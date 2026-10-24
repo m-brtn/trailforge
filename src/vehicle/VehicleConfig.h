@@ -52,7 +52,7 @@ struct VehicleConfig {
 
     // Geometry
     float wheelBase = 2.80f;  // m
-    float trackWidth = 1.65f; // m (between wheel centers)
+    float trackWidth = 1.80f; // m (between wheel centers; tires stick out ~6 cm past the flares)
     float wheelRadius = 0.40f; // m
     float wheelWidth = 0.30f;  // m
     float wheelMass = 35.0f;   // kg, only for wheel rotational inertia (0.5*m*r^2)

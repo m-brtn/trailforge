@@ -2,6 +2,7 @@
 //   trailforge_probe brake            - braking trace on a flat pad
 //   trailforge_probe course [hz]      - proving ground drive, telemetry every 0.25 s
 //   trailforge_probe bench            - step cost and stability at 60/120/240 Hz
+//   trailforge_probe susp [feature throttle low secs steer] - per-wheel suspension travel over a track feature
 
 #include "sim/Simulation.h"
 
@@ -196,6 +197,54 @@ void hillBrake() {
     }
 }
 
+// Suspension articulation trace: teleport to a feature, drive slowly, print per-wheel travel.
+void susp(int feature, float throttle, bool low, double secs, float steer) {
+    Simulation sim;
+    sim.requestTeleport(feature);
+    for (int i = 0; i < 240; ++i) sim.tick();
+    if (low) { sim.requestToggleLowRange(); sim.tick(); }
+    const JPH::BodyID vid = sim.vehicle().bodyId(), tid = sim.track().bodyId();
+    auto& sys = sim.world().system();
+    double time = 0.0;
+    int bodyContactTicks = 0, ticks = 0;
+    float minL[4] = {9, 9, 9, 9}, maxL[4] = {0, 0, 0, 0}, maxDiag = 0.0f;
+    std::printf("feature %d '%s'\n", feature, sim.track().features()[feature].name.c_str());
+    std::printf("   t     z   roll  pitch body| L(m) comp%% c  hubY_body  per wheel FL FR RL RR | diag\n");
+    for (int i = 0; time < secs; ++i) {
+        sim.setIntent({.throttle = throttle, .steer = steer});
+        sim.tick();
+        time += sim.fixedStep();
+        const auto& t = sim.vehicle().telemetry();
+        const auto& s = sim.currentSnapshot();
+        const JPH::RMat44 bodyXf = JPH::RMat44::sRotationTranslation(s.body.rotation, JPH::RVec3(s.body.position));
+        const JPH::RMat44 inv = bodyXf.InversedRotationTranslation();
+        float hubY[4];
+        for (int w = 0; w < 4; ++w) {
+            hubY[w] = JPH::Vec3(inv * JPH::RVec3(s.wheels[w].position)).GetY();
+            minL[w] = std::min(minL[w], t.wheels[w].suspensionLength);
+            maxL[w] = std::max(maxL[w], t.wheels[w].suspensionLength);
+        }
+        const float diag = (hubY[0] + hubY[3]) - (hubY[1] + hubY[2]);
+        maxDiag = std::max(maxDiag, std::abs(diag));
+        const bool bc = sys.WereBodiesInContact(vid, tid);
+        bodyContactTicks += bc;
+        ++ticks;
+        if (i % 12 == 0) {
+            const JPH::Vec3 fwd = s.body.rotation.RotateAxisZ(), left = s.body.rotation.RotateAxisX();
+            std::printf("%5.2f %6.2f %+5.1f %+5.1f %s |", time, s.body.position.GetZ(),
+                        std::asin(left.GetY()) * 57.2958f, std::asin(fwd.GetY()) * 57.2958f, bc ? "HIT " : "    ");
+            for (int w = 0; w < 4; ++w)
+                std::printf(" %.3f %3.0f%% %c %+.3f |", t.wheels[w].suspensionLength,
+                            100.0f * t.wheels[w].compressionRatio, t.wheels[w].contact ? 'C' : '-', hubY[w]);
+            std::printf(" %+.3f\n", diag);
+        }
+    }
+    std::printf("summary: body-terrain contact %d/%d ticks; max |diag hubY| %.3f m\n", bodyContactTicks, ticks, maxDiag);
+    for (int w = 0; w < 4; ++w)
+        std::printf("  %s L min %.3f max %.3f (range %.3f of 0.40 travel)\n", kWheelNames[w], minL[w], maxL[w],
+                    maxL[w] - minL[w]);
+}
+
 void bench() {
     for (double hz : {60.0, 120.0, 240.0}) {
         SimulationSettings s;
@@ -236,6 +285,9 @@ int main(int argc, char** argv) {
     else if (mode == "course") course(argc > 2 ? std::atof(argv[2]) : 120.0);
     else if (mode == "demo") demoLoads();
     else if (mode == "hillbrake") hillBrake();
+    else if (mode == "susp") susp(argc > 2 ? std::atoi(argv[2]) : 2, argc > 3 ? float(std::atof(argv[3])) : 0.4f,
+                                  argc > 4 ? std::atoi(argv[4]) != 0 : true, argc > 5 ? std::atof(argv[5]) : 10.0,
+                                  argc > 6 ? float(std::atof(argv[6])) : 0.0f);
     else if (mode == "corner") corner(TrackLayout::Flat, argc > 2 ? float(std::atof(argv[2])) : -0.45f, 4.0,
                                          argc > 3 ? std::atoi(argv[3]) : 1);
     else bench();

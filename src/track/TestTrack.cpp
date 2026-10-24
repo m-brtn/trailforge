@@ -432,7 +432,7 @@ void TestTrack::buildFlat(bool withPit) {
         rect(-h, h, -h, h);
     } else {
         // Pit under the front left wheel of a vehicle standing at (0,0,0) facing +Z
-        // (wheel 0: x = +0.825, z = +1.4).
+        // (wheel 0: x = +0.9, z = +1.4).
         const float px0 = 0.45f, px1 = 1.65f, pz0 = 0.75f, pz1 = 2.05f;
         rect(-h, px0, -h, h);
         rect(px1, h, -h, h);

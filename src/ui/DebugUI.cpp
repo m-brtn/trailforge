@@ -59,6 +59,22 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         char g[8];
         ImGui::Text("%5.1f km/h  gear %s  %s%s  %4.0f rpm", std::abs(t.forwardSpeed) * 3.6f, gearName(t.gear, g, 8),
                     t.direction == DriveDirection::Forward ? "D" : "R", t.lowRange ? " LOW" : "", t.engineRPM);
+        // Suspension compression per wheel, laid out as seen from above (front row first, left wheel on the left).
+        for (int row = 0; row < 2; ++row) {
+            for (int col = 0; col < 2; ++col) {
+                const int i = row * 2 + col;
+                const WheelTelemetry& w = t.wheels[i];
+                char overlay[16];
+                std::snprintf(overlay, sizeof(overlay), w.contact ? "%s %3.0f%%" : "%s air", kWheelNames[i],
+                              100.0f * w.compressionRatio);
+                if (col > 0) ImGui::SameLine();
+                const ImVec4 color = w.bumpStop ? ImVec4(0.85f, 0.2f, 0.15f, 1) : !w.contact ? ImVec4(0.45f, 0.45f, 0.5f, 1)
+                                                                                             : ImVec4(0.3f, 0.6f, 0.3f, 1);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
+                ImGui::ProgressBar(std::clamp(w.compressionRatio, 0.0f, 1.0f), ImVec2(110, 0), overlay);
+                ImGui::PopStyleColor();
+            }
+        }
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("W/S throttle/brake  A/D steer  Space handbrake  Q fwd/rev  L low range  R reset  C camera  "

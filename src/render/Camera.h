@@ -39,8 +39,8 @@ public:
     float fovYDeg = 60.0f;
     float nearPlane = 0.1f;
     float farPlane = 600.0f;
-    float followDistance = 8.0f; // m
-    float followHeight = 2.6f;   // m above the body
+    float followDistance = 7.5f; // m
+    float followHeight = 1.9f;   // m above the body
     float followStiffness = 6.0f; // 1/s, catch-up rate (exponential smoothing)
 
 private:

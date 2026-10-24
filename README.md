@@ -77,7 +77,9 @@ Command-line options:
 - `brake`, `course`, `bench` — braking, course drive, step cost at 60/120/240 Hz;
 - `corner [steer] [collisionSteps]` — steady-state cornering on a flat pad, average loads;
 - `demo` — loads along the `--demo` trajectory in 1 s windows (Σload, Σ(F·ŷ), bump stop hits);
-- `hillbrake` — holding on climbs with the brake.
+- `hillbrake` — holding on climbs with the brake;
+- `susp [feature throttle low secs steer]` — per-wheel suspension length, compression and hub height in body space
+  over a track feature (default 2, the diagonal twister), body-terrain contact ticks.
 
 ### Scenario mode
 
@@ -112,7 +114,9 @@ Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/t
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
 cost of the marks with the ring empty and filled to 16k / 64k segments),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
-`--audio-capture`, see [Audio](#audio)).
+`--audio-capture`, see [Audio](#audio)),
+`tools/scenarios/suspension.txt` (stops on the diagonal twister with a wheel in the air; follow view with the HUD,
+rear and side views, `/tmp/trailforge_v_susp_*.png`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
@@ -205,7 +209,7 @@ While paused the physics is frozen; N performs exactly one step.
 
 ## Vehicle
 
-- Mass 2000 kg, wheelbase 2.8 m, track 1.65 m, wheels r = 0.4 m and 0.3 m wide (35 kg each).
+- Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares), wheels r = 0.4 m and 0.3 m wide (35 kg each).
 - Center of mass 0.10 m below the frame center.
 - The body collision is a compound of three boxes. The visible model (`VehicleModel`, ~7k triangles) is a
   procedural off-roader built around those boxes: beveled body, fenders, bumpers, snorkel, roof rack with lights,
@@ -398,7 +402,8 @@ binary or in the source tree.
 
 ## Diagnostics (F1)
 
-- **HUD** (always visible): speed, gear, direction, rpm.
+- **HUD** (always visible): speed, gear, direction, rpm; suspension compression per wheel laid out as seen from
+  above ("air" without contact, red on the bump stop).
 - **Telemetry:**
   - FPS and frame time; ticks per frame, physics step time (last and average), dropped time;
   - speed, rpm, gear, clutch, range, body tilt, throttle/brake/handbrake/steering bars;
