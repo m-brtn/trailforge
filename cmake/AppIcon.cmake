@@ -3,8 +3,9 @@
 # macOS only (needs `sips` and `iconutil`, both part of the base system):
 #   1) Icon.png -> 256x256 BMP -> embedded into the binary (cmake/EmbedFile.cmake);
 #      at startup SDL_SetWindowIcon sets it, which on Cocoa is the Dock icon of the running process;
-#   2) Icon.png -> TrailForge.icns (iconset 16..1024 px) -> build/<preset>/TrailForge.app, a minimal bundle that
-#      wraps a copy of the `trailforge` executable so Finder/Dock show the icon before launch.
+#   2) Icon.png -> TrailForge.icns (iconset 16..1024 px) -> build/<preset>/TrailForge.app, a self-contained bundle:
+#      a copy of the `trailforge` executable, Info.plist (version from project()), the icns and the runtime assets
+#      (assets/audio -> Contents/Resources/assets/audio, found at runtime through SDL_GetBasePath()).
 # Elsewhere no icon is embedded and the window keeps the default icon.
 
 set(TRAILFORGE_ICON_SOURCES "")
@@ -59,6 +60,13 @@ function(trailforge_add_macos_bundle target)
         COMMENT "Building TrailForge.icns")
 
     set(_app ${CMAKE_BINARY_DIR}/TrailForge.app)
+    # LSMinimumSystemVersion follows the deployment target the binary is actually built for.
+    if(CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(TRAILFORGE_MIN_MACOS ${CMAKE_OSX_DEPLOYMENT_TARGET})
+    else()
+        execute_process(COMMAND xcrun --sdk macosx --show-sdk-version OUTPUT_VARIABLE TRAILFORGE_MIN_MACOS
+                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endif()
     configure_file(${CMAKE_SOURCE_DIR}/cmake/Info.plist.in ${_icon_gen}/Info.plist @ONLY)
     add_custom_command(
         OUTPUT ${_app}/Contents/MacOS/trailforge
@@ -68,5 +76,18 @@ function(trailforge_add_macos_bundle target)
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${target}> ${_app}/Contents/MacOS/trailforge
         DEPENDS ${target} ${_icns} ${_icon_gen}/Info.plist
         COMMENT "Assembling TrailForge.app")
-    add_custom_target(trailforge_bundle ALL DEPENDS ${_app}/Contents/MacOS/trailforge)
+
+    # Runtime assets: re-copied only when a file under assets/audio changes.
+    set(_assets ${CMAKE_SOURCE_DIR}/assets/audio)
+    file(GLOB_RECURSE _asset_files CONFIGURE_DEPENDS ${_assets}/*)
+    set(_assets_stamp ${_icon_gen}/bundle_assets.stamp)
+    add_custom_command(
+        OUTPUT ${_assets_stamp}
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${_app}/Contents/Resources/assets
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_app}/Contents/Resources/assets
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${_assets} ${_app}/Contents/Resources/assets/audio
+        COMMAND ${CMAKE_COMMAND} -E touch ${_assets_stamp}
+        DEPENDS ${_asset_files}
+        COMMENT "Copying assets/audio into TrailForge.app")
+    add_custom_target(trailforge_bundle ALL DEPENDS ${_app}/Contents/MacOS/trailforge ${_assets_stamp})
 endfunction()

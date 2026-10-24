@@ -73,7 +73,7 @@ ImGuiContextGuard::~ImGuiContextGuard() {
 
 Application::Application(const AppOptions& options)
     : m_options(options),
-      m_window("TrailForge", 1440, 900),
+      m_window("TrailForge " TRAILFORGE_VERSION, 1440, 900),
       m_sim(SimulationSettings{}),
       m_ui(m_sim.vehicleConfig()),
       m_clock(m_sim.fixedStep()) {
@@ -116,11 +116,16 @@ Application::Application(const AppOptions& options)
     AudioOptions audio;
     audio.device = options.audio;
     audio.capturePath = options.audioCapturePath;
+    // SDL_GetBasePath(): Contents/Resources/ inside TrailForge.app, the executable's directory otherwise.
     if (const char* base = SDL_GetBasePath()) {
         audio.assetDirs.push_back(std::string(base) + "assets/audio");
+#if !defined(TRAILFORGE_PACKAGED)
         audio.assetDirs.push_back(std::string(base) + "../../assets/audio"); // build/<preset>/trailforge
+#endif
     }
+#if !defined(TRAILFORGE_PACKAGED)
     audio.assetDirs.push_back(std::string(TRAILFORGE_SOURCE_DIR) + "/assets/audio");
+#endif
     m_audio = std::make_unique<AudioSystem>(audio);
 }
 

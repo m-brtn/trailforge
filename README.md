@@ -59,9 +59,32 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 
 App icon (`Icon.png`, macOS): the build converts it with `sips` to a 256×256 BMP that is embedded into the binary;
 at startup `SDL_SetWindowIcon` sets it (on Cocoa this is `NSApp.applicationIconImage`, i.e. the Dock icon of the
-running `trailforge` process), masked to the macOS rounded-square grid. The build also produces
-`build/<preset>/TrailForge.app` — a minimal bundle with `TrailForge.icns` (`sips` + `iconutil`, 16–1024 px) and a
-copy of the same executable, so Finder shows the icon before launch. `Logo.png` is reserved for a future menu.
+running `trailforge` process), masked to the macOS rounded-square grid. `Logo.png` is reserved for a future menu
+and is not loaded at runtime.
+
+The build also produces `build/<preset>/TrailForge.app`, a self-contained bundle: a copy of the executable,
+`Info.plist` (version from `project(TrailForge VERSION …)` in `CMakeLists.txt`, `LSMinimumSystemVersion` = the
+deployment target, i.e. the SDK version 27.0 unless `CMAKE_OSX_DEPLOYMENT_TARGET` is set), `TrailForge.icns`
+(`sips` + `iconutil`, 16–1024 px) and the runtime assets in `Contents/Resources/assets/audio`. Shaders and the
+window icon are embedded in the binary, so the sounds are the only files read at runtime. They are looked up via
+`SDL_GetBasePath()` (SDL 3.4.18 on macOS: `Contents/Resources/` inside a bundle, the executable's directory
+otherwise): `<base>/assets/audio`, then, in development builds only, `<base>/../../assets/audio` and the source
+tree. The version is shown in the window title, the HUD and the Telemetry window, and by `trailforge --version`.
+
+### Packaged build and release
+
+```sh
+tools/release/package_macos.sh            # -> dist/TrailForge.app and dist/TrailForge-<version>-macos-arm64.zip
+tools/release/package_macos.sh --publish  # the same, then gh release create v<version> with docs/releases/v<version>.md
+```
+
+The script does a clean Release configure in `build/package` with `-DTRAILFORGE_PACKAGED=ON` (no source-tree
+asset fallback), builds, runs CTest, copies the bundle to `dist/`, checks that `otool -L` lists only system
+libraries and frameworks, signs ad hoc (`codesign --force --deep -s -`) and verifies the signature, zips with
+`ditto -c -k --keepParent`, then runs the bundle from `/` and from a fresh unzip and checks that all 55 sounds load
+from inside the bundle. `dist/` is git-ignored. The app is not notarized: after downloading, open it with
+right-click → Open, or `xattr -dr com.apple.quarantine TrailForge.app`. Releases are on GitHub
+(`gh release list`); release notes live in `docs/releases/`.
 
 Command-line options:
 
@@ -71,7 +94,8 @@ Command-line options:
 - `--capture file.bmp|file.png [--capture-at N]` — save one rendered frame;
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--no-audio` — no audio device, no sounds loaded;
-- `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio)).
+- `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
+- `--version` — print the version and exit.
 
 `build/<preset>/trailforge_probe` — headless measurements:
 - `brake`, `course`, `bench` — braking, course drive, step cost at 60/120/240 Hz;
@@ -158,7 +182,8 @@ once the vehicle is nearly stopped (|forward speed| < 0.5 m/s) and S is still he
 becomes the reverse throttle. In reverse it is symmetric: W brakes the backward roll, then engages drive. Holding
 both pedals never switches. Q still toggles the direction by hand below 1 m/s; while moving it is refused with an
 on-screen hint "Stop to change direction". The switch runs on physics ticks in simulated time, so it does not depend
-on the frame rate. With auto reverse a held S no longer holds the vehicle on a slope: use the handbrake (Space), or
+on the frame rate. With auto reverse a held S no longer holds the vehicle on a slope: use the handbrake (Space; drift
+under 1.3 cm in 2 s on the 10–23° stops of the hills, low range, measured with an ad-hoc scenario), or
 turn auto reverse off (F1 → Tuning → Simulation → "Auto reverse", then S only brakes and Q + W drive backwards).
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
 F1–F3 and Escape always work.
@@ -403,8 +428,8 @@ slightly.
 **Assets.** `assets/audio/manifest.json` lists every file with its source, license, processing and verification;
 `assets/audio/CREDITS.md` has the attributions (54 files CC0 1.0, one CC BY 4.0 — credit required, see the file).
 `tools/audio/fetch_freesound.py` rebuilds the set from Freesound (needs `FREESOUND_API_KEY` in the environment,
-ffmpeg and sox; the key is never written to disk). The game reads the assets from `assets/audio/` next to the
-binary or in the source tree.
+ffmpeg and sox; the key is never written to disk). The game reads the assets from `assets/audio/` inside the app
+bundle or next to the binary, and in development builds also from the source tree (see "Build and run").
 
 ## Diagnostics (F1)
 

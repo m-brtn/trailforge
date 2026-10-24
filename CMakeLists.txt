@@ -8,6 +8,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TRAILFORGE_BUILD_APP "Build the windowed application (SDL3/SDL GPU/ImGui)" ON)
 option(TRAILFORGE_BUILD_TESTS "Build the headless physics tests" ON)
+# Packaged builds (tools/release/package_macos.sh) read assets only from the bundle / next to the executable,
+# never from the source tree path compiled into development builds.
+option(TRAILFORGE_PACKAGED "Build for distribution: no source-tree asset fallback" OFF)
 
 if(APPLE)
     enable_language(OBJC)
@@ -78,7 +81,12 @@ if(TRAILFORGE_BUILD_APP)
         target_link_libraries(trailforge PRIVATE "-framework Metal")
     endif()
     target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES} ${TRAILFORGE_ICON_DEFINES}
-                                                  TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+                                                  TRAILFORGE_VERSION="${PROJECT_VERSION}")
+    if(TRAILFORGE_PACKAGED)
+        target_compile_definitions(trailforge PRIVATE TRAILFORGE_PACKAGED=1)
+    else()
+        target_compile_definitions(trailforge PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    endif()
     trailforge_add_macos_bundle(trailforge)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)

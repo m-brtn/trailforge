@@ -51,12 +51,29 @@ python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 ```
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
-`--audio-capture file.wav`. Scenario checks must not depend on an audio device: everything except
+`--audio-capture file.wav`, `--version`. Scenario checks must not depend on an audio device: everything except
 `audio_check.txt` passes with `--no-audio`.
 The scenario command reference is in `README.md` ("Scenario mode").
 
 Before committing a code change, build both `debug` and `release`, run `ctest` for both, and run `full_check.txt`
 in Release.
+
+### Packaged build and GitHub release (every stage)
+
+Every stage ends with a packaged build and a GitHub release, after the stage's commits are pushed:
+
+1. Bump the version in `project(TrailForge VERSION x.y.z)` in `CMakeLists.txt`: minor per stage (v0.1.0 was the
+   first packaged release, then v0.2.0, v0.3.0, ...), patch for a fix-only re-release.
+2. Write the release notes in `docs/releases/v<version>.md` (English) from the devlog: what is in the build,
+   controls summary, known limitations, and how to open an ad-hoc signed app (right-click -> Open or
+   `xattr -dr com.apple.quarantine TrailForge.app`). Only verified claims, as in the devlog.
+3. Commit the bump and the notes, push, then run `tools/release/package_macos.sh --publish` (clean Release
+   build in `build/package`, ctest, `dist/TrailForge.app`, ad-hoc signature, zip
+   `dist/TrailForge-<version>-macos-arm64.zip`, smoke tests from `/` and from a fresh unzip, then
+   `gh release create v<version>` with the zip and the notes). Without `--publish` it only packages and tests.
+4. Record the release URL, asset name and size, and the smoke test results in the devlog.
+
+`dist/` is git-ignored; never commit the zip or the app.
 
 ## Layout
 
@@ -75,7 +92,9 @@ src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, 
 src/app/      Application (lifecycle, main loop), Scenario (scenario mode), main
 shaders/      scene.metal -> metallib at build time, embedded into the binary
 tests/        CTest physics and audio tests (no window, no audio device)
-tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis)
+tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
+              release/package_macos.sh (packaged .app, zip, GitHub release)
+docs/releases/ release notes per version
 assets/audio/ WAV sounds, manifest.json, CREDITS.md
 devlog/       daily development log
 ```

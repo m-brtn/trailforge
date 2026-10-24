@@ -21,7 +21,7 @@
     <key>CFBundleVersion</key>
     <string>@PROJECT_VERSION@</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>@TRAILFORGE_MIN_MACOS@</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

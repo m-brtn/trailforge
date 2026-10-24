@@ -11,7 +11,7 @@ namespace {
 
 void printUsage() {
     std::printf("Usage: trailforge [--quit-after <seconds>] [--demo] [--no-ui] [--capture <file.bmp>] [--capture-at <seconds>] [--script <file>]\n"
-                "                  [--no-audio] [--audio-capture <file.wav>]\n"
+                "                  [--no-audio] [--audio-capture <file.wav>] [--version]\n"
                 "  --quit-after N  exit automatically after N seconds (smoke test)\n"
                 "  --demo          scripted throttle/steering without user input\n"
                 "  --no-ui         start with the F1 diagnostics hidden\n"
@@ -20,7 +20,8 @@ void printUsage() {
                 "  --script F      run a test scenario (input via SDL events), exit code 1 on failures\n"
                 "  --no-audio      do not open an audio device or load sounds\n"
                 "  --audio-capture F  render the mix offline to WAV file F (no device; one physics tick of\n"
-                "                  audio per tick) and the mix parameters to F.csv\n");
+                "                  audio per tick) and the mix parameters to F.csv\n"
+                "  --version       print the version and exit\n");
 }
 
 } // namespace
@@ -36,6 +37,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--no-ui") == 0) options.startWithUi = false;
         else if (std::strcmp(argv[i], "--no-audio") == 0) options.audio = false;
         else if (std::strcmp(argv[i], "--audio-capture") == 0 && i + 1 < argc) options.audioCapturePath = argv[++i];
+        else if (std::strcmp(argv[i], "--version") == 0) { std::printf("TrailForge %s\n", TRAILFORGE_VERSION); return 0; }
+        else if (std::strncmp(argv[i], "-psn_", 5) == 0) continue; // process serial number from older Finder launches
         else { printUsage(); return std::strcmp(argv[i], "--help") == 0 ? 0 : 2; }
     }
     try {

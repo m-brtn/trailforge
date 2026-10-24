@@ -79,8 +79,9 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("W gas / S brake (held at a stop: reverse)  A/D steer  Space handbrake");
         ImGui::TextDisabled("Q fwd/rev  L low range  R reset  C camera  H lights  F1 UI  F2 graphics  F3 audio");
-        ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u", stats.fps, stats.frameMs,
-                            stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH);
+        ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u  v%s", stats.fps, stats.frameMs,
+                            stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH,
+                            TRAILFORGE_VERSION);
         ImGui::End();
         drawDriveHud(sim);
     }
@@ -336,6 +337,7 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, display.x * 0.38f), display.y - 170.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("Telemetry (F1)");
 
+    ImGui::TextDisabled("TrailForge %s", TRAILFORGE_VERSION);
     const StepTiming& tm = sim.timing();
     ImGui::Text("Render: %.0f FPS, %.2f ms/frame   GPU: %s, shaders: %s", stats.fps, stats.frameMs, stats.gpuDriver,
                 stats.shaderFormat);
