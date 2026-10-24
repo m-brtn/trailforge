@@ -13,6 +13,8 @@ enum class SurfaceId : std::uint8_t {
     PackedDirt,   // main hard ground of the proving ground
     Rock,         // rocks
     LowGrip,      // low-grip section (hard, only lower mu)
+    Mud,          // showcase mud path: rigid, only lower mu (no sinkage; visuals are separate)
+    Grass,        // showcase meadow: rigid, only mu
     Count
 };
 

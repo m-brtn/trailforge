@@ -34,6 +34,15 @@ void Camera::toggleMode() {
     }
 }
 
+void Camera::setFreePose(const glm::vec3& position, const glm::vec3& target) {
+    m_mode = Mode::Free;
+    m_position = position;
+    const glm::vec3 d = glm::normalize(target - position);
+    m_freeYaw = std::atan2(d.x, d.z);
+    m_freePitch = std::asin(std::clamp(d.y, -1.0f, 1.0f));
+    m_lookAt = position + d;
+}
+
 void Camera::update(float dt, const CameraInput& in, const glm::vec3& target, const glm::vec3& forward,
                     const CameraRayCast& rayCast) {
     const float sensitivity = 0.005f;

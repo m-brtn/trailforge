@@ -1,0 +1,33 @@
+# Visual check of the mud & puddles showcase (screenshots to /tmp/trailforge_vis_*.png):
+#   ./build/release/trailforge --script tools/scenarios/visual_tour.txt
+set ui 0
+set hud 0
+teleport 8
+wait 2.0
+capture /tmp/trailforge_vis_01_follow.png
+wait 0.3
+camera -4.8 1.5 53.0 0 0.7 48.5
+wait 0.5
+capture /tmp/trailforge_vis_02_vehicle_front.png
+wait 0.3
+camera -3.8 1.0 45.0 0 0.6 48.8
+wait 0.5
+capture /tmp/trailforge_vis_03_vehicle_rear.png
+wait 0.3
+camera 2.0 2.4 50.0 -2 0.0 66
+wait 0.5
+capture /tmp/trailforge_vis_04_puddles.png
+wait 0.3
+camera -4 6 40 -6 0 70
+wait 0.5
+capture /tmp/trailforge_vis_05_overview.png
+wait 0.3
+set mud 0.65
+camera -2.7 0.65 51.2 -0.8 0.35 49.9
+wait 0.5
+capture /tmp/trailforge_vis_06_wheel_mud.png
+wait 0.3
+camera -5.5 1.8 44.5 0 0.8 49
+wait 0.5
+capture /tmp/trailforge_vis_07_muddy_side.png
+quit

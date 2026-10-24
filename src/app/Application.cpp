@@ -1,8 +1,13 @@
 #include "app/Application.h"
 
+#include "render/GroundMaps.h"
 #include "render/MathConvert.h"
+#include "render/Scenery.h"
+#include "render/VehicleModel.h"
 
 #include <SDL3/SDL.h>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlgpu3.h>
@@ -77,11 +82,26 @@ Application::Application(const AppOptions& options)
     m_imgui = std::make_unique<ImGuiContextGuard>(m_window.get(), *m_renderer);
     m_ui.visible = options.startWithUi;
 
-    m_trackMesh = m_renderer->upload(buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces()));
-    m_bodyMesh = m_renderer->upload(buildVehicleBodyMesh());
-    m_wheelMesh = m_renderer->upload(buildWheelMesh(m_sim.vehicleConfig().wheelRadius, m_sim.vehicleConfig().wheelWidth));
-    std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu\n", m_renderer->driverName(),
-                m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount());
+    const Uint64 t0 = SDL_GetPerformanceCounter();
+    const MeshData trackMesh = buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces());
+    const MeshData sceneryMesh = buildSceneryMesh();
+    const MeshData bodyMesh = buildVehicleBodyMesh();
+    m_trackMesh = m_renderer->upload(trackMesh);
+    m_sceneryMesh = m_renderer->upload(sceneryMesh);
+    m_waterMesh = m_renderer->upload(buildWaterMesh());
+    m_bodyMesh = m_renderer->upload(bodyMesh);
+    m_springMesh = m_renderer->upload(buildUnitSpringMesh());
+    m_armMesh = m_renderer->upload(buildUnitTubeMesh(0.021f));
+    m_halfShaftMesh = m_renderer->upload(buildUnitTubeMesh(0.028f));
+    m_shockBodyMesh = m_renderer->upload(buildShockBodyMesh());
+    m_shockShaftMesh = m_renderer->upload(buildShockShaftMesh());
+    m_renderer->setGround(buildGroundMaps(m_sim.track()), TestTrack::water().level);
+    m_gfx.settings = m_renderer->settings();
+    std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu, render triangles: track %zu, "
+                "scenery %zu, vehicle body %zu, scene build %.0f ms\n",
+                m_renderer->driverName(), m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount(),
+                trackMesh.vertices.size() / 3, sceneryMesh.vertices.size() / 3, bodyMesh.vertices.size() / 3,
+                1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
     if (!options.scriptPath.empty()) {
         m_scenario = Scenario::load(options.scriptPath);
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
@@ -91,9 +111,9 @@ Application::Application(const AppOptions& options)
 Application::~Application() {
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
-    m_trackMesh.release();
-    m_bodyMesh.release();
-    m_wheelMesh.release();
+    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_springMesh,
+                       &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
+        m->release();
     m_imgui.reset();
     m_renderer.reset();
 }
@@ -113,6 +133,8 @@ void Application::processEvents() {
 
     if (m_input.pressed(Action::Quit)) m_running = false;
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
+    if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
+    if (m_input.pressed(Action::ToggleHeadlights)) m_gfx.headlights = !m_gfx.headlights;
     if (m_input.pressed(Action::TogglePause)) m_paused = !m_paused;
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
     if (m_input.pressed(Action::ToggleCamera)) m_camera.toggleMode();
@@ -200,18 +222,33 @@ void Application::renderFrame(float frameTime) {
     stats.gpuDriver = m_renderer->driverName();
     stats.shaderFormat = m_renderer->shaderFormatName();
     stats.gamepad = m_input.gamepadConnected() ? m_input.gamepadName() : "";
-    const UiRequests req = m_ui.draw(m_sim, stats);
+    const RenderStats& rs = m_renderer->stats();
+    stats.cpuFrameMs = m_cpuMs;
+    stats.gpuFrameMs = rs.gpuMs;
+    stats.renderW = rs.renderW;
+    stats.renderH = rs.renderH;
+    stats.outputW = rs.outputW;
+    stats.outputH = rs.outputH;
+    stats.drawCalls = rs.drawCalls;
+    stats.grassBlades = rs.grassBlades;
+    stats.reflection = rs.reflectionRendered;
+    stats.maxMsaa = m_renderer->maxMsaa();
+    const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
     ImGui::Render();
     if (req.togglePause) m_paused = !m_paused;
     if (req.stepOnce && m_paused) m_stepOnce = true;
     if (req.setVSync) m_renderer->setVSync(req.vsync);
+    if (m_gfx.changed) {
+        m_renderer->setSettings(m_gfx.settings);
+        m_gfx.settings = m_renderer->settings();
+        m_gfx.changed = false;
+    }
 
     // ---- Scene
-    DrawItem draws[2 + kWheelCount];
-    draws[0] = {&m_trackMesh, glm::mat4(1.0f), glm::vec4(1.0f), 0.18f};
-    draws[1] = {&m_bodyMesh, bodyM, glm::vec4(1.0f), 0.0f};
-    for (int i = 0; i < kWheelCount; ++i)
-        draws[2 + i] = {&m_wheelMesh, interp(a.wheels[i], b.wheels[i]), glm::vec4(1.0f), 0.0f};
+    std::array<glm::mat4, kWheelCount> wheelM;
+    for (int i = 0; i < kWheelCount; ++i) wheelM[i] = interp(a.wheels[i], b.wheels[i]);
+    updateCosmetics(frameTime);
+    buildDraws(bodyM, wheelM);
 
     m_debugDraw.clear();
     if (m_ui.drawPhysicsDebug) {
@@ -227,7 +264,23 @@ void Application::renderFrame(float frameTime) {
     frame.view = m_camera.view();
     frame.proj = m_camera.projection(float(pw) / float(ph > 0 ? ph : 1));
     frame.cameraPos = m_camera.position();
-    frame.draws = draws;
+    frame.fovYRadians = glm::radians(m_camera.fovYDeg);
+    frame.nearPlane = m_camera.nearPlane;
+    frame.time = float(m_time);
+    frame.draws = m_draws;
+    frame.water = &m_waterMesh;
+    frame.vehicleModel = bodyM;
+    frame.vehicleMud = m_gfx.mud;
+    {
+        const VehicleTelemetry& t = m_sim.vehicle().telemetry();
+        frame.brakeLight = std::max(t.command.brake, t.command.handBrake) > 0.05f ? 1.0f : 0.0f;
+        frame.reverseLight = t.direction == DriveDirection::Reverse ? 1.0f : 0.0f;
+        frame.headlights = m_gfx.headlights ? 1.0f : 0.0f;
+        for (int i = 0; i < kWheelCount; ++i) {
+            const auto& w = t.wheels[i];
+            frame.wheelContacts[i] = glm::vec4(toGlm(w.contactPosition), w.contact ? 1.0f : 0.0f);
+        }
+    }
     frame.lines = m_debugDraw.lines();
     frame.linesOnTop = m_ui.linesOnTop;
     frame.ui = ImGui::GetDrawData();
@@ -238,6 +291,92 @@ void Application::renderFrame(float frameTime) {
     if (!m_captureRequest.empty()) frame.capturePath = m_captureRequest.c_str();
     m_renderer->drawFrame(frame);
     m_captureRequest.clear();
+}
+
+void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
+    const VehicleConfig& vc = m_sim.vehicleConfig();
+    if (vc.wheelRadius != m_wheelMeshRadius || vc.wheelWidth != m_wheelMeshWidth) {
+        SDL_WaitForGPUIdle(m_renderer->device());
+        m_wheelMesh = m_renderer->upload(buildWheelMesh(vc.wheelRadius, vc.wheelWidth));
+        m_wheelMeshRadius = vc.wheelRadius;
+        m_wheelMeshWidth = vc.wheelWidth;
+    }
+
+    m_draws.clear();
+    auto add = [&](const GpuMesh& mesh, const glm::mat4& model, bool castsShadow = true, bool inReflection = true) {
+        DrawItem d;
+        d.mesh = &mesh;
+        d.model = model;
+        d.castsShadow = castsShadow;
+        d.inReflection = inReflection;
+        m_draws.push_back(d);
+    };
+    add(m_trackMesh, glm::mat4(1.0f));
+    add(m_sceneryMesh, glm::mat4(1.0f));
+    add(m_bodyMesh, bodyM);
+    add(m_wheelMesh, bodyM * spareWheelMatrix(vc.wheelRadius, vc.wheelWidth));
+    m_draws.back().mud = 0.25f; // the spare on the roof stays mostly clean
+    m_draws.back().wheelMud = true;
+
+    const glm::mat4 invBody = glm::inverse(bodyM);
+    for (int i = 0; i < kWheelCount; ++i) {
+        // Wheel and suspension follow the Jolt wheel transform (interpolated between ticks).
+        const glm::mat4 wheelBody = invBody * wheelM[i];
+        const glm::vec3 hub(wheelBody[3]);
+        const float side = hub.x >= 0.0f ? 1.0f : -1.0f;
+        // The wheel mesh has its outer face at +X; Jolt uses one wheel-right axis for both sides.
+        const bool flip = glm::dot(glm::vec3(wheelBody[0]), glm::vec3(side, 0, 0)) < 0.0f;
+        add(m_wheelMesh, flip ? wheelM[i] * glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(0, 1, 0))
+                              : wheelM[i]);
+        m_draws.back().wheelMud = true;
+
+        const SuspensionPose p = suspensionPose(hub, hub.z);
+        const glm::vec3 dir = glm::normalize(p.shockTop - p.shockLow);
+        add(m_armMesh, bodyM * segmentMatrix(p.armPivotA, p.armOuter), true, false);
+        add(m_armMesh, bodyM * segmentMatrix(p.armPivotB, p.armOuter), true, false);
+        add(m_halfShaftMesh, bodyM * segmentMatrix(p.shaftInner, p.shaftOuter), true, false);
+        add(m_shockBodyMesh, bodyM * aimMatrix(p.shockLow, p.shockTop), true, false);
+        add(m_shockShaftMesh, bodyM * aimMatrix(p.shockTop, p.shockLow), false, false);
+        add(m_springMesh, bodyM * segmentMatrix(p.shockTop, p.shockLow + dir * kSpringPerch), true, false);
+    }
+}
+
+void Application::updateCosmetics(float dt) {
+    if (!m_gfx.autoMud || m_paused) return;
+    // Cosmetic only: mud builds up while the wheels roll on the Mud surface or through the puddles
+    // and slowly dries/falls off elsewhere. It never feeds back into the simulation.
+    const VehicleTelemetry& t = m_sim.vehicle().telemetry();
+    const WaterInfo water = TestTrack::water();
+    float gain = 0.0f;
+    for (const auto& w : t.wheels) {
+        if (!w.contact) continue;
+        const float roll = std::min(std::abs(w.angularVelocity) * m_sim.vehicleConfig().wheelRadius, 8.0f);
+        const bool wet = w.contactPosition.GetY() < water.level - 0.02f && w.contactPosition.GetX() > water.x0 &&
+                         w.contactPosition.GetX() < water.x1 && w.contactPosition.GetZ() > water.z0 &&
+                         w.contactPosition.GetZ() < water.z1;
+        if (w.surface == SurfaceId::Mud || wet) gain += roll * (wet ? 0.010f : 0.006f);
+    }
+    m_gfx.mud = std::clamp(m_gfx.mud + (gain - 0.002f) * dt, 0.0f, 1.0f);
+}
+
+void Application::endPerf() {
+    if (!m_perfActive) return;
+    m_perfActive = false;
+    std::vector<double> v = m_perfFrameMs;
+    if (v.empty()) return;
+    std::sort(v.begin(), v.end());
+    double sum = 0.0;
+    for (double x : v) sum += x;
+    const double avg = sum / double(v.size());
+    const double p95 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.95))];
+    const double p99 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.99))];
+    const RenderStats& rs = m_renderer->stats();
+    std::printf("PERF %-12s frames=%zu fps=%.1f frame_avg=%.2f ms p95=%.2f p99=%.2f max=%.2f cpu_avg=%.2f ms "
+                "gpu_avg=%.2f ms render=%ux%u output=%ux%u vsync=%d draws=%d grass=%.0fk\n",
+                m_perfLabel.c_str(), v.size(), 1000.0 / avg, avg, p95, p99, v.back(),
+                m_perfCpuSum / double(v.size()), m_perfGpuCount ? m_perfGpuSum / m_perfGpuCount : -1.0, rs.renderW,
+                rs.renderH, rs.outputW, rs.outputH, m_renderer->vsync() ? 1 : 0, rs.drawCalls,
+                double(rs.grassBlades) / 1000.0);
 }
 
 // ------------------------------------------------------------------ verification scenario
@@ -451,6 +590,87 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_captureRequest = arg;
         return Exec::Done;
     }
+    if (c.op == "quality") {
+        for (int p = 0; p < int(QualityPreset::Custom); ++p) {
+            if (arg == presetName(QualityPreset(p))) {
+                const RenderSettings look = m_gfx.settings;
+                m_gfx.settings = presetSettings(QualityPreset(p));
+                m_gfx.settings.exposure = look.exposure;
+                m_gfx.settings.sunElevationDeg = look.sunElevationDeg;
+                m_gfx.settings.sunAzimuthDeg = look.sunAzimuthDeg;
+                m_gfx.settings.fogDensity = look.fogDensity;
+                m_gfx.settings.bloomStrength = look.bloomStrength;
+                m_gfx.preset = QualityPreset(p);
+                m_gfx.changed = true;
+                return Exec::Done;
+            }
+        }
+        return Exec::Failed;
+    }
+    if (c.op == "set") {
+        if (c.args.size() < 2) return Exec::Failed;
+        const float v = float(std::atof(c.args[1].c_str()));
+        RenderSettings& s = m_gfx.settings;
+        const std::string& k = c.args[0];
+        bool render = true;
+        if (k == "render_scale") s.renderScale = v;
+        else if (k == "msaa") s.msaa = int(v);
+        else if (k == "fxaa") s.fxaa = v != 0.0f;
+        else if (k == "cascades") s.shadowCascades = int(v);
+        else if (k == "shadow_size") s.shadowMapSize = int(v);
+        else if (k == "shadow_dist") s.shadowDistance = v;
+        else if (k == "shadow_filter") s.shadowFilter = int(v);
+        else if (k == "reflections") s.reflections = v != 0.0f;
+        else if (k == "refl_scale") s.reflectionScale = v;
+        else if (k == "bloom") s.bloom = v != 0.0f;
+        else if (k == "grass") s.grassLevel = int(v);
+        else if (k == "grass_dist") s.grassDistance = v;
+        else if (k == "clouds") s.clouds = v != 0.0f;
+        else if (k == "exposure") s.exposure = v;
+        else if (k == "sun_el") s.sunElevationDeg = v;
+        else if (k == "sun_az") s.sunAzimuthDeg = v;
+        else if (k == "fog") s.fogDensity = v;
+        else {
+            render = false;
+            if (k == "mud") { m_gfx.mud = std::clamp(v, 0.0f, 1.0f); m_gfx.autoMud = false; }
+            else if (k == "auto_mud") m_gfx.autoMud = v != 0.0f;
+            else if (k == "headlights") m_gfx.headlights = v != 0.0f;
+            else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
+            else if (k == "ui") m_ui.visible = v != 0.0f;
+            else if (k == "hud") m_ui.hud = v != 0.0f;
+            else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
+            else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
+            else return Exec::Failed;
+        }
+        if (render) {
+            m_gfx.preset = QualityPreset::Custom;
+            m_gfx.changed = true;
+        }
+        return Exec::Done;
+    }
+    if (c.op == "camera") {
+        if (arg == "follow") {
+            if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+            return Exec::Done;
+        }
+        if (c.args.size() < 6) return Exec::Failed;
+        float v[6];
+        for (int i = 0; i < 6; ++i) v[i] = float(std::atof(c.args[std::size_t(i)].c_str()));
+        m_camera.setFreePose({v[0], v[1], v[2]}, {v[3], v[4], v[5]});
+        return Exec::Done;
+    }
+    if (c.op == "perf_begin") {
+        m_perfActive = true;
+        m_perfLabel = arg.empty() ? "perf" : arg;
+        m_perfFrameMs.clear();
+        m_perfCpuSum = m_perfGpuSum = 0.0;
+        m_perfGpuCount = 0;
+        return Exec::Done;
+    }
+    if (c.op == "perf_end") {
+        endPerf();
+        return Exec::Done;
+    }
     if (c.op == "reset_stats") {
         m_minCamClearance = 1e9f;
         m_maxAirWheels = 0;
@@ -508,6 +728,17 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "max_air") return m_maxAirWheels;
     if (n == "front_spring") return m_sim.vehicleConfig().tuning.frontSpringFrequency;
     if (n == "mass") return m_sim.vehicleConfig().mass;
+    if (n == "fps") return m_fps;
+    if (n == "frame_ms") return m_frameMs;
+    if (n == "cpu_ms") return m_cpuMs;
+    if (n == "gpu_ms") return m_renderer->stats().gpuMs;
+    if (n == "mud") return m_gfx.mud;
+    if (n == "quality") return double(int(m_gfx.preset));
+    if (n == "msaa") return m_renderer->settings().msaa;
+    if (n == "grass_blades") return double(m_renderer->stats().grassBlades);
+    if (n == "draw_calls") return m_renderer->stats().drawCalls;
+    if (n == "render_w") return m_renderer->stats().renderW;
+    if (n == "reflection") return m_renderer->stats().reflectionRendered ? 1.0 : 0.0;
     if (n == "depth_w") return m_renderer->depthWidth();
     if (n == "depth_h") return m_renderer->depthHeight();
     if (n == "depth_creations") return m_renderer->depthCreations();
@@ -565,6 +796,17 @@ int Application::run() {
         }
         stepSimulation(frameTime);
         renderFrame(float(std::min(frameTime, 0.1)));
+        // CPU frame cost: everything since the frame start except blocking on the swapchain (VSync/back-pressure).
+        const double workMs = 1000.0 * double(SDL_GetPerformanceCounter() - now) / freq;
+        m_cpuMs = std::max(0.0, workMs - m_renderer->stats().acquireWaitMs);
+        if (m_perfActive) {
+            m_perfFrameMs.push_back(frameTime * 1000.0);
+            m_perfCpuSum += m_cpuMs;
+            if (m_renderer->stats().gpuMs > 0.0) {
+                m_perfGpuSum += m_renderer->stats().gpuMs;
+                ++m_perfGpuCount;
+            }
+        }
 
         if (m_options.quitAfterSeconds > 0.0 && m_time >= m_options.quitAfterSeconds) {
             const auto p = m_sim.currentSnapshot().body.position;

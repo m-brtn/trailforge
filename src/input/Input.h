@@ -17,6 +17,8 @@ enum class Action {
     Reset,           // R / gamepad Back
     ToggleCamera,    // C / gamepad RB
     ToggleDebugUI,   // F1
+    ToggleGraphicsUI, // F2
+    ToggleHeadlights, // H
     TogglePause,     // Escape / gamepad Start
     StepOnce,        // N (while paused: a single physics step)
     Quit,

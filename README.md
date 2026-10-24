@@ -1,10 +1,18 @@
+![TrailForge](Banner.png)
+
 # TrailForge — off-road simulator prototype
 
 A small custom engine in C++20: SDL3 (window, input, gamepad), SDL GPU (rendering via Metal), Jolt Physics
 (`VehicleConstraint` + `WheeledVehicleController`), Dear ImGui (diagnostics), GLM. The focus of the prototype is
 vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs.
 
-All geometry is procedural; there are no external assets.
+All geometry and textures are procedural; there are no external assets.
+
+![Showcase](docs/showcase.jpg)
+
+Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun shadows, procedural sky with clouds and
+height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass with LOD, planar puddle reflections.
+A small mud & puddles showcase meadow sits north of the proving ground.
 
 ## Platforms
 
@@ -80,11 +88,19 @@ One command per line, `#` starts a comment:
 | `click KEY` / `inputclick KEY` / `scrollto KEY` / `text STR` | click an ImGui widget, Cmd+click (number input), scroll the Tuning window to a widget, type text |
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
+| `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `sun_el`, `sun_az`, `fog`, `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync` |
+| `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
+| `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
+
+Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
+`tools/scenarios/perf_presets.txt` (frame times per quality preset).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
-`win_w/h`, `px_w/h`, `msg:<substring>` (1 if the latest UI message contains the substring), and more.
+`win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
+`grass_blades`, `reflection`, `mud`, `msg:<substring>` (1 if the latest UI message contains the substring), and more.
 Full list: `Application::scenarioValue`.
 
 ## Controls
@@ -98,7 +114,9 @@ Full list: `Application::scenarioValue`.
 | Low range (only below 1 m/s) | L | Y (North) |
 | Reset to the last start point | R | Back |
 | Camera: follow ↔ free | C | RB |
+| Headlights | H | — |
 | Diagnostics | F1 | — |
+| Graphics panel (quality, look, cosmetic dirt) | F2 | — |
 | Pause | Escape | Start |
 | Single physics step (while paused) | N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
@@ -106,7 +124,7 @@ Full list: `Application::scenarioValue`.
 
 Brake and throttle are separate: S always brakes. To drive backwards, stop, press Q and hold W.
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
-F1 and Escape always work.
+F1, F2 and Escape always work.
 
 To type a number into an ImGui slider on macOS use **Cmd+click** (in ImGui's macOS mode Ctrl+click acts as a right click);
 on other platforms use Ctrl+click.
@@ -118,7 +136,9 @@ src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job s
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
-src/render/   Renderer (SDL GPU), Mesh, Camera, DebugDraw
+src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
+              Scenery (backdrop terrain, trees), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
+              GpuTimingMetal.m (GPU time from MTLCommandBuffer)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport)
 src/app/      Application (lifecycle and main loop), Scenario (scenario mode), main
@@ -155,7 +175,11 @@ While paused the physics is frozen; N performs exactly one step.
 
 - Mass 2000 kg, wheelbase 2.8 m, track 1.65 m, wheels r = 0.4 m and 0.3 m wide (35 kg each).
 - Center of mass 0.10 m below the frame center.
-- The body is a compound of three boxes; the same geometry is used for the mesh.
+- The body collision is a compound of three boxes. The visible model (`VehicleModel`, ~7k triangles) is a
+  procedural off-roader built around those boxes: beveled body, fenders, bumpers, snorkel, roof rack with lights,
+  spare wheel, lamps. Visual parts stick out slightly beyond the collision boxes.
+- Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
+  are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
 - Four-wheel drive:
   - engine 520 N·m, 800–4800 rpm;
@@ -182,10 +206,45 @@ Surrounded by an earth berm and concrete walls.
   - steps of 0.15 / 0.30 / 0.45 m;
   - a field of 28 rocks and two boulders.
 
+- **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
+  winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (μ×0.60/0.55),
+  the meadow is `Grass` (μ×0.80/0.78). There is **no sinkage, no ruts and no water physics**: puddles are dips in the
+  hard ground, and the water surface is render-only. Deformable terrain is a later stage.
+
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
+The outer backdrop (hills, trees beyond the walls) and grass are render-only and cannot be reached.
 Grip is computed per wheel: `SetCombineFriction` takes the material under the contact patch
 and multiplies the tire curve by the surface coefficients — longitudinal and lateral separately.
 Teleport points are in the Tuning window.
+
+## Rendering
+
+SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per frame:
+
+1. Sun shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with 1/4/12 taps).
+2. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
+3. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
+   rock/concrete/dirt, mask-blended grass/mud/wet ground, instanced grass (2.4 m chunks, 3 LOD levels, distance fade,
+   wind, flattened under the wheel contacts), procedural sky with clouds, water with Fresnel, ripples and reflection,
+   height fog, debug lines.
+4. Bloom (5-level downsample/upsample chain).
+5. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+
+Vehicle dirt is **cosmetic only**: a mud layer on the body (splash line from the bottom up) and wheels. In auto mode it
+builds up while the wheels roll on `Mud` or through puddles and slowly dries off; it never affects the physics.
+
+Quality presets (Graphics panel, F2; default High):
+
+| Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance |
+|---|---|---|---|---|---|---|---|
+| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m |
+| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m |
+| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m |
+| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m |
+
+The panel also shows CPU frame time (without the swapchain wait), GPU time (from `MTLCommandBuffer`
+`GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed
+individually (the preset becomes "Custom"). Physics debug lines are off by default (Tuning → Debug drawing).
 
 ## Diagnostics (F1)
 
@@ -225,6 +284,7 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients.
+  The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
 - No forced differential lock: Jolt supports only open and LSD.
   The LSD here limits the wheel speed ratio; it is not a preloaded clutch pack.
 - No aerodynamics or rolling resistance (linear damping = 0).
@@ -282,6 +342,26 @@ Everything below was actually run on macOS 27 / M-series.
   - Rebuild vehicle with 2600 kg mass: the mass is applied, the live spring tuning is kept, Σload ≈ m·g.
 
   Frames: `/tmp/trailforge_01_start.png` … `/tmp/trailforge_22_rebuilt.png`.
+  After the rendering stage: 128 / 0 again in Release and Debug (GPU debug layer), ctest 8/8 in both.
+- **Rendering performance** (`tools/scenarios/perf_presets.txt`, Release, 1440×900 pt window = 2880×1800 px
+  output, showcase follow camera and an overview camera, UI hidden, 4–5 s per sample).
+  Best (least disturbed) sample per preset and view across four runs, VSync off:
+
+| Preset | Render size | GPU ms (follow / overview) | FPS (follow / overview) | CPU ms | Grass blades drawn |
+|---|---|---|---|---|---|
+| Low | 1930×1206 | 3.2 / 3.1 | 264 / 314 | 0.5–0.7 | 1–2k |
+| Medium | 2448×1530 | 4.0 / 3.3 | 206 / 272 | 0.6–0.8 | 4–7k |
+| High | 2880×1800 | 3.9 / 3.8 | 271 / 266 | 0.8–0.9 | 16–34k |
+| Ultra | 2880×1800 | 5.4 / 6.0 | 219 / 205 | 0.9–1.0 | 60–93k |
+
+  With VSync on, High and Ultra averaged 58.4–60 FPS in these runs (frame time p95 ≈ 17.2–17.5 ms); during
+  `full_check` (VSync on, UI visible) the telemetry showed 116–120 FPS, so the presentation rate itself varies
+  between 60 and 120 Hz on this setup (not investigated).
+  The machine was shared with other load (a VM, media analysis, WindowServer ≈ 37 % CPU), and with VSync off macOS
+  still paced the background window: across four runs the same preset measured anywhere from 60 to 270 FPS,
+  frame counts quantized at 60/120 Hz. Treat the FPS column as an upper bound and the GPU time as the cost;
+  one contended Ultra+VSync run dropped to 51 FPS average with a 316 ms hitch.
+  Showcase frames: `tools/scenarios/visual_tour.txt` → `/tmp/trailforge_vis_01_follow.png` … `07_muddy_side.png`.
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;

@@ -25,6 +25,8 @@ public:
 
     void toggleMode();
     Mode mode() const { return m_mode; }
+    // Switch to the free camera at a fixed pose (scripted screenshots).
+    void setFreePose(const glm::vec3& position, const glm::vec3& target);
 
     // target is the interpolated body position, forward is its +Z axis (world).
     void update(float dt, const CameraInput& input, const glm::vec3& target, const glm::vec3& forward,

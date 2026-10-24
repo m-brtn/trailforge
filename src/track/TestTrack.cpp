@@ -20,7 +20,8 @@ using JPH::Vec3Arg;
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
-constexpr float kHalfSize = 50.0f;   // 100 x 100 m proving ground
+// 100 x 100 m proving ground (z < 50) plus the showcase meadow to the north.
+constexpr float kXMin = -50.0f, kXMax = 50.0f, kZMin = -50.0f, kZMax = 86.0f;
 constexpr float kGridStep = 0.5f;    // terrain grid step, m
 
 float deg(float d) { return d * kPi / 180.0f; }
@@ -64,13 +65,95 @@ constexpr float kLaneC0 = 16.0f, kLaneC1 = 36.0f;   // side slope, steps, rocks
 constexpr float kStartZ0 = -48.0f, kStartZ1 = -30.0f;
 constexpr float kLowGripZ0 = 24.0f, kLowGripZ1 = 42.0f;
 
-SurfaceId groundSurface(float x, float z) {
+// ---- Showcase (z > 46): a winding mud path with puddles through a grass meadow.
+constexpr float kShowZ0 = 46.0f;    // blend from the proving ground starts here
+constexpr float kShowZ1 = 52.0f;    // full showcase relief from here
+constexpr float kWaterLevel = 0.0f; // every puddle shares this level (one planar reflection)
+
+float pathCenterX(float z) { return 7.0f * std::sin((z - 50.0f) * 0.11f); }
+
+struct Puddle {
+    float x, z, rx, rz, depth; // ellipse radii, m; bottom depth below the water level, m
+};
+
+const Puddle* puddles(int& count) {
+    static const Puddle p[] = {
+        {pathCenterX(57.0f), 57.0f, 2.3f, 3.2f, 0.16f},
+        {pathCenterX(66.5f) + 0.5f, 66.5f, 2.7f, 3.8f, 0.20f},
+        {pathCenterX(76.0f) - 0.4f, 76.0f, 2.1f, 2.8f, 0.14f},
+        {-12.5f, 70.0f, 4.2f, 3.3f, 0.24f}, // mud wallow beside the path
+        {10.5f, 59.0f, 1.5f, 1.2f, 0.10f},  // rain pool in the grass
+    };
+    count = int(sizeof(p) / sizeof(p[0]));
+    return p;
+}
+
+// Squared normalized ellipse distance to puddle k (1 at the ellipse border).
+float puddleQ2(const Puddle& p, float x, float z) {
+    const float dx = (x - p.x) / p.rx, dz = (z - p.z) / p.rz;
+    return dx * dx + dz * dz;
+}
+
+float showcaseRelief(float x, float z) {
+    // Gentle meadow undulation, always >= ~0.12 m so that only the puddle bowls go below the water level.
+    float h = 0.12f + 0.11f * (1.0f + std::sin(0.23f * x + 0.7f) * std::cos(0.19f * z - 0.4f));
+    h += 0.05f * (1.0f + std::sin(0.61f * x + 0.37f * z + 1.3f));
+    // Grass hummocks.
+    auto mound = [&](float cx, float cz, float r, float height) {
+        const float d2 = ((x - cx) * (x - cx) + (z - cz) * (z - cz)) / (r * r);
+        return d2 < 1.0f ? height * (1.0f - d2) * (1.0f - d2) : 0.0f;
+    };
+    h += mound(15.0f, 66.0f, 7.0f, 1.3f) + mound(-17.0f, 81.0f, 6.0f, 1.0f) + mound(19.0f, 80.0f, 5.0f, 0.7f);
+    // The path is a shallow channel.
+    h -= 0.10f * TestTrack::showcaseMudWeight(x, z);
+    // Puddle bowls: min() with a paraboloid keeps the surface continuous.
+    int n = 0;
+    const Puddle* p = puddles(n);
+    const float rim = 0.08f;
+    for (int k = 0; k < n; ++k) h = std::min(h, -p[k].depth + (p[k].depth + rim) * puddleQ2(p[k], x, z));
+    return h;
+}
+
+SurfaceId groundSurface(float x, float z) { return TestTrack::groundSurfaceAt(x, z); }
+
+} // namespace
+
+SurfaceId TestTrack::groundSurfaceAt(float x, float z) {
     if (x > kLaneA0 && x < kLaneA1 && z > kStartZ0 && z < kStartZ1) return SurfaceId::Concrete;
     if (x > kLaneA0 && x < kLaneA1 && z > kLowGripZ0 && z < kLowGripZ1) return SurfaceId::LowGrip;
+    if (z > 47.0f) {
+        if (showcaseMudWeight(x, z) > 0.45f) return SurfaceId::Mud;
+        int n = 0;
+        const Puddle* p = puddles(n);
+        for (int k = 0; k < n; ++k)
+            if (puddleQ2(p[k], x, z) < 1.25f) return SurfaceId::Mud;
+        return SurfaceId::Grass;
+    }
     return SurfaceId::PackedDirt;
 }
 
-} // namespace
+float TestTrack::showcaseMudWeight(float x, float z) {
+    if (z < kShowZ0) return 0.0f;
+    const float path = 1.0f - smoothstep(2.4f, 3.8f, std::abs(x - pathCenterX(z)));
+    const float wallowD = std::sqrt(((x + 12.5f) / 6.0f) * ((x + 12.5f) / 6.0f) + ((z - 70.0f) / 4.8f) * ((z - 70.0f) / 4.8f));
+    const float wallow = 1.0f - smoothstep(0.7f, 1.0f, wallowD);
+    return std::max(path, wallow) * window(z, 48.5f, 83.0f, 1.5f);
+}
+
+TrackBounds TestTrack::bounds() { return {kXMin, kXMax, kZMin, kZMax}; }
+
+WaterInfo TestTrack::water() {
+    int n = 0;
+    const Puddle* p = puddles(n);
+    WaterInfo w{kWaterLevel, 1e9f, 1e9f, -1e9f, -1e9f};
+    for (int k = 0; k < n; ++k) {
+        w.x0 = std::min(w.x0, p[k].x - p[k].rx);
+        w.x1 = std::max(w.x1, p[k].x + p[k].rx);
+        w.z0 = std::min(w.z0, p[k].z - p[k].rz);
+        w.z1 = std::max(w.z1, p[k].z + p[k].rz);
+    }
+    return w;
+}
 
 // ------------------------------------------------------------------ TrackGeometry
 
@@ -175,9 +258,11 @@ float TestTrack::provingGroundHeight(float x, float z) {
         const float w = window(z, -36.0f, -16.0f, 8.0f) * window(x, kLaneC0 - 2.0f, kLaneC1 + 2.0f, 0.0f);
         if (w > 0.0f) h += w * std::tan(deg(18.0f)) * std::clamp(x - 18.0f, 0.0f, 14.0f);
     }
+    // Showcase meadow to the north (blends in over z = 46..52).
+    if (z > kShowZ0) h += smoothstep(kShowZ0, kShowZ1, z) * showcaseRelief(x, z);
     // Berm around the perimeter.
     {
-        const float d = std::min(kHalfSize - std::abs(x), kHalfSize - std::abs(z));
+        const float d = std::min(std::min(x - kXMin, kXMax - x), std::min(z - kZMin, kZMax - z));
         if (d < 5.0f) h += 0.08f * (5.0f - d) * (5.0f - d); // up to 2 m at the edge
     }
     return h;
@@ -220,19 +305,21 @@ TestTrack::~TestTrack() {
 
 void TestTrack::buildProvingGround() {
     auto& g = m_geometry;
-    const int n = int(2.0f * kHalfSize / kGridStep);
-    std::vector<float> heights((n + 1) * (n + 1));
-    auto px = [&](int i) { return -kHalfSize + i * kGridStep; };
-    for (int j = 0; j <= n; ++j)
-        for (int i = 0; i <= n; ++i)
-            heights[j * (n + 1) + i] = provingGroundHeight(px(i), px(j));
-    auto P = [&](int i, int j) { return Vec3(px(i), heights[j * (n + 1) + i], px(j)); };
+    const int nx = int((kXMax - kXMin) / kGridStep);
+    const int nz = int((kZMax - kZMin) / kGridStep);
+    std::vector<float> heights(size_t(nx + 1) * (nz + 1));
+    auto px = [&](int i) { return kXMin + i * kGridStep; };
+    auto pz = [&](int j) { return kZMin + j * kGridStep; };
+    for (int j = 0; j <= nz; ++j)
+        for (int i = 0; i <= nx; ++i)
+            heights[j * (nx + 1) + i] = provingGroundHeight(px(i), pz(j));
+    auto P = [&](int i, int j) { return Vec3(px(i), heights[j * (nx + 1) + i], pz(j)); };
 
-    g.positions.reserve(size_t(n) * n * 6 + 20000);
-    g.surfaces.reserve(size_t(n) * n * 2 + 7000);
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < n; ++i) {
-            const SurfaceId s = groundSurface(px(i) + 0.5f * kGridStep, px(j) + 0.5f * kGridStep);
+    g.positions.reserve(size_t(nx) * nz * 6 + 30000);
+    g.surfaces.reserve(size_t(nx) * nz * 2 + 10000);
+    for (int j = 0; j < nz; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const SurfaceId s = groundSurface(px(i) + 0.5f * kGridStep, pz(j) + 0.5f * kGridStep);
             // CCW from above: (x0,z0) -> (x0,z1) -> (x1,z0) gives a +Y normal.
             g.addTriangle(P(i, j), P(i, j + 1), P(i + 1, j), s);
             g.addTriangle(P(i + 1, j), P(i, j + 1), P(i + 1, j + 1), s);
@@ -242,10 +329,12 @@ void TestTrack::buildProvingGround() {
     // Concrete walls along the perimeter (behind the berm) keep the vehicle on the proving ground.
     const float wallT = 0.5f, wallTop = 5.0f, wallBottom = 0.5f;
     const float wy = 0.5f * (wallTop + wallBottom), whh = 0.5f * (wallTop - wallBottom);
-    g.addBox(Vec3(kHalfSize + wallT, wy, 0.0f), Vec3(wallT, whh, kHalfSize + 2.0f * wallT), 0.0f, SurfaceId::Concrete);
-    g.addBox(Vec3(-kHalfSize - wallT, wy, 0.0f), Vec3(wallT, whh, kHalfSize + 2.0f * wallT), 0.0f, SurfaceId::Concrete);
-    g.addBox(Vec3(0.0f, wy, kHalfSize + wallT), Vec3(kHalfSize, whh, wallT), 0.0f, SurfaceId::Concrete);
-    g.addBox(Vec3(0.0f, wy, -kHalfSize - wallT), Vec3(kHalfSize, whh, wallT), 0.0f, SurfaceId::Concrete);
+    const float cx = 0.5f * (kXMin + kXMax), cz = 0.5f * (kZMin + kZMax);
+    const float hx = 0.5f * (kXMax - kXMin), hz = 0.5f * (kZMax - kZMin);
+    g.addBox(Vec3(kXMax + wallT, wy, cz), Vec3(wallT, whh, hz + 2.0f * wallT), 0.0f, SurfaceId::Concrete);
+    g.addBox(Vec3(kXMin - wallT, wy, cz), Vec3(wallT, whh, hz + 2.0f * wallT), 0.0f, SurfaceId::Concrete);
+    g.addBox(Vec3(cx, wy, kZMax + wallT), Vec3(hx, whh, wallT), 0.0f, SurfaceId::Concrete);
+    g.addBox(Vec3(cx, wy, kZMin - wallT), Vec3(hx, whh, wallT), 0.0f, SurfaceId::Concrete);
 
     // Steps: 0.15, 0.30, 0.45 m (concrete), across lane C.
     const float stepX = 0.5f * (kLaneC0 + kLaneC1);
@@ -264,10 +353,35 @@ void TestTrack::buildProvingGround() {
         const Vec3 radii(r * rng.range(0.9f, 1.4f), r * rng.range(0.6f, 0.9f), r * rng.range(0.9f, 1.4f));
         g.addRock(Vec3(x, provingGroundHeight(x, z) - 0.25f * radii.GetY(), z), radii, rng.range(0.0f, 2.0f * kPi),
                   1000u + k, SurfaceId::Rock);
+        m_rocks.push_back({x, z, std::max(radii.GetX(), radii.GetZ())});
     }
     // A couple of large boulders to drive over with one wheel.
     g.addRock(Vec3(-3.0f, -0.35f, 21.5f), Vec3(0.9f, 0.7f, 1.0f), 0.4f, 7u, SurfaceId::Rock);
     g.addRock(Vec3(stepX - 2.0f, -0.3f, 15.5f), Vec3(1.1f, 0.8f, 1.0f), 1.1f, 11u, SurfaceId::Rock);
+    m_rocks.push_back({-3.0f, 21.5f, 1.0f});
+    m_rocks.push_back({stepX - 2.0f, 15.5f, 1.1f});
+
+    // Showcase rocks: in the meadow beside the mud path (a separate generator keeps the rock field unchanged).
+    {
+        Lcg srng{777u};
+        const float spots[][2] = {{-6.5f, 54.0f}, {12.0f, 62.5f}, {-4.0f, 61.0f}, {-19.0f, 63.0f}, {-1.0f, 73.0f},
+                                  {13.5f, 74.0f}, {-7.5f, 79.0f}, {6.0f, 82.0f}, {-21.0f, 74.5f}, {22.0f, 58.0f}};
+        int k = 0;
+        for (const auto& s : spots) {
+            const float r = srng.range(0.35f, 0.9f);
+            const Vec3 radii(r * srng.range(1.0f, 1.5f), r * srng.range(0.55f, 0.85f), r * srng.range(0.9f, 1.4f));
+            g.addRock(Vec3(s[0], provingGroundHeight(s[0], s[1]) - 0.3f * radii.GetY(), s[1]), radii,
+                      srng.range(0.0f, 2.0f * kPi), 3000u + k++, SurfaceId::Rock);
+            m_rocks.push_back({s[0], s[1], std::max(radii.GetX(), radii.GetZ())});
+        }
+        // Two boulders that frame the path.
+        const float bx = pathCenterX(70.5f) + 4.2f;
+        g.addRock(Vec3(bx, provingGroundHeight(bx, 70.5f) - 0.4f, 70.5f), Vec3(1.5f, 1.1f, 1.3f), 0.7f, 41u, SurfaceId::Rock);
+        m_rocks.push_back({bx, 70.5f, 1.5f});
+        g.addRock(Vec3(-3.5f, provingGroundHeight(-3.5f, 67.0f) - 0.35f, 67.0f), Vec3(1.1f, 0.9f, 1.2f), 2.1f, 43u,
+                  SurfaceId::Rock);
+        m_rocks.push_back({-3.5f, 67.0f, 1.2f});
+    }
 
     auto feature = [&](const char* name, float x, float z) {
         m_features.push_back({name, Vec3(x, provingGroundHeight(x, z), z), 0.0f});
@@ -281,6 +395,7 @@ void TestTrack::buildProvingGround() {
     // z = -7.5: past the side slope run-out (it fades out at z = -8), otherwise the vehicle rolls off ~20 degrees.
     feature("Steps 0.15/0.30/0.45 m", stepX, -7.5f);
     feature("Rock field", stepX, 14.0f);
+    feature("Mud & puddles showcase", 0.0f, 48.5f);
 }
 
 void TestTrack::buildFlat(bool withPit) {

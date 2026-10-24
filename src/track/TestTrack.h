@@ -44,6 +44,22 @@ struct TrackFeature {
     float yaw = 0.0f;   // rad, 0 = vehicle faces +Z
 };
 
+// Footprint of a rock (for render-side masks: no grass on rocks).
+struct RockFootprint {
+    float x = 0.0f, z = 0.0f, radius = 0.0f;
+};
+
+// Walled proving ground area (heightfield extent), meters.
+struct TrackBounds {
+    float xMin, xMax, zMin, zMax;
+};
+
+// Showcase puddles: the terrain dips below one common water level; the water surface itself is render-only.
+struct WaterInfo {
+    float level;          // m, world Y of the water surface
+    float x0, z0, x1, z1; // rectangle that contains every puddle
+};
+
 class TestTrack {
 public:
     TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout);
@@ -57,8 +73,16 @@ public:
     JPH::BodyID bodyId() const { return m_body; }
     TrackLayout layout() const { return m_layout; }
 
+    const std::vector<RockFootprint>& rocks() const { return m_rocks; }
+
     // Procedural terrain height (without rocks/steps), meters.
     static float provingGroundHeight(float x, float z);
+    // Ground surface of the heightfield at (x, z) (rocks and steps are separate).
+    static SurfaceId groundSurfaceAt(float x, float z);
+    // 0..1: how "muddy" the showcase ground is at (x, z); Mud surface where > 0.45 or inside a puddle.
+    static float showcaseMudWeight(float x, float z);
+    static TrackBounds bounds();
+    static WaterInfo water();
 
 private:
     void buildProvingGround();
@@ -68,6 +92,7 @@ private:
     TrackLayout m_layout;
     TrackGeometry m_geometry;
     std::vector<TrackFeature> m_features;
+    std::vector<RockFootprint> m_rocks;
     JPH::BodyID m_body;
 };
 

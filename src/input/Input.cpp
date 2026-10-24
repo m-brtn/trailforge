@@ -45,6 +45,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         if (e.key.repeat) break;
         // F1 and Escape always work; everything else only if the UI does not own the keyboard.
         if (e.key.key == SDLK_F1) { press(Action::ToggleDebugUI); break; }
+        if (e.key.key == SDLK_F2) { press(Action::ToggleGraphicsUI); break; }
         if (e.key.key == SDLK_ESCAPE) { press(Action::TogglePause); break; }
         if (uiWantsKeyboard) break;
         switch (e.key.key) {
@@ -53,6 +54,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDLK_R: press(Action::Reset); break;
         case SDLK_C: press(Action::ToggleCamera); break;
         case SDLK_N: press(Action::StepOnce); break;
+        case SDLK_H: press(Action::ToggleHeadlights); break;
         default: break;
         }
         break;

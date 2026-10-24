@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/DebugDraw.h"
+#include "render/RenderSettings.h"
 #include "vehicle/VehicleConfig.h"
 
 #include <map>
@@ -30,6 +31,24 @@ struct FrameStats {
     const char* gpuDriver = "";
     const char* shaderFormat = "";
     const char* gamepad = ""; // empty: not connected
+    double cpuFrameMs = 0.0;  // CPU time of the last frame without waiting for the swapchain
+    double gpuFrameMs = 0.0;  // GPU time of the last completed command buffer
+    unsigned renderW = 0, renderH = 0, outputW = 0, outputH = 0;
+    int drawCalls = 0;
+    unsigned long long grassBlades = 0;
+    bool reflection = false;
+    int maxMsaa = 1;
+};
+
+// Graphics panel state (owned by the application, edited by the UI).
+struct GraphicsState {
+    RenderSettings settings;
+    QualityPreset preset = QualityPreset::High;
+    bool changed = false;        // set by the UI when settings were edited
+    float mud = 0.0f;            // cosmetic mud on the vehicle, 0..1 (no effect on physics)
+    bool autoMud = true;         // accumulate while driving on the mud surface, wash off in water
+    bool headlights = true;
+    bool visible = false;        // F2
 };
 
 // UI requests to the application (executed outside the ImGui frame).
@@ -46,10 +65,11 @@ class DebugUI {
 public:
     explicit DebugUI(const VehicleConfig& initial);
 
-    UiRequests draw(Simulation& sim, const FrameStats& stats);
+    UiRequests draw(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);
 
     bool visible = true;
-    bool drawPhysicsDebug = true;
+    bool hud = true;               // the small always-on hint/perf window
+    bool drawPhysicsDebug = false; // off by default so the scene reads cleanly; Tuning > Debug drawing
     bool linesOnTop = true;
     VehicleDebugOptions debug;
 
@@ -62,6 +82,7 @@ private:
 
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req);
+    void drawGraphics(const FrameStats& stats, GraphicsState& gfx);
 
     VehicleTuning m_tuning;
     VehicleConfig m_config; // editable copy; applied with the "Rebuild vehicle" button

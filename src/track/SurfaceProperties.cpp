@@ -9,6 +9,8 @@ SurfaceTable::SurfaceTable() {
     m_props[size_t(SurfaceId::PackedDirt)] = {"Packed dirt", 0.85f, 0.85f, {0.42f, 0.34f, 0.22f}};
     m_props[size_t(SurfaceId::Rock)] = {"Rock", 0.90f, 0.90f, {0.38f, 0.37f, 0.36f}};
     m_props[size_t(SurfaceId::LowGrip)] = {"Low grip (hard)", 0.35f, 0.35f, {0.20f, 0.35f, 0.55f}};
+    m_props[size_t(SurfaceId::Mud)] = {"Mud look (rigid, low mu)", 0.60f, 0.55f, {0.16f, 0.11f, 0.07f}};
+    m_props[size_t(SurfaceId::Grass)] = {"Grass (rigid)", 0.80f, 0.78f, {0.20f, 0.26f, 0.09f}};
 
     for (size_t i = 0; i < kSurfaceCount; ++i) {
         const auto& p = m_props[i];

@@ -38,6 +38,8 @@ check failed:
 
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
+./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
+./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ```
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`.
@@ -53,9 +55,10 @@ src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job sys
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
-src/render/   Renderer (SDL GPU passes), Mesh, Camera, DebugDraw
+src/render/   Renderer (SDL GPU passes), RenderSettings, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
+              DebugDraw, GpuTimingMetal.m
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
-src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport)
+src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel)
 src/app/      Application (lifecycle, main loop), Scenario (scenario mode), main
 shaders/      scene.metal -> metallib at build time, embedded into the binary
 tests/        CTest physics tests (no window)
@@ -115,9 +118,10 @@ Example stage entry:
 
 - No hidden forces: no artificial downforce, no direct setting of velocity or position. The only teleports are
   the R reset and the teleport buttons / scenario `teleport`.
-- Do not claim simulation that does not exist. Surfaces differ only in friction coefficients; the low-grip
-  section is a rigid low-friction surface, not mud or ice. Deformable terrain is a later stage.
-- Wheel visuals are placed from the Jolt wheel transforms every frame; no decorative animation.
+- Do not claim simulation that does not exist. Mud is a rigid low-friction surface, puddles are dips in rigid
+  ground with a render-only water plane, vehicle dirt is cosmetic. Deformable terrain is a later stage.
+- Wheel and suspension visuals are placed from the Jolt wheel transforms and suspension length every frame;
+  no decorative animation.
 - Render geometry and collision of the proving ground come from the same triangles.
 - Keep the "Physics simplifications" list in `README.md` honest when behavior changes.
 - Only claim platforms that were actually run (currently macOS / Apple Silicon / Metal).
@@ -128,6 +132,6 @@ Example stage entry:
   verified).
 - Commit only after the build and tests above pass; mention the verified numbers (ctest, `full_check`) in the
   devlog.
-- Do not commit build output, captures or local files (`build/`, `*.bmp`, `*.png`,
+- Do not commit build output, captures or local files (`build/`, `*.bmp`, `*.png` except `Banner.png`,
   `imgui.ini`, `compile_commands.json`).
 - Push to `origin/main` with a normal push. Rewrite history or force push only when the user explicitly asks.

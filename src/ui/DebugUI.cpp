@@ -43,31 +43,120 @@ const UiItemRect* DebugUI::item(const std::string& key) const {
     return it != m_items.end() && it->second.frame == ImGui::GetFrameCount() ? &it->second : nullptr;
 }
 
-UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats) {
+UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState& gfx) {
     UiRequests req;
     req.vsync = m_vsync;
 
-    // A short hint is always visible (even with the UI hidden).
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.45f);
-    ImGui::Begin("##hud", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
-    {
+    // A short hint is always visible (even with the UI hidden), unless turned off for clean screenshots.
+    if (hud) {
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.45f);
+        ImGui::Begin("##hud", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
         const auto& t = sim.vehicle().telemetry();
         char g[8];
         ImGui::Text("%5.1f km/h  gear %s  %s%s  %4.0f rpm", std::abs(t.forwardSpeed) * 3.6f, gearName(t.gear, g, 8),
                     t.direction == DriveDirection::Forward ? "D" : "R", t.lowRange ? " LOW" : "", t.engineRPM);
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
-        ImGui::TextDisabled("W/S throttle/brake  A/D steer  Space handbrake  Q fwd/rev  L low range  R reset  C camera  F1 UI");
+        ImGui::TextDisabled("W/S throttle/brake  A/D steer  Space handbrake  Q fwd/rev  L low range  R reset  C camera  "
+                            "H lights  F1 UI  F2 graphics");
+        ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u", stats.fps, stats.frameMs,
+                            stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH);
+        ImGui::End();
     }
-    ImGui::End();
 
+    if (gfx.visible) drawGraphics(stats, gfx);
     if (!visible) return req;
     drawTelemetry(sim, stats, req);
     drawTuning(sim, req);
     return req;
+}
+
+void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float w = std::min(380.0f, display.x * 0.3f);
+    ImGui::SetNextWindowPos(ImVec2(0.5f * (display.x - w), 60), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Graphics (F2)", &gfx.visible);
+    remember("graphics", true);
+    RenderSettings& s = gfx.settings;
+    bool edited = false;
+
+    ImGui::Text("CPU %.2f ms  GPU %.2f ms  frame %.2f ms (%.0f FPS)", stats.cpuFrameMs, stats.gpuFrameMs, stats.frameMs,
+                stats.fps);
+    ImGui::Text("3D %ux%u -> %ux%u, %d draws, %.0fk grass blades%s", stats.renderW, stats.renderH, stats.outputW,
+                stats.outputH, stats.drawCalls, double(stats.grassBlades) / 1000.0,
+                stats.reflection ? ", reflection" : "");
+
+    int preset = int(gfx.preset);
+    const char* presets[] = {"Low", "Medium", "High", "Ultra", "Custom"};
+    if (ImGui::Combo("Quality", &preset, presets, 5) && preset != int(QualityPreset::Custom)) {
+        const RenderSettings look = s;
+        s = presetSettings(QualityPreset(preset));
+        s.exposure = look.exposure;
+        s.sunElevationDeg = look.sunElevationDeg;
+        s.sunAzimuthDeg = look.sunAzimuthDeg;
+        s.fogDensity = look.fogDensity;
+        s.bloomStrength = look.bloomStrength;
+        s.groundGrid = look.groundGrid;
+        gfx.preset = QualityPreset(preset);
+        gfx.changed = true;
+    }
+    remember("quality");
+
+    if (ImGui::CollapsingHeader("Performance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        edited |= ImGui::SliderFloat("Render scale", &s.renderScale, 0.5f, 1.0f, "%.2f");
+        int msaa = s.msaa >= 4 ? 2 : s.msaa >= 2 ? 1 : 0;
+        const char* msaaNames[] = {"Off", "2x", "4x"};
+        if (ImGui::Combo("MSAA", &msaa, msaaNames, stats.maxMsaa >= 4 ? 3 : stats.maxMsaa >= 2 ? 2 : 1)) {
+            s.msaa = msaa == 2 ? 4 : msaa == 1 ? 2 : 1;
+            edited = true;
+        }
+        edited |= ImGui::Checkbox("FXAA", &s.fxaa);
+        edited |= ImGui::SliderInt("Shadow cascades", &s.shadowCascades, 0, 4);
+        int sizeIdx = s.shadowMapSize >= 2048 ? 2 : s.shadowMapSize >= 1536 ? 1 : 0;
+        const char* sizes[] = {"1024", "1536", "2048"};
+        if (ImGui::Combo("Shadow map", &sizeIdx, sizes, 3)) {
+            s.shadowMapSize = sizeIdx == 2 ? 2048 : sizeIdx == 1 ? 1536 : 1024;
+            edited = true;
+        }
+        edited |= ImGui::SliderFloat("Shadow distance [m]", &s.shadowDistance, 20.0f, 150.0f, "%.0f");
+        const char* filters[] = {"Hard (1 tap)", "Soft (4 taps)", "Softer (12 taps)"};
+        edited |= ImGui::Combo("Shadow filter", &s.shadowFilter, filters, 3);
+        edited |= ImGui::Checkbox("Puddle reflections", &s.reflections);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        edited |= ImGui::SliderFloat("##reflscale", &s.reflectionScale, 0.25f, 1.0f, "%.2fx res");
+        const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
+        edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
+        edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 90.0f, "%.0f");
+        edited |= ImGui::Checkbox("Bloom", &s.bloom);
+        ImGui::SameLine();
+        edited |= ImGui::Checkbox("Clouds", &s.clouds);
+    }
+    if (ImGui::CollapsingHeader("Look", ImGuiTreeNodeFlags_DefaultOpen)) {
+        gfx.changed |= ImGui::SliderFloat("Exposure", &s.exposure, 0.3f, 3.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Sun elevation [deg]", &s.sunElevationDeg, 3.0f, 85.0f, "%.0f");
+        gfx.changed |= ImGui::SliderFloat("Sun azimuth [deg]", &s.sunAzimuthDeg, 0.0f, 360.0f, "%.0f");
+        gfx.changed |= ImGui::SliderFloat("Fog density", &s.fogDensity, 0.0f, 4.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Bloom strength", &s.bloomStrength, 0.0f, 0.2f, "%.3f");
+        gfx.changed |= ImGui::Checkbox("1 m ground grid", &s.groundGrid);
+        ImGui::Checkbox("Headlights (H)", &gfx.headlights);
+    }
+    if (ImGui::CollapsingHeader("Vehicle dirt (cosmetic)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Auto (builds up on mud and in puddles, slowly dries off)", &gfx.autoMud);
+        ImGui::BeginDisabled(gfx.autoMud);
+        ImGui::SliderFloat("Mud amount", &gfx.mud, 0.0f, 1.0f, "%.2f");
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Visual only: the ground is rigid; the Mud surface only has a lower friction.");
+    }
+    if (edited) {
+        gfx.preset = QualityPreset::Custom;
+        gfx.changed = true;
+    }
+    ImGui::End();
 }
 
 void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req) {

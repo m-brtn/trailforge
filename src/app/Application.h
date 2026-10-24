@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL_video.h>
 
+#include <array>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -90,7 +91,23 @@ private:
     DebugUI m_ui;
     FixedStepClock m_clock;
 
-    GpuMesh m_trackMesh, m_bodyMesh, m_wheelMesh;
+    void buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM);
+    void updateCosmetics(float dt);
+    void endPerf();
+
+    GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_bodyMesh, m_wheelMesh;
+    GpuMesh m_springMesh, m_armMesh, m_halfShaftMesh, m_shockBodyMesh, m_shockShaftMesh;
+    float m_wheelMeshRadius = 0.0f, m_wheelMeshWidth = 0.0f;
+    std::vector<DrawItem> m_draws;
+    GraphicsState m_gfx;
+    double m_cpuMs = 0.0;            // last frame: CPU work without the swapchain wait
+
+    // perf_begin / perf_end (scenario frame-time measurement)
+    bool m_perfActive = false;
+    std::string m_perfLabel;
+    std::vector<double> m_perfFrameMs;
+    double m_perfCpuSum = 0.0, m_perfGpuSum = 0.0;
+    int m_perfGpuCount = 0;
 
     bool m_running = true;
     bool m_paused = false;

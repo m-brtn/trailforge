@@ -1,0 +1,66 @@
+# Frame-time measurement per quality preset in the mud & puddles showcase (follow camera, UI hidden):
+#   ./build/release/trailforge --script tools/scenarios/perf_presets.txt
+# Prints one "PERF <label> ..." line per run: FPS, frame avg/p95/p99/max, CPU and GPU ms per frame.
+set ui 0
+teleport 8
+wait 2.0
+set vsync 0
+# Warm-up: let the present mode switch settle and the GPU clocks ramp up before the first sample.
+quality High
+wait 4
+quality Low
+wait 1.5
+perf_begin low_novsync
+wait 5
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_novsync
+wait 5
+perf_end
+quality High
+wait 1.5
+perf_begin high_novsync
+wait 5
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_novsync
+wait 5
+perf_end
+# Free camera over the whole showcase (more grass and both reflections in view).
+camera -4 6 40 -6 0 70
+quality Low
+wait 1.5
+perf_begin low_overview
+wait 4
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_overview
+wait 4
+perf_end
+quality High
+wait 1.5
+perf_begin high_overview
+wait 4
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_overview
+wait 4
+perf_end
+camera follow
+set vsync 1
+quality High
+wait 1.5
+perf_begin high_vsync
+wait 5
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_vsync
+wait 5
+perf_end
+expect fps > 55
+quit

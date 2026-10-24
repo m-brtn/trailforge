@@ -1,12 +1,16 @@
 #include "render/Renderer.h"
 
-#include <SDL3/SDL_log.h>
-#include <SDL3/SDL_surface.h>
+#include "render/GroundMaps.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_log.h>
+#include <SDL3/SDL_surface.h>
 #include <imgui.h>
 #include <imgui_impl_sdlgpu3.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -21,11 +25,62 @@ extern const std::uint8_t g_scene_metallib[];
 extern const std::size_t g_scene_metallib_size;
 #endif
 
+extern "C" double tf_metal_fence_gpu_ms(const void* fence);
+
 namespace tf {
 namespace {
 
 [[noreturn]] void fail(const std::string& what) {
     throw std::runtime_error(what + ": " + SDL_GetError());
+}
+
+enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2 };
+enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3 };
+
+constexpr float kGrassChunk = 2.4f;
+constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
+constexpr int kGrassSegs[3] = {4, 2, 1};
+constexpr int kBloomLevels = 5;
+
+SDL_GPUSampleCount sampleCount(int n) {
+    return n >= 4 ? SDL_GPU_SAMPLECOUNT_4 : n == 2 ? SDL_GPU_SAMPLECOUNT_2 : SDL_GPU_SAMPLECOUNT_1;
+}
+
+struct Frustum {
+    glm::vec4 planes[6];
+    explicit Frustum(const glm::mat4& m) {
+        auto row = [&](int i) { return glm::vec4(m[0][i], m[1][i], m[2][i], m[3][i]); };
+        const glm::vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+        planes[0] = r3 + r0;
+        planes[1] = r3 - r0;
+        planes[2] = r3 + r1;
+        planes[3] = r3 - r1;
+        planes[4] = r2; // depth 0..1
+        planes[5] = r3 - r2;
+        for (glm::vec4& p : planes) p /= glm::length(glm::vec3(p));
+    }
+    bool sphere(const glm::vec3& c, float r) const {
+        for (const glm::vec4& p : planes)
+            if (glm::dot(glm::vec3(p), c) + p.w < -r) return false;
+        return true;
+    }
+    bool box(const glm::vec3& bmin, const glm::vec3& bmax) const {
+        for (const glm::vec4& p : planes) {
+            const glm::vec3 v(p.x > 0 ? bmax.x : bmin.x, p.y > 0 ? bmax.y : bmin.y, p.z > 0 ? bmax.z : bmin.z);
+            if (glm::dot(glm::vec3(p), v) + p.w < 0.0f) return false;
+        }
+        return true;
+    }
+};
+
+// World-space bounding sphere of a draw (mesh AABB under the model transform).
+void drawSphere(const DrawItem& d, glm::vec3& center, float& radius) {
+    const glm::vec3 c = 0.5f * (d.mesh->boundsMin() + d.mesh->boundsMax());
+    const glm::vec3 e = 0.5f * (d.mesh->boundsMax() - d.mesh->boundsMin());
+    center = glm::vec3(d.model * glm::vec4(c, 1.0f));
+    const float s = std::max({glm::length(glm::vec3(d.model[0])), glm::length(glm::vec3(d.model[1])),
+                              glm::length(glm::vec3(d.model[2]))});
+    radius = glm::length(e) * s;
 }
 
 } // namespace
@@ -36,6 +91,8 @@ GpuMesh& GpuMesh::operator=(GpuMesh&& o) noexcept {
         m_device = o.m_device;
         m_buffer = o.m_buffer;
         m_count = o.m_count;
+        m_min = o.m_min;
+        m_max = o.m_max;
         o.m_device = nullptr;
         o.m_buffer = nullptr;
         o.m_count = 0;
@@ -48,6 +105,8 @@ void GpuMesh::release() {
     m_buffer = nullptr;
     m_count = 0;
 }
+
+// ---------------------------------------------------------------- setup
 
 Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
     // Only formats with available shaders are offered (Metal). On other
@@ -65,6 +124,7 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         fail("SDL_ClaimWindowForGPUDevice");
     }
     SDL_SetGPUSwapchainParameters(m_device, m_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC);
+    m_colorFormat = swapchainFormat();
 
     const SDL_GPUShaderFormat supported = SDL_GetGPUShaderFormats(m_device);
 #if defined(TRAILFORGE_HAS_METALLIB)
@@ -80,22 +140,90 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         fail("No supported shader format");
     }
 
-    m_depthFormat = SDL_GPUTextureSupportsFormat(m_device, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTURETYPE_2D,
-                                                 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
-                        ? SDL_GPU_TEXTUREFORMAT_D32_FLOAT
-                        : SDL_GPU_TEXTUREFORMAT_D24_UNORM;
-    createPipelines();
+    if (!SDL_GPUTextureSupportsFormat(m_device, kDepthFormat, SDL_GPU_TEXTURETYPE_2D_ARRAY,
+                                      SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER))
+        fail("D32 depth textures are required");
+    m_maxMsaa = 1;
+    if (SDL_GPUTextureSupportsSampleCount(m_device, kHdrFormat, SDL_GPU_SAMPLECOUNT_2) &&
+        SDL_GPUTextureSupportsSampleCount(m_device, kDepthFormat, SDL_GPU_SAMPLECOUNT_2))
+        m_maxMsaa = 2;
+    if (SDL_GPUTextureSupportsSampleCount(m_device, kHdrFormat, SDL_GPU_SAMPLECOUNT_4) &&
+        SDL_GPUTextureSupportsSampleCount(m_device, kDepthFormat, SDL_GPU_SAMPLECOUNT_4))
+        m_maxMsaa = 4;
+
+    // Samplers.
+    {
+        SDL_GPUSamplerCreateInfo si{};
+        si.min_filter = SDL_GPU_FILTER_LINEAR;
+        si.mag_filter = SDL_GPU_FILTER_LINEAR;
+        si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+        si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        si.enable_compare = true;
+        si.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+        m_cmpSampler = SDL_CreateGPUSampler(m_device, &si);
+
+        si.enable_compare = false;
+        m_clampSampler = SDL_CreateGPUSampler(m_device, &si);
+
+        si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+        si.enable_anisotropy = true;
+        si.max_anisotropy = 8.0f;
+        si.max_lod = 16.0f;
+        m_repeatSampler = SDL_CreateGPUSampler(m_device, &si);
+        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler) fail("samplers");
+    }
+
+    // Grass chunk storage buffer.
+    {
+        SDL_GPUBufferCreateInfo bi{};
+        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+        bi.size = kMaxGrassChunks * sizeof(glm::vec4);
+        m_grassBuffer = SDL_CreateGPUBuffer(m_device, &bi);
+        SDL_GPUTransferBufferCreateInfo ti{};
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = bi.size;
+        m_grassTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
+        if (!m_grassBuffer || !m_grassTransfer) fail("grass buffers");
+    }
+
+    // 1x1 placeholders until setGround() is called.
+    {
+        const std::uint8_t px[4] = {128, 128, 128, 255};
+        const std::uint16_t h = 0;
+        m_noise = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        m_mask = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        m_height = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R16_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        uploadTexture(m_noise.tex, px, 1, 1, 4);
+        uploadTexture(m_mask.tex, px, 1, 1, 4);
+        uploadTexture(m_height.tex, &h, 1, 1, 2);
+    }
+
+    m_settings = presetSettings(QualityPreset::High);
+    m_settings.msaa = std::min(m_settings.msaa, m_maxMsaa);
+    createStaticPipelines();
+    createScenePipelines();
 }
 
 Renderer::~Renderer() {
     if (!m_device) return;
     SDL_WaitForGPUIdle(m_device);
+    for (PendingFence& f : m_fences) SDL_ReleaseGPUFence(m_device, f.fence);
+    m_fences.clear();
+    releaseTargets();
+    releaseScenePipelines();
+    for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
+                                       m_tonemapPipe, m_fxaaPipe})
+        if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
+    releaseTexture(m_noise);
+    releaseTexture(m_mask);
+    releaseTexture(m_height);
+    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler})
+        if (s) SDL_ReleaseGPUSampler(m_device, s);
+    if (m_grassBuffer) SDL_ReleaseGPUBuffer(m_device, m_grassBuffer);
+    if (m_grassTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_grassTransfer);
     if (m_lineBuffer) SDL_ReleaseGPUBuffer(m_device, m_lineBuffer);
     if (m_lineTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_lineTransfer);
-    if (m_depth) SDL_ReleaseGPUTexture(m_device, m_depth);
-    if (m_litPipeline) SDL_ReleaseGPUGraphicsPipeline(m_device, m_litPipeline);
-    if (m_linePipeline) SDL_ReleaseGPUGraphicsPipeline(m_device, m_linePipeline);
-    if (m_lineOnTopPipeline) SDL_ReleaseGPUGraphicsPipeline(m_device, m_lineOnTopPipeline);
     SDL_ReleaseWindowFromGPUDevice(m_device, m_window);
     SDL_DestroyGPUDevice(m_device);
 }
@@ -105,6 +233,7 @@ SDL_GPUTextureFormat Renderer::swapchainFormat() const {
 }
 
 void Renderer::setVSync(bool on) {
+    m_vsync = on;
     SDL_SetGPUSwapchainParameters(m_device, m_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
                                   on ? SDL_GPU_PRESENTMODE_VSYNC
                                      : (SDL_WindowSupportsGPUPresentMode(m_device, m_window, SDL_GPU_PRESENTMODE_IMMEDIATE)
@@ -112,12 +241,37 @@ void Renderer::setVSync(bool on) {
                                             : SDL_GPU_PRESENTMODE_VSYNC));
 }
 
-SDL_GPUShader* Renderer::createShader(const char* entry, SDL_GPUShaderStage stage, std::uint32_t uniformBuffers) {
+void Renderer::setSettings(const RenderSettings& in) {
+    RenderSettings s = in;
+    s.renderScale = std::clamp(s.renderScale, 0.4f, 1.0f);
+    s.msaa = s.msaa >= 4 ? 4 : s.msaa >= 2 ? 2 : 1;
+    s.msaa = std::min(s.msaa, m_maxMsaa);
+    s.shadowCascades = std::clamp(s.shadowCascades, 0, 4);
+    s.shadowMapSize = std::clamp(s.shadowMapSize, 512, 4096);
+    s.shadowDistance = std::clamp(s.shadowDistance, 10.0f, 300.0f);
+    s.shadowFilter = std::clamp(s.shadowFilter, 0, 2);
+    s.reflectionScale = std::clamp(s.reflectionScale, 0.2f, 1.0f);
+    s.grassLevel = std::clamp(s.grassLevel, 0, 4);
+    s.grassDistance = std::clamp(s.grassDistance, 5.0f, 120.0f);
+    s.exposure = std::clamp(s.exposure, 0.1f, 8.0f);
+    s.sunElevationDeg = std::clamp(s.sunElevationDeg, 2.0f, 89.0f);
+    const bool targets = s.renderScale != m_settings.renderScale || s.msaa != m_settings.msaa ||
+                         s.shadowCascades != m_settings.shadowCascades || s.shadowMapSize != m_settings.shadowMapSize ||
+                         s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
+                         s.reflections != m_settings.reflections || s.bloom != m_settings.bloom;
+    m_settings = s;
+    if (targets) m_targetsDirty = true;
+}
+
+SDL_GPUShader* Renderer::createShader(const char* entry, SDL_GPUShaderStage stage, std::uint32_t uniformBuffers,
+                                      std::uint32_t samplers, std::uint32_t storageBuffers) {
     SDL_GPUShaderCreateInfo info{};
     info.entrypoint = entry;
     info.format = m_shaderFormat;
     info.stage = stage;
     info.num_uniform_buffers = uniformBuffers;
+    info.num_samplers = samplers;
+    info.num_storage_buffers = storageBuffers;
 #if defined(TRAILFORGE_HAS_METALLIB)
     if (m_shaderFormat == SDL_GPU_SHADERFORMAT_METALLIB) {
         info.code = g_scene_metallib;
@@ -133,117 +287,304 @@ SDL_GPUShader* Renderer::createShader(const char* entry, SDL_GPUShaderStage stag
     return s;
 }
 
-void Renderer::createPipelines() {
-    const SDL_GPUTextureFormat colorFormat = swapchainFormat();
+SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char* fsName, std::uint32_t vsUniforms,
+                                                  std::uint32_t fsUniforms, std::uint32_t vsSamplers,
+                                                  std::uint32_t fsSamplers, std::uint32_t vsStorage, int vertexLayout,
+                                                  SDL_GPUTextureFormat color, SDL_GPUSampleCount samples,
+                                                  bool depthTest, bool depthWrite, SDL_GPUCullMode cull,
+                                                  SDL_GPUFrontFace front, int blend, SDL_GPUPrimitiveType prim,
+                                                  bool depthBias) {
+    SDL_GPUShader* vs = createShader(vsName, SDL_GPU_SHADERSTAGE_VERTEX, vsUniforms, vsSamplers, vsStorage);
+    SDL_GPUShader* fs = createShader(fsName, SDL_GPU_SHADERSTAGE_FRAGMENT, fsUniforms, fsSamplers);
 
-    SDL_GPUColorTargetDescription colorTarget{};
-    colorTarget.format = colorFormat;
-
-    // ---- Lit meshes
-    {
-        SDL_GPUShader* vs = createShader("lit_vs", SDL_GPU_SHADERSTAGE_VERTEX, 2);
-        SDL_GPUShader* fs = createShader("lit_fs", SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
-
-        SDL_GPUVertexBufferDescription vb{};
-        vb.slot = 0;
+    SDL_GPUVertexBufferDescription vb{};
+    vb.slot = 0;
+    vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+    SDL_GPUVertexAttribute attrs[4]{};
+    std::uint32_t numAttrs = 0;
+    if (vertexLayout == kLayoutLit) {
         vb.pitch = sizeof(LitVertex);
-        vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-        SDL_GPUVertexAttribute attrs[3]{};
         attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, position))};
         attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, normal))};
         attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, color))};
-
-        SDL_GPUGraphicsPipelineCreateInfo pi{};
-        pi.vertex_shader = vs;
-        pi.fragment_shader = fs;
-        pi.vertex_input_state.vertex_buffer_descriptions = &vb;
-        pi.vertex_input_state.num_vertex_buffers = 1;
-        pi.vertex_input_state.vertex_attributes = attrs;
-        pi.vertex_input_state.num_vertex_attributes = 3;
-        pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-        pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-        pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
-        pi.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-        pi.rasterizer_state.enable_depth_clip = true;
-        pi.depth_stencil_state.enable_depth_test = true;
-        pi.depth_stencil_state.enable_depth_write = true;
-        pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-        pi.target_info.color_target_descriptions = &colorTarget;
-        pi.target_info.num_color_targets = 1;
-        pi.target_info.depth_stencil_format = m_depthFormat;
-        pi.target_info.has_depth_stencil_target = true;
-        m_litPipeline = SDL_CreateGPUGraphicsPipeline(m_device, &pi);
-        SDL_ReleaseGPUShader(m_device, vs);
-        SDL_ReleaseGPUShader(m_device, fs);
-        if (!m_litPipeline) fail("lit pipeline");
-    }
-
-    // ---- Debug lines (depth-tested and on top of everything)
-    {
-        SDL_GPUShader* vs = createShader("line_vs", SDL_GPU_SHADERSTAGE_VERTEX, 1);
-        SDL_GPUShader* fs = createShader("line_fs", SDL_GPU_SHADERSTAGE_FRAGMENT, 0);
-
-        SDL_GPUVertexBufferDescription vb{};
-        vb.slot = 0;
+        attrs[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, std::uint32_t(offsetof(LitVertex, material))};
+        numAttrs = 4;
+    } else if (vertexLayout == kLayoutLine) {
         vb.pitch = sizeof(LineVertex);
-        vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-        SDL_GPUVertexAttribute attrs[2]{};
         attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LineVertex, position))};
         attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, std::uint32_t(offsetof(LineVertex, color))};
+        numAttrs = 2;
+    }
 
-        SDL_GPUColorTargetDescription blended = colorTarget;
-        blended.blend_state.enable_blend = true;
-        blended.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-        blended.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-        blended.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
-        blended.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-        blended.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-        blended.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    SDL_GPUColorTargetDescription ct{};
+    ct.format = color;
+    SDL_GPUColorTargetBlendState& b = ct.blend_state;
+    if (blend != kBlendNone) {
+        b.enable_blend = true;
+        b.color_blend_op = SDL_GPU_BLENDOP_ADD;
+        b.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+        if (blend == kBlendAlpha) {
+            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        } else if (blend == kBlendPremultiplied) {
+            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        } else {
+            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        }
+    }
 
-        SDL_GPUGraphicsPipelineCreateInfo pi{};
-        pi.vertex_shader = vs;
-        pi.fragment_shader = fs;
+    SDL_GPUGraphicsPipelineCreateInfo pi{};
+    pi.vertex_shader = vs;
+    pi.fragment_shader = fs;
+    if (numAttrs > 0) {
         pi.vertex_input_state.vertex_buffer_descriptions = &vb;
         pi.vertex_input_state.num_vertex_buffers = 1;
         pi.vertex_input_state.vertex_attributes = attrs;
-        pi.vertex_input_state.num_vertex_attributes = 2;
-        pi.primitive_type = SDL_GPU_PRIMITIVETYPE_LINELIST;
-        pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-        pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-        pi.rasterizer_state.enable_depth_clip = true;
-        pi.depth_stencil_state.enable_depth_test = true;
-        pi.depth_stencil_state.enable_depth_write = false;
-        pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-        pi.target_info.color_target_descriptions = &blended;
-        pi.target_info.num_color_targets = 1;
-        pi.target_info.depth_stencil_format = m_depthFormat;
-        pi.target_info.has_depth_stencil_target = true;
-        m_linePipeline = SDL_CreateGPUGraphicsPipeline(m_device, &pi);
-        pi.depth_stencil_state.enable_depth_test = false;
-        m_lineOnTopPipeline = SDL_CreateGPUGraphicsPipeline(m_device, &pi);
-        SDL_ReleaseGPUShader(m_device, vs);
-        SDL_ReleaseGPUShader(m_device, fs);
-        if (!m_linePipeline || !m_lineOnTopPipeline) fail("line pipeline");
+        pi.vertex_input_state.num_vertex_attributes = numAttrs;
     }
+    pi.primitive_type = prim;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.rasterizer_state.cull_mode = cull;
+    pi.rasterizer_state.front_face = front;
+    pi.rasterizer_state.enable_depth_clip = !depthBias; // shadow casters behind the light near plane are clamped
+    if (depthBias) {
+        pi.rasterizer_state.enable_depth_bias = true;
+        pi.rasterizer_state.depth_bias_constant_factor = 1.0f;
+        pi.rasterizer_state.depth_bias_slope_factor = 1.75f;
+        pi.rasterizer_state.depth_bias_clamp = 0.01f;
+    }
+    pi.multisample_state.sample_count = samples;
+    pi.depth_stencil_state.enable_depth_test = depthTest;
+    pi.depth_stencil_state.enable_depth_write = depthWrite;
+    pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+    pi.target_info.color_target_descriptions = color != SDL_GPU_TEXTUREFORMAT_INVALID ? &ct : nullptr;
+    pi.target_info.num_color_targets = color != SDL_GPU_TEXTUREFORMAT_INVALID ? 1 : 0;
+    const bool hasDepth = depthTest || depthWrite;
+    pi.target_info.depth_stencil_format = hasDepth ? kDepthFormat : SDL_GPU_TEXTUREFORMAT_INVALID;
+    pi.target_info.has_depth_stencil_target = hasDepth;
+    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(m_device, &pi);
+    SDL_ReleaseGPUShader(m_device, vs);
+    SDL_ReleaseGPUShader(m_device, fs);
+    if (!p) fail(std::string("pipeline ") + vsName + "/" + fsName);
+    return p;
 }
 
-void Renderer::ensureDepthTexture(std::uint32_t w, std::uint32_t h) {
-    if (m_depth && m_depthW == w && m_depthH == h) return;
-    if (m_depth) SDL_ReleaseGPUTexture(m_device, m_depth);
+void Renderer::createStaticPipelines() {
+    const auto none = SDL_GPU_TEXTUREFORMAT_INVALID;
+    const auto s1 = SDL_GPU_SAMPLECOUNT_1;
+    const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    m_shadowPipe = createPipeline("shadow_vs", "shadow_fs", 2, 0, 0, 0, 0, kLayoutLit, none, s1, true, true,
+                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, true);
+    // Mirrored view: the winding flips, so front faces are clockwise.
+    m_reflLitPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, s1, true, true,
+                                   SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
+    m_reflSkyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, true, false,
+                                   SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_bloomDownPipe = createPipeline("fullscreen_vs", "bloom_down_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1,
+                                     false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_bloomUpPipe = createPipeline("fullscreen_vs", "bloom_up_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, false,
+                                   false, SDL_GPU_CULLMODE_NONE, ccw, kBlendAdd);
+    m_tonemapPipe = createPipeline("fullscreen_vs", "tonemap_fs", 0, 1, 0, 2, 0, kLayoutNone, m_colorFormat, s1, false,
+                                   false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false, false,
+                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+}
+
+void Renderer::createScenePipelines() {
+    const SDL_GPUSampleCount sc = sampleCount(m_settings.msaa);
+    const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+    m_litPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, sc, true, true,
+                               SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
+    m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, sc, true, false,
+                               SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 2, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
+                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
+                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
+    m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
+                                SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
+    m_lineOnTopPipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, false, false,
+                                     SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
+    m_sceneMsaa = m_settings.msaa;
+}
+
+void Renderer::releaseScenePipelines() {
+    for (SDL_GPUGraphicsPipeline** p : {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe}) {
+        if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
+        *p = nullptr;
+    }
+    m_sceneMsaa = 0;
+}
+
+Renderer::Texture Renderer::makeTexture(std::uint32_t w, std::uint32_t h, SDL_GPUTextureFormat fmt,
+                                        SDL_GPUTextureUsageFlags usage, SDL_GPUSampleCount samples,
+                                        std::uint32_t layers, std::uint32_t levels, SDL_GPUTextureType type) {
     SDL_GPUTextureCreateInfo ti{};
-    ti.type = SDL_GPU_TEXTURETYPE_2D;
-    ti.format = m_depthFormat;
-    ti.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
-    ti.width = w;
-    ti.height = h;
-    ti.layer_count_or_depth = 1;
-    ti.num_levels = 1;
-    ti.sample_count = SDL_GPU_SAMPLECOUNT_1;
-    m_depth = SDL_CreateGPUTexture(m_device, &ti);
-    if (!m_depth) fail("depth texture");
-    m_depthW = w;
-    m_depthH = h;
-    ++m_depthCreations;
+    ti.type = type;
+    ti.format = fmt;
+    ti.usage = usage;
+    ti.width = std::max<std::uint32_t>(w, 1);
+    ti.height = std::max<std::uint32_t>(h, 1);
+    ti.layer_count_or_depth = layers;
+    ti.num_levels = levels;
+    ti.sample_count = samples;
+    Texture t;
+    t.tex = SDL_CreateGPUTexture(m_device, &ti);
+    if (!t.tex) fail("texture");
+    t.w = ti.width;
+    t.h = ti.height;
+    return t;
+}
+
+void Renderer::releaseTexture(Texture& t) {
+    if (t.tex) SDL_ReleaseGPUTexture(m_device, t.tex);
+    t = {};
+}
+
+void Renderer::releaseTargets() {
+    releaseTexture(m_hdrMsaa);
+    releaseTexture(m_hdr);
+    releaseTexture(m_depth);
+    releaseTexture(m_reflColor);
+    releaseTexture(m_reflDepth);
+    releaseTexture(m_shadow);
+    for (Texture& t : m_bloom) releaseTexture(t);
+    m_bloom.clear();
+    releaseTexture(m_ldr);
+}
+
+void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
+    if (!m_targetsDirty && outW == m_outW && outH == m_outH && m_sceneMsaa == m_settings.msaa) return;
+    SDL_WaitForGPUIdle(m_device);
+    if (m_sceneMsaa != m_settings.msaa) {
+        releaseScenePipelines();
+        createScenePipelines();
+    }
+    releaseTargets();
+    const RenderSettings& s = m_settings;
+    const std::uint32_t rw = std::max<std::uint32_t>(16, std::uint32_t(std::lround(outW * s.renderScale)));
+    const std::uint32_t rh = std::max<std::uint32_t>(16, std::uint32_t(std::lround(outH * s.renderScale)));
+    const SDL_GPUSampleCount sc = sampleCount(s.msaa);
+    const auto colorRT = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    const auto sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    const auto depthRT = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    if (s.msaa > 1) m_hdrMsaa = makeTexture(rw, rh, kHdrFormat, colorRT, sc);
+    m_hdr = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+    m_depth = makeTexture(rw, rh, kDepthFormat, depthRT, sc);
+    if (s.reflections) {
+        const std::uint32_t fw = std::uint32_t(std::lround(rw * s.reflectionScale));
+        const std::uint32_t fh = std::uint32_t(std::lround(rh * s.reflectionScale));
+        m_reflColor = makeTexture(fw, fh, kHdrFormat, colorRT | sampled);
+        m_reflDepth = makeTexture(fw, fh, kDepthFormat, depthRT);
+    }
+    m_shadow = makeTexture(std::uint32_t(s.shadowMapSize), std::uint32_t(s.shadowMapSize), kDepthFormat,
+                           depthRT | sampled, SDL_GPU_SAMPLECOUNT_1, std::uint32_t(std::max(1, s.shadowCascades)), 1,
+                           SDL_GPU_TEXTURETYPE_2D_ARRAY);
+    if (s.bloom) {
+        std::uint32_t bw = rw, bh = rh;
+        for (int i = 0; i < kBloomLevels; ++i) {
+            bw = std::max<std::uint32_t>(1, bw / 2);
+            bh = std::max<std::uint32_t>(1, bh / 2);
+            m_bloom.push_back(makeTexture(bw, bh, kHdrFormat, colorRT | sampled));
+        }
+    }
+    if (s.fxaa) m_ldr = makeTexture(outW, outH, m_colorFormat, colorRT | sampled);
+    m_outW = outW;
+    m_outH = outH;
+    m_stats.renderW = rw;
+    m_stats.renderH = rh;
+    m_stats.outputW = outW;
+    m_stats.outputH = outH;
+    ++m_targetCreations;
+    m_targetsDirty = false;
+}
+
+void Renderer::uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_t w, std::uint32_t h,
+                             std::uint32_t bytesPerPixel) {
+    const std::uint32_t bytes = w * h * bytesPerPixel;
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = bytes;
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
+    if (!tb) fail("texture transfer buffer");
+    std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), data, bytes);
+    SDL_UnmapGPUTransferBuffer(m_device, tb);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    SDL_GPUTextureTransferInfo src{};
+    src.transfer_buffer = tb;
+    src.pixels_per_row = w;
+    src.rows_per_layer = h;
+    SDL_GPUTextureRegion dst{};
+    dst.texture = tex;
+    dst.w = w;
+    dst.h = h;
+    dst.d = 1;
+    SDL_UploadToGPUTexture(copy, &src, &dst, false);
+    SDL_EndGPUCopyPass(copy);
+    SDL_SubmitGPUCommandBuffer(cmd);
+    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+}
+
+void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
+    SDL_WaitForGPUIdle(m_device);
+    releaseTexture(m_noise);
+    releaseTexture(m_mask);
+    releaseTexture(m_height);
+    const std::uint32_t ns = std::uint32_t(maps.noiseSize);
+    std::uint32_t levels = 1;
+    while ((ns >> levels) > 0) ++levels;
+    m_noise = makeTexture(ns, ns, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                          SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_SAMPLECOUNT_1, 1,
+                          levels);
+    uploadTexture(m_noise.tex, maps.noise.data(), ns, ns, 4);
+    {
+        SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+        SDL_GenerateMipmapsForGPUTexture(cmd, m_noise.tex);
+        SDL_SubmitGPUCommandBuffer(cmd);
+    }
+    const std::uint32_t w = std::uint32_t(maps.width), h = std::uint32_t(maps.height);
+    m_mask = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    uploadTexture(m_mask.tex, maps.mask.data(), w, h, 4);
+    m_height = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R16_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    uploadTexture(m_height.tex, maps.heights.data(), w, h, 2);
+    // Texel centers sit on the grid points: uv = (xz - x0 + texel/2) / (n * texel).
+    const float half = maps.texel * 0.5f;
+    m_groundRect = glm::vec4(maps.x0 - half, maps.z0 - half, 1.0f / (float(w) * maps.texel),
+                             1.0f / (float(h) * maps.texel));
+    m_waterLevel = waterLevel;
+
+    // Grass chunks: aligned to multiples of the chunk size so blade ids are stable on every density grid.
+    m_grassChunks.clear();
+    const float xMax = maps.x0 + maps.sizeX(), zMax = maps.z0 + maps.sizeZ();
+    const int i0 = int(std::ceil(maps.x0 / kGrassChunk)), i1 = int(std::floor(xMax / kGrassChunk)) - 1;
+    const int j0 = int(std::ceil(maps.z0 / kGrassChunk)), j1 = int(std::floor(zMax / kGrassChunk)) - 1;
+    for (int j = j0; j <= j1; ++j) {
+        for (int i = i0; i <= i1; ++i) {
+            const float x0 = float(i) * kGrassChunk, z0 = float(j) * kGrassChunk;
+            float maxGrass = 0.0f, minY = 1e9f, maxY = -1e9f;
+            constexpr int kS = 8;
+            for (int b = 0; b <= kS; ++b) {
+                for (int a = 0; a <= kS; ++a) {
+                    const float x = x0 + kGrassChunk * float(a) / kS, z = z0 + kGrassChunk * float(b) / kS;
+                    maxGrass = std::max(maxGrass, maps.grassAt(x, z));
+                    const float y = maps.heightAt(x, z);
+                    minY = std::min(minY, y);
+                    maxY = std::max(maxY, y);
+                }
+            }
+            if (maxGrass > 0.03f) m_grassChunks.push_back({x0, z0, minY - 0.1f, maxY + 0.7f});
+        }
+    }
+    SDL_Log("TrailForge: ground maps %dx%d, %zu grass chunks", maps.width, maps.height, m_grassChunks.size());
 }
 
 void Renderer::ensureLineCapacity(std::uint32_t bytes) {
@@ -267,6 +608,11 @@ void Renderer::ensureLineCapacity(std::uint32_t bytes) {
 GpuMesh Renderer::upload(const MeshData& mesh) {
     const std::uint32_t bytes = std::uint32_t(mesh.vertices.size() * sizeof(LitVertex));
     if (bytes == 0) return {};
+    glm::vec3 bmin(1e30f), bmax(-1e30f);
+    for (const LitVertex& v : mesh.vertices) {
+        bmin = glm::min(bmin, v.position);
+        bmax = glm::max(bmax, v.position);
+    }
     SDL_GPUBufferCreateInfo bi{};
     bi.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
     bi.size = bytes;
@@ -290,20 +636,142 @@ GpuMesh Renderer::upload(const MeshData& mesh) {
     SDL_EndGPUCopyPass(copy);
     SDL_SubmitGPUCommandBuffer(cmd);
     SDL_ReleaseGPUTransferBuffer(m_device, transfer); // SDL defers the release until the commands complete
-    return GpuMesh(m_device, buffer, std::uint32_t(mesh.vertices.size()));
+    return GpuMesh(m_device, buffer, std::uint32_t(mesh.vertices.size()), bmin, bmax);
 }
 
+void Renderer::pollGpuTiming() {
+    while (!m_fences.empty()) {
+        SDL_GPUFence* f = m_fences.front().fence;
+        if (!SDL_QueryGPUFence(m_device, f)) break;
+        const double ms = tf_metal_fence_gpu_ms(f);
+        if (ms >= 0.0) {
+            m_stats.gpuMs = ms;
+            m_stats.gpuMsAvg = m_stats.gpuMsAvg <= 0.0 ? ms : m_stats.gpuMsAvg * 0.9 + ms * 0.1;
+        }
+        SDL_ReleaseGPUFence(m_device, f);
+        m_fences.pop_front();
+    }
+}
+
+// ---------------------------------------------------------------- per-frame setup
+
+void Renderer::fillLighting(FrameUniforms& fu) const {
+    const RenderSettings& s = m_settings;
+    const float el = glm::radians(s.sunElevationDeg), az = glm::radians(s.sunAzimuthDeg);
+    const glm::vec3 sun(std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az));
+    const float h = std::sin(el);
+    const float day = glm::smoothstep(0.0f, 0.55f, h);
+    const glm::vec3 sunTint = glm::mix(glm::vec3(1.0f, 0.50f, 0.22f), glm::vec3(1.0f, 0.93f, 0.84f), day);
+    const float sunI = 5.2f * glm::smoothstep(-0.02f, 0.12f, h);
+    fu.sunDir = glm::vec4(sun, 0.0f);
+    fu.sunColor = glm::vec4(sunTint * sunI, 0.0f);
+    const float skyI = glm::mix(0.5f, 1.5f, day);
+    fu.skyZenith = glm::vec4(glm::mix(glm::vec3(0.12f, 0.18f, 0.34f), glm::vec3(0.12f, 0.30f, 0.80f), day) * skyI, 0.0f);
+    fu.skyHorizon = glm::vec4(glm::mix(glm::vec3(0.80f, 0.55f, 0.38f), glm::vec3(0.46f, 0.60f, 0.78f), day) * skyI, 0.0f);
+    fu.groundAmbient = glm::vec4(glm::vec3(0.10f, 0.085f, 0.06f) * skyI * 0.5f, 0.0f);
+    fu.fogParams = glm::vec4(0.0016f * s.fogDensity, 0.05f, 1.0f, s.clouds ? 0.55f : 0.0f);
+}
+
+void Renderer::computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj) {
+    const RenderSettings& s = m_settings;
+    const int n = s.shadowCascades;
+    fu.shadowParams = glm::vec4(float(n), 1.0f / float(s.shadowMapSize), float(s.shadowFilter), 1.6f);
+    fu.cascadeSplits = glm::vec4(1e9f);
+    fu.cascadeTexel = glm::vec4(0.0f);
+    if (n <= 0) return;
+    const float nearD = 0.5f, farD = s.shadowDistance;
+    const glm::mat4 invView = glm::inverse(frame.view);
+    const float tanY = std::tan(frame.fovYRadians * 0.5f), tanX = tanY * aspect;
+    const glm::vec3 sun(fu.sunDir);
+    const glm::vec3 up = std::abs(sun.y) > 0.98f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+    float prev = 0.1f;
+    for (int c = 0; c < n; ++c) {
+        const float t = float(c + 1) / float(n);
+        const float logD = nearD * std::pow(farD / nearD, t), linD = nearD + (farD - nearD) * t;
+        const float split = glm::mix(linD, logD, 0.72f);
+        fu.cascadeSplits[c] = split;
+        // Bounding sphere of the frustum slice (radius depends only on the slice, so it is rotation-stable).
+        glm::vec3 corners[8];
+        int k = 0;
+        for (float d : {prev, split})
+            for (float sy : {-1.0f, 1.0f})
+                for (float sx : {-1.0f, 1.0f})
+                    corners[k++] = glm::vec3(invView * glm::vec4(sx * tanX * d, sy * tanY * d, -d, 1.0f));
+        glm::vec3 center(0.0f);
+        for (const glm::vec3& p : corners) center += p;
+        center /= 8.0f;
+        float radius = 0.0f;
+        for (const glm::vec3& p : corners) radius = std::max(radius, glm::length(p - center));
+        radius = std::ceil(radius * 4.0f) / 4.0f;
+        const float back = 80.0f; // casters behind the slice (toward the sun)
+        const glm::mat4 lv = glm::lookAt(center + sun * (radius + back), center, up);
+        glm::mat4 lp = glm::ortho(-radius, radius, -radius, radius, 0.0f, 2.0f * radius + back);
+        // Snap the projection to whole shadow texels to avoid shimmering when the camera moves.
+        const glm::mat4 vp = lp * lv;
+        const float halfSize = float(s.shadowMapSize) * 0.5f;
+        glm::vec4 origin = vp * glm::vec4(0, 0, 0, 1);
+        origin *= halfSize;
+        const glm::vec2 off = (glm::round(glm::vec2(origin)) - glm::vec2(origin)) / halfSize;
+        lp[3][0] += off.x;
+        lp[3][1] += off.y;
+        lightViewProj[c] = lp * lv;
+        fu.shadowViewProj[c] = lightViewProj[c];
+        fu.cascadeTexel[c] = 2.0f * radius / float(s.shadowMapSize);
+        prev = split;
+    }
+}
+
+std::uint32_t Renderer::cullGrass(const FrameDesc& frame, const glm::mat4& viewProj,
+                                  std::array<std::uint32_t, 3>& counts) {
+    counts = {0, 0, 0};
+    const RenderSettings& s = m_settings;
+    if (s.grassLevel <= 0 || m_grassChunks.empty()) return 0;
+    const Frustum fr(viewProj);
+    const float D = s.grassDistance;
+    const float radii[3] = {D * 0.3f, D * 0.6f, D};
+    std::vector<glm::vec4> lists[3];
+    const glm::vec2 cam(frame.cameraPos.x, frame.cameraPos.z);
+    for (const GrassChunk& ch : m_grassChunks) {
+        const glm::vec2 nearest(std::clamp(cam.x, ch.x0, ch.x0 + kGrassChunk), std::clamp(cam.y, ch.z0, ch.z0 + kGrassChunk));
+        const float d = glm::length(nearest - cam);
+        if (d > D) continue;
+        if (!fr.box(glm::vec3(ch.x0, ch.minY, ch.z0), glm::vec3(ch.x0 + kGrassChunk, ch.maxY, ch.z0 + kGrassChunk)))
+            continue;
+        const int lod = d < radii[0] ? 0 : d < radii[1] ? 1 : 2;
+        lists[lod].push_back(glm::vec4(ch.x0, ch.z0, 0, 0));
+    }
+    m_grassScratch.clear();
+    for (int l = 0; l < 3; ++l) {
+        counts[l] = std::uint32_t(lists[l].size());
+        m_grassScratch.insert(m_grassScratch.end(), lists[l].begin(), lists[l].end());
+    }
+    if (m_grassScratch.size() > kMaxGrassChunks) m_grassScratch.resize(kMaxGrassChunks);
+    return std::uint32_t(m_grassScratch.size());
+}
+
+// ---------------------------------------------------------------- frame
+
 bool Renderer::drawFrame(const FrameDesc& frame) {
+    pollGpuTiming();
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
     if (!cmd) fail("SDL_AcquireGPUCommandBuffer");
 
     SDL_GPUTexture* swapchain = nullptr;
     std::uint32_t w = 0, h = 0;
-    if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, m_window, &swapchain, &w, &h) || !swapchain || w == 0 || h == 0) {
+    const Uint64 acquireStart = SDL_GetPerformanceCounter();
+    const bool acquired = SDL_WaitAndAcquireGPUSwapchainTexture(cmd, m_window, &swapchain, &w, &h);
+    m_stats.acquireWaitMs =
+        1000.0 * double(SDL_GetPerformanceCounter() - acquireStart) / double(SDL_GetPerformanceFrequency());
+    if (!acquired || !swapchain || w == 0 || h == 0) {
         SDL_SubmitGPUCommandBuffer(cmd);
         return false;
     }
-    ensureDepthTexture(w, h);
+    ensureTargets(w, h);
+    const RenderSettings& s = m_settings;
+    const std::uint32_t rw = m_hdr.w, rh = m_hdr.h;
+    const float aspect = float(rw) / float(rh);
+    m_stats.drawCalls = 0;
+    m_stats.shadowDraws = 0;
 
     // The swapchain cannot be read back, so a capture frame is rendered into an offscreen texture.
     SDL_GPUTexture* target = swapchain;
@@ -311,7 +779,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     if (frame.capturePath) {
         SDL_GPUTextureCreateInfo ci{};
         ci.type = SDL_GPU_TEXTURETYPE_2D;
-        ci.format = swapchainFormat();
+        ci.format = m_colorFormat;
         ci.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
         ci.width = w;
         ci.height = h;
@@ -321,69 +789,336 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         if (captureTex) target = captureTex;
     }
 
-    // ---- Upload lines and ImGui data (before the render pass)
+    // ---- Frame uniforms
+    FrameUniforms fu{};
+    const glm::mat4 viewProj = frame.proj * frame.view;
+    fu.viewProj = viewProj;
+    fu.invViewProj = glm::inverse(viewProj);
+    fu.vehicleInv = glm::inverse(frame.vehicleModel);
+    fu.cameraPos = glm::vec4(frame.cameraPos, frame.time);
+    fu.cameraFwd = glm::vec4(-glm::vec3(glm::inverse(frame.view)[2]), 0.0f);
+    fillLighting(fu);
+    glm::mat4 lightViewProj[4];
+    computeCascades(frame, aspect, fu, lightViewProj);
+    fu.groundRect = m_groundRect;
+    fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
+    fu.clipPlane = glm::vec4(0, 0, 0, 1);
+    fu.options = glm::vec4(s.groundGrid ? 0.35f : 0.0f, s.exposure, 1.0f, s.clouds ? 1.0f : 0.0f);
+
+    // Puddle reflection only when the camera is above the water and near enough to see it.
+    const bool wantRefl = s.reflections && m_reflColor.tex && frame.water && frame.water->vertexCount() > 0 &&
+                          frame.cameraPos.y > m_waterLevel + 0.05f;
+    bool reflVisible = false;
+    if (wantRefl) {
+        const Frustum fr(viewProj);
+        const glm::vec3 bmin = frame.water->boundsMin(), bmax = frame.water->boundsMax();
+        const glm::vec2 cam(frame.cameraPos.x, frame.cameraPos.z);
+        const glm::vec2 nearest(std::clamp(cam.x, bmin.x, bmax.x), std::clamp(cam.y, bmin.z, bmax.z));
+        reflVisible = fr.box(bmin - glm::vec3(0, 0.1f, 0), bmax + glm::vec3(0, 0.1f, 0)) &&
+                      glm::length(nearest - cam) < 120.0f;
+    }
+    fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
+    m_stats.reflectionRendered = reflVisible;
+
+    // ---- Uploads (lines, grass chunks, ImGui) before any render pass
     const std::uint32_t lineBytes = std::uint32_t(frame.lines.size_bytes());
-    if (lineBytes > 0) {
-        ensureLineCapacity(lineBytes);
-        void* dst = SDL_MapGPUTransferBuffer(m_device, m_lineTransfer, true);
-        std::memcpy(dst, frame.lines.data(), lineBytes);
-        SDL_UnmapGPUTransferBuffer(m_device, m_lineTransfer);
+    std::array<std::uint32_t, 3> grassCounts{};
+    const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
+    if (lineBytes > 0 || grassTotal > 0) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-        SDL_GPUTransferBufferLocation src{m_lineTransfer, 0};
-        SDL_GPUBufferRegion region{m_lineBuffer, 0, lineBytes};
-        SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        if (lineBytes > 0) {
+            ensureLineCapacity(lineBytes);
+            void* dst = SDL_MapGPUTransferBuffer(m_device, m_lineTransfer, true);
+            std::memcpy(dst, frame.lines.data(), lineBytes);
+            SDL_UnmapGPUTransferBuffer(m_device, m_lineTransfer);
+            SDL_GPUTransferBufferLocation src{m_lineTransfer, 0};
+            SDL_GPUBufferRegion region{m_lineBuffer, 0, lineBytes};
+            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        }
+        if (grassTotal > 0) {
+            const std::uint32_t bytes = grassTotal * sizeof(glm::vec4);
+            void* dst = SDL_MapGPUTransferBuffer(m_device, m_grassTransfer, true);
+            std::memcpy(dst, m_grassScratch.data(), bytes);
+            SDL_UnmapGPUTransferBuffer(m_device, m_grassTransfer);
+            SDL_GPUTransferBufferLocation src{m_grassTransfer, 0};
+            SDL_GPUBufferRegion region{m_grassBuffer, 0, bytes};
+            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        }
         SDL_EndGPUCopyPass(copy);
     }
     if (frame.ui) ImGui_ImplSDLGPU3_PrepareDrawData(frame.ui, cmd);
 
-    // ---- Scene pass: color + depth
-    FrameUniforms fu{};
-    fu.viewProj = frame.proj * frame.view;
-    fu.lightDir = glm::vec4(glm::normalize(glm::vec3(-0.45f, -0.80f, -0.35f)), 0.0f);
-    fu.lightColor = glm::vec4(1.00f, 0.95f, 0.85f, 0.0f) * 0.85f;
-    fu.skyColor = glm::vec4(0.45f, 0.52f, 0.62f, 0.0f);
-    fu.groundColor = glm::vec4(0.22f, 0.20f, 0.17f, 0.0f);
-    fu.cameraPos = glm::vec4(frame.cameraPos, 1.0f);
-    fu.fogParams = glm::vec4(0.006f, frame.clearColor);
-
-    SDL_GPUColorTargetInfo color{};
-    color.texture = target;
-    color.clear_color = SDL_FColor{std::pow(frame.clearColor.r, 1.0f / 2.2f), std::pow(frame.clearColor.g, 1.0f / 2.2f),
-                                   std::pow(frame.clearColor.b, 1.0f / 2.2f), 1.0f};
-    color.load_op = SDL_GPU_LOADOP_CLEAR;
-    color.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_GPUDepthStencilTargetInfo depth{};
-    depth.texture = m_depth;
-    depth.clear_depth = 1.0f;
-    depth.load_op = SDL_GPU_LOADOP_CLEAR;
-    depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
-    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-    depth.cycle = true;
-
-    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &color, 1, &depth);
-    SDL_BindGPUGraphicsPipeline(pass, m_litPipeline);
-    SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-    SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-    for (const DrawItem& d : frame.draws) {
-        if (!d.mesh || d.mesh->vertexCount() == 0) continue;
-        DrawUniforms du{d.model, d.tint, glm::vec4(d.gridStrength, 0, 0, 0)};
+    auto drawLit = [&](SDL_GPURenderPass* pass, const DrawItem& d) {
+        DrawUniforms du{};
+        du.model = d.model;
+        du.normalMatrix = glm::transpose(glm::inverse(d.model));
+        du.tint = d.tint;
+        du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, 0, 0);
         SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
-        SDL_PushGPUFragmentUniformData(cmd, 1, &du, sizeof(du));
         SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
         SDL_DrawGPUPrimitives(pass, d.mesh->vertexCount(), 1, 0, 0);
-    }
-    if (lineBytes > 0) {
-        SDL_BindGPUGraphicsPipeline(pass, frame.linesOnTop ? m_lineOnTopPipeline : m_linePipeline);
-        SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-        SDL_GPUBufferBinding binding{m_lineBuffer, 0};
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-        SDL_DrawGPUPrimitives(pass, std::uint32_t(frame.lines.size()), 1, 0, 0);
-    }
-    SDL_EndGPURenderPass(pass);
+    };
 
-    // ---- UI pass: on top, no depth (the ImGui pipeline is created without a depth target)
+    // ---- 1. Sun shadow cascades
+    for (int c = 0; c < s.shadowCascades; ++c) {
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = m_shadow.tex;
+        dt.clear_depth = 1.0f;
+        dt.load_op = SDL_GPU_LOADOP_CLEAR;
+        dt.store_op = SDL_GPU_STOREOP_STORE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.layer = std::uint8_t(c);
+        dt.cycle = c == 0;
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
+        SDL_BindGPUGraphicsPipeline(pass, m_shadowPipe);
+        ShadowUniforms su{lightViewProj[c]};
+        SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+        const glm::mat4 lv = lightViewProj[c];
+        for (const DrawItem& d : frame.draws) {
+            if (!d.mesh || d.mesh->vertexCount() == 0 || !d.castsShadow) continue;
+            glm::vec3 center;
+            float radius;
+            drawSphere(d, center, radius);
+            const glm::vec4 p = lv * glm::vec4(center, 1.0f);
+            // Ortho: clip-space xy in [-1, 1]; the radius in clip units is radius * scale of the projection.
+            const float sx = glm::length(glm::vec3(lv[0][0], lv[1][0], lv[2][0]));
+            const float sy = glm::length(glm::vec3(lv[0][1], lv[1][1], lv[2][1]));
+            if (std::abs(p.x) > 1.0f + radius * sx || std::abs(p.y) > 1.0f + radius * sy) continue;
+            drawLit(pass, d);
+            ++m_stats.shadowDraws;
+        }
+        SDL_EndGPURenderPass(pass);
+    }
+
+    // Shared fragment resources of the lit pipelines.
+    SDL_GPUTextureSamplerBinding litTex[3] = {
+        {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler}};
+
+    // ---- 2. Puddle reflection (mirrored camera, clip plane at the water level)
+    if (reflVisible) {
+        FrameUniforms rf = fu;
+        glm::mat4 mirror(1.0f);
+        mirror[1][1] = -1.0f;
+        mirror[3][1] = 2.0f * m_waterLevel;
+        const glm::mat4 rview = frame.view * mirror;
+        rf.viewProj = frame.proj * rview;
+        rf.invViewProj = glm::inverse(rf.viewProj);
+        const glm::vec3 rcam(frame.cameraPos.x, 2.0f * m_waterLevel - frame.cameraPos.y, frame.cameraPos.z);
+        rf.cameraPos = glm::vec4(rcam, frame.time);
+        rf.cameraFwd = glm::vec4(fu.cameraFwd.x, -fu.cameraFwd.y, fu.cameraFwd.z, 0.0f);
+        rf.clipPlane = glm::vec4(0, 1, 0, -(m_waterLevel - 0.03f));
+        rf.waterParams.y = 0.0f;
+        rf.options.x = 0.0f;
+
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = m_reflColor.tex;
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        ct.cycle = true;
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = m_reflDepth.tex;
+        dt.clear_depth = 1.0f;
+        dt.load_op = SDL_GPU_LOADOP_CLEAR;
+        dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.cycle = true;
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        SDL_BindGPUGraphicsPipeline(pass, m_reflLitPipe);
+        SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
+        SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
+        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+        const Frustum fr(rf.viewProj);
+        for (const DrawItem& d : frame.draws) {
+            if (!d.mesh || d.mesh->vertexCount() == 0 || !d.inReflection) continue;
+            glm::vec3 center;
+            float radius;
+            drawSphere(d, center, radius);
+            if (center.y + radius < m_waterLevel - 0.05f || !fr.sphere(center, radius)) continue;
+            drawLit(pass, d);
+            ++m_stats.drawCalls;
+        }
+        SDL_BindGPUGraphicsPipeline(pass, m_reflSkyPipe);
+        SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
+        SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+        SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
+        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        ++m_stats.drawCalls;
+        SDL_EndGPURenderPass(pass);
+    }
+
+    // ---- 3. Main HDR scene
+    {
+        SDL_GPUColorTargetInfo ct{};
+        if (s.msaa > 1) {
+            ct.texture = m_hdrMsaa.tex;
+            ct.resolve_texture = m_hdr.tex;
+            ct.store_op = SDL_GPU_STOREOP_RESOLVE;
+            ct.cycle_resolve_texture = true;
+        } else {
+            ct.texture = m_hdr.tex;
+            ct.store_op = SDL_GPU_STOREOP_STORE;
+        }
+        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.cycle = true;
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = m_depth.tex;
+        dt.clear_depth = 1.0f;
+        dt.load_op = SDL_GPU_LOADOP_CLEAR;
+        dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.cycle = true;
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+
+        // Opaque meshes.
+        SDL_BindGPUGraphicsPipeline(pass, m_litPipe);
+        SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+        SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+        const Frustum fr(viewProj);
+        for (const DrawItem& d : frame.draws) {
+            if (!d.mesh || d.mesh->vertexCount() == 0) continue;
+            glm::vec3 center;
+            float radius;
+            drawSphere(d, center, radius);
+            if (!fr.sphere(center, radius)) continue;
+            drawLit(pass, d);
+            ++m_stats.drawCalls;
+        }
+
+        // Grass blades (one instanced draw per LOD).
+        m_stats.grassChunks = int(grassTotal);
+        m_stats.grassBlades = 0;
+        if (grassTotal > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_grassPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_GPUTextureSamplerBinding vtex[2] = {{m_height.tex, m_clampSampler}, {m_mask.tex, m_clampSampler}};
+            SDL_BindGPUVertexSamplers(pass, 0, vtex, 2);
+            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_grassBuffer, 1);
+            SDL_GPUTextureSamplerBinding ftex{m_shadow.tex, m_cmpSampler};
+            SDL_BindGPUFragmentSamplers(pass, 0, &ftex, 1);
+            const float fine = kGrassCells[s.grassLevel - 1];
+            const int perSide0 = int(std::lround(kGrassChunk / fine));
+            const float D = s.grassDistance;
+            const float radii[3] = {D * 0.3f, D * 0.6f, D};
+            std::uint32_t first = 0;
+            for (int l = 0; l < 3; ++l) {
+                const std::uint32_t count = grassCounts[l];
+                if (count > 0) {
+                    const int perSide = perSide0 >> l;
+                    GrassUniforms gu{};
+                    gu.lod = glm::vec4(fine, float(l), float(perSide), float(first));
+                    gu.fade = glm::vec4(radii[l], radii[l] * 0.18f, D, float(kGrassSegs[l]));
+                    gu.blade = glm::vec4(1.0f, 0.6f * fine, 0.22f, kGrassChunk);
+                    for (int i = 0; i < 4; ++i) gu.wheels[i] = glm::vec4(glm::vec3(frame.wheelContacts[i]),
+                                                                         frame.wheelContacts[i].w > 0 ? 0.32f : 0.0f);
+                    SDL_PushGPUVertexUniformData(cmd, 1, &gu, sizeof(gu));
+                    const std::uint32_t instances = count * std::uint32_t(perSide * perSide);
+                    SDL_DrawGPUPrimitives(pass, std::uint32_t(3 * (2 * kGrassSegs[l] - 1)), instances, 0, 0);
+                    m_stats.grassBlades += instances;
+                    ++m_stats.drawCalls;
+                }
+                first += count;
+            }
+        }
+
+        // Sky behind everything (depth test against the cleared far plane).
+        SDL_BindGPUGraphicsPipeline(pass, m_skyPipe);
+        SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+        SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+        SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
+        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        ++m_stats.drawCalls;
+
+        // Puddle surfaces.
+        if (frame.water && frame.water->vertexCount() > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_waterPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_GPUTextureSamplerBinding wtex[4] = {{m_shadow.tex, m_cmpSampler},
+                                                    {m_noise.tex, m_repeatSampler},
+                                                    {m_height.tex, m_clampSampler},
+                                                    {reflVisible ? m_reflColor.tex : m_noise.tex, m_clampSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, wtex, 4);
+            DrawItem wd;
+            wd.mesh = frame.water;
+            drawLit(pass, wd);
+            ++m_stats.drawCalls;
+        }
+
+        // Debug lines.
+        if (lineBytes > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, frame.linesOnTop ? m_lineOnTopPipe : m_linePipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_GPUBufferBinding binding{m_lineBuffer, 0};
+            SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+            SDL_DrawGPUPrimitives(pass, std::uint32_t(frame.lines.size()), 1, 0, 0);
+            ++m_stats.drawCalls;
+        }
+        SDL_EndGPURenderPass(pass);
+    }
+
+    auto fullscreen = [&](SDL_GPUTexture* dst, SDL_GPULoadOp load, SDL_GPUGraphicsPipeline* pipe,
+                          const PostUniforms& pu, const SDL_GPUTextureSamplerBinding* tex, std::uint32_t numTex) {
+        SDL_GPUColorTargetInfo ct{};
+        ct.texture = dst;
+        ct.load_op = load;
+        ct.store_op = SDL_GPU_STOREOP_STORE;
+        ct.cycle = load != SDL_GPU_LOADOP_LOAD && dst != target;
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+        SDL_BindGPUGraphicsPipeline(pass, pipe);
+        SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
+        SDL_BindGPUFragmentSamplers(pass, 0, tex, numTex);
+        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(pass);
+    };
+
+    // ---- 4. Bloom (13-tap downsample chain, tent upsample with additive blend)
+    const bool bloom = s.bloom && !m_bloom.empty();
+    if (bloom) {
+        for (int i = 0; i < kBloomLevels; ++i) {
+            const Texture& src = i == 0 ? m_hdr : m_bloom[i - 1];
+            PostUniforms pu{};
+            pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
+            pu.params = glm::vec4(1.6f, 0, 0, i == 0 ? 1.0f : 0.0f);
+            pu.extra = glm::vec4(0, 0, 1, 1);
+            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_bloom[i].tex, SDL_GPU_LOADOP_DONT_CARE, m_bloomDownPipe, pu, &b, 1);
+        }
+        for (int i = kBloomLevels - 1; i > 0; --i) {
+            PostUniforms pu{};
+            pu.texel = glm::vec4(1.0f / float(m_bloom[i].w), 1.0f / float(m_bloom[i].h), 0, 0);
+            pu.extra = glm::vec4(0, 0, 1, 1);
+            SDL_GPUTextureSamplerBinding b{m_bloom[i].tex, m_clampSampler};
+            fullscreen(m_bloom[i - 1].tex, SDL_GPU_LOADOP_LOAD, m_bloomUpPipe, pu, &b, 1);
+        }
+    }
+
+    // ---- 5. Tonemap (+ upscale from the render resolution), 6. FXAA
+    {
+        PostUniforms pu{};
+        pu.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(w), 1.0f / float(h));
+        pu.params = glm::vec4(0.0f, bloom ? s.bloomStrength : 0.0f, s.exposure, 0.0f);
+        pu.extra = glm::vec4(0.28f, s.fxaa ? 1.0f : 0.0f, 1.0f, 1.0f);
+        SDL_GPUTextureSamplerBinding tex[2] = {{m_hdr.tex, m_clampSampler},
+                                               {bloom ? m_bloom[0].tex : m_hdr.tex, m_clampSampler}};
+        if (s.fxaa && m_ldr.tex) {
+            fullscreen(m_ldr.tex, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
+            PostUniforms fx{};
+            fx.texel = glm::vec4(1.0f / float(w), 1.0f / float(h), 0, 0);
+            SDL_GPUTextureSamplerBinding b{m_ldr.tex, m_clampSampler};
+            fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_fxaaPipe, fx, &b, 1);
+        } else {
+            fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
+        }
+    }
+
+    // ---- 7. UI on top (the ImGui pipeline is created without a depth target)
     if (frame.ui && frame.ui->DisplaySize.x > 0 && frame.ui->DisplaySize.y > 0) {
         SDL_GPUColorTargetInfo uiColor{};
         uiColor.texture = target;
@@ -410,7 +1145,13 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         return true;
     }
 
-    SDL_SubmitGPUCommandBuffer(cmd);
+    if (SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd)) {
+        m_fences.push_back({fence});
+        while (m_fences.size() > 8) {
+            SDL_ReleaseGPUFence(m_device, m_fences.front().fence);
+            m_fences.pop_front();
+        }
+    }
     return true;
 }
 
@@ -439,8 +1180,10 @@ bool Renderer::saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::
     bool ok = false;
     if (fence) {
         SDL_WaitForGPUFences(m_device, true, &fence, 1);
+        const double ms = tf_metal_fence_gpu_ms(fence);
+        if (ms >= 0.0) m_stats.gpuMs = ms;
         SDL_ReleaseGPUFence(m_device, fence);
-        const SDL_GPUTextureFormat fmt = swapchainFormat();
+        const SDL_GPUTextureFormat fmt = m_colorFormat;
         const SDL_PixelFormat pf = (fmt == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM || fmt == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB)
                                        ? SDL_PIXELFORMAT_ARGB8888
                                        : SDL_PIXELFORMAT_ABGR8888;

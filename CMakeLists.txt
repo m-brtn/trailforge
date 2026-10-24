@@ -43,11 +43,18 @@ if(TRAILFORGE_BUILD_APP)
         src/input/Input.cpp
         src/render/Renderer.cpp
         src/render/Mesh.cpp
+        src/render/GroundMaps.cpp
+        src/render/VehicleModel.cpp
+        src/render/Scenery.cpp
         src/render/Camera.cpp
         src/render/DebugDraw.cpp
         src/ui/DebugUI.cpp
         ${TRAILFORGE_SHADER_SOURCES})
     target_link_libraries(trailforge PRIVATE trailforge_sim SDL3::SDL3-static imgui glm_headers)
+    if(APPLE)
+        target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
+        target_link_libraries(trailforge PRIVATE "-framework Metal")
+    endif()
     target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES})
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)
