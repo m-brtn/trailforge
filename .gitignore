@@ -2,9 +2,7 @@ build/
 .cache/
 *.bmp
 *.png
-!Banner.png
-!Icon.png
-!Logo.png
+!external_assets/images/*.png
 imgui.ini
 .DS_Store
 compile_commands.json

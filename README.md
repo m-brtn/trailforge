@@ -1,4 +1,4 @@
-![TrailForge](Banner.png)
+![TrailForge](external_assets/images/Banner.png)
 
 # TrailForge — off-road simulator prototype
 
@@ -57,7 +57,7 @@ ctest --preset release        # or debug
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
 ```
 
-App icon (`Icon.png`, macOS): the build converts it with `sips` to a 256×256 BMP that is embedded into the binary;
+App icon (`external_assets/images/Icon.png`, macOS): the build converts it with `sips` to a 256×256 BMP that is embedded into the binary;
 at startup `SDL_SetWindowIcon` sets it (on Cocoa this is `NSApp.applicationIconImage`, i.e. the Dock icon of the
 running `trailforge` process), masked to the macOS rounded-square grid. `Logo.png` is reserved for a future menu
 and is not loaded at runtime.

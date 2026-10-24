@@ -99,6 +99,8 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
               release/package_macos.sh (packaged .app, zip, GitHub release)
 docs/releases/ release notes per version
 assets/audio/ WAV sounds, manifest.json, CREDITS.md
+external_assets/ images/ (Icon.png app icon source, Logo.png, Banner.png, Cars.png vehicle concept sheet),
+ music/ (user-provided tracks, not wired in yet)
 devlog/       daily development log
 ```
 
@@ -173,7 +175,7 @@ Example stage entry:
   verified).
 - Commit only after the build and tests above pass; mention the verified numbers (ctest, `full_check`) in the
   devlog.
-- Do not commit build output, captures or local files (`build/`, `*.bmp`, `*.png` except `Banner.png`,
-  `imgui.ini`, `compile_commands.json`, audio captures `*.wav` / `*.wav.csv` outside `assets/audio/`).
+- Do not commit build output, captures or local files (`build/`, `*.bmp`, `*.png` outside
+  `external_assets/images/`, `imgui.ini`, `compile_commands.json`, audio captures `*.wav` / `*.wav.csv` outside `assets/audio/`).
 - Never commit secrets (the Freesound API key lives only in the environment).
 - Push to `origin/main` with a normal push. Rewrite history or force push only when the user explicitly asks.

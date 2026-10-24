@@ -1,4 +1,4 @@
-# Application icon (source of truth: Icon.png at the repository root).
+# Application icon (source of truth: external_assets/images/Icon.png).
 #
 # macOS only (needs `sips` and `iconutil`, both part of the base system):
 #   1) Icon.png -> 256x256 BMP -> embedded into the binary (cmake/EmbedFile.cmake);
@@ -11,7 +11,7 @@
 set(TRAILFORGE_ICON_SOURCES "")
 set(TRAILFORGE_ICON_DEFINES "")
 
-set(_icon_png ${CMAKE_SOURCE_DIR}/Icon.png)
+set(_icon_png ${CMAKE_SOURCE_DIR}/external_assets/images/Icon.png)
 set(_icon_gen ${CMAKE_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${_icon_gen})
 
