@@ -1052,7 +1052,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         du.model = d.model;
         du.normalMatrix = glm::transpose(glm::inverse(d.model));
         du.tint = d.tint;
-        du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, 0, 0);
+        du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, d.soilWetness, d.wheelRadius);
+        du.soil = d.soil;
         SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
         SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);

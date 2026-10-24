@@ -58,6 +58,7 @@ struct DrawUniforms {
     glm::mat4 normalMatrix;
     glm::vec4 tint;
     glm::vec4 params;
+    glm::vec4 soil;
 };
 
 struct GrassUniforms {
@@ -122,6 +123,9 @@ struct DrawItem {
     glm::vec4 tint{1.0f};
     float mud = 1.0f;          // multiplier for the cosmetic mud receptivity baked in the vertices
     bool wheelMud = false;     // map the mud radially (wheel) instead of by height (body)
+    glm::vec4 soil{0.0f};      // wheels: soil in the tread (rgb linear colour, a amount 0..1), cosmetic
+    float soilWetness = 0.0f;
+    float wheelRadius = 0.0f;
     bool castsShadow = true;
     bool inReflection = true;  // drawn into the puddle reflection
 };

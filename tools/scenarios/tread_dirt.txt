@@ -53,4 +53,31 @@ up S
 camera 42.0 18.0 41.0 42.0 0.0 40.99
 capture /tmp/trailforge_tread_sand_roll.png
 wait 0.2
+# Wheel close-ups while the tread is loaded: stopped in the mud bath, and on the sand.
+teleport 12
+wait 1.5
+down W
+until z < 41 6
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+log mud_wheel
+expect tread_soil_max > 0.8
+camera -44.9 0.9 33.0 -42.3 0.45 34.6
+capture /tmp/trailforge_tread_wheel_mud.png
+wait 0.2
+teleport 11
+wait 1.5
+down W
+until z < 58.5 6
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+log sand_wheel
+expect tread_soil_max > 0.3
+camera 38.8 1.4 53.0 41.3 0.9 54.5
+capture /tmp/trailforge_tread_wheel_sand.png
+wait 0.2
 quit

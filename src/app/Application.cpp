@@ -465,6 +465,10 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         add(m_wheelMesh, flip ? wheelM[i] * glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(0, 1, 0))
                               : wheelM[i]);
         m_draws.back().wheelMud = true;
+        const TreadSoil& soil = m_sim.tireMarks().soil(std::size_t(i));
+        m_draws.back().soil = glm::vec4(soil.color[0], soil.color[1], soil.color[2], soil.amount);
+        m_draws.back().soilWetness = soil.wetness;
+        m_draws.back().wheelRadius = vc.wheelRadius;
 
         const SuspensionPose p = suspensionPose(hub, hub.z);
         const glm::vec3 dir = glm::normalize(p.shockTop - p.shockLow);

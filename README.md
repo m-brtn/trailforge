@@ -368,6 +368,10 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
 
 Vehicle dirt is **cosmetic only**: a mud layer on the body (splash line from the bottom up) and wheels. In auto mode it
 builds up while the wheels roll on `Mud` or through puddles and slowly dries off; it never affects the physics.
+The tires additionally show the soil of their own tread (`TreadSoil`, per wheel, see "Tire marks"): the tread
+face and grooves load first, then the outer sidewall, the rim only a little; the colour is the carried soil (dark wet
+mud, brown dirt, light dusty sand) and wet soil is glossy. The mask is in wheel space, so it turns with the Jolt wheel
+transform.
 
 ### Tire marks (visual only)
 

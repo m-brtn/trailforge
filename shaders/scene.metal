@@ -66,7 +66,8 @@ struct DrawUniforms {
     float4x4 model;
     float4x4 normalMatrix;  // inverse transpose of model (upper 3x3)
     float4 tint;            // rgb multiplier
-    float4 params;          // x: mud scale, y: mud mapping (0 body, 1 wheel), zw: reserved
+    float4 params;          // x: mud scale, y: mud mapping (0 body, 1 wheel), z: tread soil wetness, w: wheel radius
+    float4 soil;            // wheels: soil in the tread, rgb linear colour, a amount 0..1
 };
 
 // ---------------------------------------------------------------- common helpers
@@ -305,6 +306,8 @@ struct LitOut {
     float3 localPos;
     float3 localNormal;
     float mudMode [[flat]]; // DrawUniforms.params.y
+    float4 soil [[flat]];
+    float2 soilParams [[flat]]; // x: wetness, y: wheel radius
 };
 
 vertex LitOut lit_vs(LitIn in [[stage_in]], constant FrameUniforms& frame [[buffer(0)]],
@@ -319,6 +322,8 @@ vertex LitOut lit_vs(LitIn in [[stage_in]], constant FrameUniforms& frame [[buff
     out.localPos = in.position;
     out.localNormal = in.normal;
     out.mudMode = draw.params.y;
+    out.soil = draw.soil;
+    out.soilParams = draw.params.zw;
     return out;
 }
 
@@ -419,7 +424,7 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
     } else if (mat == MAT_SAND) {
         // Light dry sand: wind ripples across the prevailing wind, fine grain speckle, darker damp hollows.
         const float ripple = sin(dot(P.xz, float2(0.55, 2.4)) + nB.r * 5.0 + nA.g * 3.0);
-        const float3 lightS = float3(0.46, 0.37, 0.24), darkS = float3(0.30, 0.235, 0.15);
+        const float3 lightS = float3(0.40, 0.315, 0.20), darkS = float3(0.26, 0.20, 0.125);
         float3 c = mix(darkS, lightS, smoothstep(0.2, 0.8, large * 0.7 + 0.3 * (0.5 + 0.5 * ripple)));
         c *= 0.92 + 0.16 * fine;
         c = mix(c, float3(0.20, 0.17, 0.12), (1.0 - smoothstep(0.08, 0.2, nC.b)) * 0.35); // grit
@@ -441,6 +446,24 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
     g.roughness = mix(g.roughness, 0.38, wet * 0.8);
     g.bump *= 1.0 - 0.5 * wet;
     return g;
+}
+
+// Soil carried in the tread (TreadSoil, cosmetic): the grooves and the tread face load first, then the outer
+// sidewall; the rim catches only a little. Wheel-local space: axle along X, radius in YZ.
+float treadSoilCover(float4 soil, float radius, float3 lp, float3 ln, texture2d<float> noise, sampler ns) {
+    if (soil.a <= 0.002 || radius <= 0.0) return 0.0;
+    const float r = length(lp.yz) / radius;
+    const float radial = abs(dot(normalize(ln), float3(0.0, normalize(lp.yz + 1e-5))));
+    const float ang = atan2(lp.y, lp.z);
+    const float n = noise.sample(ns, float2(ang * 1.9, lp.x * 6.0)).g;
+    const float sp = noise.sample(ns, float2(ang * 7.0, lp.x * 23.0 + r * 9.0)).a;
+    // Need: how much soil a spot needs before it is covered (0 = first to fill).
+    const float face = smoothstep(0.90, 0.97, r) * smoothstep(0.35, 0.8, radial);
+    const float groove = face * (1.0 - smoothstep(0.975, 0.995, r)); // recessed between the lugs
+    float need = mix(0.35 + 1.6 * saturate((0.97 - r) / 0.35), 0.12, face) - 0.12 * groove;
+    need = r < 0.62 ? 0.92 : need; // rim
+    const float t = soil.a - need + (n - 0.5) * 0.3 + (sp - 0.5) * 0.25;
+    return smoothstep(0.0, 0.08, t) * (r < 0.62 ? 0.5 : 1.0);
 }
 
 // Cosmetic mud on the vehicle (object-space noise). Body: a splash line that rises with the amount, thrown up
@@ -541,6 +564,17 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
             s.clearCoat *= 1.0 - mud;
             s.emissive *= 1.0 - 0.85 * mud;
         }
+        if (in.mudMode > 0.5) {
+            const float soilC = treadSoilCover(in.soil, in.soilParams.y, in.localPos, in.localNormal, noise, noiseSampler);
+            if (soilC > 0.0) {
+                const float grain = noise.sample(noiseSampler, in.localPos.zy * 9.0 + in.localPos.x).a;
+                const float wetS = in.soilParams.x;
+                s.albedo = mix(s.albedo, in.soil.rgb * (0.8 + 0.4 * grain), soilC);
+                s.roughness = mix(s.roughness, mix(0.95, 0.35, wetS), soilC);
+                s.metallic = mix(s.metallic, 0.0, soilC);
+                s.clearCoat *= 1.0 - soilC;
+            }
+        }
         s.ao = 1.0;
     }
     s.N = N;
@@ -604,6 +638,8 @@ vertex LitOut tree_vs(LitIn in [[stage_in]], uint iid [[instance_id]], constant 
     out.localPos = in.position;
     out.localNormal = in.normal;
     out.mudMode = 0.0;
+    out.soil = float4(0.0);
+    out.soilParams = float2(0.0);
     return out;
 }
 
