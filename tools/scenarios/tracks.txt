@@ -1,0 +1,167 @@
+# Tire marks on different surfaces (screenshots to /tmp/trailforge_tracks_*.png):
+#   ./build/release/trailforge --script tools/scenarios/tracks.txt
+# Marks are render-only: they come from the per-tick wheel contact samples (load, slip, surface) and never change
+# friction or ground height. marks_s<N> counts live segments on SurfaceId N (0 Concrete, 1 PackedDirt, 4 Mud, 5 Grass).
+set ui 0
+set hud 0
+time 16.5
+
+# ---------------------------------------------------------------- concrete skid strip: launch, rolling, lock-up
+teleport 9
+wait 1.5
+set marks_clear 1
+down W
+wait 2.5
+log launch                       # first gear at full throttle spins the wheels for ~2 s
+expect marks_s0 > 10
+mark marks_s0
+wait 1.5
+expect d_marks_s0 < 5            # rolling in second gear: no rubber
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log after_brake
+expect d_marks_s0 > 40           # locked / sliding wheels lay rubber
+camera 44.2 1.6 -4.0 41.8 0.0 6.0
+wait 0.6
+capture /tmp/trailforge_tracks_concrete_brake.png
+wait 0.3
+
+# ---------------------------------------------------------------- off the strip: concrete -> dirt -> meadow grass
+camera follow
+down W
+until z > 36 12
+up W
+until z > 58 10
+down S
+until speed_kmh < 0.5 8
+up S
+log meadow
+expect marks_s1 > 4              # rolling imprint in the dirt band between the strip and the meadow
+expect marks_s5 > 40             # pressed grass
+# Wheelspin in low range tears the turf.
+tap L
+wait 0.3
+down W
+wait 1.6
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+tap L
+wait 0.3
+camera 45.6 1.7 36.0 41.6 0.0 50.0
+wait 0.6
+capture /tmp/trailforge_tracks_strip_to_meadow.png
+wait 0.3
+camera 44.6 2.2 56.0 41.8 0.0 66.0
+wait 0.6
+capture /tmp/trailforge_tracks_grass.png
+wait 0.3
+
+# ---------------------------------------------------------------- mud path: launch churn, rolling ruts
+camera follow
+teleport 8
+wait 1.5
+down W
+wait 3.0
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log mud
+expect marks_s4 > 40
+camera -2.0 1.5 46.0 0.6 0.0 54.0
+wait 0.6
+capture /tmp/trailforge_tracks_mud.png
+wait 0.3
+camera 1.6 1.3 53.5 0.0 0.0 60.0
+wait 0.6
+capture /tmp/trailforge_tracks_mud_rolling.png
+wait 0.3
+camera 3.0 2.0 62.0 0.0 0.0 74.0
+wait 0.6
+capture /tmp/trailforge_tracks_mud_to_grass.png
+wait 0.3
+
+# ---------------------------------------------------------------- start pad: handbrake drift / donut on concrete
+camera follow
+teleport 0
+wait 1.5
+down W
+wait 0.8
+down D
+down Space
+wait 0.7
+up Space
+wait 2.0
+up W
+up D
+down S
+until speed_kmh < 0.5 8
+up S
+log donut
+camera 0.0 14.0 -52.0 -1.0 0.0 -39.0
+wait 0.6
+capture /tmp/trailforge_tracks_concrete_drift.png
+wait 0.3
+
+# ---------------------------------------------------------------- dirt: wheelspin and rolling next to the pad
+camera follow
+teleport 4
+wait 1.5
+tap L
+wait 0.3
+down W
+wait 1.5
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+tap L
+log dirt
+expect marks_s1 > 20
+time Noon
+camera -25.0 2.6 -49.5 -26.0 0.0 -42.0
+wait 0.6
+capture /tmp/trailforge_tracks_dirt.png
+wait 0.3
+
+# ---------------------------------------------------------------- cost: marks off vs. the ring filled to its cap
+# Synthetic ribbons over the whole proving ground ("Fill to cap"), follow camera in the mud showcase, High preset.
+# Prints "PERF <label> ..." lines (frame avg/p95/p99, CPU and GPU ms).
+time 16.5
+camera follow
+teleport 8
+wait 1.5
+set vsync 0
+quality High
+wait 3
+set marks 0
+wait 1.5
+perf_begin marks_off
+wait 5
+perf_end
+set marks 1
+set marks_fill 1
+wait 1.5
+expect marks == 16384
+perf_begin marks_16k
+wait 5
+perf_end
+set marks_max 65536
+set marks_fill 1
+wait 1.5
+expect marks == 65536
+expect marks_drawn == 65536
+perf_begin marks_64k
+wait 5
+perf_end
+camera -6.0 9.0 30.0 2.0 0.0 50.0
+wait 0.6
+capture /tmp/trailforge_tracks_stress_64k.png
+wait 0.3
+set marks_max 16384
+set vsync 1
+quit

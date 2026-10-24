@@ -68,14 +68,14 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         ImGui::End();
     }
 
-    if (gfx.visible) drawGraphics(stats, gfx);
+    if (gfx.visible) drawGraphics(sim, stats, gfx);
     if (!visible) return req;
     drawTelemetry(sim, stats, req);
     drawTuning(sim, req, gfx);
     return req;
 }
 
-void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
+void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsState& gfx) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float w = std::min(380.0f, display.x * 0.3f);
     ImGui::SetNextWindowPos(ImVec2(0.5f * (display.x - w), 60), ImGuiCond_FirstUseEver);
@@ -148,11 +148,47 @@ void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
         ImGui::EndDisabled();
         ImGui::TextDisabled("Visual only: the ground is rigid; the Mud surface only has a lower friction.");
     }
+    if (ImGui::CollapsingHeader("Tire marks (visual only)", ImGuiTreeNodeFlags_DefaultOpen))
+        drawTireMarks(sim, stats, gfx);
     if (edited) {
         gfx.preset = QualityPreset::Custom;
         gfx.changed = true;
     }
     ImGui::End();
+}
+
+void DebugUI::drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsState& gfx) {
+    TireMarks& marks = sim.tireMarks();
+    TireMarkSettings ms = marks.settings();
+    bool apply = false;
+    ImGui::Checkbox("Draw", &gfx.tireMarks);
+    ImGui::SameLine();
+    apply |= ImGui::Checkbox("Generate", &ms.enabled);
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) marks.clear();
+    ImGui::SameLine();
+    if (ImGui::Button("Fill to cap")) gfx.fillMarks = true;
+    // Changing the capacity clears the ring, so it is applied when the slider is released.
+    ImGui::SliderInt("Max segments", &ms.maxSegments, 1024, 65536, "%d", ImGuiSliderFlags_Logarithmic);
+    apply |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SliderFloat("Fade time [s]", &ms.fadeTime, 10.0f, 1200.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+    apply |= ImGui::IsItemDeactivatedAfterEdit();
+    if (apply) marks.setSettings(ms);
+    static const char* kNames[6] = {"Concrete", "Packed dirt", "Rock", "Low grip", "Mud", "Grass"};
+    ImGui::TextUnformatted("Intensity per surface");
+    for (int i = 0; i < 6; ++i) {
+        ImGui::PushID(i);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+        ImGui::SliderFloat(kNames[i], &gfx.markGain[std::size_t(i)], 0.0f, 2.0f, "%.2f");
+        ImGui::PopID();
+    }
+    const std::size_t bytes = marks.size() * sizeof(TireMarkSegment);
+    ImGui::Text("%zu / %zu segments (%.1f MB ring), %llu written", marks.size(), marks.capacity(),
+                double(marks.capacity() * sizeof(TireMarkSegment)) / (1024.0 * 1024.0),
+                static_cast<unsigned long long>(marks.written()));
+    ImGui::Text("CPU update %.1f us/tick, upload %.1f KB/frame, live %.0f KB, 1 draw", sim.timing().marksUs,
+                double(stats.markUploadBytes) / 1024.0, double(bytes) / 1024.0);
+    ImGui::TextDisabled("No effect on friction or ground height; the ground stays rigid.");
 }
 
 void DebugUI::drawTimeOfDay(GraphicsState& gfx) {

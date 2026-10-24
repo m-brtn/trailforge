@@ -2,6 +2,7 @@
 
 #include "track/SurfaceProperties.h"
 #include "vehicle/VehicleConfig.h"
+#include "vehicle/WheelContact.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -96,6 +97,8 @@ public:
 
     const VehicleConfig& config() const { return m_config; }
     const VehicleTelemetry& telemetry() const { return m_telemetry; }
+    // Per-wheel ground contact of the last tick (see WheelContact.h).
+    const std::array<WheelContactSample, kWheelCount>& contacts() const { return m_contacts; }
     JPH::BodyID bodyId() const { return m_bodyId; }
 
     // Body pose (body origin position, not the center of mass).
@@ -123,6 +126,7 @@ private:
     bool m_lowRange = false;
     DriverCommand m_command;
     VehicleTelemetry m_telemetry;
+    std::array<WheelContactSample, kWheelCount> m_contacts;
 };
 
 } // namespace tf

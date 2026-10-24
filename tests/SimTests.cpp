@@ -4,6 +4,7 @@
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -275,6 +276,120 @@ void frameScheduleIndependence() {
     CHECK(std::abs(a.rot.Dot(b.rot)) > 0.9999f, "orientation differs");
 }
 
+// Tire marks from the per-wheel contact samples (visual only, generated headless).
+struct MarkStats {
+    int segments = 0;
+    float maxImprint = 0.0f, maxSlip = 0.0f;
+    int surfaceSegments[kSurfaceCount] = {};
+};
+
+MarkStats marksSince(const TireMarks& m, std::uint64_t writtenBefore) {
+    MarkStats st;
+    const std::uint64_t fresh = std::min<std::uint64_t>(m.written() - writtenBefore, m.size());
+    for (std::size_t i = m.size() - fresh; i < m.size(); ++i) {
+        const TireMarkSegment& s = m.oldest(i);
+        ++st.segments;
+        st.maxImprint = std::fmax(st.maxImprint, std::fmax(s.imprint0, s.imprint1));
+        st.maxSlip = std::fmax(st.maxSlip, std::fmax(s.slip0, s.slip1));
+        ++st.surfaceSegments[int(s.surface)];
+    }
+    return st;
+}
+
+void printMarks(const char* what, const MarkStats& s, const Simulation& sim) {
+    std::printf("    %-34s v=%5.1f km/h segments=%4d maxImprint=%.2f maxSlip=%.2f (C/D/M/G %d/%d/%d/%d)\n", what,
+                sim.vehicle().telemetry().speed * 3.6f, s.segments, s.maxImprint, s.maxSlip,
+                s.surfaceSegments[int(SurfaceId::Concrete)], s.surfaceSegments[int(SurfaceId::PackedDirt)],
+                s.surfaceSegments[int(SurfaceId::Mud)], s.surfaceSegments[int(SurfaceId::Grass)]);
+}
+
+// Cruise at a target speed with a proportional throttle (no wheelspin).
+void cruise(Simulation& sim, double seconds, float targetKmh, float steer = 0.0f) {
+    for (int i = 0; i < int(seconds / sim.fixedStep()); ++i) {
+        const float v = sim.vehicle().telemetry().speed * 3.6f;
+        DriverIntent in;
+        in.throttle = std::fmin(0.6f, std::fmax(0.0f, 0.25f + 0.05f * (targetKmh - v)));
+        in.steer = steer;
+        run(sim, sim.fixedStep(), in);
+    }
+}
+
+void tireMarksSurfaces() {
+    Simulation sim(settingsFor(TrackLayout::SurfaceLanes));
+    TireMarks& marks = sim.tireMarks();
+    run(sim, 1.0);
+
+    // Concrete: rolling at a steady 30 km/h leaves (almost) nothing, a locked-wheel stop leaves dark rubber.
+    cruise(sim, 6.0, 30.0f);
+    std::uint64_t w0 = marks.written();
+    cruise(sim, 3.0, 30.0f);
+    const MarkStats rolling = marksSince(marks, w0);
+    printMarks("concrete, rolling 30 km/h:", rolling, sim);
+    w0 = marks.written();
+    run(sim, 2.5, DriverIntent{.brake = 1.0f});
+    const MarkStats lockup = marksSince(marks, w0);
+    printMarks("concrete, full brake:", lockup, sim);
+    CHECK(rolling.maxSlip < 0.05f && rolling.segments <= 4, "rolling on concrete left marks: %d segments, slip %.2f",
+          rolling.segments, rolling.maxSlip);
+    CHECK(rolling.maxImprint == 0.0f, "concrete must not take a rolling imprint");
+    CHECK(lockup.segments >= 20 && lockup.maxSlip > 0.5f, "lock-up on concrete: %d segments, slip %.2f",
+          lockup.segments, lockup.maxSlip);
+    CHECK(lockup.surfaceSegments[int(SurfaceId::Concrete)] == lockup.segments, "lock-up marks not tagged Concrete");
+
+    // Soft lanes: rolling leaves a load-driven imprint; wheelspin from standstill (low range) churns.
+    const struct {
+        int feature;
+        SurfaceId surface;
+        const char* name;
+    } lanes[] = {{1, SurfaceId::PackedDirt, "dirt"}, {2, SurfaceId::Mud, "mud"}, {3, SurfaceId::Grass, "grass"}};
+    for (const auto& lane : lanes) {
+        sim.requestTeleport(lane.feature);
+        run(sim, 1.0);
+        cruise(sim, 4.0, 20.0f);
+        w0 = marks.written();
+        cruise(sim, 3.0, 20.0f);
+        const MarkStats roll = marksSince(marks, w0);
+        char label[64];
+        std::snprintf(label, sizeof(label), "%s, rolling 20 km/h:", lane.name);
+        printMarks(label, roll, sim);
+        CHECK(roll.segments >= 50 && roll.surfaceSegments[int(lane.surface)] == roll.segments,
+              "%s: %d segments, %d on the lane surface", lane.name, roll.segments,
+              roll.surfaceSegments[int(lane.surface)]);
+        CHECK(roll.maxImprint > 0.5f, "%s: weak imprint %.2f", lane.name, roll.maxImprint);
+        CHECK(roll.maxSlip < 0.3f, "%s: rolling counted as churn %.2f", lane.name, roll.maxSlip);
+
+        sim.requestTeleport(lane.feature);
+        run(sim, 1.0);
+        sim.requestToggleLowRange();
+        run(sim, 0.1);
+        w0 = marks.written();
+        run(sim, 1.5, DriverIntent{.throttle = 1.0f});
+        const MarkStats spin = marksSince(marks, w0);
+        std::snprintf(label, sizeof(label), "%s, wheelspin (low range):", lane.name);
+        printMarks(label, spin, sim);
+        CHECK(spin.segments >= 8 && spin.maxSlip > 0.3f, "%s: wheelspin churn %d segments, slip %.2f", lane.name,
+              spin.segments, spin.maxSlip);
+        run(sim, 2.0, DriverIntent{.brake = 1.0f});
+        sim.requestToggleLowRange();
+        run(sim, 0.1);
+    }
+
+    // Hard cap and fade: a small ring keeps only its capacity; old segments expire after the fade time.
+    TireMarkSettings s = marks.settings();
+    s.maxSegments = 256;
+    s.fadeTime = 3.0f;
+    marks.setSettings(s);
+    sim.requestTeleport(1);
+    run(sim, 1.0);
+    cruise(sim, 8.0, 30.0f);
+    std::printf("    cap 256: size=%zu written=%llu\n", marks.size(), (unsigned long long)marks.written());
+    CHECK(marks.size() <= 256, "ring exceeded its capacity: %zu", marks.size());
+    run(sim, 6.0, DriverIntent{.brake = 1.0f});
+    run(sim, 3.5);
+    std::printf("    after %.1f s parked: size=%zu\n", 3.5, marks.size());
+    CHECK(marks.size() == 0, "segments did not expire: %zu left", marks.size());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -287,6 +402,7 @@ int main(int argc, char** argv) {
         {"frame_schedule_independence", frameScheduleIndependence},
         {"corner_load_balance", cornerLoadBalance},
         {"brake_holds_in_low_range", brakeHoldsInLowRange},
+        {"tire_marks_surfaces", tireMarksSurfaces},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

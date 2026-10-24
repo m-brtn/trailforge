@@ -22,7 +22,8 @@ add_library(trailforge_sim STATIC
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
     src/vehicle/Vehicle.cpp
-    src/sim/Simulation.cpp)
+    src/sim/Simulation.cpp
+    src/sim/TireMarks.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -79,7 +80,8 @@ if(TRAILFORGE_BUILD_TESTS)
             reset_restores_state
             frame_schedule_independence
             corner_load_balance
-            brake_holds_in_low_range)
+            brake_holds_in_low_range
+            tire_marks_surfaces)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

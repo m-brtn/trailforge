@@ -4,6 +4,7 @@
 #include "render/RenderSettings.h"
 #include "vehicle/VehicleConfig.h"
 
+#include <array>
 #include <map>
 #include <string>
 
@@ -38,6 +39,7 @@ struct FrameStats {
     unsigned long long grassBlades = 0;
     bool reflection = false;
     int maxMsaa = 1;
+    unsigned markUploadBytes = 0; // tire mark bytes uploaded in the last frame
 };
 
 // Graphics panel state (owned by the application, edited by the UI).
@@ -51,6 +53,10 @@ struct GraphicsState {
     bool visible = false;        // F2
     bool timeLapse = false;      // advance settings.timeOfDay in real time
     float timeLapseSpeed = 0.25f; // game hours per real second
+    // Tire marks (render-only): drawing toggle and per-surface intensity multipliers (SurfaceId order).
+    bool tireMarks = true;
+    std::array<float, 6> markGain{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    bool fillMarks = false;      // request: fill the ring with synthetic segments (performance test at the cap)
 };
 
 // UI requests to the application (executed outside the ImGui frame).
@@ -84,7 +90,8 @@ private:
 
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);
-    void drawGraphics(const FrameStats& stats, GraphicsState& gfx);
+    void drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);
+    void drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);
     void drawTimeOfDay(GraphicsState& gfx);
 
     VehicleTuning m_tuning;

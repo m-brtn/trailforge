@@ -2,6 +2,7 @@
 
 #include "render/GroundMaps.h"
 #include "render/TimeOfDay.h"
+#include "sim/TireMarks.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
@@ -36,7 +37,12 @@ namespace {
 }
 
 enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2 };
-enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3 };
+enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4 };
+// Shadow casters: positive slope bias, no depth clip. Decals: pulled toward the camera so they win against the
+// surface they lie on.
+enum DepthBias { kBiasNone = 0, kBiasShadow = 1, kBiasDecal = 2 };
+
+constexpr float kMarkLift = 0.012f; // m: tire marks are drawn this far above the contact plane
 
 constexpr float kGrassChunk = 2.4f;
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
@@ -198,6 +204,8 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         uploadTexture(m_noise.tex, px, 1, 1, 4);
         uploadTexture(m_mask.tex, px, 1, 1, 4);
         uploadTexture(m_height.tex, &h, 1, 1, 2);
+        m_trample = makeTexture(1, 1, kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+        clearTrample();
     }
 
     m_settings = presetSettings(QualityPreset::High);
@@ -214,9 +222,12 @@ Renderer::~Renderer() {
     releaseTargets();
     releaseScenePipelines();
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
-                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe})
+                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
     for (GpuMesh& m : m_treeMeshes) m.release();
+    if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
+    if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
+    releaseTexture(m_trample);
     if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
     if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
     releaseTexture(m_noise);
@@ -298,7 +309,7 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
                                                   SDL_GPUTextureFormat color, SDL_GPUSampleCount samples,
                                                   bool depthTest, bool depthWrite, SDL_GPUCullMode cull,
                                                   SDL_GPUFrontFace front, int blend, SDL_GPUPrimitiveType prim,
-                                                  bool depthBias) {
+                                                  int depthBias) {
     SDL_GPUShader* vs = createShader(vsName, SDL_GPU_SHADERSTAGE_VERTEX, vsUniforms, vsSamplers, vsStorage);
     SDL_GPUShader* fs = createShader(fsName, SDL_GPU_SHADERSTAGE_FRAGMENT, fsUniforms, fsSamplers);
 
@@ -343,6 +354,7 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+            if (blend == kBlendMax) b.color_blend_op = b.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
         }
     }
 
@@ -359,12 +371,18 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
     pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
     pi.rasterizer_state.cull_mode = cull;
     pi.rasterizer_state.front_face = front;
-    pi.rasterizer_state.enable_depth_clip = !depthBias; // shadow casters behind the light near plane are clamped
-    if (depthBias) {
+    // Shadow casters behind the light near plane are clamped.
+    pi.rasterizer_state.enable_depth_clip = depthBias != kBiasShadow;
+    if (depthBias == kBiasShadow) {
         pi.rasterizer_state.enable_depth_bias = true;
         pi.rasterizer_state.depth_bias_constant_factor = 1.0f;
         pi.rasterizer_state.depth_bias_slope_factor = 1.75f;
         pi.rasterizer_state.depth_bias_clamp = 0.01f;
+    } else if (depthBias == kBiasDecal) {
+        pi.rasterizer_state.enable_depth_bias = true;
+        pi.rasterizer_state.depth_bias_constant_factor = -2.0f;
+        pi.rasterizer_state.depth_bias_slope_factor = -2.0f;
+        pi.rasterizer_state.depth_bias_clamp = 0.0f;
     }
     pi.multisample_state.sample_count = samples;
     pi.depth_stencil_state.enable_depth_test = depthTest;
@@ -387,7 +405,7 @@ void Renderer::createStaticPipelines() {
     const auto s1 = SDL_GPU_SAMPLECOUNT_1;
     const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
     m_shadowPipe = createPipeline("shadow_vs", "shadow_fs", 2, 0, 0, 0, 0, kLayoutLit, none, s1, true, true,
-                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, true);
+                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
     // Mirrored view: the winding flips, so front faces are clockwise.
     m_reflLitPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, s1, true, true,
                                    SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
@@ -402,9 +420,11 @@ void Renderer::createStaticPipelines() {
     m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_treeShadowPipe = createPipeline("tree_shadow_vs", "shadow_fs", 2, 0, 0, 0, 1, kLayoutLit, none, s1, true, true,
-                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, true);
+                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
     m_reflTreePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, s1, true, true,
                                     SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
+    m_tramplePipe = createPipeline("mark_mask_vs", "mark_mask_fs", 2, 0, 0, 0, 1, kLayoutNone, kTrampleFormat, s1,
+                                   false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendMax);
 }
 
 void Renderer::createScenePipelines() {
@@ -414,8 +434,10 @@ void Renderer::createScenePipelines() {
                                SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, sc, true, false,
                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 2, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
+    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 3, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 2, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
+                                SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
     m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
     m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
@@ -429,7 +451,7 @@ void Renderer::createScenePipelines() {
 
 void Renderer::releaseScenePipelines() {
     for (SDL_GPUGraphicsPipeline** p :
-         {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe}) {
+         {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe}) {
         if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
         *p = nullptr;
     }
@@ -573,6 +595,12 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
     m_groundRect = glm::vec4(maps.x0 - half, maps.z0 - half, 1.0f / (float(w) * maps.texel),
                              1.0f / (float(h) * maps.texel));
     m_waterLevel = waterLevel;
+    // The trample mask covers the same rect at a finer texel.
+    releaseTexture(m_trample);
+    m_trample = makeTexture(std::uint32_t(std::ceil(float(w) * maps.texel / kTrampleTexel)),
+                            std::uint32_t(std::ceil(float(h) * maps.texel / kTrampleTexel)), kTrampleFormat,
+                            SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+    clearTrample();
 
     // Grass chunks: aligned to multiples of the chunk size so blade ids are stable on every density grid.
     m_grassChunks.clear();
@@ -620,6 +648,62 @@ void Renderer::setTrees(const std::array<MeshData, 3>& lods, std::span<const Tre
     if (!m_treeBuffer || !m_treeTransfer) fail("tree buffers");
     SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
             m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3);
+}
+
+void Renderer::clearTrample() {
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+    SDL_GPUColorTargetInfo ct{};
+    ct.texture = m_trample.tex;
+    ct.load_op = SDL_GPU_LOADOP_CLEAR;
+    ct.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr));
+    SDL_SubmitGPUCommandBuffer(cmd);
+    m_trampleEmpty = true;
+    m_trampleGeneration = ~0ull;
+}
+
+void Renderer::ensureMarkCapacity(std::uint32_t segments) {
+    if (segments == m_markCapacity && m_markBuffer) return;
+    if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
+    if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
+    SDL_GPUBufferCreateInfo bi{};
+    bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+    bi.size = segments * std::uint32_t(sizeof(TireMarkSegment));
+    m_markBuffer = SDL_CreateGPUBuffer(m_device, &bi);
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = bi.size;
+    m_markTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
+    if (!m_markBuffer || !m_markTransfer) fail("tire mark buffers");
+    m_markCapacity = segments;
+    m_markGeneration = ~0ull; // forces a full upload
+}
+
+std::uint32_t Renderer::uploadMarks(SDL_GPUCopyPass* copy, const TireMarks& marks) {
+    const std::uint32_t cap = std::uint32_t(marks.capacity());
+    const bool full = marks.generation() != m_markGeneration || marks.written() - m_markWritten >= cap;
+    const std::uint32_t fresh = full ? cap : std::uint32_t(marks.written() - m_markWritten);
+    m_markGeneration = marks.generation();
+    m_markWritten = marks.written();
+    if (fresh == 0) return 0;
+    // The newest `fresh` segments end just before the head; at most two contiguous runs in the ring.
+    const std::uint32_t head = std::uint32_t(marks.headIndex());
+    const std::uint32_t start = full ? 0 : (head + cap - fresh) % cap;
+    const std::uint32_t run0 = std::min(fresh, cap - start), run1 = fresh - run0;
+    constexpr std::uint32_t kSeg = sizeof(TireMarkSegment);
+    auto* dst = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, m_markTransfer, true));
+    std::memcpy(dst, marks.data() + start, std::size_t(run0) * kSeg);
+    if (run1 > 0) std::memcpy(dst + std::size_t(run0) * kSeg, marks.data(), std::size_t(run1) * kSeg);
+    SDL_UnmapGPUTransferBuffer(m_device, m_markTransfer);
+    SDL_GPUTransferBufferLocation src0{m_markTransfer, 0};
+    SDL_GPUBufferRegion region0{m_markBuffer, start * kSeg, run0 * kSeg};
+    SDL_UploadToGPUBuffer(copy, &src0, &region0, false);
+    if (run1 > 0) {
+        SDL_GPUTransferBufferLocation src1{m_markTransfer, run0 * kSeg};
+        SDL_GPUBufferRegion region1{m_markBuffer, 0, run1 * kSeg};
+        SDL_UploadToGPUBuffer(copy, &src1, &region1, false);
+    }
+    return fresh * kSeg;
 }
 
 void Renderer::ensureLineCapacity(std::uint32_t bytes) {
@@ -923,8 +1007,15 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const std::uint32_t treeTotal = cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, trees);
     for (int l = 0; l < 3; ++l) m_stats.trees[l] = int(trees.count[l]);
     m_stats.shadowTrees = int(trees.shadowCount);
-    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0) {
+    const TireMarks* marks = frame.tireMarks;
+    if (marks) ensureMarkCapacity(std::uint32_t(marks->capacity()));
+    const bool markSync = marks && (marks->written() != m_markWritten || marks->generation() != m_markGeneration);
+    const std::uint32_t markCount = marks ? std::uint32_t(marks->size()) : 0;
+    m_stats.markSegments = markCount;
+    m_stats.markUploadBytes = 0;
+    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || markSync) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+        if (markSync) m_stats.markUploadBytes = uploadMarks(copy, *marks);
         if (lineBytes > 0) {
             ensureLineCapacity(lineBytes);
             void* dst = SDL_MapGPUTransferBuffer(m_device, m_lineTransfer, true);
@@ -1019,6 +1110,49 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     // Shared fragment resources of the lit pipelines.
     SDL_GPUTextureSamplerBinding litTex[3] = {
         {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler}};
+
+    MarkUniforms mu{};
+    if (marks) {
+        mu.info = glm::vec4(float(marks->firstIndex()), float(marks->capacity()), float(frame.simTime),
+                            marks->settings().fadeTime);
+        mu.params = glm::vec4(kMarkLift, 0, 0, 0);
+        mu.gainA = glm::vec4(frame.markGain[0], frame.markGain[1], frame.markGain[2], frame.markGain[3]);
+        mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], 0, 0);
+        float width[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+        for (std::size_t i = 0; i < kSurfaceCount; ++i) width[i] = surfaceMarkResponse(SurfaceId(i)).widthScale;
+        mu.widthA = glm::vec4(width[0], width[1], width[2], width[3]);
+        mu.widthB = glm::vec4(width[4], width[5], width[6], width[7]);
+    }
+
+    // ---- Grass trample mask: re-rendered when segments were added or removed, and every half second while marks
+    // exist (fading). Flattened / torn grass follows the marks.
+    m_stats.trampleUpdated = false;
+    {
+        const bool changed = markCount != m_trampleCount || (marks && (marks->written() != m_trampleWritten ||
+                                                                      marks->generation() != m_trampleGeneration));
+        const bool due = markCount > 0 && (changed || frame.simTime - m_trampleTime > 0.5);
+        if (due || (markCount == 0 && !m_trampleEmpty)) {
+            SDL_GPUColorTargetInfo ct{};
+            ct.texture = m_trample.tex;
+            ct.load_op = SDL_GPU_LOADOP_CLEAR;
+            ct.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+            if (markCount > 0) {
+                SDL_BindGPUGraphicsPipeline(pass, m_tramplePipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+                SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
+                SDL_BindGPUVertexStorageBuffers(pass, 0, &m_markBuffer, 1);
+                SDL_DrawGPUPrimitives(pass, 6, markCount, 0, 0);
+            }
+            SDL_EndGPURenderPass(pass);
+            m_trampleEmpty = markCount == 0;
+            m_trampleCount = markCount;
+            m_trampleWritten = marks ? marks->written() : 0;
+            m_trampleGeneration = marks ? marks->generation() : ~0ull;
+            m_trampleTime = frame.simTime;
+            m_stats.trampleUpdated = true;
+        }
+    }
 
     // ---- 2. Puddle reflection (mirrored camera, clip plane at the water level)
     if (reflVisible) {
@@ -1130,6 +1264,20 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             }
         }
 
+        // Tire marks: one instanced draw over the live part of the ring (6 vertices per segment), blended over the
+        // ground with the same lighting, shadows and fog.
+        if (markCount > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_markPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 1, &mu, sizeof(mu));
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_markBuffer, 1);
+            SDL_DrawGPUPrimitives(pass, 6, markCount, 0, 0);
+            ++m_stats.drawCalls;
+        }
+
         // Grass blades (one instanced draw per LOD).
         m_stats.grassChunks = int(grassTotal);
         m_stats.grassBlades = 0;
@@ -1137,8 +1285,10 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_grassPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding vtex[2] = {{m_height.tex, m_clampSampler}, {m_mask.tex, m_clampSampler}};
-            SDL_BindGPUVertexSamplers(pass, 0, vtex, 2);
+            SDL_GPUTextureSamplerBinding vtex[3] = {{m_height.tex, m_clampSampler},
+                                                    {m_mask.tex, m_clampSampler},
+                                                    {m_trample.tex, m_clampSampler}};
+            SDL_BindGPUVertexSamplers(pass, 0, vtex, 3);
             SDL_BindGPUVertexStorageBuffers(pass, 0, &m_grassBuffer, 1);
             SDL_GPUTextureSamplerBinding ftex{m_shadow.tex, m_cmpSampler};
             SDL_BindGPUFragmentSamplers(pass, 0, &ftex, 1);

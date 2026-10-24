@@ -22,7 +22,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics tests (CTest, 8 tests)
+# headless physics tests (CTest, 9 tests)
 ctest --preset release
 ctest --preset debug
 
@@ -41,6 +41,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
+./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
 ```
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`.
@@ -54,8 +55,8 @@ in Release.
 ```
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
+src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (contact samples)
+src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring)
 src/render/   Renderer (SDL GPU passes), RenderSettings, TimeOfDay, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
               DebugDraw, GpuTimingMetal.m
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)

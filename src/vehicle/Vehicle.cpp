@@ -294,11 +294,35 @@ void Vehicle::postPhysics(float dt) {
             wt.contactLateral = w->GetContactLateral();
             wt.contactSpeed = Vec3(bi.GetPointVelocity(m_bodyId, w->GetContactPosition())).Length();
             wt.slipValid = wt.contactSpeed > 0.5f || std::abs(wt.angularVelocity * s->mRadius) > 0.5f;
+
+            WheelContactSample& c = m_contacts[i];
+            const Vec3 n = wt.contactNormal;
+            // The cylinder cast may report its contact anywhere across the tread; the patch center is the wheel
+            // center projected onto the contact plane.
+            const Vec3 hub = wt.suspensionTop + wt.suspensionDir * wt.suspensionLength;
+            c.patchCenter = hub - n * (hub - wt.contactPosition).Dot(n);
+            c.normal = n;
+            c.longitudinal = wt.contactLongitudinal;
+            c.lateral = wt.contactLateral;
+            Vec3 v = Vec3(bi.GetPointVelocity(m_bodyId, RVec3(c.patchCenter)));
+            v -= n * v.Dot(n);
+            c.velocity = v;
+            c.load = wt.load;
+            c.longitudinalForce = wt.longitudinalForce;
+            c.lateralForce = wt.lateralForce;
+            c.rollingSpeed = wt.angularVelocity * s->mRadius;
+            c.longitudinalSlipSpeed = c.rollingSpeed - v.Dot(c.longitudinal);
+            c.lateralSlipSpeed = v.Dot(c.lateral);
         } else {
             wt.load = 0.0f;
             wt.longitudinalForce = 0.0f;
             wt.lateralForce = 0.0f;
         }
+        WheelContactSample& c = m_contacts[i];
+        c.contact = wt.contact;
+        c.surface = wt.surface;
+        c.width = s->mWidth;
+        c.radius = s->mRadius;
         if (i < 2) steerSum += wt.steerAngleDeg;
     }
     t.steerAngleDeg = 0.5f * steerSum;

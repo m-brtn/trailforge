@@ -1,6 +1,7 @@
 #pragma once
 
 #include "physics/PhysicsWorld.h"
+#include "sim/TireMarks.h"
 #include "track/SurfaceProperties.h"
 #include "track/TestTrack.h"
 #include "vehicle/Vehicle.h"
@@ -50,10 +51,12 @@ struct SimulationSettings {
     PhysicsWorld::Settings physics;
     VehicleConfig vehicle;
     InputSmoothing smoothing;
+    TireMarkSettings tireMarks;
 };
 
 struct StepTiming {
     double lastStepMs = 0.0;   // last physics step time (CPU, ms)
+    double marksUs = 0.0;      // tire mark update of the last tick (CPU, microseconds), not part of lastStepMs
     double avgStepMs = 0.0;    // moving average, ms
     double maxStepMs = 0.0;    // maximum over the last ~2 s, ms
     unsigned long long ticks = 0;
@@ -93,6 +96,10 @@ public:
     const Vehicle& vehicle() const { return *m_vehicle; }
     const VehicleConfig& vehicleConfig() const { return m_vehicle->config(); }
     const StepTiming& timing() const { return m_timing; }
+    double simTime() const { return m_simTime; } // s, sum of all fixed steps
+    // Visual-only tire marks written from the wheel contact samples after every tick.
+    TireMarks& tireMarks() { return m_tireMarks; }
+    const TireMarks& tireMarks() const { return m_tireMarks; }
     const RenderSnapshot& previousSnapshot() const { return m_prev; }
     const RenderSnapshot& currentSnapshot() const { return m_curr; }
     // Latest messages about discrete commands (e.g. "reverse only near a stop").
@@ -130,6 +137,8 @@ private:
 
     RenderSnapshot m_prev, m_curr;
     StepTiming m_timing;
+    double m_simTime = 0.0;
+    TireMarks m_tireMarks;
 };
 
 } // namespace tf

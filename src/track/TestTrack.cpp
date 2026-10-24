@@ -64,6 +64,8 @@ constexpr float kLaneC0 = 16.0f, kLaneC1 = 36.0f;   // side slope, steps, rocks
 
 constexpr float kStartZ0 = -48.0f, kStartZ1 = -30.0f;
 constexpr float kLowGripZ0 = 24.0f, kLowGripZ1 = 42.0f;
+// Concrete skid strip along the east edge (flat ground between the side slope plateau and the berm).
+constexpr float kSkidX0 = 39.0f, kSkidX1 = 45.0f, kSkidZ0 = -48.0f, kSkidZ1 = 44.0f;
 
 // ---- Showcase (z > 46): a winding mud path with puddles through a grass meadow.
 constexpr float kShowZ0 = 46.0f;    // blend from the proving ground starts here
@@ -121,6 +123,7 @@ SurfaceId groundSurface(float x, float z) { return TestTrack::groundSurfaceAt(x,
 SurfaceId TestTrack::groundSurfaceAt(float x, float z) {
     if (x > kLaneA0 && x < kLaneA1 && z > kStartZ0 && z < kStartZ1) return SurfaceId::Concrete;
     if (x > kLaneA0 && x < kLaneA1 && z > kLowGripZ0 && z < kLowGripZ1) return SurfaceId::LowGrip;
+    if (x > kSkidX0 && x < kSkidX1 && z > kSkidZ0 && z < kSkidZ1) return SurfaceId::Concrete;
     if (z > 47.0f) {
         if (showcaseMudWeight(x, z) > 0.45f) return SurfaceId::Mud;
         int n = 0;
@@ -293,6 +296,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     case TrackLayout::ProvingGround: buildProvingGround(); break;
     case TrackLayout::Flat: buildFlat(false); break;
     case TrackLayout::FlatWithWheelPit: buildFlat(true); break;
+    case TrackLayout::SurfaceLanes: buildSurfaceLanes(); break;
     }
 
     JPH::TriangleList tris;
@@ -415,6 +419,7 @@ void TestTrack::buildProvingGround() {
     feature("Steps 0.15/0.30/0.45 m", stepX, -7.5f);
     feature("Rock field", stepX, 14.0f);
     feature("Mud & puddles showcase", 0.0f, 48.5f);
+    feature("Skid strip (concrete)", 0.5f * (kSkidX0 + kSkidX1), -46.0f);
 }
 
 void TestTrack::buildFlat(bool withPit) {
@@ -435,6 +440,19 @@ void TestTrack::buildFlat(bool withPit) {
         rect(px0, px1, pz1, h);
     }
     m_features.push_back({"Start", Vec3(0, 0, 0), 0.0f});
+}
+
+void TestTrack::buildSurfaceLanes() {
+    // Lanes along Z, 12 m wide, centered at x = 0, 12, 24, 36; spawn points at the start of each lane.
+    auto& g = m_geometry;
+    const SurfaceId lanes[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Mud, SurfaceId::Grass};
+    const char* names[] = {"Concrete lane", "Packed dirt lane", "Mud lane", "Grass lane"};
+    const float z0 = -100.0f, z1 = 200.0f;
+    for (int k = 0; k < 4; ++k) {
+        const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
+        g.addQuad(Vec3(x0, 0, z0), Vec3(x0, 0, z1), Vec3(x1, 0, z1), Vec3(x1, 0, z0), lanes[k]);
+        m_features.push_back({names[k], Vec3(x0 + 6.0f, 0, -90.0f), 0.0f});
+    }
 }
 
 } // namespace tf

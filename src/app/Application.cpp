@@ -239,7 +239,12 @@ void Application::renderFrame(float frameTime) {
     stats.grassBlades = rs.grassBlades;
     stats.reflection = rs.reflectionRendered;
     stats.maxMsaa = m_renderer->maxMsaa();
+    stats.markUploadBytes = rs.markUploadBytes;
     const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
+    if (m_gfx.fillMarks) {
+        fillTireMarks();
+        m_gfx.fillMarks = false;
+    }
     ImGui::Render();
     if (req.togglePause) m_paused = !m_paused;
     if (req.stepOnce && m_paused) m_stepOnce = true;
@@ -297,6 +302,9 @@ void Application::renderFrame(float frameTime) {
             frame.wheelContacts[i] = glm::vec4(toGlm(w.contactPosition), w.contact ? 1.0f : 0.0f);
         }
     }
+    frame.tireMarks = m_gfx.tireMarks ? &m_sim.tireMarks() : nullptr;
+    frame.simTime = m_sim.simTime();
+    frame.markGain = m_gfx.markGain;
     frame.lines = m_debugDraw.lines();
     frame.linesOnTop = m_ui.linesOnTop;
     frame.ui = ImGui::GetDrawData();
@@ -307,6 +315,59 @@ void Application::renderFrame(float frameTime) {
     if (!m_captureRequest.empty()) frame.capturePath = m_captureRequest.c_str();
     m_renderer->drawFrame(frame);
     m_captureRequest.clear();
+}
+
+// Performance test: fills the whole ring with synthetic ribbons (random curves on the proving ground terrain,
+// surface from the ground map). Not driven marks; they only load the renderer at the configured cap.
+void Application::fillTireMarks() {
+    TireMarks& marks = m_sim.tireMarks();
+    const float t = float(m_sim.simTime());
+    std::uint32_t seed = 12345u;
+    auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return float(seed >> 8) / float(1u << 24);
+    };
+    auto ground = [](float x, float z) { return glm::vec3(x, TestTrack::provingGroundHeight(x, z), z); };
+    auto normalAt = [&](float x, float z) {
+        const float e = 0.25f;
+        const glm::vec3 dx = ground(x + e, z) - ground(x - e, z), dz = ground(x, z + e) - ground(x, z - e);
+        return glm::normalize(glm::cross(dz, dx));
+    };
+    const float seg = marks.settings().segmentLength, halfWidth = 0.16f;
+    std::size_t left = marks.capacity();
+    while (left > 0) {
+        glm::vec2 p(-44.0f + 88.0f * rnd(), -44.0f + 124.0f * rnd());
+        float heading = 6.2832f * rnd(), u = 0.0f;
+        glm::vec3 lastPos = ground(p.x, p.y), lastSide(0.0f);
+        for (int i = 0; i < 400 && left > 0; ++i) {
+            heading += (rnd() - 0.5f) * 0.12f;
+            if (std::abs(p.x) > 45.0f || p.y < -45.0f || p.y > 81.0f)
+                heading = std::atan2(-p.x, 18.0f - p.y); // back toward the middle at the walls
+            p += glm::vec2(std::sin(heading), std::cos(heading)) * seg;
+            const glm::vec3 pos = ground(p.x, p.y), n = normalAt(p.x, p.y);
+            const glm::vec3 side = glm::normalize(glm::cross(n, pos - lastPos)) * halfWidth;
+            if (i > 0) {
+                const SurfaceId s = TestTrack::groundSurfaceAt(p.x, p.y);
+                const bool soft = surfaceMarkResponse(s).imprint > 0.0f;
+                TireMarkSegment m{};
+                std::memcpy(m.p0, &lastPos, sizeof(m.p0));
+                std::memcpy(m.p1, &pos, sizeof(m.p1));
+                std::memcpy(m.side0, &lastSide, sizeof(m.side0));
+                std::memcpy(m.side1, &side, sizeof(m.side1));
+                m.u0 = u;
+                m.u1 = u + seg;
+                m.birth = t;
+                m.surface = float(s);
+                m.imprint0 = m.imprint1 = soft ? 0.7f : 0.0f;
+                m.slip0 = m.slip1 = soft ? 0.1f : 0.6f;
+                marks.push(m);
+                --left;
+                u += seg;
+            }
+            lastPos = pos;
+            lastSide = side;
+        }
+    }
 }
 
 void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
@@ -655,6 +716,17 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "hud") m_ui.hud = v != 0.0f;
             else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
             else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
+            else if (k == "marks") m_gfx.tireMarks = v != 0.0f;
+            else if (k == "marks_clear") m_sim.tireMarks().clear();
+            else if (k == "marks_fill") fillTireMarks();
+            else if (k == "marks_gain") m_gfx.markGain.fill(v);
+            else if (k == "marks_gen" || k == "marks_max" || k == "marks_fade") {
+                TireMarkSettings ms = m_sim.tireMarks().settings();
+                if (k == "marks_gen") ms.enabled = v != 0.0f;
+                else if (k == "marks_max") ms.maxSegments = int(v);
+                else ms.fadeTime = v;
+                m_sim.tireMarks().setSettings(ms);
+            }
             else return Exec::Failed;
         }
         if (render) {
@@ -776,6 +848,19 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "quality") return double(int(m_gfx.preset));
     if (n == "msaa") return m_renderer->settings().msaa;
     if (n == "grass_blades") return double(m_renderer->stats().grassBlades);
+    if (n == "marks") return double(m_sim.tireMarks().size());
+    if (n == "marks_cap") return double(m_sim.tireMarks().capacity());
+    if (n == "marks_written") return double(m_sim.tireMarks().written());
+    if (n == "marks_drawn") return double(m_renderer->stats().markSegments);
+    if (n == "marks_us") return m_sim.timing().marksUs;
+    if (n.size() == 8 && n.rfind("marks_s", 0) == 0) {
+        // marks_s<SurfaceId>: live segments on that surface (0 Concrete .. 5 Grass).
+        const TireMarks& tm = m_sim.tireMarks();
+        const float id = float(n[7] - '0');
+        double count = 0;
+        for (std::size_t i = 0; i < tm.size(); ++i) count += tm.oldest(i).surface == id ? 1.0 : 0.0;
+        return count;
+    }
     if (n == "draw_calls") return m_renderer->stats().drawCalls;
     if (n == "render_w") return m_renderer->stats().renderW;
     if (n == "reflection") return m_renderer->stats().reflectionRendered ? 1.0 : 0.0;

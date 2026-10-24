@@ -18,6 +18,7 @@ struct ImDrawData;
 namespace tf {
 
 struct GroundMaps;
+class TireMarks;
 
 // Uniform block layouts; must match the structs of the same name in shaders/scene.metal.
 struct FrameUniforms {
@@ -80,6 +81,15 @@ struct PostUniforms {
     glm::vec4 extra;
 };
 
+struct MarkUniforms {
+    glm::vec4 info;   // x: first live segment (ring index), y: ring capacity, z: simulation time (s), w: fade time (s)
+    glm::vec4 params; // x: lift along the contact normal (m)
+    glm::vec4 gainA;  // per-surface intensity multipliers: Concrete, PackedDirt, Rock, LowGrip
+    glm::vec4 gainB;  // Mud, Grass
+    glm::vec4 widthA; // mark width / tire width per surface (SurfaceMarkResponse::widthScale), same order
+    glm::vec4 widthB;
+};
+
 // GPU vertex buffer with explicit ownership (released in the destructor).
 class GpuMesh {
 public:
@@ -139,6 +149,12 @@ struct FrameDesc {
     std::array<glm::vec3, 2> headlightPos{};  // world positions of the two lamps (spot lights, no shadows)
     glm::vec3 headlightDir{0, 0, 1};          // beam axis
     std::array<glm::vec4, 4> wheelContacts{}; // xyz contact point, w > 0 when the wheel touches the ground
+
+    // Persistent tire marks (render-only). The renderer keeps a GPU copy of the segment ring and uploads only the
+    // segments written since the previous frame.
+    const TireMarks* tireMarks = nullptr;
+    double simTime = 0.0;                        // simulation time the segment birth times refer to (s)
+    std::array<float, 6> markGain{1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
 };
 
 struct RenderStats {
@@ -151,13 +167,16 @@ struct RenderStats {
     std::array<int, 3> trees{};               // tree instances drawn per LOD (main view)
     int shadowTrees = 0;                      // tree instances per shadow cascade
     bool reflectionRendered = false;
+    std::uint32_t markSegments = 0;           // tire mark segments drawn (one instanced draw)
+    std::uint32_t markUploadBytes = 0;        // tire mark bytes uploaded this frame
+    bool trampleUpdated = false;              // grass trample mask re-rendered this frame
     double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
     double gpuMsAvg = 0.0;                    // exponential average
     double acquireWaitMs = 0.0;               // CPU time blocked in SDL_WaitAndAcquireGPUSwapchainTexture
 };
 
-// SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> puddle reflection -> HDR scene
-// (lit, instanced trees, grass, sky with mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale)
+// SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
+// (lit, instanced trees, tire marks, grass, sky with mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale)
 // -> FXAA -> ImGui.
 class Renderer {
 public:
@@ -213,7 +232,7 @@ private:
                                             SDL_GPUTextureFormat color, SDL_GPUSampleCount samples, bool depthTest,
                                             bool depthWrite, SDL_GPUCullMode cull, SDL_GPUFrontFace front, int blend,
                                             SDL_GPUPrimitiveType prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-                                            bool depthBias = false);
+                                            int depthBias = 0);
     void createStaticPipelines();
     void createScenePipelines();
     void releaseScenePipelines();
@@ -226,6 +245,10 @@ private:
     void uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_t w, std::uint32_t h,
                        std::uint32_t bytesPerPixel);
     void ensureLineCapacity(std::uint32_t bytes);
+    // Copies the tire mark segments written since the last call into the GPU ring (inside an open copy pass).
+    std::uint32_t uploadMarks(SDL_GPUCopyPass* copy, const TireMarks& marks);
+    void ensureMarkCapacity(std::uint32_t segments);
+    void clearTrample();
     void pollGpuTiming();
     bool saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::uint32_t w, std::uint32_t h, const char* path);
 
@@ -264,6 +287,7 @@ private:
     SDL_GPUGraphicsPipeline* m_fxaaPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_treeShadowPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_reflTreePipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_tramplePipe = nullptr;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
     SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
@@ -273,6 +297,7 @@ private:
     SDL_GPUGraphicsPipeline* m_linePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_lineOnTopPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_markPipe = nullptr;
 
     // Frame targets.
     std::uint32_t m_outW = 0, m_outH = 0;
@@ -305,6 +330,21 @@ private:
     SDL_GPUBuffer* m_treeBuffer = nullptr;
     SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
     std::uint32_t m_treeCapacity = 0; // instances
+
+    // Tire marks: GPU copy of the simulation's segment ring (same capacity and indices).
+    SDL_GPUBuffer* m_markBuffer = nullptr;
+    SDL_GPUTransferBuffer* m_markTransfer = nullptr;
+    std::uint32_t m_markCapacity = 0; // segments
+    std::uint64_t m_markWritten = 0;
+    std::uint64_t m_markGeneration = ~0ull;
+    // Grass trample mask over the ground rect (R: flattened, G: torn), rendered from the mark segments.
+    static constexpr float kTrampleTexel = 0.1f; // m
+    static constexpr SDL_GPUTextureFormat kTrampleFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+    Texture m_trample;
+    std::uint64_t m_trampleWritten = 0, m_trampleGeneration = ~0ull;
+    std::size_t m_trampleCount = 0;
+    double m_trampleTime = -1e9;
+    bool m_trampleEmpty = true;
 
     // Debug lines.
     SDL_GPUBuffer* m_lineBuffer = nullptr;

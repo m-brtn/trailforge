@@ -97,20 +97,24 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
 Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
-`tools/scenarios/perf_presets.txt` (frame times per quality preset).
+`tools/scenarios/perf_presets.txt` (frame times per quality preset),
+`tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
+cost of the marks with the ring empty and filled to 16k / 64k segments).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
-`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `msg:<substring>` (1 if the latest UI message contains the substring), and more.
+`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
+`marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
+0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass), `msg:<substring>` (1 if the latest UI message contains the substring), and more.
 Full list: `Application::scenarioValue`.
 
 ## Controls
@@ -144,8 +148,8 @@ on other platforms use Ctrl+click.
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
+src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (per-tick contact samples)
+src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons)
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer)
@@ -216,11 +220,15 @@ Surrounded by an earth berm and concrete walls.
   - steps of 0.15 / 0.30 / 0.45 m;
   - a field of 28 rocks and two boulders. Rocks are angular convex chunks (a subdivided icosahedron cut by random
     planes), flat-shaded; the collision mesh is the same triangles.
+- **Skid strip** (east edge, x 39–45, z −48…44, teleport "Skid strip (concrete)"): a flat 6 × 92 m concrete strip
+  for braking and wheelspin on concrete; it ends in a short dirt band and the meadow, so one run crosses
+  concrete → dirt → grass.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (μ×0.60/0.55),
-  the meadow is `Grass` (μ×0.80/0.78). There is **no sinkage, no ruts and no water physics**: puddles are dips in the
-  hard ground, and the water surface is render-only. Deformable terrain is a later stage.
+  the meadow is `Grass` (μ×0.80/0.78). There is **no sinkage and no water physics**: puddles are dips in the
+  hard ground, and the water surface is render-only. The ruts you see are tire marks, which are render-only too
+  (see "Tire marks"). Deformable terrain is a later stage.
 
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
 The outer backdrop (hills, trees beyond the walls, distant mountains) and grass are render-only and cannot be reached.
@@ -234,13 +242,15 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
 
 1. Sun (or moon) shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with
    1/4/12 taps).
-2. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
-3. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
-   rock/concrete/dirt, mask-blended grass/mud/wet ground, instanced grass (2.4 m chunks, 3 LOD levels, distance fade,
-   wind, flattened under the wheel contacts), procedural sky with clouds, water with Fresnel, ripples and reflection,
-   height fog, debug lines.
-4. Bloom (5-level downsample/upsample chain).
-5. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+2. Grass trample mask (RG8, 0.1 m texels over the ground) rendered from the tire mark segments, only when marks were
+   added or removed and every 0.5 s while they fade.
+3. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
+4. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
+   rock/concrete/dirt, mask-blended grass/mud/wet ground, tire marks (one instanced draw), instanced grass (2.4 m
+   chunks, 3 LOD levels, distance fade, wind, flattened under the wheel contacts and in the trample mask), procedural
+   sky with clouds, water with Fresnel, ripples and reflection, height fog, debug lines.
+5. Bloom (5-level downsample/upsample chain).
+6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
 
 ### Time of day and environment
 
@@ -264,6 +274,38 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
 
 Vehicle dirt is **cosmetic only**: a mud layer on the body (splash line from the bottom up) and wheels. In auto mode it
 builds up while the wheels roll on `Mud` or through puddles and slowly dries off; it never affects the physics.
+
+### Tire marks (visual only)
+
+Every physics tick `Vehicle` fills one `WheelContactSample` per wheel (`src/vehicle/WheelContact.h`): contact patch
+center and normal, suspension load, longitudinal/lateral slip speed of the patch, rolling speed, surface, tire width
+and radius. `TireMarks` (`src/sim`, headless, no SDL) turns these samples into one ribbon per wheel: a segment every
+0.15 m of patch travel, written into a fixed ring buffer (default 16,384 segments, the oldest is overwritten). Each
+segment stores both end points, the half-width vector in the contact plane (width from the wheel), surface, birth
+time, and two intensities per end:
+
+- **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9 at static load);
+- **slip** — rubber on hard surfaces, churn on soft ones, from the patch sliding speed *and* the slip ratio
+  (sliding speed / max(patch speed, rolling speed)). The ratio gate keeps normal driving clean: a steady 12 % slip in
+  2nd gear at full throttle (≈ 1.7 m/s) leaves nothing on concrete, while lock-up, a 1st-gear launch with real
+  wheelspin (3–4.5 m/s in the sim), handbrake slides and wheelspin on loose ground do.
+
+Per surface: concrete/rock/low-grip get dark rubber only while sliding; dirt gets a compacted tread imprint (lug
+pattern) and loose churned soil on wheelspin; mud gets a dark, wet, glossy rut with lighter raised edges (the mark
+is 1.3× the tire width); grass gets a flattened, lighter strip, and spinning tears the turf to soil.
+Relief is in the shading normal only — the ground mesh and the collision do not change.
+
+Rendering: the ring is mirrored in a GPU storage buffer of the same size; only new segments are uploaded (at most two
+copy regions per frame, 80 bytes each). All live segments are one instanced draw of quads that follow the terrain
+(both ends sit on real contact points, lifted 1.2 cm along the normal, plus a negative depth bias, so there is no
+z-fighting). The fragment shader rebuilds the ground material under the mark and shades it with the regular lighting,
+cascaded shadows, vehicle AO, headlights and fog, so marks match every time of day. Soft-surface segments are also
+drawn into the grass trample mask; grass blades read it and lie flat, or disappear where the turf was torn.
+Marks fade over the last 40 % of their lifetime (default 240 s) and are then dropped.
+
+Graphics panel (F2) → "Tire marks (visual only)": draw / generate toggles, max segments (1k–64k), fade time,
+per-surface intensity multipliers, Clear, "Fill to cap" (synthetic random ribbons for stress testing), live
+count / capacity, ring size, CPU cost per tick and upload size per frame.
 
 Quality presets (Graphics panel, F2; default High):
 
@@ -317,6 +359,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients.
   The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
+- Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
+  collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
+  every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven).
 - No forced differential lock: Jolt supports only open and LSD.
   The LSD here limits the wheel speed ratio; it is not a preloaded clutch pack.
 - No aerodynamics or rolling resistance (linear damping = 0).
@@ -335,7 +380,7 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 8 of 8 tests pass in Debug and Release:
+- **CTest.** 9 of 9 tests pass in Debug, Release and headless:
 
 | Test | Result |
 |---|---|
@@ -347,6 +392,7 @@ Everything below was actually run on macOS 27 / M-series.
 | Frame schedule independence | Different frame patterns at the same step rate: position difference 0.000000 m |
 | Cornering load balance (40 km/h) | Average Σload = 19620 N with 1, 2 and 4 collision steps; outer front > 2× inner |
 | Brake in low range | 10.4 m/s → stop in 1.33 s, speed never increases, final 0 m/s |
+| Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 83 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; wheelspin: 68/76/68 segments, slip 0.56/0.48/0.54; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
 
 - **Step cost** (`trailforge_probe bench`, Release, 20 s course drive):
   - 60 Hz: 0.038 ms per step on average, worst 0.11 ms; 2.3 ms CPU per simulated second;
@@ -409,6 +455,20 @@ Everything below was actually run on macOS 27 / M-series.
   Run-to-run noise in that session was ±0.3 ms; absolute numbers are higher than the table above because the display
   ran at 60 Hz that day (VSync runs at 58–59 FPS) and the GPU clocked lower. Draw calls 46 → 49 (follow), 10 → 13
   (overview): the pines are three instanced draws instead of being part of the scenery mesh.
+- **Tire marks** (`tools/scenarios/tracks.txt`, Release): 18 checks, 0 failures — launch marks on the skid strip,
+  no new concrete marks while rolling in 2nd gear, > 40 brake segments, dirt/grass marks when leaving the strip,
+  mud ruts, low-range spin on grass and dirt, a handbrake drift on the start pad, 64k segments live and drawn.
+  `full_check.txt` stays at 128 / 0 and `time_of_day.txt` at 8 / 0. Cost at 2880×1800, High, VSync off, mud showcase
+  follow camera (one session, averages):
+
+| Marks | GPU ms | Frame ms | CPU ms | Grass blades |
+|---|---|---|---|---|
+| Off | 4.09 | 3.89 | 0.93 | 29k |
+| 16,384 live (default cap, synthetic fill) | 4.40 | 4.00 | 0.91 | 21k |
+| 65,536 live (synthetic fill) | 5.98 | 4.81 | 1.00 | 18k |
+
+  GPU time is the whole frame; the marks pass was not timed separately. Fewer grass blades are drawn with marks
+  because torn turf kills blades, which partly offsets the marks cost.
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;
@@ -457,3 +517,8 @@ Everything below was actually run on macOS 27 / M-series.
 5. **Drivetrain.** Differential locks as a separate controller mode, axles as linked wheels.
 6. **Validation.** Tests for rolling resistance on soft soil, rut depth versus load
    and traction loss under wheelspin.
+
+The tire marks already provide the input for this: `WheelContactSample` carries, per wheel and per tick, the patch
+position and normal, load, slip speeds, surface, width and radius. A deformable terrain stage can consume the same
+samples (patch pressure = load / (width × patch length)) to write sinkage into the height field instead of a mark
+ribbon, and the mark renderer then only has to draw what the height field does not already show.

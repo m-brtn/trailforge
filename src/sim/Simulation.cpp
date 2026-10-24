@@ -19,7 +19,7 @@ float approach(float current, float target, float rate, float dt) {
 
 } // namespace
 
-Simulation::Simulation(const SimulationSettings& settings) : m_settings(settings) {
+Simulation::Simulation(const SimulationSettings& settings) : m_settings(settings), m_tireMarks(settings.tireMarks) {
     m_world = std::make_unique<PhysicsWorld>(settings.physics);
     m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, settings.layout);
     spawnVehicle(settings.vehicle, m_track->spawn());
@@ -39,6 +39,10 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);
     m_smoothed = {};
+    TireMarkSettings marks = m_tireMarks.settings();
+    marks.referenceLoad = 0.25f * config.mass * 9.81f;
+    m_tireMarks.setSettings(marks);
+    m_tireMarks.breakRibbons();
     m_curr = captureSnapshot();
     m_prev = m_curr;
 }
@@ -121,6 +125,11 @@ void Simulation::tick() {
     // Jolt splits the step into collisionSteps substeps; constraint lambdas are impulses of the last substep.
     m_vehicle->postPhysics(dt / float(m_settings.collisionSteps));
     const auto t1 = Clock::now();
+
+    m_simTime += m_settings.fixedStep;
+    m_tireMarks.update(m_vehicle->contacts(), m_simTime);
+    const auto t2 = Clock::now();
+    m_timing.marksUs = std::chrono::duration<double, std::micro>(t2 - t1).count();
 
     m_prev = m_curr;
     m_curr = captureSnapshot();
