@@ -42,6 +42,7 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_impactListener.setBody(m_vehicle->bodyId());
     ++m_spawnCount;
     m_smoothed = {};
+    m_autoReverseHold = 0.0f;
     TireMarkSettings marks = m_tireMarks.settings();
     marks.referenceLoad = 0.25f * config.mass * 9.81f;
     m_tireMarks.setSettings(marks);
@@ -68,7 +69,7 @@ void Simulation::processCommands() {
         spawnVehicle(*m_pendingRebuild, m_track->features()[m_spawnFeature]);
         m_pendingRebuild.reset();
         m_pendingReset = false;
-        m_lastMessage = "Vehicle rebuilt";
+        setMessage("Vehicle rebuilt");
     }
     if (m_pendingTeleport) {
         const int idx = std::clamp(*m_pendingTeleport, 0, int(m_track->features().size()) - 1);
@@ -80,7 +81,7 @@ void Simulation::processCommands() {
         // Recreation resets the body, wheels, engine and gearbox to the initial state.
         spawnVehicle(m_vehicle->config(), m_track->features()[m_spawnFeature]);
         m_pendingReset = false;
-        m_lastMessage = "Vehicle reset to spawn point";
+        setMessage("Vehicle reset to spawn point");
     }
     if (m_pendingTuning) {
         m_vehicle->applyTuning(*m_pendingTuning);
@@ -88,19 +89,56 @@ void Simulation::processCommands() {
     }
     if (m_pendingToggleDirection) {
         m_pendingToggleDirection = false;
-        m_lastMessage = m_vehicle->toggleDirection() ? "Direction changed"
-                                                     : "Direction change only near standstill (< 1 m/s)";
+        if (m_vehicle->toggleDirection())
+            setMessage(m_vehicle->telemetry().direction == DriveDirection::Forward ? "Drive (forward) selected"
+                                                                                   : "Reverse selected");
+        else
+            setMessage("Stop to change direction (below 1 m/s)");
     }
     if (m_pendingToggleLowRange) {
         m_pendingToggleLowRange = false;
-        m_lastMessage = m_vehicle->toggleLowRange() ? "Transfer case range changed"
-                                                    : "Low range change only near standstill (< 1 m/s)";
+        setMessage(m_vehicle->toggleLowRange() ? "Transfer case range changed"
+                                               : "Low range change only near standstill (< 1 m/s)");
+    }
+}
+
+void Simulation::setMessage(const char* text) {
+    m_lastMessage = text;
+    m_lastMessageTime = m_simTime;
+}
+
+void Simulation::resolvePedals(float dt) {
+    m_resolved = m_intent;
+    if (!m_intent.autoReverse) {
+        m_autoReverseHold = 0.0f;
+        return;
+    }
+    const AutoReverseSettings& a = m_settings.autoReverse;
+    const VehicleTelemetry& t = m_vehicle->telemetry();
+    bool forward = t.direction == DriveDirection::Forward;
+    auto map = [&] {
+        m_resolved.throttle = forward ? m_intent.throttle : m_intent.brake;
+        m_resolved.brake = forward ? m_intent.brake : m_intent.throttle;
+    };
+    map();
+    // The pedal against the selected direction brakes; held near a standstill (and without the other pedal)
+    // for holdTime it selects the opposite direction and becomes the throttle.
+    if (m_resolved.brake > a.pedalThreshold && m_resolved.throttle < 0.05f && std::abs(t.forwardSpeed) < a.stopSpeed) {
+        m_autoReverseHold += dt;
+        if (m_autoReverseHold >= a.holdTime && m_vehicle->toggleDirection()) {
+            m_autoReverseHold = 0.0f;
+            forward = !forward;
+            setMessage(forward ? "Drive engaged" : "Reverse engaged");
+            map();
+        }
+    } else {
+        m_autoReverseHold = 0.0f;
     }
 }
 
 void Simulation::smoothInput(float dt) {
     const InputSmoothing& s = m_settings.smoothing;
-    const DriverIntent& in = m_intent;
+    const DriverIntent& in = m_resolved;
     auto pedal = [&](float cur, float target) {
         return approach(cur, std::clamp(target, 0.0f, 1.0f), target > cur ? s.pedalRise : s.pedalFall, dt);
     };
@@ -119,6 +157,7 @@ void Simulation::tick() {
     const float dt = float(m_settings.fixedStep);
 
     processCommands();
+    resolvePedals(dt);
     smoothInput(dt);
 
     const auto t0 = Clock::now();

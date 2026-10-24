@@ -23,6 +23,17 @@ struct DriverIntent {
     float steer = 0.0f;     // -1..1 (right is +)
     float handBrake = 0.0f; // 0..1
     bool analog = false;    // analog source: steering is not smoothed with the keyboard rate
+    // Pedal mapping. false: throttle drives in the selected direction and brake always brakes (tests, tools).
+    // true (live keyboard/gamepad): throttle is the "forward" pedal (W/RT) and brake the "backward" pedal (S/LT);
+    // the pedal against the selected direction brakes, and holding it near a standstill switches the direction.
+    bool autoReverse = false;
+};
+
+// Automatic forward/reverse switching for DriverIntent::autoReverse, evaluated on physics ticks.
+struct AutoReverseSettings {
+    float stopSpeed = 0.5f;      // m/s, |forward speed| below which a held opposite pedal counts as "stopped"
+    float holdTime = 0.25f;      // s of simulated time the opposite pedal must be held while stopped
+    float pedalThreshold = 0.5f; // opposite pedal travel that counts as held (gamepad triggers are analog)
 };
 
 // Pedal and steering smoothing. Updated on every physics tick with a fixed dt,
@@ -52,6 +63,7 @@ struct SimulationSettings {
     PhysicsWorld::Settings physics;
     VehicleConfig vehicle;
     InputSmoothing smoothing;
+    AutoReverseSettings autoReverse;
     TireMarkSettings tireMarks;
 };
 
@@ -90,6 +102,7 @@ public:
     int collisionSteps() const { return m_settings.collisionSteps; }
     void setCollisionSteps(int n) { m_settings.collisionSteps = n; }
     InputSmoothing& smoothing() { return m_settings.smoothing; }
+    AutoReverseSettings& autoReverse() { return m_settings.autoReverse; }
 
     PhysicsWorld& world() { return *m_world; }
     SurfaceTable& surfaces() { return m_surfaces; }
@@ -109,6 +122,9 @@ public:
     const RenderSnapshot& currentSnapshot() const { return m_curr; }
     // Latest messages about discrete commands (e.g. "reverse only near a stop").
     const char* lastMessage() const { return m_lastMessage; }
+    double lastMessageTime() const { return m_lastMessageTime; } // simTime() when the message was set
+    // Pedals after the forward/reverse mapping of the last tick (before smoothing).
+    const DriverIntent& resolvedIntent() const { return m_resolved; }
     bool hadPhysicsError() const { return m_physicsError; }
 
     // Ray against static geometry and other bodies except the vehicle. Returns the path fraction [0,1] to the hit.
@@ -119,6 +135,8 @@ private:
     void spawnVehicle(VehicleConfig config, const TrackFeature& at);
     RenderSnapshot captureSnapshot() const;
     void processCommands();
+    void setMessage(const char* text);
+    void resolvePedals(float dt);
     void smoothInput(float dt);
 
     JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
@@ -132,6 +150,8 @@ private:
     unsigned m_spawnCount = 0;
 
     DriverIntent m_intent;
+    DriverIntent m_resolved;
+    float m_autoReverseHold = 0.0f; // s the opposite pedal has been held while stopped
     DriverCommand m_smoothed;
     bool m_pendingToggleDirection = false;
     bool m_pendingToggleLowRange = false;
@@ -140,6 +160,7 @@ private:
     std::optional<VehicleTuning> m_pendingTuning;
     std::optional<int> m_pendingTeleport;
     const char* m_lastMessage = "";
+    double m_lastMessageTime = -1.0e9;
     bool m_physicsError = false;
 
     RenderSnapshot m_prev, m_curr;

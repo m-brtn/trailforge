@@ -6,6 +6,7 @@
 # audio_ev<N> counts events received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 thump, 4 body impact,
 # 5 splash, 6 creak, 7 UI.
 set ui 0
+set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 set hud 0
 time Noon
 expect audio_active == 1

@@ -3,6 +3,7 @@
 # Marks are render-only: they come from the per-tick wheel contact samples (load, slip, surface) and never change
 # friction or ground height. marks_s<N> counts live segments on SurfaceId N (0 Concrete, 1 PackedDirt, 4 Mud, 5 Grass).
 set ui 0
+set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 set hud 0
 time 16.5
 

@@ -390,6 +390,137 @@ void tireMarksSurfaces() {
     CHECK(marks.size() == 0, "segments did not expire: %zu left", marks.size());
 }
 
+// Live-input pedals (DriverIntent::autoReverse): W = forward pedal, S = backward pedal.
+DriverIntent pedals(float w, float s) { return DriverIntent{.throttle = w, .brake = s, .autoReverse = true}; }
+
+struct SwitchTrace {
+    double stopTime = -1.0;   // first tick with |v| < stopSpeed while the opposite pedal is held
+    double switchTime = -1.0; // tick at which the direction changed
+    float speedAtSwitch = 0.0f;
+    bool switchedWhileMoving = false;
+};
+
+// Holds the given pedals until the direction changes (or the timeout) and records when the vehicle stopped.
+SwitchTrace holdUntilSwitch(Simulation& sim, const DriverIntent& in, double timeout) {
+    SwitchTrace tr;
+    const DriveDirection start = sim.vehicle().telemetry().direction;
+    const float stopSpeed = sim.autoReverse().stopSpeed;
+    sim.setIntent(in);
+    for (int i = 0; i < int(timeout / sim.fixedStep()); ++i) {
+        const float vBefore = sim.vehicle().telemetry().forwardSpeed;
+        sim.tick();
+        const double time = (i + 1) * sim.fixedStep();
+        if (tr.stopTime < 0.0 && std::abs(vBefore) < stopSpeed) tr.stopTime = time;
+        if (sim.vehicle().telemetry().direction != start) {
+            tr.switchTime = time;
+            tr.speedAtSwitch = vBefore;
+            tr.switchedWhileMoving = std::abs(vBefore) >= stopSpeed;
+            break;
+        }
+    }
+    return tr;
+}
+
+void autoReverse() {
+    // Flat ground at 60/120/240 Hz: S brakes to a stop, then engages reverse after the hold time (simulated time,
+    // so the same at any tick rate) and drives backwards; W brakes the backward roll, then engages forward.
+    for (double hz : {60.0, 120.0, 240.0}) {
+        SimulationSettings s = settingsFor(TrackLayout::Flat);
+        s.fixedStep = 1.0 / hz;
+        Simulation sim(s);
+        const double dt = sim.fixedStep(), hold = sim.autoReverse().holdTime;
+        run(sim, 0.5);
+        run(sim, 3.0, pedals(1, 0));
+        const float v0 = sim.vehicle().telemetry().forwardSpeed;
+        const SwitchTrace toRev = holdUntilSwitch(sim, pedals(0, 1), 8.0);
+        run(sim, 3.0, pedals(0, 1));
+        const auto& t = sim.vehicle().telemetry();
+        const float vRev = t.forwardSpeed;
+        const int gearRev = t.gear;
+        const SwitchTrace toFwd = holdUntilSwitch(sim, pedals(1, 0), 8.0);
+        run(sim, 3.0, pedals(1, 0));
+        const float vFwd = sim.vehicle().telemetry().forwardSpeed;
+        std::printf("    %3.0f Hz: v0=%.2f m/s, stop %.3f s -> reverse %.3f s (delay %.3f, v %.2f), after 3 s v=%.2f gear=%d; "
+                    "W: stop %.3f s -> drive %.3f s (v %.2f), after 3 s v=%.2f\n",
+                    hz, v0, toRev.stopTime, toRev.switchTime, toRev.switchTime - toRev.stopTime, toRev.speedAtSwitch, vRev,
+                    gearRev, toFwd.stopTime, toFwd.switchTime, toFwd.speedAtSwitch, vFwd);
+        CHECK(v0 > 5.0f, "precondition: forward speed %.2f", v0);
+        CHECK(toRev.switchTime > 0.0 && !toRev.switchedWhileMoving, "%.0f Hz: reverse engaged while moving or never", hz);
+        CHECK(std::abs(toRev.switchTime - toRev.stopTime - hold) < dt + 1e-6 || toRev.switchTime - toRev.stopTime > hold,
+              "%.0f Hz: reverse delay %.3f s vs hold %.3f s", hz, toRev.switchTime - toRev.stopTime, hold);
+        CHECK(toRev.switchTime - toRev.stopTime < hold + 0.1, "%.0f Hz: reverse delay %.3f s", hz,
+              toRev.switchTime - toRev.stopTime);
+        CHECK(vRev < -2.0f && gearRev < 0, "%.0f Hz: not driving backwards: v=%.2f gear=%d", hz, vRev, gearRev);
+        CHECK(toFwd.switchTime > 0.0 && !toFwd.switchedWhileMoving, "%.0f Hz: forward engaged while moving or never", hz);
+        CHECK(toFwd.switchTime - toFwd.stopTime < hold + 0.1, "%.0f Hz: forward delay %.3f s", hz,
+              toFwd.switchTime - toFwd.stopTime);
+        CHECK(vFwd > 2.0f, "%.0f Hz: not driving forward again: v=%.2f", hz, vFwd);
+    }
+
+    // Low range from a standstill, then R reset with S still held: the reset selects forward, S engages reverse again.
+    {
+        Simulation sim(settingsFor(TrackLayout::Flat));
+        run(sim, 0.5);
+        sim.requestToggleLowRange();
+        run(sim, 0.1);
+        const SwitchTrace tr = holdUntilSwitch(sim, pedals(0, 1), 2.0);
+        run(sim, 3.0, pedals(0, 1));
+        const auto& t = sim.vehicle().telemetry();
+        std::printf("    low range: reverse after %.3f s, after 3 s v=%.2f m/s gear=%d low=%d\n", tr.switchTime,
+                    t.forwardSpeed, t.gear, t.lowRange);
+        CHECK(t.lowRange && t.direction == DriveDirection::Reverse, "low range reverse not engaged");
+        CHECK(t.forwardSpeed < -1.0f && t.gear < 0, "low range: not driving backwards: v=%.2f", t.forwardSpeed);
+        sim.requestReset();
+        sim.tick();
+        CHECK(sim.vehicle().telemetry().direction == DriveDirection::Forward, "reset did not select forward");
+        run(sim, 1.0, pedals(0, 1));
+        run(sim, 2.0, pedals(0, 1));
+        const auto& r = sim.vehicle().telemetry();
+        std::printf("    after reset: dir=%s v=%.2f m/s gear=%d\n", r.direction == DriveDirection::Reverse ? "R" : "D",
+                    r.forwardSpeed, r.gear);
+        CHECK(r.direction == DriveDirection::Reverse && r.forwardSpeed < -1.0f, "no reverse after reset: v=%.2f",
+              r.forwardSpeed);
+    }
+
+    // Both pedals: no switch. Classic mapping (autoReverse off): S only brakes and holds at a standstill.
+    {
+        Simulation sim(settingsFor(TrackLayout::Flat));
+        run(sim, 0.5);
+        run(sim, 2.0, pedals(1, 1));
+        CHECK(sim.vehicle().telemetry().direction == DriveDirection::Forward, "W+S switched the direction");
+        run(sim, 2.0, DriverIntent{.brake = 1.0f});
+        const auto& t = sim.vehicle().telemetry();
+        CHECK(t.direction == DriveDirection::Forward && std::abs(t.forwardSpeed) < 0.05f,
+              "classic mapping: S must only brake (dir %d, v %.3f)", int(t.direction), t.forwardSpeed);
+    }
+
+    // Slope: climb the 12 degree hill in low range, S stops the vehicle, engages reverse and it backs down.
+    {
+        Simulation sim(settingsFor(TrackLayout::ProvingGround));
+        sim.requestTeleport(4);
+        run(sim, 1.0);
+        sim.requestToggleLowRange();
+        run(sim, 0.1);
+        sim.setIntent(pedals(1, 0));
+        for (int i = 0; i < int(12.0 / sim.fixedStep()) && position(sim).GetZ() < -36.0f; ++i) sim.tick();
+        const JPH::Vec3 onSlope = position(sim);
+        const SwitchTrace tr = holdUntilSwitch(sim, pedals(0, 1), 6.0);
+        const float zSwitch = position(sim).GetZ();
+        run(sim, 2.0, pedals(0, 1));
+        const auto& t = sim.vehicle().telemetry();
+        const float pitch = std::asin(sim.currentSnapshot().body.rotation.RotateAxisZ().GetY()) * 57.2958f;
+        std::printf("    slope: on slope z=%.2f y=%.2f pitch %.1f deg, reverse after %.3f s (stop %.3f s), 2 s later "
+                    "dz=%.2f m v=%.2f gear=%d\n",
+                    onSlope.GetZ(), onSlope.GetY(), pitch, tr.switchTime, tr.stopTime, position(sim).GetZ() - zSwitch,
+                    t.forwardSpeed, t.gear);
+        CHECK(onSlope.GetZ() >= -36.0f && onSlope.GetY() > 0.6f, "precondition: not on the slope (z %.2f y %.2f)",
+              onSlope.GetZ(), onSlope.GetY());
+        CHECK(tr.switchTime > 0.0 && !tr.switchedWhileMoving, "slope: reverse engaged while moving or never");
+        CHECK(t.direction == DriveDirection::Reverse && t.gear < 0, "slope: not in reverse (gear %d)", t.gear);
+        CHECK(position(sim).GetZ() - zSwitch < -0.5f, "slope: did not back down (dz %.2f)", position(sim).GetZ() - zSwitch);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -403,6 +534,7 @@ int main(int argc, char** argv) {
         {"corner_load_balance", cornerLoadBalance},
         {"brake_holds_in_low_range", brakeHoldsInLowRange},
         {"tire_marks_surfaces", tireMarksSurfaces},
+        {"auto_reverse", autoReverse},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

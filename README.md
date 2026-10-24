@@ -103,7 +103,7 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap) |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
@@ -121,7 +121,7 @@ rear and side views, `/tmp/trailforge_v_susp_*.png`).
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
-`win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
+`auto_reverse`, `hint` (1 while the driving hint is on screen), `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass), `msg:<substring>` (1 if the latest UI message contains the substring),
@@ -137,10 +137,10 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Throttle / brake | W / S | RT / LT |
+| Throttle / brake (S held at a standstill: reverse) | W / S | RT / LT |
 | Steering | A / D | left stick |
 | Handbrake | Space | A (South) |
-| Forward ↔ reverse (only below 1 m/s) | Q | X (West) |
+| Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s) | L | Y (North) |
 | Reset to the last start point | R | Back |
 | Camera: follow ↔ free | C | RB |
@@ -153,7 +153,13 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | arrow keys, PgUp/PgDn, Shift — faster | — |
 
-Brake and throttle are separate: S always brakes. To drive backwards, stop, press Q and hold W.
+**Reverse.** W is the forward pedal and S the backward pedal (RT / LT on a gamepad). While moving forward, S brakes;
+once the vehicle is nearly stopped (|forward speed| < 0.5 m/s) and S is still held for 0.25 s, reverse engages and S
+becomes the reverse throttle. In reverse it is symmetric: W brakes the backward roll, then engages drive. Holding
+both pedals never switches. Q still toggles the direction by hand below 1 m/s; while moving it is refused with an
+on-screen hint "Stop to change direction". The switch runs on physics ticks in simulated time, so it does not depend
+on the frame rate. With auto reverse a held S no longer holds the vehicle on a slope: use the handbrake (Space), or
+turn auto reverse off (F1 → Tuning → Simulation → "Auto reverse", then S only brakes and Q + W drive backwards).
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
 F1–F3 and Escape always work.
 
@@ -402,8 +408,11 @@ binary or in the source tree.
 
 ## Diagnostics (F1)
 
-- **HUD** (always visible): speed, gear, direction, rpm; suspension compression per wheel laid out as seen from
-  above ("air" without contact, red on the bump stop).
+- **HUD** (always visible, `set hud 0` hides it): top left — speed, gear, direction, rpm, suspension compression per
+  wheel laid out as seen from above ("air" without contact, red on the bump stop), controls; bottom center — a
+  driving read-out with the selector (D / R, N while the gearbox is in neutral), speed in km/h, gear, range
+  (HIGH / LOW) and rpm, plus a 2.5 s hint above it after a discrete command ("Reverse engaged", "Stop to change
+  direction", "Transfer case range changed", …).
 - **Telemetry:**
   - FPS and frame time; ticks per frame, physics step time (last and average), dropped time;
   - speed, rpm, gear, clutch, range, body tilt, throttle/brake/handbrake/steering bars;
@@ -466,7 +475,7 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 13 of 13 tests pass in Debug, Release and headless:
+- **CTest.** 14 of 14 tests pass in Debug, Release and headless:
 
 | Test | Result |
 |---|---|
@@ -479,6 +488,7 @@ Everything below was actually run on macOS 27 / M-series.
 | Cornering load balance (40 km/h) | Average Σload = 19620 N with 1, 2 and 4 collision steps; outer front > 2× inner |
 | Brake in low range | 10.4 m/s → stop in 1.33 s, speed never increases, final 0 m/s |
 | Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 83 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; wheelspin: 68/76/68 segments, slip 0.56/0.48/0.54; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
+| Auto reverse | At 60/120/240 Hz S brakes 12.8–14.1 m/s to a stop and engages reverse 0.23–0.25 s later (hold 0.25 s, never while moving), −12.6…−12.9 m/s after 3 s; W brakes and engages drive the same way; low range reverse −4.8 m/s after 3 s; reverse again right after R; W+S never switches; classic mapping holds; on the 12° hill S stops, engages reverse and the vehicle backs down 7.4 m in 2 s |
 | Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
@@ -497,8 +507,11 @@ Everything below was actually run on macOS 27 / M-series.
   - In the 40 km/h demo corner the body rolls 8.5°, the outer wheels compress 77–79%,
     and the inner front wheel unloads to 0 N.
 - **Scenario `tools/scenarios/full_check.txt`** (window, rendering, input via the SDL event queue → `Input` → ticks):
-  128 checks, 0 failures. Two consecutive runs in Release and one in Debug, about 110 s per run. Covered:
+  155 checks, 0 failures (since the reverse UX stage; 128 before), about 130 s per run. Covered:
   - throttle and braking; D/A steering and smooth return to center;
+  - auto reverse: S brakes while moving, engages reverse at a standstill and drives backwards, W brakes and engages
+    drive; the same in low range, right after R, on the 28° hill and on the low-grip patch; the hint after Q while
+    moving. Sections that hold the brake at a standstill run with `set auto_reverse 0` (classic mapping);
   - Q and L are refused with a message while moving and work when stopped; reverse; handbrake; R reset;
   - C camera and free camera with arrow keys; F1; Esc pause (ticks stop), N — exactly one step;
   - ImGui input capture: with focus in a field, W and R do not reach the vehicle; typing `2.2` into the spring slider is applied;

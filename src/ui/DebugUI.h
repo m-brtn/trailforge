@@ -87,10 +87,15 @@ public:
     void drawAudio(AudioPanelState& audio);
 
     bool visible = true;
-    bool hud = true;               // the small always-on hint/perf window
+    bool hud = true;               // the small always-on hint/perf window and the driving read-out
+    bool autoReverse = true;       // S/W at a standstill switch direction (DriverIntent::autoReverse)
     bool drawPhysicsDebug = false; // off by default so the scene reads cleanly; Tuning > Debug drawing
     bool linesOnTop = true;
     VehicleDebugOptions debug;
+
+    // The short driving hint (latest Simulation message) is on screen.
+    bool hintVisible(const Simulation& sim) const;
+    static constexpr double kHintSeconds = 2.5; // s of simulated time
 
     // Widget drawn in the last frame, or nullptr.
     const UiItemRect* item(const std::string& key) const;
@@ -99,6 +104,7 @@ private:
     void remember(const char* key, bool window = false);
     std::map<std::string, UiItemRect> m_items;
 
+    void drawDriveHud(const Simulation& sim);
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);
     void drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);

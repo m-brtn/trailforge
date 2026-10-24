@@ -161,7 +161,9 @@ void Application::processEvents() {
     if (m_input.pressed(Action::Reset)) m_sim.requestReset();
 
     DriverIntent intent = m_input.driverIntent();
+    intent.autoReverse = m_ui.autoReverse;
     if (m_options.demoDrive) {
+        intent.autoReverse = false;
         // Slow circular drive through the start pad and the lane A bumps.
         const double phase = std::fmod(m_time, 24.0);
         intent.throttle = phase < 20.0 ? 0.35f : 0.0f;
@@ -766,6 +768,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
             else if (k == "ui") m_ui.visible = v != 0.0f;
             else if (k == "hud") m_ui.hud = v != 0.0f;
+            else if (k == "auto_reverse") m_ui.autoReverse = v != 0.0f;
             else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
             else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
             else if (k == "marks") m_gfx.tireMarks = v != 0.0f;
@@ -874,6 +877,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "rpm") return t.engineRPM;
     if (n == "dir") return t.direction == DriveDirection::Forward ? 1.0 : -1.0;
     if (n == "low") return t.lowRange ? 1.0 : 0.0;
+    if (n == "auto_reverse") return m_ui.autoReverse ? 1.0 : 0.0;
+    if (n == "hint") return m_ui.hintVisible(m_sim) ? 1.0 : 0.0;
     if (n == "tilt") return std::acos(std::fmin(1.0f, t.upDot)) * 57.2958;
     if (n == "x") return p.GetX();
     if (n == "y") return p.GetY();

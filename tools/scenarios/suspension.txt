@@ -2,6 +2,7 @@
 #   ./build/release/trailforge --script tools/scenarios/suspension.txt
 # Stops with one front wheel in the air and checks that the wheels articulate independently.
 set ui 0
+set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 teleport 2
 wait 2.0
 tap L

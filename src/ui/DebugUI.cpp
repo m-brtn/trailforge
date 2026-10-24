@@ -77,11 +77,12 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         }
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
-        ImGui::TextDisabled("W/S throttle/brake  A/D steer  Space handbrake  Q fwd/rev  L low range  R reset  C camera  "
-                            "H lights  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("W gas / S brake (held at a stop: reverse)  A/D steer  Space handbrake");
+        ImGui::TextDisabled("Q fwd/rev  L low range  R reset  C camera  H lights  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH);
         ImGui::End();
+        drawDriveHud(sim);
     }
 
     if (gfx.visible) drawGraphics(sim, stats, gfx);
@@ -89,6 +90,54 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
     drawTelemetry(sim, stats, req);
     drawTuning(sim, req, gfx);
     return req;
+}
+
+bool DebugUI::hintVisible(const Simulation& sim) const {
+    return sim.lastMessage()[0] && sim.simTime() - sim.lastMessageTime() < kHintSeconds;
+}
+
+// Bottom-center driving read-out: selector, gear, range and speed, plus a short hint after a discrete command.
+void DebugUI::drawDriveHud(const Simulation& sim) {
+    const auto& t = sim.vehicle().telemetry();
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    const bool reverse = t.direction == DriveDirection::Reverse;
+    const char* selector = t.gear == 0 ? "N" : reverse ? "R" : "D";
+    char gear[8];
+    ImGui::SetNextWindowPos(ImVec2(0.5f * display.x, display.y - 16.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.5f);
+    ImGui::Begin("##drivehud", nullptr, flags);
+    remember("drive_hud", true);
+    ImGui::PushFont(nullptr, 2.4f * ImGui::GetStyle().FontSizeBase);
+    const ImVec4 selColor = reverse ? ImVec4(1.0f, 0.55f, 0.25f, 1) : t.gear == 0 ? ImVec4(0.75f, 0.75f, 0.75f, 1)
+                                                                                  : ImVec4(0.45f, 0.9f, 0.45f, 1);
+    ImGui::TextColored(selColor, "%s", selector);
+    ImGui::SameLine();
+    ImGui::Text("%3.0f", std::abs(t.forwardSpeed) * 3.6f);
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("km/h");
+    ImGui::Text("gear %s  %s", gearName(t.gear, gear, sizeof(gear)), reverse ? "(reverse)" : "(forward)");
+    ImGui::EndGroup();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    if (t.lowRange) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "LOW");
+    else ImGui::TextDisabled("HIGH");
+    ImGui::TextDisabled("%4.0f rpm", t.engineRPM);
+    ImGui::EndGroup();
+    ImGui::End();
+
+    if (!hintVisible(sim)) return;
+    ImGui::SetNextWindowPos(ImVec2(0.5f * display.x, display.y - 110.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##drivehint", nullptr, flags);
+    ImGui::PushFont(nullptr, 1.5f * ImGui::GetStyle().FontSizeBase);
+    ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1), "%s", sim.lastMessage());
+    ImGui::PopFont();
+    ImGui::End();
 }
 
 void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsState& gfx) {
@@ -282,8 +331,9 @@ void DebugUI::drawTimeOfDay(GraphicsState& gfx) {
 
 void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, display.x * 0.38f), display.y - 70.0f), ImGuiCond_FirstUseEver);
+    // Below the always-on HUD (top left).
+    ImGui::SetNextWindowPos(ImVec2(10, 160), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, display.x * 0.38f), display.y - 170.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("Telemetry (F1)");
 
     const StepTiming& tm = sim.timing();
@@ -458,6 +508,10 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         ImGui::SliderFloat("Steer return [1/s]", &sm.steerReturnRate, 0.5f, 10.0f, "%.1f");
         ImGui::SliderFloat("Pedal rise [1/s]", &sm.pedalRise, 0.5f, 20.0f, "%.1f");
         ImGui::SliderFloat("Pedal fall [1/s]", &sm.pedalFall, 0.5f, 20.0f, "%.1f");
+        ImGui::Checkbox("Auto reverse (S/W at a standstill)", &autoReverse);
+        AutoReverseSettings& ar = sim.autoReverse();
+        ImGui::SliderFloat("Auto reverse speed [m/s]", &ar.stopSpeed, 0.1f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Auto reverse hold [s]", &ar.holdTime, 0.0f, 1.0f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Debug drawing", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Physics debug lines", &drawPhysicsDebug);
