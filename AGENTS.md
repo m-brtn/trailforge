@@ -25,7 +25,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 16 tests; no window, no audio device)
+# headless physics and audio tests (CTest, 19 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -35,7 +35,7 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`).
+`showcase`, `surfaces`, `climb`, `abs`, `tc`, `diff`).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
 check failed:
@@ -83,7 +83,8 @@ Every stage ends with a packaged build and a GitHub release, after the stage's c
 ```
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (contact samples)
+src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (contact samples),
+              DrivingAids (ABS / traction control logic, brake torque and throttle factor only)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
               BodyImpacts (chassis contact listener for impact sounds)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick

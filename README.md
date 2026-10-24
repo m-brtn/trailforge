@@ -110,7 +110,12 @@ Command-line options:
   on a scripted drive around the mud showcase;
 - `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
   flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
-  headless only); `climb [lane]` — the force balance of one ramp climb.
+  headless only); `climb [lane]` — the force balance of one ramp climb;
+- `abs` — 50 km/h full stops per surface lane, straight and with 40 % steer, ABS off / on: distance, heading change,
+  locked wheel-seconds, ABS cycle rate;
+- `tc` — flat high-range launches and ramp hill starts with TC off / on / off-road (`TF_TC_TRACE=1` prints a trace);
+- `diff` — differential configurations on `TrackLayout::SlopeWithWheelPit` (headless only) and the diagonal twister
+  (`TF_DIFF_TRACE=1` prints a trace).
 
 ### Scenario mode
 
@@ -160,7 +165,11 @@ lock-up and handbrake slides, never while the mud layer is active; needs the mix
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
-`auto_reverse`, `hint` (1 while the driving hint is on screen), `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
+`auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
+2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
+2 locked), `abs_seen` / `tc_seen` (the aid acted in a sampled frame since `reset_stats`), `max_locked` (most locked
+wheels in one frame) and `lock_time` (locked wheel-seconds; locked = in contact, ground speed > 2 m/s, wheel surface
+speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
@@ -171,6 +180,7 @@ audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_loa
 gain), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
 received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 suspension thump, 4 body impact, 5 splash, 6 creak,
 7 UI), and more. Full list: `Application::scenarioValue`.
+Driver aid `set` keys: `abs 0/1`, `tc 0/1/2`, `diff_locks 0..3`.
 Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_pitch`, `audio_whine`,
 `audio_play_ui N` (play UI sound N: 0 click, 1 hover, 2 confirm, 3 back, 4 slider tick, 5 menu open, 6 menu close).
 
@@ -178,13 +188,16 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Throttle / brake (S held at a standstill: reverse) | W / S | RT / LT |
+| Throttle / brake (stopped: release S and press again for reverse) | W / S | RT / LT |
 | Steering | A / D | left stick |
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s) | L | Y (North) |
 | Reset to the last start point | R | Back |
 | Camera: follow ↔ free | C | RB |
+| ABS on / off | B | D-pad up |
+| Traction control: off → on → off-road | T | D-pad right |
+| Diff locks: open → rear → rear + center → all | X | D-pad down |
 | Headlights | H | — |
 | Diagnostics | F1 | — |
 | Graphics panel (quality, look, cosmetic dirt) | F2 | — |
@@ -194,14 +207,21 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | arrow keys, PgUp/PgDn, Shift — faster | — |
 
-**Reverse.** W is the forward pedal and S the backward pedal (RT / LT on a gamepad). While moving forward, S brakes;
-once the vehicle is nearly stopped (|forward speed| < 0.5 m/s) and S is still held for 0.25 s, reverse engages and S
-becomes the reverse throttle. In reverse it is symmetric: W brakes the backward roll, then engages drive. Holding
-both pedals never switches. Q still toggles the direction by hand below 1 m/s; while moving it is refused with an
-on-screen hint "Stop to change direction". The switch runs on physics ticks in simulated time, so it does not depend
-on the frame rate. With auto reverse a held S no longer holds the vehicle on a slope: use the handbrake (Space; drift
-under 1.3 cm in 2 s on the 10–23° stops of the hills, low range, measured with an ad-hoc scenario), or
-turn auto reverse off (F1 → Tuning → Simulation → "Auto reverse", then S only brakes and Q + W drive backwards).
+**Reverse.** W is the forward pedal and S the backward pedal (RT / LT on a gamepad). While moving forward, S brakes,
+and an S press that started while moving keeps braking through the stop and holds the vehicle for as long as it is
+held, also on a slope (CTest `auto_reverse`: 0.8 mm of creep in 6 s on the 12° hill). Reverse engages only after S is
+released and pressed again at a standstill (|forward speed| < 0.5 m/s, held 0.25 s); then S becomes the reverse
+throttle. In reverse it is symmetric: W brakes the backward roll and holds; released and pressed again it engages
+drive. Holding both pedals never switches. Q still toggles the direction by hand below 1 m/s; while moving it is
+refused with an on-screen hint "Stop to change direction". The switch runs on physics ticks in simulated time, so it
+does not depend on the frame rate. Auto reverse can be turned off (F1 → Tuning → Simulation → "Auto reverse"; then
+S only brakes and Q + W drive backwards).
+
+**Driver aids and differentials.** B toggles ABS, T cycles traction control (off → on → off-road), X cycles the
+diff locks (none → rear → rear + center → all). The bottom HUD shows ABS / TC lamps (dim = off, green = armed,
+blinking amber = acting) and the effective mode of each differential (F / C / R: open, LSD, LOCK). ABS and TC
+switches survive R and teleports; the diff locks reset to none. Both aids are off by default. Details and limits are
+under "Driver aids" below.
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
 F1–F3 and Escape always work.
 
@@ -213,7 +233,8 @@ on other platforms use Ctrl+click.
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (per-tick contact samples)
+src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (per-tick contact samples),
+              DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
@@ -269,11 +290,64 @@ While paused the physics is frozen; N performs exactly one step.
   - engine 520 N·m, 800–4800 rpm;
   - 5-speed automatic plus reverse −4.0, final drive 3.9;
   - low range ×2.72 — a multiplier on the differential ratios, not a separate gearbox;
-  - open front differential, rear and center are LSD (ratio 1.4).
+  - open front differential, rear and center are LSD (ratio 1.4); X locks rear, rear + center or all
+    (see "Driver aids").
 - Wheels use `VehicleCollisionTesterCastCylinder`; their positions come from the simulation.
 - Roll and pitch limits are disabled (`mMaxPitchRollAngle = π`): the vehicle can roll over.
 - No hidden downforce, no direct setting of velocity or position.
   The only teleports are the R reset and the teleport buttons in the UI.
+
+## Driver aids
+
+Simplified control logic on top of the tire model. Both aids act only through the per-wheel brake torque
+(`WheelSettingsWV::mMaxBrakeTorque`, set before every physics step) and a throttle factor passed to Jolt's engine;
+no forces or velocities are set. They read the previous tick's wheel telemetry; the ground speed of a wheel is the
+true velocity of its contact point (a real ABS has to estimate it from the wheel speeds). They are not models of a
+specific production unit.
+
+- **ABS** (per wheel, brake pressed, wheel ground speed above 1.5 m/s): brake slip = (v − ωr) / v. Above 0.18 the pressure is dumped at 40 /s, below 0.08 it is re-applied at 8 /s, in between it is
+  held. Pressure goes down to 0, because a Jolt wheel at ω = 0 stays locked under any brake torque. Measured cycle
+  11–15 Hz per wheel on straight stops (`trailforge_probe abs`, 120 Hz). At 60 Hz the controller also runs at 60 Hz
+  and is coarser: a few short locks, and on dirt the straight stop is up to ~7 % longer than with locked wheels.
+- **Traction control** (On / Off-road): drive slip = (ωr − v) / max(|v|, 2 m/s), low-pass filtered (50 ms).
+  A wheel that spins more than the slowest wheel in contact by the threshold (0.20 On, 0.35 Off-road) gets a brake
+  torque (gain 3000 N·m per unit slip, max 1500 N·m) — that is how an open differential's torque gets back to the
+  wheel with grip. When even the slowest wheel spins above the threshold, an integrating controller cuts the engine
+  throttle (down to 0.05 On, 0.10 Off-road; cut 1.5 /s, recovery 0.6 /s).
+- **Differentials.** Jolt's differentials split torque; they have no kinematic link between the two sides. Open =
+  fixed 50/50 split. LSD = Jolt's limited-slip ratio (max/min side speed, 1.4 by default; above it the torque shifts
+  to the slower side). **Locked** is the same Jolt LSD with ratio 1.05: almost all torque goes to the slower side as
+  soon as the speeds differ, which behaves like a locker for traction, but nothing forces the two sides to turn
+  together (a wheel in the air still turns a little faster, and a locked axle still lets the wheels differ in a
+  turn). The center differential uses the same mechanism between the axles.
+
+Measured (headless, 120 Hz, Release):
+
+- `trailforge_probe abs`, full brake from 50 km/h (straight; then with 40 % right steer):
+
+  | Surface (peak μ) | Straight, ABS off → on | Locked wheel-s off → on | Steered: heading change off → on |
+  |---|---|---|---|
+  | Concrete (0.95) | 13.66 → 13.17 m | 4.71 → 0.14 | −23° → −45° |
+  | Rock (0.75) | 17.34 → 15.56 m | 7.17 → 0.11 | −16° → −52° |
+  | Packed dirt (0.70) | 18.48 → 16.41 m | 7.82 → 0.06 | −14° → −54° |
+  | Grass (0.50) | 25.43 → 22.12 m | 11.45 → 0.00 | −10° → −60° |
+  | Mud (0.35) | 36.15 → 31.35 m | 16.80 → 0.00 | −6° → −92° |
+
+  With locked wheels the vehicle slides nearly straight (the combined-slip model below leaves a locked tire almost no
+  lateral grip); with ABS it turns. Steered stops on grass and mud leave the 10 m lane (8–12 m sideways).
+- `trailforge_probe tc`, 15° mud hill start (creep 8 m up, foot brake to a stop, hold, full throttle, low range):
+  TC off 14.1 s to the plateau (wheelspin 14.1 s), On 11.8 s (6.1 s), Off-road 10.9 s (10.0 s). 20° grass:
+  off 9.9 s, Off-road 8.6 s, but **On fails** (the low road threshold cuts the throttle too far and the vehicle slides
+  back and sideways; use Off-road there). 15° dirt: 3.7 s off, 4.3 s On, 3.9 s Off-road. 20° mud is beyond the
+  sliding limit (μ 0.35 < tan 20°) in every mode. Flat high-range launches: TC cuts the peak slip on mud
+  9.4 → 4.6 m/s and grass 7.3 → 3.9 m/s, but v(2 s) is lower (mud 5.2 → 4.5 m/s, grass 7.4 → 5.7 m/s): with this
+  tire curve (sliding μ = 0.8 × peak) the slip control costs more than it gains on the flat.
+- `trailforge_probe diff`, `TrackLayout::SlopeWithWheelPit` (15° concrete slope, a bottomless pit under the
+  front-left wheel, low range, full throttle, 8 s): all open — stays (the hanging wheel spins up to ~14 m/s);
+  default (rear + center LSD) — out in ~3.5 s; all open + X rear lock — stays; + rear + center — 2.4 m, then stuck;
+  all locked — out in ~3.2 s; all open + TC On / Off-road — out in ~2.6 / ~2.7 s (the TC brake on the hanging
+  wheel acts like a locker). The diagonal twister is climbed by every configuration (all open 6.2 s, all locked
+  4.6 s).
 
 ## Proving ground (~100×100 m)
 
@@ -330,8 +404,10 @@ These are plausible dry-concrete-to-mud ranges for an all-terrain tire, not meas
 mud, sand and grass are only lower friction, with no sinkage, rutting or bulldozing. Measured with
 `trailforge_probe surfaces` (120 Hz, full throttle): straight launches keep grip on concrete (max slip 0.27 m/s,
 0–30 km/h 1.52 s) and spin on grass (7.3 m/s, 0–30 km/h 2.20 s) and mud (9.4 m/s, 3.07 s); 50 → 0 km/h takes
-13.7 m on concrete, 18.5 m on dirt, 25.4 m on grass and 36.2 m on mud; in low range a hill start fails on 15° and
-20° mud (the spinning tires drop to the sliding μ 0.28), and the 20° mud ramp is climbed only with momentum.
+13.7 m on concrete, 18.5 m on dirt, 25.4 m on grass and 36.2 m on mud (without ABS). In low range a full-throttle
+hill start on 15° mud climbs slowly with the wheels spinning (14.1 s to the plateau, since the slip speed floor; it
+failed before), 20° mud is beyond the friction limit (μ 0.35 < tan 20°), and the 20° mud ramp is climbed only with
+momentum. Traction control results are under "Driver aids".
 
 Teleport points are in the Tuning window.
 
@@ -533,18 +609,23 @@ bundle or next to the binary, and in development builds also from the source tre
 - **HUD** (always visible, `set hud 0` hides it): top left — speed, gear, direction, rpm, suspension compression per
   wheel laid out as seen from above ("air" without contact, red on the bump stop), controls; bottom center — a
   driving read-out with the selector (D / R, N while the gearbox is in neutral), speed in km/h, gear, range
-  (HIGH / LOW) and rpm, plus a 2.5 s hint above it after a discrete command ("Reverse engaged", "Stop to change
-  direction", "Transfer case range changed", …).
+  (HIGH / LOW) and rpm, the ABS / TC lamps and the differential modes, plus a 2.5 s hint above it after a discrete
+  command ("Reverse engaged", "Stop to change direction", "Transfer case range changed", "ABS on", …).
 - **Telemetry:**
   - FPS and frame time; ticks per frame, physics step time (last and average), dropped time;
   - speed, rpm, gear, clutch, range, body tilt, throttle/brake/handbrake/steering bars;
   - per-wheel table: contact, surface, suspension length and compression (m and %), load, longitudinal
-    and lateral forces, slip ratio, slip angle, μ, wheel angular velocity.
+    and lateral forces, slip ratio, slip angle, μ, wheel angular velocity, brake torque, ABS pressure, TC brake;
+  - driver aids line: ABS / TC state (and whether they act), TC throttle factor and the throttle passed to Jolt,
+    effective differential modes.
 - **Tuning:**
   - springs, dampers, anti-roll bars, tire curves, surface coefficients, engine, brakes
     and differentials are applied between physics steps;
   - toggles for the two tire/drivetrain fixes, also applied between steps: Tires → "Static grip" (`tireStaticGrip`)
-    and Drivetrain → "Launch clutch limit" (`launchClutchLimit`) with the creep torque;
+    and Drivetrain → "Launch clutch limit" (`launchClutchLimit`) with the creep torque; Tires → "Slip speed floor"
+    and "Combined slip";
+  - Drivetrain: Open / Limited slip / Locked per differential, axle and center LSD ratios, the locked ratio;
+  - Driver aids: ABS / TC / diff lock switches (same as B / T / X) and every ABS / TC parameter;
   - mass, inertia, center of mass, suspension travel, wheel radius, steering angle and gear ratios are applied
     with the **Rebuild vehicle** button (the vehicle is recreated);
   - physics rate, collision steps, input smoothing, debug lines, teleport.
@@ -583,15 +664,27 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   a 40 N·m creep torque), like a torque converter at stall. Jolt clamps the engine rpm, so an unlimited slipping
   clutch delivered ~840 N·m at any throttle.
 - Once a tire spins up it is on the sliding part of the curve (μ × 0.80): full throttle from a standstill on a slope
-  near the limit spins in place where a careful throttle would climb. There is no traction control.
+  near the limit spins in place where a careful throttle would climb. Traction control (off by default) is
+  simplified control logic, see "Driver aids".
+- Slip speed floor: Jolt's slip ratio is |ωr − v| / max(|v|, 0.001), so at a standstill any wheel rotation reads as
+  full slip and the tire falls to the sliding μ before it moves. The friction curve is evaluated with
+  |ωr − v| / max(|v|, 1 m/s) instead (`tireSlipSpeedFloor`, 0 = Jolt's ratio). With it a full-throttle 15° mud hill
+  start climbs (14.1 s, wheels spinning) where it used to stay at the foot.
+- Combined slip: Jolt's longitudinal and lateral limits are independent, so a locked wheel kept steering. With
+  `tireCombinedSlip` (on by default) both limits are scaled down when the normalized slips add up to more than one
+  (each axis keeps its share of the friction budget; blended in between 1 and 3 m/s of ground speed). This is a
+  friction-circle approximation, not a tire model.
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven). Soil in the tread and its
   prints on hard ground are cosmetic too: the tread soil never changes grip.
 - Wheel spray is cosmetic CPU particles, not Jolt bodies: they collide only with the ground height function, not with
   the vehicle, rocks or each other, remove no material from the ground and never push the vehicle.
-- No forced differential lock: Jolt supports only open and LSD.
-  The LSD here limits the wheel speed ratio; it is not a preloaded clutch pack.
+- No rigid differential lock: Jolt supports only open and LSD torque splits. "Locked" is the LSD with ratio 1.05
+  (torque to the slower side), not a shaft linking the two wheels. The LSD limits the wheel speed ratio; it is not a
+  preloaded clutch pack.
+- ABS and TC read the true contact-point ground speed instead of estimating it from wheel speeds, and act through
+  brake torque and a throttle factor only. ABS at 60 Hz is coarser (see "Driver aids").
 - No aerodynamics or rolling resistance (linear damping = 0).
   The engine is a torque curve, with no flywheel inertia beyond Jolt's model.
 - Body collision is a compound of three boxes.
@@ -613,8 +706,8 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 16 of 16 tests pass in Debug, Release and headless (numbers below are from the latest run after the
-  friction retune where they changed):
+- **CTest.** 19 of 19 tests pass in Debug, Release and headless (numbers below are from the latest run where they
+  changed):
 
 | Test | Result |
 |---|---|
@@ -627,7 +720,10 @@ Everything below was actually run on macOS 27 / M-series.
 | Cornering load balance (40 km/h) | Average Σload = 19620 N with 1, 2 and 4 collision steps; outer front > 2× inner |
 | Brake in low range | 11.7 m/s → stop in 1.59 s, speed never increases, final 0 m/s |
 | Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 82 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; low-range power turn: 95/66/85 segments, slip 0.35/0.95/0.76; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
-| Auto reverse | At 60/120/240 Hz S brakes 12.8–14.1 m/s to a stop and engages reverse 0.23–0.25 s later (hold 0.25 s, never while moving), −12.6…−12.9 m/s after 3 s; W brakes and engages drive the same way; low range reverse −4.8 m/s after 3 s; reverse again right after R; W+S never switches; classic mapping holds; on the 12° hill S stops, engages reverse and the vehicle backs down 7.4 m in 2 s |
+| Auto reverse | At 60/120/240 Hz S held from 13.8 m/s stops the vehicle in 1.86–1.90 s and keeps holding it (no switch for 4.25 s, 0.000 m/s); released and pressed again, reverse engages after 0.250–0.254 s (hold 0.25 s), −12.9…−13.1 m/s after 3 s; W the same way back to drive (+14.2 m/s); low range reverse −4.8 m/s after 3 s; reverse again right after R; W+S never switches; classic mapping holds; on the 12° hill S held from the climb holds the vehicle (0.8 mm in 6 s), pressed again it engages reverse and the vehicle backs down 6.9 m in 2 s |
+| ABS prevents lock | 50 km/h full stops on dirt and grass at 60/120/240 Hz: without ABS 7.8–11.5 locked wheel-s and −10…−13° heading with 40 % steer; with ABS 0–0.11 wheel-s at 120/240 Hz (0.70 / 0.13 at 60 Hz) and −54…−76°; straight stop dirt 18.5 → 16.5 / 15.9 m at 120 / 240 Hz (19.9 m at 60 Hz), grass 25.4 → 22.1 / 21.7 m |
+| Diff locks climb | 15° slope, FL over a pit, all diffs open: −0.22 m in 8 s, hanging wheel up to 14 m/s; all locked (X × 3): 38–54 m (60/120/240 Hz) |
+| Traction control on mud | Flat mud launch, 3 s: max slip 9.3–9.5 m/s and 2.8 s of spin with TC off; On 2.7–4.8 m/s, 1.4–1.5 s, v(3 s) 7.6–7.8 vs 8.0–8.1 m/s; Off-road 4.4–6.6 m/s |
 | Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
@@ -648,11 +744,14 @@ Everything below was actually run on macOS 27 / M-series.
   - In the 40 km/h demo corner the body rolls 8.5°, the outer wheels compress 77–79%,
     and the inner front wheel unloads to 0 N.
 - **Scenario `tools/scenarios/full_check.txt`** (window, rendering, input via the SDL event queue → `Input` → ticks):
-  155 checks, 0 failures (since the reverse UX stage; 128 before), about 130 s per run. Covered:
+  206 checks, 0 failures (since the driver-aids stage; 162 before), about 150 s per run. Covered:
   - throttle and braking; D/A steering and smooth return to center;
-  - auto reverse: S brakes while moving, engages reverse at a standstill and drives backwards, W brakes and engages
-    drive; the same in low range, right after R, on the 28° hill and on the low-grip patch; the hint after Q while
-    moving. Sections that hold the brake at a standstill run with `set auto_reverse 0` (classic mapping);
+  - auto reverse: S held from moving brakes and keeps holding at the stop; released and pressed again it engages
+    reverse and drives backwards, W the same way back to drive; the same in low range, right after R, on the 28° hill
+    and on the low-grip patch; the hint after Q while moving. The climb brake holds run with auto reverse on, the
+    other stops with `set auto_reverse 0` (classic mapping);
+  - driver aids: B / T / X cycle ABS, TC and the diff locks (effective modes checked); a 45 km/h stop on the dirt
+    lane locks wheels without ABS (> 3 wheel-s) and not with it (< 0.5 wheel-s); TC acts on the low-grip patch;
   - Q and L are refused with a message while moving and work when stopped; reverse; handbrake; R reset;
   - C camera and free camera with arrow keys; F1; Esc pause (ticks stop), N — exactly one step;
   - ImGui input capture: with focus in a field, W and R do not reach the vehicle; typing `2.2` into the spring slider is applied;
