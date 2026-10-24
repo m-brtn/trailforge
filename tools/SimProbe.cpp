@@ -4,6 +4,9 @@
 //   trailforge_probe bench            - step cost and stability at 60/120/240 Hz
 //   trailforge_probe susp [feature throttle low secs steer] - per-wheel suspension travel over a track feature
 //   trailforge_probe surfaces         - launches, braking, 15/20 degree climbs per surface
+//   trailforge_probe abs              - 50 km/h stops per surface, straight and with full lock, ABS off / on
+//   trailforge_probe tc               - hill starts on the ramps with traction control off / on / off-road
+//   trailforge_probe diff             - differential modes with a wheel in the air (pit, diagonal twister)
 
 #include "audio/AudioMixer.h"
 #include "audio/VehicleAudioFeed.h"
@@ -683,6 +686,212 @@ void climbTrace(int lane) {
     }
 }
 
+void setAids(Simulation& sim, bool abs, TractionMode tc, int locks) {
+    sim.requestAidControls({abs, tc, locks});
+    sim.tick();
+}
+
+const char* tcName(TractionMode m) { return m == TractionMode::Off ? "off" : m == TractionMode::On ? "on " : "off-road"; }
+
+// ABS: full stops from 50 km/h per surface lane (straight, and with full right lock applied with the brake),
+// ABS off / on. Lock time = wheel-seconds with a wheel in contact turning below 20 % of its ground speed.
+void absProbe() {
+    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
+    for (int lane : {0, 4, 1, 3, 2, 5}) {
+        for (int steer = 0; steer < 2; ++steer) {
+            for (int abs = 0; abs < 2; ++abs) {
+                SimulationSettings s;
+                s.layout = TrackLayout::SurfaceLanes;
+                Simulation sim(s);
+                sim.requestTeleport(lane);
+                for (int i = 0; i < 120; ++i) sim.tick();
+                setAids(sim, abs != 0, TractionMode::Off, 0);
+                for (int i = 0; i < int(12.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 50.0f; ++i) {
+                    sim.setIntent({.throttle = 0.6f});
+                    sim.tick();
+                }
+                const float v0 = sim.vehicle().telemetry().speed;
+                const auto p0 = sim.currentSnapshot().body.position;
+                const float yaw0 = std::atan2(sim.currentSnapshot().body.rotation.RotateAxisZ().GetX(),
+                                              sim.currentSnapshot().body.rotation.RotateAxisZ().GetZ());
+                double t = 0, lock = 0, absTime = 0, frontLock = 0;
+                int releases = 0;
+                std::array<float, kWheelCount> prevP{1, 1, 1, 1};
+                std::array<bool, kWheelCount> releasing{};
+                float path = 0;
+                while (sim.vehicle().telemetry().speed > 0.05f && t < 15.0) {
+                    sim.setIntent({.brake = 1.0f, .steer = steer ? 0.4f : 0.0f});
+                    sim.tick();
+                    t += sim.fixedStep();
+                    const auto& tel = sim.vehicle().telemetry();
+                    path += tel.speed * float(sim.fixedStep());
+                    bool any = false;
+                    for (int i = 0; i < kWheelCount; ++i) {
+                        const auto& w = tel.wheels[i];
+                        if (w.contact && std::abs(w.groundSpeed) > 2.0f && std::abs(w.rollingSpeed) < 0.2f * std::abs(w.groundSpeed)) {
+                            lock += sim.fixedStep();
+                            if (i < 2) frontLock += sim.fixedStep();
+                        }
+                        const bool down = w.absPressure < prevP[i] - 1e-4f;
+                        if (down && !releasing[i]) ++releases;
+                        releasing[i] = down;
+                        prevP[i] = w.absPressure;
+                        any |= w.absPressure < 0.999f;
+                    }
+                    if (any) absTime += sim.fixedStep();
+                }
+                const auto p1 = sim.currentSnapshot().body.position;
+                const float yaw1 = std::atan2(sim.currentSnapshot().body.rotation.RotateAxisZ().GetX(),
+                                              sim.currentSnapshot().body.rotation.RotateAxisZ().GetZ());
+                std::printf("abs %-8s %s ABS %s: from %4.1f km/h %5.2f m path (dz %5.2f, dx %+5.2f) in %.2f s, heading %+6.1f deg, "
+                            "lock %.2f wheel-s (front %.2f), ABS active %.2f s, %d releases (%.1f Hz per wheel)\n",
+                            names[lane], steer ? "turn    " : "straight", abs ? "on " : "off", v0 * 3.6f, path,
+                            p1.GetZ() - p0.GetZ(), p1.GetX() - p0.GetX(), t, (yaw1 - yaw0) * 57.2958f, lock, frontLock,
+                            absTime, releases, absTime > 0 ? releases / (4.0 * absTime) : 0.0);
+            }
+        }
+    }
+}
+
+// Traction control: hill starts (creep 8 m up, foot brake to a stop, hold 2 s, full throttle) on the ramps, low range.
+void tcProbe() {
+    const char* laneNames[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
+    for (int lane : {0, 1, 3, 2}) {
+        for (TractionMode tc : {TractionMode::Off, TractionMode::On, TractionMode::OffRoad}) {
+            SimulationSettings s;
+            s.layout = TrackLayout::SurfaceLanes;
+            Simulation sim(s);
+            sim.requestTeleport(lane);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            setAids(sim, false, tc, 0);
+            double t = 0, t30 = -1, spin = 0, active = 0;
+            float maxSlip = 0, v2 = 0;
+            while (t < 6.0) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                float slip = 0;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                maxSlip = std::max(maxSlip, slip);
+                if (slip > 1.0f) spin += sim.fixedStep();
+                if (sim.vehicle().telemetry().tcActive) active += sim.fixedStep();
+                if (std::abs(t - 2.0) < 0.5 * sim.fixedStep()) v2 = sim.vehicle().telemetry().speed;
+                if (t30 < 0 && sim.vehicle().telemetry().speed * 3.6f >= 30.0f) t30 = t;
+            }
+            std::printf("tc  launch %-8s high range TC %-8s: v(2 s) %5.2f m/s, 0-30 km/h %5.2f s, max slip %5.2f m/s, "
+                        "wheelspin (>1 m/s) %.2f s, TC active %.2f s\n",
+                        laneNames[lane], tcName(tc), v2, t30, maxSlip, spin, active);
+        }
+    }
+    const char* rampNames[] = {"concrete", "dirt", "rock", "grass", "mud", "lowgrip"};
+    for (int k : {8, 9, 7, 6, 2}) {
+        for (TractionMode tc : {TractionMode::Off, TractionMode::On, TractionMode::OffRoad}) {
+            SimulationSettings s;
+            s.layout = TrackLayout::SurfaceRamps;
+            Simulation sim(s);
+            sim.requestTeleport(k);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            sim.requestToggleLowRange();
+            setAids(sim, false, tc, 0);
+            auto z = [&] { return sim.currentSnapshot().body.position.GetZ(); };
+            for (int i = 0; i < int(10.0 / sim.fixedStep()) && z() < 8.0f; ++i) {
+                sim.setIntent({.throttle = 0.4f});
+                sim.tick();
+            }
+            for (int i = 0; i < int(5.0 / sim.fixedStep()); ++i) {
+                sim.setIntent({.brake = 1.0f});
+                sim.tick();
+            }
+            const float zStart = z();
+            double t = 0, top = -1, spin = 0, tcTime = 0;
+            float maxSlip = 0, minFactor = 1;
+            while (t < 15.0 && top < 0) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                const auto& tel = sim.vehicle().telemetry();
+                float slip = 0;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                maxSlip = std::max(maxSlip, slip);
+                if (slip > 1.0f) spin += sim.fixedStep();
+                if (tel.tcActive) tcTime += sim.fixedStep();
+                minFactor = std::min(minFactor, tel.throttleFactor);
+                if (z() > 24.0f) top = t;
+                if (std::getenv("TF_TC_TRACE") && sim.timing().ticks % 60 == 0 && t < 15.0) {
+                    std::printf("  t=%.2f z=%.2f v=%+.2f f=%.2f thr=%.2f rpm=%.0f g=%d |", t, z(), tel.forwardSpeed,
+                                tel.throttleFactor, tel.engineThrottle, tel.engineRPM, tel.gear);
+                    for (const auto& w : tel.wheels)
+                        std::printf(" %c v%+.2f r%+.2f tb%4.0f F%+5.0f", w.contact ? 'C' : '-', w.groundSpeed, w.rollingSpeed,
+                                    w.tcBrake, w.longitudinalForce);
+                    std::printf("\n");
+                }
+            }
+            std::printf("tc  %-8s %2d deg TC %-8s: %s", rampNames[k / 2], k % 2 ? 20 : 15, tcName(tc), top >= 0 ? "top" : "no ");
+            if (top >= 0) std::printf(" in %5.2f s", top);
+            else std::printf("  %5.2f m in 15 s", z() - zStart);
+            const auto pos = sim.currentSnapshot().body.position;
+            std::printf(", max slip %5.2f m/s, wheelspin (>1 m/s) %.2f s, TC active %.2f s, min throttle factor %.2f, "
+                        "lateral drift %+.2f m\n",
+                        maxSlip, spin, tcTime, minFactor, pos.GetX() - sim.track().features()[k].position.GetX());
+        }
+    }
+}
+
+// Differentials: one wheel without support. Pad with a bottomless pit under the front-left wheel and the
+// proving ground diagonal twister, low range, full throttle.
+void diffProbe() {
+    struct Setup {
+        const char* name;
+        DiffMode f, r, c;
+        int locks;
+        TractionMode tc;
+    } setups[] = {
+        {"all open              ", DiffMode::Open, DiffMode::Open, DiffMode::Open, 0, TractionMode::Off},
+        {"default (F open, R/C LSD)", DiffMode::Open, DiffMode::LimitedSlip, DiffMode::LimitedSlip, 0, TractionMode::Off},
+        {"all open + rear lock  ", DiffMode::Open, DiffMode::Open, DiffMode::Open, 1, TractionMode::Off},
+        {"all open + rear+center", DiffMode::Open, DiffMode::Open, DiffMode::Open, 2, TractionMode::Off},
+        {"all locked            ", DiffMode::Open, DiffMode::Open, DiffMode::Open, 3, TractionMode::Off},
+        {"all open + TC on      ", DiffMode::Open, DiffMode::Open, DiffMode::Open, 0, TractionMode::On},
+        {"all open + TC off-road", DiffMode::Open, DiffMode::Open, DiffMode::Open, 0, TractionMode::OffRoad},
+    };
+    for (int track = 0; track < 2; ++track) {
+        for (const Setup& su : setups) {
+            SimulationSettings s;
+            s.layout = track == 0 ? TrackLayout::SlopeWithWheelPit : TrackLayout::ProvingGround;
+            s.vehicle.tuning.frontDiff = su.f;
+            s.vehicle.tuning.rearDiff = su.r;
+            s.vehicle.tuning.centerDiff = su.c;
+            Simulation sim(s);
+            if (track == 1) sim.requestTeleport(2);
+            sim.setIntent({.brake = 1.0f});
+            for (int i = 0; i < 240; ++i) sim.tick();
+            sim.requestToggleLowRange();
+            setAids(sim, false, su.tc, su.locks);
+            auto z = [&] { return sim.currentSnapshot().body.position.GetZ(); };
+            const float z0 = z();
+            const double secs = track == 0 ? 8.0 : 20.0;
+            const float goal = track == 0 ? 4.0f : 16.0f;
+            double t = 0, done = -1;
+            float maxAirSpin = 0;
+            while (t < secs && done < 0) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                for (const auto& w : sim.vehicle().telemetry().wheels)
+                    if (!w.contact) maxAirSpin = std::max(maxAirSpin, std::abs(w.rollingSpeed));
+                if ((track == 0 ? z() - z0 : z()) > goal) done = t;
+                if (std::getenv("TF_DIFF_TRACE") && sim.timing().ticks % 12 == 0) printRow(sim, t);
+            }
+            std::printf("diff %-12s %s: ", track == 0 ? "slope pit" : "twister", su.name);
+            if (done >= 0) std::printf("out (%.0f m) in %5.2f s", goal, done);
+            else std::printf("stuck: %5.2f m in %.0f s", z() - z0, secs);
+            std::printf(", max rim speed of a wheel in the air %5.1f m/s\n", maxAirSpin);
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -699,6 +908,9 @@ int main(int argc, char** argv) {
     else if (mode == "skid") skid();
     else if (mode == "showcase") showcase();
     else if (mode == "surfaces") surfaces();
+    else if (mode == "abs") absProbe();
+    else if (mode == "tc") tcProbe();
+    else if (mode == "diff") diffProbe();
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

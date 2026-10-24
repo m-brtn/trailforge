@@ -5,7 +5,41 @@
 
 namespace tf {
 
-enum class DiffMode { Open, LimitedSlip };
+// Locked is Jolt's limited-slip model with a ratio close to 1 (lockedSlipRatio): a torque split that sends all drive
+// torque to the slower side, not a rigid shaft (see Vehicle::applyDifferentials).
+enum class DiffMode { Open, LimitedSlip, Locked };
+
+// Traction control: Off, On (road threshold, cuts the throttle), OffRoad (higher threshold, keeps more throttle and
+// mostly brakes the spinning wheel).
+enum class TractionMode { Off, On, OffRoad };
+
+// Driver aids: simplified control logic that only acts on the throttle pedal and on per-wheel brake torques
+// (Jolt WheelSettingsWV::mMaxBrakeTorque, set before every step). Not a model of a specific ABS/TC unit.
+struct DrivingAidTuning {
+    bool absEnabled = false;                 // default state of the ABS switch (B)
+    TractionMode traction = TractionMode::Off; // default state of the TC switch (T)
+
+    // ABS: per-wheel brake pressure p (0..1) multiplies the pedal torque. Braking slip = (v - w*r) / v at the wheel.
+    float absReleaseSlip = 0.18f; // slip above which pressure is released
+    float absApplySlip = 0.08f;   // slip below which pressure builds up again (between the two: hold)
+    float absReleaseRate = 40.0f; // 1/s, pressure drop rate (fast dump valve)
+    float absApplyRate = 8.0f;    // 1/s, pressure build-up rate
+    float absMinPressure = 0.0f;  // pressure floor while releasing (Jolt keeps a stopped wheel locked under any brake torque)
+    float absMinSpeed = 1.5f;     // m/s, below this the pedal acts directly (a real ABS also drops out near a stop)
+
+    // Traction control. Drive slip = (w*r - v) / max(v, tcMinSpeed), also for a wheel in the air.
+    float tcSlipThreshold = 0.20f;        // On
+    float tcOffRoadSlipThreshold = 0.35f; // OffRoad
+    float tcMinSpeed = 2.0f;              // m/s, slip denominator floor (slip is undefined at a standstill)
+    float tcSlipFilterTime = 0.05f;       // s, low-pass time constant of the measured slip
+    float tcBrakeGain = 3000.0f;          // N*m of brake per unit of slip above the threshold
+    float tcMaxBrakeTorque = 1500.0f;     // N*m per wheel
+    float tcBrakeRate = 8000.0f;          // N*m/s, rate limit of the TC brake torque (both directions)
+    float tcCutRate = 1.5f;               // 1/s, throttle factor drop rate at an error of one threshold
+    float tcRecoverRate = 0.6f;           // 1/s, throttle factor recovery rate at zero slip
+    float tcMinThrottle = 0.05f;          // throttle factor floor, On
+    float tcOffRoadMinThrottle = 0.10f;   // throttle factor floor, OffRoad
+};
 
 // Parameters applied to the running vehicle between physics steps
 // (without recreation): suspension (springs/dampers), tire grip, brakes,
@@ -30,6 +64,9 @@ struct VehicleTuning {
     // A tire below the peak slip ratio may transmit up to the peak longitudinal friction before it breaks away,
     // instead of mu(slip of the previous step), which is 0 for a wheel that just gripped. false = plain Jolt curve.
     bool tireStaticGrip = true;
+    // Floor of the slip ratio denominator, m/s: slip = |w*r - v| / max(|v|, floor). 0 = Jolt's 0.001 m/s, with which
+    // any wheel rotation near a standstill counts as a full slide.
+    float tireSlipSpeedFloor = 1.0f;
 
     // Brakes
     float maxBrakeTorque = 3000.0f;     // N*m per wheel
@@ -43,12 +80,21 @@ struct VehicleTuning {
     // slipping clutch would deliver S * dw (~840 N*m at launch) whatever the throttle.
     bool launchClutchLimit = true;
     float creepTorque = 40.0f;      // N*m at the engine shaft, idle creep in gear
-
-    // Differentials (Jolt supports open / limited slip)
+    // Differentials (Jolt limited-slip model). These are the modes with the driver's lockers off; the locker switch
+    // (X) overrides rear, rear + center, or all three with Locked.
     DiffMode frontDiff = DiffMode::Open;
     DiffMode rearDiff = DiffMode::LimitedSlip;
     DiffMode centerDiff = DiffMode::LimitedSlip;
-    float limitedSlipRatio = 1.4f; // ratio of max/min wheel speeds above which torque goes to the slower wheel
+    float limitedSlipRatio = 1.4f;       // front/rear LSD: max/min wheel speed ratio at which all torque goes to the slower wheel
+    float centerLimitedSlipRatio = 1.4f; // center LSD: the same between the axles (average axle speeds)
+    float lockedSlipRatio = 1.05f;       // "Locked": the same model with a ratio close to 1 (Jolt requires > 1)
+
+    // Tire friction circle: beyond the peak, the longitudinal and lateral limits share one budget in proportion to
+    // the normalized slips (slip ratio / peak, slip angle / peak). A locked or spinning wheel then has little side
+    // grip. false = Jolt's independent limits (a locked wheel keeps full side grip).
+    bool tireCombinedSlip = true;
+
+    DrivingAidTuning aids;
 };
 
 // Parameters that require recreating the vehicle ("Rebuild" button).

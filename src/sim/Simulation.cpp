@@ -39,10 +39,17 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);
+    if (m_aidSwitches) {
+        AidControls c = m_vehicle->aidControls();
+        c.abs = m_aidSwitches->abs;
+        c.traction = m_aidSwitches->traction;
+        m_vehicle->setAidControls(c);
+    }
     m_impactListener.setBody(m_vehicle->bodyId());
     ++m_spawnCount;
     m_smoothed = {};
     m_autoReverseHold = 0.0f;
+    m_brakeLatch = false;
     TireMarkSettings marks = m_tireMarks.settings();
     marks.referenceLoad = 0.25f * config.mass * 9.81f;
     m_tireMarks.setSettings(marks);
@@ -100,6 +107,28 @@ void Simulation::processCommands() {
         setMessage(m_vehicle->toggleLowRange() ? "Transfer case range changed"
                                                : "Low range change only near standstill (< 1 m/s)");
     }
+    if (m_pendingAbsToggle || m_pendingTractionCycle || m_pendingDiffCycle || m_pendingAids) {
+        AidControls c = m_pendingAids ? *m_pendingAids : m_vehicle->aidControls();
+        if (m_pendingAbsToggle) {
+            c.abs = !c.abs;
+            setMessage(c.abs ? "ABS on" : "ABS off");
+        }
+        if (m_pendingTractionCycle) {
+            c.traction = TractionMode((int(c.traction) + 1) % 3);
+            setMessage(c.traction == TractionMode::Off ? "Traction control off"
+                       : c.traction == TractionMode::On ? "Traction control on"
+                                                        : "Traction control off-road");
+        }
+        if (m_pendingDiffCycle) {
+            c.diffLocks = (c.diffLocks + 1) % AidControls::kDiffLockStages;
+            const char* names[] = {"Lockers off", "Rear diff locked", "Rear + center diffs locked", "All diffs locked"};
+            setMessage(names[c.diffLocks]);
+        }
+        m_pendingAbsToggle = m_pendingTractionCycle = m_pendingDiffCycle = false;
+        m_pendingAids.reset();
+        m_vehicle->setAidControls(c);
+        m_aidSwitches = m_vehicle->aidControls();
+    }
 }
 
 void Simulation::setMessage(const char* text) {
@@ -111,6 +140,7 @@ void Simulation::resolvePedals(float dt) {
     m_resolved = m_intent;
     if (!m_intent.autoReverse) {
         m_autoReverseHold = 0.0f;
+        m_brakeLatch = false;
         return;
     }
     const AutoReverseSettings& a = m_settings.autoReverse;
@@ -121,9 +151,14 @@ void Simulation::resolvePedals(float dt) {
         m_resolved.brake = forward ? m_intent.brake : m_intent.throttle;
     };
     map();
-    // The pedal against the selected direction brakes; held near a standstill (and without the other pedal)
-    // for holdTime it selects the opposite direction and becomes the throttle.
-    if (m_resolved.brake > a.pedalThreshold && m_resolved.throttle < 0.05f && std::abs(t.forwardSpeed) < a.stopSpeed) {
+    // The pedal against the selected direction brakes. A press that started while moving keeps braking through the
+    // stop and holds the vehicle (also on a slope) until it is released; a fresh press near a standstill (without
+    // the other pedal), held for holdTime, selects the opposite direction and becomes the throttle.
+    const bool held = m_resolved.brake > a.pedalThreshold;
+    const bool stopped = std::abs(t.forwardSpeed) < a.stopSpeed;
+    if (!held) m_brakeLatch = false;
+    else if (!stopped) m_brakeLatch = true;
+    if (held && !m_brakeLatch && m_resolved.throttle < 0.05f && stopped) {
         m_autoReverseHold += dt;
         if (m_autoReverseHold >= a.holdTime && m_vehicle->toggleDirection()) {
             m_autoReverseHold = 0.0f;
@@ -161,7 +196,7 @@ void Simulation::tick() {
     smoothInput(dt);
 
     const auto t0 = Clock::now();
-    m_vehicle->prePhysics(m_smoothed);
+    m_vehicle->prePhysics(m_smoothed, dt);
     m_impactListener.beginTick();
     const JPH::EPhysicsUpdateError err = m_world->step(dt, m_settings.collisionSteps);
     m_physicsError = m_physicsError || err != JPH::EPhysicsUpdateError::None;

@@ -77,8 +77,9 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         }
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
-        ImGui::TextDisabled("W gas / S brake (held at a stop: reverse)  A/D steer  Space handbrake");
-        ImGui::TextDisabled("Q fwd/rev  L low range  R reset  C camera  H lights  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("W gas / S brake (stopped: release, press again for reverse)  A/D steer  Space handbrake");
+        ImGui::TextDisabled("Q fwd/rev  L low range  B ABS  T traction control  X diff locks  R reset");
+        ImGui::TextDisabled("C camera  H lights  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH,
                             TRAILFORGE_VERSION);
@@ -91,6 +92,37 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
     drawTelemetry(sim, stats, req);
     drawTuning(sim, req, gfx);
     return req;
+}
+
+// ABS / TC lamps (dim = off, green = armed, blinking amber = acting) and the effective differential modes.
+void DebugUI::drawAidIndicators(const Simulation& sim) {
+    const auto& t = sim.vehicle().telemetry();
+    const double now = sim.simTime();
+    if (t.absActive) m_absLastActive = now;
+    if (t.tcActive) m_tcLastActive = now;
+    // Lamps stay lit 0.3 s after the last intervention and blink at 4 Hz while acting.
+    const bool blinkOn = std::fmod(now, 0.25) < 0.15;
+    auto lamp = [&](const char* text, bool armed, double lastActive) {
+        if (!armed) ImGui::TextDisabled("%s", text);
+        else if (now - lastActive < 0.3) ImGui::TextColored(blinkOn ? ImVec4(1.0f, 0.65f, 0.1f, 1) : ImVec4(0.45f, 0.3f, 0.1f, 1), "%s", text);
+        else ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), "%s", text);
+    };
+    ImGui::BeginGroup();
+    lamp("ABS", t.controls.abs, m_absLastActive);
+    ImGui::SameLine();
+    lamp(t.controls.traction == TractionMode::OffRoad ? "TC OFF-ROAD" : "TC", t.controls.traction != TractionMode::Off,
+         m_tcLastActive);
+    auto diff = [](const char* axle, DiffMode m) {
+        const char* name = m == DiffMode::Open ? "open" : m == DiffMode::LimitedSlip ? "LSD" : "LOCK";
+        if (m == DiffMode::Locked) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "%s %s", axle, name);
+        else ImGui::TextDisabled("%s %s", axle, name);
+    };
+    diff("F", t.frontDiff);
+    ImGui::SameLine();
+    diff("C", t.centerDiff);
+    ImGui::SameLine();
+    diff("R", t.rearDiff);
+    ImGui::EndGroup();
 }
 
 bool DebugUI::hintVisible(const Simulation& sim) const {
@@ -129,6 +161,8 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     else ImGui::TextDisabled("HIGH");
     ImGui::TextDisabled("%4.0f rpm", t.engineRPM);
     ImGui::EndGroup();
+    ImGui::SameLine();
+    drawAidIndicators(sim);
     ImGui::End();
 
     if (!hintVisible(sim)) return;
@@ -342,8 +376,8 @@ void DebugUI::drawTimeOfDay(GraphicsState& gfx) {
 void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     // Below the always-on HUD (top left).
-    ImGui::SetNextWindowPos(ImVec2(10, 160), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, display.x * 0.38f), display.y - 170.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(10, 180), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f, display.x * 0.38f), display.y - 190.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("Telemetry (F1)");
 
     ImGui::TextDisabled("TrailForge %s", TRAILFORGE_VERSION);
@@ -383,6 +417,11 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     bar("handbrake [0..1]", t.command.handBrake, 0, 1, "%.2f");
     bar("steer input [-1..1]", t.command.steer, -1, 1, "%+.2f");
     ImGui::Text("Front wheel steer angle: %+.1f deg (+ = left)", t.steerAngleDeg);
+    auto diffName = [](DiffMode m) { return m == DiffMode::Open ? "open" : m == DiffMode::LimitedSlip ? "LSD" : "locked"; };
+    const char* tcModes[] = {"off", "on", "off-road"};
+    ImGui::Text("ABS %s%s   TC %s%s, throttle x%.2f -> %.2f   Diffs F %s / C %s / R %s", t.controls.abs ? "on" : "off",
+                t.absActive ? " (acting)" : "", tcModes[int(t.controls.traction)], t.tcActive ? " (acting)" : "",
+                t.throttleFactor, t.engineThrottle, diffName(t.frontDiff), diffName(t.centerDiff), diffName(t.rearDiff));
 
     ImGui::SeparatorText("Wheels");
     if (ImGui::BeginTable("wheels", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -420,6 +459,9 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
         });
         row("Friction mu [-]", [](const WheelTelemetry& w) { ImGui::Text("%.2f", w.combinedLongFriction); });
         row("Wheel speed [rad/s]", [](const WheelTelemetry& w) { ImGui::Text("%+.1f", w.angularVelocity); });
+        row("Brake [N*m]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.brakeTorque); });
+        row("ABS pressure [-]", [](const WheelTelemetry& w) { ImGui::Text("%.2f", w.absPressure); });
+        row("TC brake [N*m]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.tcBrake); });
         ImGui::EndTable();
     }
     ImGui::TextDisabled("Load/forces = Jolt constraint impulse [N*s] / collision substep [s] (fixed step / collision steps). Slip ratio: |(w*r - v)/v| (Jolt), '-' below 0.5 m/s.");
@@ -455,6 +497,15 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         remember("static_grip");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Off: plain Jolt curve, mu(0) = 0; gripping wheels alternate grip / free spin.");
+        changed |= ImGui::SliderFloat("Slip speed floor [m/s]", &m_tuning.tireSlipSpeedFloor, 0.0f, 3.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Slip ratio for the friction curve = |w*r - v| / max(|v|, floor).\n"
+                              "0: Jolt's own ratio, where any wheel turn at a standstill reads as full slip.");
+        changed |= ImGui::Checkbox("Combined slip (friction circle)", &m_tuning.tireCombinedSlip);
+        remember("combined_slip");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Scales the longitudinal and lateral limits so their combined slip shares one budget.\n"
+                              "Off: Jolt's independent limits, a locked wheel still steers.");
     }
     if (ImGui::CollapsingHeader("Surfaces (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("Multiplier on tire curve. Ground is rigid in this MVP.");
@@ -478,13 +529,47 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         changed |= ImGui::SliderFloat("Creep torque [N*m]", &m_tuning.creepTorque, 0.0f, 150.0f, "%.0f");
         changed |= ImGui::SliderFloat("Brake torque [N*m/wheel]", &m_tuning.maxBrakeTorque, 500.0f, 8000.0f, "%.0f");
         changed |= ImGui::SliderFloat("Handbrake torque [N*m]", &m_tuning.maxHandBrakeTorque, 0.0f, 8000.0f, "%.0f");
-        const char* modes[] = {"Open", "Limited slip"};
+        const char* modes[] = {"Open", "Limited slip", "Locked"};
         int f = int(m_tuning.frontDiff), r = int(m_tuning.rearDiff), c = int(m_tuning.centerDiff);
-        if (ImGui::Combo("Front diff", &f, modes, 2)) { m_tuning.frontDiff = DiffMode(f); changed = true; }
-        if (ImGui::Combo("Rear diff", &r, modes, 2)) { m_tuning.rearDiff = DiffMode(r); changed = true; }
-        if (ImGui::Combo("Center diff", &c, modes, 2)) { m_tuning.centerDiff = DiffMode(c); changed = true; }
-        changed |= ImGui::SliderFloat("LSD ratio (max/min)", &m_tuning.limitedSlipRatio, 1.05f, 4.0f, "%.2f");
-        ImGui::TextDisabled("No hard locker: Jolt only offers open/LSD torque split.");
+        if (ImGui::Combo("Front diff", &f, modes, 3)) { m_tuning.frontDiff = DiffMode(f); changed = true; }
+        if (ImGui::Combo("Rear diff", &r, modes, 3)) { m_tuning.rearDiff = DiffMode(r); changed = true; }
+        if (ImGui::Combo("Center diff", &c, modes, 3)) { m_tuning.centerDiff = DiffMode(c); changed = true; }
+        changed |= ImGui::SliderFloat("Axle LSD ratio (max/min)", &m_tuning.limitedSlipRatio, 1.05f, 4.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Center LSD ratio", &m_tuning.centerLimitedSlipRatio, 1.05f, 4.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Locked ratio", &m_tuning.lockedSlipRatio, 1.001f, 1.5f, "%.3f");
+        ImGui::TextDisabled("Jolt diffs split torque; LSD/Locked cap the faster/slower side speed ratio.\n"
+                            "Locked = ratio near 1: torque goes to the slower side, no rigid shaft link.\n"
+                            "X cycles lockers on top: rear, rear + center, all.");
+    }
+    if (ImGui::CollapsingHeader("Driver aids (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        AidControls a = sim.aidControls();
+        bool sw = ImGui::Checkbox("ABS (B)", &a.abs);
+        remember("abs_switch");
+        int tc = int(a.traction);
+        const char* tcModes[] = {"Off", "On", "Off-road"};
+        if (ImGui::Combo("Traction control (T)", &tc, tcModes, 3)) { a.traction = TractionMode(tc); sw = true; }
+        const char* lockNames[] = {"none", "rear", "rear + center", "all"};
+        sw |= ImGui::SliderInt("Diff locks (X)", &a.diffLocks, 0, AidControls::kDiffLockStages - 1,
+                               lockNames[std::clamp(a.diffLocks, 0, AidControls::kDiffLockStages - 1)]);
+        if (sw) sim.requestAidControls(a);
+        DrivingAidTuning& d = m_tuning.aids;
+        ImGui::SeparatorText("ABS");
+        changed |= ImGui::SliderFloat("Release slip", &d.absReleaseSlip, 0.05f, 0.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Re-apply slip", &d.absApplySlip, 0.0f, 0.4f, "%.2f");
+        changed |= ImGui::SliderFloat("Release rate [1/s]", &d.absReleaseRate, 5.0f, 100.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Apply rate [1/s]", &d.absApplyRate, 1.0f, 40.0f, "%.1f");
+        changed |= ImGui::SliderFloat("ABS min speed [m/s]", &d.absMinSpeed, 0.0f, 5.0f, "%.1f");
+        ImGui::SeparatorText("Traction control");
+        changed |= ImGui::SliderFloat("Slip threshold (On)", &d.tcSlipThreshold, 0.05f, 1.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Slip threshold (Off-road)", &d.tcOffRoadSlipThreshold, 0.05f, 1.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Throttle floor (On)", &d.tcMinThrottle, 0.0f, 1.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Throttle floor (Off-road)", &d.tcOffRoadMinThrottle, 0.0f, 1.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Throttle cut rate [1/s]", &d.tcCutRate, 0.1f, 10.0f, "%.1f");
+        changed |= ImGui::SliderFloat("Throttle recover rate [1/s]", &d.tcRecoverRate, 0.1f, 10.0f, "%.1f");
+        changed |= ImGui::SliderFloat("Brake gain [N*m]", &d.tcBrakeGain, 0.0f, 10000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Max brake [N*m/wheel]", &d.tcMaxBrakeTorque, 0.0f, 4000.0f, "%.0f");
+        ImGui::TextDisabled("Simplified control logic on top of the tire model: brake torque per\n"
+                            "wheel and an engine throttle factor; no hidden forces.");
     }
     if (changed) sim.requestTuning(m_tuning);
 

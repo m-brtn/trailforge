@@ -149,6 +149,9 @@ void Application::processEvents() {
         ImGui_ImplSDL3_ProcessEvent(&e);
         if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e.window.windowID == SDL_GetWindowID(m_window.get()))
             m_running = false;
+        if (m_scenario && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && io.WantCaptureKeyboard)
+            std::printf("SCENARIO: key %s arrived while ImGui owns the keyboard (only F1-F3 and Escape act)\n",
+                        SDL_GetScancodeName(e.key.scancode));
         m_input.handleEvent(e, io.WantCaptureKeyboard, io.WantCaptureMouse);
     }
     m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse);
@@ -164,6 +167,9 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleDirection)) m_sim.requestToggleDirection();
     if (m_input.pressed(Action::ToggleLowRange)) m_sim.requestToggleLowRange();
     if (m_input.pressed(Action::Reset)) m_sim.requestReset();
+    if (m_input.pressed(Action::ToggleAbs)) m_sim.requestToggleAbs();
+    if (m_input.pressed(Action::CycleTraction)) m_sim.requestCycleTraction();
+    if (m_input.pressed(Action::CycleDiffLock)) m_sim.requestCycleDiffLock();
 
     DriverIntent intent = m_input.driverIntent();
     intent.autoReverse = m_ui.autoReverse;
@@ -264,6 +270,14 @@ void Application::renderFrame(float frameTime) {
         int air = 0;
         for (const auto& w : m_sim.vehicle().telemetry().wheels) air += w.contact ? 0 : 1;
         m_maxAirWheels = std::max(m_maxAirWheels, air);
+        const VehicleTelemetry& t = m_sim.vehicle().telemetry();
+        int locked = 0;
+        for (const auto& w : t.wheels)
+            locked += w.contact && std::abs(w.groundSpeed) > 2.0f && std::abs(w.rollingSpeed) < 0.2f * std::abs(w.groundSpeed);
+        m_maxLockedWheels = std::max(m_maxLockedWheels, locked);
+        m_lockedWheelTime += locked * frameTime;
+        m_absSeen |= t.absActive;
+        m_tcSeen |= t.tcActive;
     }
 
     // ---- UI
@@ -798,6 +812,13 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "ui") m_ui.visible = v != 0.0f;
             else if (k == "hud") m_ui.hud = v != 0.0f;
             else if (k == "auto_reverse") m_ui.autoReverse = v != 0.0f;
+            else if (k == "abs" || k == "tc" || k == "diff_locks") {
+                AidControls a = m_sim.aidControls();
+                if (k == "abs") a.abs = v != 0.0f;
+                else if (k == "tc") a.traction = TractionMode(std::clamp(int(v), 0, 2));
+                else a.diffLocks = std::clamp(int(v), 0, AidControls::kDiffLockStages - 1);
+                m_sim.requestAidControls(a);
+            }
             else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
             else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
             else if (k == "marks") m_gfx.tireMarks = v != 0.0f;
@@ -869,6 +890,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
     if (c.op == "reset_stats") {
         m_minCamClearance = 1e9f;
         m_maxAirWheels = 0;
+        m_maxLockedWheels = 0;
+        m_lockedWheelTime = 0.0;
+        m_absSeen = m_tcSeen = false;
         return Exec::Done;
     }
     if (c.op == "log") {
@@ -911,6 +935,16 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "low") return t.lowRange ? 1.0 : 0.0;
     if (n == "auto_reverse") return m_ui.autoReverse ? 1.0 : 0.0;
     if (n == "hint") return m_ui.hintVisible(m_sim) ? 1.0 : 0.0;
+    if (n == "abs") return t.controls.abs ? 1.0 : 0.0;
+    if (n == "tc") return double(int(t.controls.traction));
+    if (n == "diff_locks") return t.controls.diffLocks;
+    if (n == "front_diff") return double(int(t.frontDiff));
+    if (n == "rear_diff") return double(int(t.rearDiff));
+    if (n == "center_diff") return double(int(t.centerDiff));
+    if (n == "abs_seen") return m_absSeen ? 1.0 : 0.0;
+    if (n == "tc_seen") return m_tcSeen ? 1.0 : 0.0;
+    if (n == "max_locked") return m_maxLockedWheels;
+    if (n == "lock_time") return m_lockedWheelTime;
     if (n == "tilt") return std::acos(std::fmin(1.0f, t.upDot)) * 57.2958;
     if (n == "x") return p.GetX();
     if (n == "y") return p.GetY();

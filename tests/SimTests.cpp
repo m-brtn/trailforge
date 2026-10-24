@@ -427,8 +427,9 @@ SwitchTrace holdUntilSwitch(Simulation& sim, const DriverIntent& in, double time
 }
 
 void autoReverse() {
-    // Flat ground at 60/120/240 Hz: S brakes to a stop, then engages reverse after the hold time (simulated time,
-    // so the same at any tick rate) and drives backwards; W brakes the backward roll, then engages forward.
+    // Flat ground at 60/120/240 Hz: S pressed while moving brakes to a stop and keeps holding; released and pressed
+    // again at the stop it engages reverse after the hold time (simulated time, so the same at any tick rate) and
+    // drives backwards. W behaves the same way against the backward motion.
     for (double hz : {60.0, 120.0, 240.0}) {
         SimulationSettings s = settingsFor(TrackLayout::Flat);
         s.fixedStep = 1.0 / hz;
@@ -437,28 +438,33 @@ void autoReverse() {
         run(sim, 0.5);
         run(sim, 3.0, pedals(1, 0));
         const float v0 = sim.vehicle().telemetry().forwardSpeed;
-        const SwitchTrace toRev = holdUntilSwitch(sim, pedals(0, 1), 8.0);
+        const SwitchTrace held = holdUntilSwitch(sim, pedals(0, 1), 3.0 + hold + 1.0);
+        const float vHeld = sim.vehicle().telemetry().forwardSpeed;
+        run(sim, 0.1, pedals(0, 0));
+        const SwitchTrace toRev = holdUntilSwitch(sim, pedals(0, 1), 2.0);
         run(sim, 3.0, pedals(0, 1));
         const auto& t = sim.vehicle().telemetry();
         const float vRev = t.forwardSpeed;
         const int gearRev = t.gear;
-        const SwitchTrace toFwd = holdUntilSwitch(sim, pedals(1, 0), 8.0);
+        const SwitchTrace heldRev = holdUntilSwitch(sim, pedals(1, 0), 3.0 + hold + 1.0);
+        run(sim, 0.1, pedals(0, 0));
+        const SwitchTrace toFwd = holdUntilSwitch(sim, pedals(1, 0), 2.0);
         run(sim, 3.0, pedals(1, 0));
         const float vFwd = sim.vehicle().telemetry().forwardSpeed;
-        std::printf("    %3.0f Hz: v0=%.2f m/s, stop %.3f s -> reverse %.3f s (delay %.3f, v %.2f), after 3 s v=%.2f gear=%d; "
-                    "W: stop %.3f s -> drive %.3f s (v %.2f), after 3 s v=%.2f\n",
-                    hz, v0, toRev.stopTime, toRev.switchTime, toRev.switchTime - toRev.stopTime, toRev.speedAtSwitch, vRev,
-                    gearRev, toFwd.stopTime, toFwd.switchTime, toFwd.speedAtSwitch, vFwd);
+        std::printf("    %3.0f Hz: v0=%.2f m/s, S held: stop %.3f s, switch %.3f, v %.3f; S again: reverse after %.3f s, "
+                    "after 3 s v=%.2f gear=%d; W held: switch %.3f; W again: drive after %.3f s, after 3 s v=%.2f\n",
+                    hz, v0, held.stopTime, held.switchTime, vHeld, toRev.switchTime, vRev, gearRev, heldRev.switchTime,
+                    toFwd.switchTime, vFwd);
         CHECK(v0 > 5.0f, "precondition: forward speed %.2f", v0);
+        CHECK(held.stopTime > 0.0 && held.switchTime < 0.0 && std::abs(vHeld) < 0.05f,
+              "%.0f Hz: S held through the stop must keep braking (switch %.3f s, v %.3f)", hz, held.switchTime, vHeld);
         CHECK(toRev.switchTime > 0.0 && !toRev.switchedWhileMoving, "%.0f Hz: reverse engaged while moving or never", hz);
-        CHECK(std::abs(toRev.switchTime - toRev.stopTime - hold) < dt + 1e-6 || toRev.switchTime - toRev.stopTime > hold,
-              "%.0f Hz: reverse delay %.3f s vs hold %.3f s", hz, toRev.switchTime - toRev.stopTime, hold);
-        CHECK(toRev.switchTime - toRev.stopTime < hold + 0.1, "%.0f Hz: reverse delay %.3f s", hz,
-              toRev.switchTime - toRev.stopTime);
+        CHECK(toRev.switchTime >= hold - 1e-6 && toRev.switchTime < hold + dt + 1e-6,
+              "%.0f Hz: reverse delay %.3f s vs hold %.3f s", hz, toRev.switchTime, hold);
         CHECK(vRev < -2.0f && gearRev < 0, "%.0f Hz: not driving backwards: v=%.2f gear=%d", hz, vRev, gearRev);
+        CHECK(heldRev.stopTime > 0.0 && heldRev.switchTime < 0.0, "%.0f Hz: W held through the stop switched", hz);
         CHECK(toFwd.switchTime > 0.0 && !toFwd.switchedWhileMoving, "%.0f Hz: forward engaged while moving or never", hz);
-        CHECK(toFwd.switchTime - toFwd.stopTime < hold + 0.1, "%.0f Hz: forward delay %.3f s", hz,
-              toFwd.switchTime - toFwd.stopTime);
+        CHECK(toFwd.switchTime < hold + dt + 1e-6, "%.0f Hz: forward delay %.3f s", hz, toFwd.switchTime);
         CHECK(vFwd > 2.0f, "%.0f Hz: not driving forward again: v=%.2f", hz, vFwd);
     }
 
@@ -499,7 +505,8 @@ void autoReverse() {
               "classic mapping: S must only brake (dir %d, v %.3f)", int(t.direction), t.forwardSpeed);
     }
 
-    // Slope: climb the 12 degree hill in low range, S stops the vehicle, engages reverse and it backs down.
+    // Slope: climb the 12 degree hill in low range; S held from the climb stops the vehicle and holds it on the slope.
+    // Released and pressed again, S engages reverse and the vehicle backs down.
     {
         Simulation sim(settingsFor(TrackLayout::ProvingGround));
         sim.requestTeleport(4);
@@ -509,17 +516,24 @@ void autoReverse() {
         sim.setIntent(pedals(1, 0));
         for (int i = 0; i < int(12.0 / sim.fixedStep()) && position(sim).GetZ() < -36.0f; ++i) sim.tick();
         const JPH::Vec3 onSlope = position(sim);
-        const SwitchTrace tr = holdUntilSwitch(sim, pedals(0, 1), 6.0);
+        const SwitchTrace held = holdUntilSwitch(sim, pedals(0, 1), 2.0);
+        const float zHeld = position(sim).GetZ();
+        const SwitchTrace held2 = holdUntilSwitch(sim, pedals(0, 1), 6.0);
+        const float creep = position(sim).GetZ() - zHeld;
+        run(sim, 2.0 * sim.fixedStep(), pedals(0, 0));
+        const SwitchTrace tr = holdUntilSwitch(sim, pedals(0, 1), 2.0);
         const float zSwitch = position(sim).GetZ();
         run(sim, 2.0, pedals(0, 1));
         const auto& t = sim.vehicle().telemetry();
         const float pitch = std::asin(sim.currentSnapshot().body.rotation.RotateAxisZ().GetY()) * 57.2958f;
-        std::printf("    slope: on slope z=%.2f y=%.2f pitch %.1f deg, reverse after %.3f s (stop %.3f s), 2 s later "
-                    "dz=%.2f m v=%.2f gear=%d\n",
-                    onSlope.GetZ(), onSlope.GetY(), pitch, tr.switchTime, tr.stopTime, position(sim).GetZ() - zSwitch,
-                    t.forwardSpeed, t.gear);
+        std::printf("    slope: on slope z=%.2f y=%.2f pitch %.1f deg, S held: stop %.3f s, creep over 6 s %.4f m; "
+                    "S again: reverse after %.3f s, 2 s later dz=%.2f m v=%.2f gear=%d\n",
+                    onSlope.GetZ(), onSlope.GetY(), pitch, held.stopTime, creep, tr.switchTime,
+                    position(sim).GetZ() - zSwitch, t.forwardSpeed, t.gear);
         CHECK(onSlope.GetZ() >= -36.0f && onSlope.GetY() > 0.6f, "precondition: not on the slope (z %.2f y %.2f)",
               onSlope.GetZ(), onSlope.GetY());
+        CHECK(held.switchTime < 0.0 && held2.switchTime < 0.0, "slope: S held from the climb engaged reverse");
+        CHECK(std::abs(creep) < 0.05f, "slope: vehicle moved %.3f m while S was held", creep);
         CHECK(tr.switchTime > 0.0 && !tr.switchedWhileMoving, "slope: reverse engaged while moving or never");
         CHECK(t.direction == DriveDirection::Reverse && t.gear < 0, "slope: not in reverse (gear %d)", t.gear);
         CHECK(position(sim).GetZ() - zSwitch < -0.5f, "slope: did not back down (dz %.2f)", position(sim).GetZ() - zSwitch);
@@ -858,6 +872,136 @@ void wheelSpray() {
     CHECK(sand.dust > 0 && sandNoDust.dust == 0, "dust %d, with dust off %d", sand.dust, sandNoDust.dust);
 }
 
+float yawDeg(const Simulation& sim) {
+    const JPH::Vec3 f = sim.currentSnapshot().body.rotation.RotateAxisZ();
+    return std::atan2(f.GetX(), f.GetZ()) * 57.2958f;
+}
+
+// Full brake from 50 km/h with 40 % right steer on the dirt and grass lanes: without ABS the wheels lock and the
+// vehicle barely turns; with ABS the wheels keep turning, the vehicle turns and stops no later on the straight.
+void absPreventsLock() {
+    const struct {
+        int feature;
+        const char* name;
+    } lanes[] = {{1, "dirt"}, {3, "grass"}};
+    for (const auto& lane : lanes) {
+        for (double hz : {60.0, 120.0, 240.0}) {
+            float dist[2][2] = {}, yaw[2] = {};
+            double lock[2] = {};
+            for (int steer = 0; steer < 2; ++steer) {
+                for (int abs = 0; abs < 2; ++abs) {
+                    SimulationSettings s = settingsFor(TrackLayout::SurfaceLanes);
+                    s.fixedStep = 1.0 / hz;
+                    Simulation sim(s);
+                    sim.requestTeleport(lane.feature);
+                    run(sim, 1.0);
+                    sim.requestAidControls({abs != 0, TractionMode::Off, 0});
+                    sim.setIntent({.throttle = 0.6f});
+                    for (int i = 0; i < int(12.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed < 50.0f / 3.6f; ++i)
+                        sim.tick();
+                    const JPH::Vec3 p0 = position(sim);
+                    const float yaw0 = yawDeg(sim);
+                    double t = 0.0, locked = 0.0;
+                    sim.setIntent({.brake = 1.0f, .steer = steer ? 0.4f : 0.0f});
+                    while (sim.vehicle().telemetry().speed > 0.05f && t < 10.0) {
+                        sim.tick();
+                        t += sim.fixedStep();
+                        for (const WheelTelemetry& w : sim.vehicle().telemetry().wheels)
+                            if (w.contact && std::abs(w.groundSpeed) > 2.0f &&
+                                std::abs(w.rollingSpeed) < 0.2f * std::abs(w.groundSpeed))
+                                locked += sim.fixedStep();
+                    }
+                    dist[steer][abs] = (position(sim) - p0).Length();
+                    if (steer) {
+                        yaw[abs] = yawDeg(sim) - yaw0;
+                        lock[abs] = locked;
+                    }
+                }
+            }
+            std::printf("    %-5s %3.0f Hz: straight %.2f m (ABS %.2f m); steered: yaw %.1f deg, lock %.2f wheel-s "
+                        "(ABS: yaw %.1f deg, lock %.2f wheel-s)\n",
+                        lane.name, hz, dist[0][0], dist[0][1], yaw[0], lock[0], yaw[1], lock[1]);
+            CHECK(lock[0] > 3.0, "%s %.0f Hz: wheels did not lock without ABS (%.2f wheel-s)", lane.name, hz, lock[0]);
+            // At 60 Hz the controller runs at 60 Hz too and overshoots: brief locks, and the stop is no shorter.
+            CHECK(lock[1] < (hz < 100.0 ? 1.5 : 0.5), "%s %.0f Hz: wheels locked with ABS (%.2f wheel-s)", lane.name, hz,
+                  lock[1]);
+            CHECK(std::abs(yaw[0]) < 25.0f, "%s %.0f Hz: locked wheels still steer (%.1f deg)", lane.name, hz, yaw[0]);
+            CHECK(yaw[1] < -35.0f, "%s %.0f Hz: no steering with ABS (%.1f deg)", lane.name, hz, yaw[1]);
+            CHECK(dist[0][1] <= dist[0][0] * (hz < 100.0 ? 1.1f : 1.0f), "%s %.0f Hz: ABS stop %.2f m longer than locked %.2f m", lane.name,
+                  hz, dist[0][1], dist[0][0]);
+        }
+    }
+}
+
+// Hill start on the 15 degree concrete slope with the front-left wheel over a bottomless pit: open differentials send
+// the torque to the hanging wheel and the vehicle does not climb; with all diffs locked it drives out.
+void diffLocksClimb() {
+    for (double hz : {60.0, 120.0, 240.0}) {
+        float climbed[2] = {}, airSpin[2] = {};
+        for (int locked = 0; locked < 2; ++locked) {
+            SimulationSettings s = settingsFor(TrackLayout::SlopeWithWheelPit);
+            s.fixedStep = 1.0 / hz;
+            s.vehicle.tuning.frontDiff = s.vehicle.tuning.rearDiff = s.vehicle.tuning.centerDiff = DiffMode::Open;
+            Simulation sim(s);
+            run(sim, 2.0, {.brake = 1.0f});
+            sim.requestToggleLowRange();
+            sim.requestAidControls({false, TractionMode::Off, locked ? AidControls::kDiffLockStages - 1 : 0});
+            run(sim, 0.1, {.brake = 1.0f});
+            const float z0 = position(sim).GetZ();
+            sim.setIntent({.throttle = 1.0f});
+            for (int i = 0; i < int(8.0 / sim.fixedStep()); ++i) {
+                sim.tick();
+                const WheelTelemetry& fl = sim.vehicle().telemetry().wheels[0];
+                if (!fl.contact) airSpin[locked] = std::max(airSpin[locked], std::abs(fl.rollingSpeed));
+            }
+            climbed[locked] = position(sim).GetZ() - z0;
+            CHECK(sim.vehicle().telemetry().controls.diffLocks == (locked ? AidControls::kDiffLockStages - 1 : 0),
+                  "diff lock stage not applied");
+        }
+        std::printf("    %3.0f Hz: open: %.2f m, hanging wheel up to %.1f m/s; all locked: %.2f m\n", hz, climbed[0],
+                    airSpin[0], climbed[1]);
+        CHECK(climbed[0] < 0.5f && airSpin[0] > 5.0f, "%.0f Hz: open diffs climbed %.2f m (air spin %.1f m/s)", hz,
+              climbed[0], airSpin[0]);
+        CHECK(climbed[1] > 4.0f, "%.0f Hz: locked diffs climbed only %.2f m", hz, climbed[1]);
+    }
+}
+
+// Full-throttle launch on the flat mud lane: traction control cuts the wheelspin.
+void tractionControlMud() {
+    for (double hz : {60.0, 120.0, 240.0}) {
+        float maxSlip[3] = {};
+        double spin[3] = {}, active[3] = {};
+        float v3[3] = {};
+        for (int m = 0; m < 3; ++m) {
+            SimulationSettings s = settingsFor(TrackLayout::SurfaceLanes);
+            s.fixedStep = 1.0 / hz;
+            Simulation sim(s);
+            sim.requestTeleport(2);
+            run(sim, 1.0);
+            sim.requestAidControls({false, TractionMode(m), 0});
+            sim.setIntent({.throttle = 1.0f});
+            for (int i = 0; i < int(3.0 / sim.fixedStep()); ++i) {
+                sim.tick();
+                float slip = 0.0f;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                maxSlip[m] = std::max(maxSlip[m], slip);
+                if (slip > 1.0f) spin[m] += sim.fixedStep();
+                if (sim.vehicle().telemetry().tcActive) active[m] += sim.fixedStep();
+            }
+            v3[m] = sim.vehicle().telemetry().speed;
+        }
+        std::printf("    %3.0f Hz: off: max slip %.2f m/s, spin %.2f s, v(3 s) %.2f; on: %.2f m/s, %.2f s, v %.2f, "
+                    "active %.2f s; off-road: %.2f m/s, %.2f s, v %.2f\n",
+                    hz, maxSlip[0], spin[0], v3[0], maxSlip[1], spin[1], v3[1], active[1], maxSlip[2], spin[2], v3[2]);
+        CHECK(active[0] == 0.0, "TC active while off");
+        CHECK(active[1] > 0.5, "%.0f Hz: TC never engaged", hz);
+        CHECK(maxSlip[1] < 0.7f * maxSlip[0] && spin[1] < spin[0], "%.0f Hz: TC on did not cut wheelspin", hz);
+        CHECK(maxSlip[2] < 0.8f * maxSlip[0], "%.0f Hz: TC off-road did not cut wheelspin", hz);
+        CHECK(v3[1] > 0.8f * v3[0], "%.0f Hz: TC on bogged down (v %.2f vs %.2f)", hz, v3[1], v3[0]);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -876,6 +1020,9 @@ int main(int argc, char** argv) {
         {"skid_mark_profile", skidMarkProfile},
         {"tire_marks_boundary", tireMarksBoundary},
         {"wheel_spray", wheelSpray},
+        {"abs_prevents_lock", absPreventsLock},
+        {"diff_locks_climb", diffLocksClimb},
+        {"traction_control_mud", tractionControlMud},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

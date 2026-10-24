@@ -20,6 +20,9 @@ enum class Action {
     ToggleGraphicsUI, // F2
     ToggleAudioUI,    // F3
     ToggleHeadlights, // H
+    ToggleAbs,        // B / gamepad D-pad up
+    CycleTraction,    // T / gamepad D-pad right
+    CycleDiffLock,    // X / gamepad D-pad down
     TogglePause,     // Escape / gamepad Start
     StepOnce,        // N (while paused: a single physics step)
     Quit,

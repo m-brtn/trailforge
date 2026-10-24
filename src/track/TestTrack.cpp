@@ -314,6 +314,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     case TrackLayout::FlatWithWheelPit: buildFlat(true); break;
     case TrackLayout::SurfaceLanes: buildSurfaceLanes(); break;
     case TrackLayout::SurfaceRamps: buildSurfaceRamps(); break;
+    case TrackLayout::SlopeWithWheelPit: buildSlopeWithWheelPit(); break;
     }
 
     JPH::TriangleList tris;
@@ -462,6 +463,23 @@ void TestTrack::buildFlat(bool withPit) {
         rect(px0, px1, -h, pz0);
         rect(px0, px1, pz1, h);
     }
+    m_features.push_back({"Start", Vec3(0, 0, 0), 0.0f});
+}
+
+void TestTrack::buildSlopeWithWheelPit() {
+    // Concrete plane rising along +Z at 15 degrees, with a bottomless 1.2 x 3.3 m hole under the front-left wheel of
+    // a vehicle at the origin facing uphill: the wheel hangs for the first ~2 m of the climb.
+    auto& g = m_geometry;
+    const float h = 60.0f, t = std::tan(deg(15.0f));
+    auto rect = [&](float x0, float x1, float z0, float z1) {
+        g.addQuad(Vec3(x0, z0 * t, z0), Vec3(x0, z1 * t, z1), Vec3(x1, z1 * t, z1), Vec3(x1, z0 * t, z0),
+                  SurfaceId::Concrete);
+    };
+    const float px0 = 0.45f, px1 = 1.65f, pz0 = 0.75f, pz1 = 4.05f;
+    rect(-h, px0, -h, h);
+    rect(px1, h, -h, h);
+    rect(px0, px1, -h, pz0);
+    rect(px0, px1, pz1, h);
     m_features.push_back({"Start", Vec3(0, 0, 0), 0.0f});
 }
 

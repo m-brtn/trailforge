@@ -25,14 +25,16 @@ struct DriverIntent {
     bool analog = false;    // analog source: steering is not smoothed with the keyboard rate
     // Pedal mapping. false: throttle drives in the selected direction and brake always brakes (tests, tools).
     // true (live keyboard/gamepad): throttle is the "forward" pedal (W/RT) and brake the "backward" pedal (S/LT);
-    // the pedal against the selected direction brakes, and holding it near a standstill switches the direction.
+    // the pedal against the selected direction brakes; released and pressed again at a standstill it switches the
+    // direction.
     bool autoReverse = false;
 };
 
-// Automatic forward/reverse switching for DriverIntent::autoReverse, evaluated on physics ticks.
+// Automatic forward/reverse switching for DriverIntent::autoReverse, evaluated on physics ticks. A pedal that was
+// already held while moving only brakes, also after the stop; the switch needs a fresh press at a standstill.
 struct AutoReverseSettings {
     float stopSpeed = 0.5f;      // m/s, |forward speed| below which a held opposite pedal counts as "stopped"
-    float holdTime = 0.25f;      // s of simulated time the opposite pedal must be held while stopped
+    float holdTime = 0.25f;      // s of simulated time a fresh press must be held while stopped
     float pedalThreshold = 0.5f; // opposite pedal travel that counts as held (gamepad triggers are analog)
 };
 
@@ -93,6 +95,14 @@ public:
     void requestRebuild(const VehicleConfig& config) { m_pendingRebuild = config; }
     void requestTuning(const VehicleTuning& tuning) { m_pendingTuning = tuning; }
     void requestTeleport(int featureIndex) { m_pendingTeleport = featureIndex; }
+    // Driver aid switches: B (ABS on/off), T (TC Off -> On -> Off-road), X (lockers none -> rear -> rear + center ->
+    // all), or a direct setting (UI, scenarios). ABS and TC survive a reset/rebuild; the lockers reset like low range.
+    void requestToggleAbs() { m_pendingAbsToggle = true; }
+    void requestCycleTraction() { m_pendingTractionCycle = true; }
+    void requestCycleDiffLock() { m_pendingDiffCycle = true; }
+    void requestAidControls(const AidControls& c) { m_pendingAids = c; }
+    // Requested switches if a request is pending, otherwise the vehicle's.
+    AidControls aidControls() const { return m_pendingAids.value_or(m_vehicle->aidControls()); }
 
     // One fixed physics step.
     void tick();
@@ -152,6 +162,9 @@ private:
     DriverIntent m_intent;
     DriverIntent m_resolved;
     float m_autoReverseHold = 0.0f; // s the opposite pedal has been held while stopped
+    // The opposite pedal has been held since the vehicle was moving: it keeps braking (holds on a slope) until it
+    // is released; only a fresh press at a standstill switches the direction.
+    bool m_brakeLatch = false;
     DriverCommand m_smoothed;
     bool m_pendingToggleDirection = false;
     bool m_pendingToggleLowRange = false;
@@ -159,6 +172,11 @@ private:
     std::optional<VehicleConfig> m_pendingRebuild;
     std::optional<VehicleTuning> m_pendingTuning;
     std::optional<int> m_pendingTeleport;
+    bool m_pendingAbsToggle = false;
+    bool m_pendingTractionCycle = false;
+    bool m_pendingDiffCycle = false;
+    std::optional<AidControls> m_pendingAids;
+    std::optional<AidControls> m_aidSwitches; // ABS/TC state carried over to a respawned vehicle
     const char* m_lastMessage = "";
     double m_lastMessageTime = -1.0e9;
     bool m_physicsError = false;

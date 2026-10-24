@@ -56,6 +56,9 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDLK_C: press(Action::ToggleCamera); break;
         case SDLK_N: press(Action::StepOnce); break;
         case SDLK_H: press(Action::ToggleHeadlights); break;
+        case SDLK_B: press(Action::ToggleAbs); break;
+        case SDLK_T: press(Action::CycleTraction); break;
+        case SDLK_X: press(Action::CycleDiffLock); break;
         default: break;
         }
         break;
@@ -88,6 +91,9 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDL_GAMEPAD_BUTTON_BACK: press(Action::Reset); break;
         case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: press(Action::ToggleCamera); break;
         case SDL_GAMEPAD_BUTTON_START: press(Action::TogglePause); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: press(Action::ToggleAbs); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: press(Action::CycleTraction); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: press(Action::CycleDiffLock); break;
         default: break;
         }
         break;

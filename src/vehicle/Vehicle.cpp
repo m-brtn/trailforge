@@ -139,19 +139,25 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         [this](uint wheel, float& ioLong, float& ioLat, const Body& body, const SubShapeID& subShape) {
             const SurfaceId id = m_surfaces.lookup(body.GetShape()->GetMaterial(subShape));
             const SurfaceProperties& s = m_surfaces.get(id);
+            float slip = 0.0f;
             if (wheel < kWheelCount) {
-                ioLong = staticGripFriction(wheel, ioLong);
+                slip = curveSlip(wheel);
+                ioLong = staticGripFriction(wheel, m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip);
                 m_contactSurface[wheel] = id;
             }
             ioLong *= s.longitudinalFriction;
             ioLat *= s.lateralFriction;
+            if (wheel < kWheelCount) combinedSlip(wheel, slip, ioLong, ioLat);
         });
 
     world.system().AddConstraint(m_constraint);
     world.system().AddStepListener(m_constraint);
 
+    m_controls.abs = c.tuning.aids.absEnabled;
+    m_controls.traction = c.tuning.aids.traction;
     applyTuning(c.tuning);
     m_telemetry.direction = m_direction;
+    m_telemetry.controls = m_controls;
 }
 
 Vehicle::~Vehicle() {
@@ -185,12 +191,43 @@ void Vehicle::buildTireCurves(const VehicleTuning& t) {
 // under drive torque (a 1st-gear wheel gains ~3 m/s of slip in one 1/120 s step), slides, grips again: a period-2
 // cycle that reads as wheelspin on every launch, from rest up to ~8 m/s. A tire that has not broken away (slip
 // below the peak) may therefore pass up to the peak friction; sliding wheels keep the curve value.
-float Vehicle::staticGripFriction(JPH::uint wheel, float curveFriction) const {
+float Vehicle::staticGripFriction(JPH::uint wheel, float curveFriction, float slip) const {
     const VehicleTuning& t = m_config.tuning;
     if (!t.tireStaticGrip) return curveFriction;
-    const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
-    if (w->mLongitudinalSlip >= t.tirePeakSlipRatio) return curveFriction;
+    if (slip >= t.tirePeakSlipRatio) return curveFriction;
     return std::max(curveFriction, t.tirePeakLongFriction);
+}
+
+// Slip ratio for the tire curve. Jolt divides the slip speed by max(|v|, 0.001 m/s), so near a standstill any wheel
+// rotation reads as a full slide (sliding mu) and a hill start can never stay at the peak. Here the denominator has
+// a floor of tireSlipSpeedFloor (a common low-speed treatment in tire models); above it this equals Jolt's value.
+float Vehicle::curveSlip(JPH::uint wheel) const {
+    const VehicleTuning& t = m_config.tuning;
+    const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
+    if (t.tireSlipSpeedFloor <= 0.0f) return w->mLongitudinalSlip;
+    JPH::Vec3 v = m_body->GetPointVelocity(w->GetContactPosition()) - w->GetContactPointVelocity();
+    const float vLong = v.Dot(w->GetContactLongitudinal());
+    const float rolling = w->GetAngularVelocity() * w->GetSettings()->mRadius;
+    return std::abs(rolling - vLong) / std::max(std::abs(vLong), t.tireSlipSpeedFloor);
+}
+
+// Jolt limits the longitudinal and lateral tire impulses independently, so a locked wheel keeps its full side grip
+// and steers as well as a rolling one. Beyond the peak (normalized slip > 1) the two limits are scaled by the share
+// of each normalized slip, so the friction force points along the combined slip like a sliding contact patch.
+// Blended in above 1-3 m/s: at a crawl Jolt's slip angle and slip ratio are numerically undefined.
+void Vehicle::combinedSlip(JPH::uint wheel, float slip, float& ioLong, float& ioLat) const {
+    const VehicleTuning& t = m_config.tuning;
+    if (!t.tireCombinedSlip) return;
+    const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
+    const float sx = slip / std::max(t.tirePeakSlipRatio, 1e-3f);
+    const float sy = w->mLateralSlip * kRadToDeg / std::max(t.tirePeakSlipAngleDeg, 0.1f);
+    const float s = std::sqrt(sx * sx + sy * sy);
+    if (s <= 1.0f) return;
+    JPH::Vec3 v = m_body->GetPointVelocity(w->GetContactPosition()) - w->GetContactPointVelocity();
+    v -= w->GetContactNormal() * v.Dot(w->GetContactNormal());
+    const float blend = std::clamp((v.Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
+    ioLong *= 1.0f + blend * (sx / s - 1.0f);
+    ioLat *= 1.0f + blend * (sy / s - 1.0f);
 }
 
 void Vehicle::applyTuning(const VehicleTuning& t) {
@@ -216,15 +253,40 @@ void Vehicle::applyTuning(const VehicleTuning& t) {
     applyDifferentials();
 }
 
+DiffMode Vehicle::effectiveDiff(int which) const {
+    const VehicleTuning& t = m_config.tuning;
+    // Locker stages: 1 rear, 2 rear + center, 3 all.
+    const int stageNeeded[3] = {3, 1, 2};
+    if (m_controls.diffLocks >= stageNeeded[which]) return DiffMode::Locked;
+    return which == 0 ? t.frontDiff : which == 1 ? t.rearDiff : t.centerDiff;
+}
+
+// Jolt's differentials are torque splitters: open = fixed 50/50, limited slip = the split moves toward the slower
+// side as the speed ratio approaches mLimitedSlipRatio, where all torque goes to the slower side. "Locked" uses
+// the same model with lockedSlipRatio (1.05): the faster side loses its drive torque at a 5 % speed difference. The
+// two sides are not coupled kinematically, so a locked axle neither scrubs in turns nor drags a lifted wheel along.
 void Vehicle::applyDifferentials() {
     const VehicleTuning& t = m_config.tuning;
-    auto ratio = [&](DiffMode m) { return m == DiffMode::LimitedSlip ? t.limitedSlipRatio : FLT_MAX; };
+    const float locked = std::max(t.lockedSlipRatio, 1.001f);
+    auto ratio = [&](DiffMode m, float lsd) {
+        return m == DiffMode::LimitedSlip ? std::max(lsd, 1.001f) : m == DiffMode::Locked ? locked : FLT_MAX;
+    };
     auto& diffs = m_controller->GetDifferentials();
     const float finalDrive = m_config.differentialRatio * (m_lowRange ? m_config.lowRangeRatio : 1.0f);
-    diffs[0].mLimitedSlipRatio = ratio(t.frontDiff);
-    diffs[1].mLimitedSlipRatio = ratio(t.rearDiff);
+    diffs[0].mLimitedSlipRatio = ratio(effectiveDiff(0), t.limitedSlipRatio);
+    diffs[1].mLimitedSlipRatio = ratio(effectiveDiff(1), t.limitedSlipRatio);
     for (auto& d : diffs) d.mDifferentialRatio = finalDrive;
-    m_controller->SetDifferentialLimitedSlipRatio(ratio(t.centerDiff));
+    m_controller->SetDifferentialLimitedSlipRatio(ratio(effectiveDiff(2), t.centerLimitedSlipRatio));
+    m_telemetry.frontDiff = effectiveDiff(0);
+    m_telemetry.rearDiff = effectiveDiff(1);
+    m_telemetry.centerDiff = effectiveDiff(2);
+}
+
+void Vehicle::setAidControls(const AidControls& controls) {
+    m_controls = controls;
+    m_controls.diffLocks = std::clamp(m_controls.diffLocks, 0, AidControls::kDiffLockStages - 1);
+    applyDifferentials();
+    m_telemetry.controls = m_controls;
 }
 
 bool Vehicle::toggleDirection() {
@@ -242,7 +304,7 @@ bool Vehicle::toggleLowRange() {
     return true;
 }
 
-void Vehicle::prePhysics(const DriverCommand& cmd) {
+void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     m_command = cmd;
     // Jolt's automatic keeps the clutch engaged in any gear, and engine rpm never drops below
     // the minimum. At idle the engine drags the wheels through the clutch with torque clutchStrength*dw
@@ -258,10 +320,27 @@ void Vehicle::prePhysics(const DriverCommand& cmd) {
     } else {
         tr.mMode = JPH::ETransmissionMode::Auto;
     }
-    tr.mClutchStrength = clutchStrength(cmd.throttle);
+    // Driver aids, from the wheel state of the previous tick. Jolt brakes each wheel with
+    // brake input x WheelSettingsWV::mMaxBrakeTorque, so the per-wheel torque goes into mMaxBrakeTorque (read by
+    // Jolt every step) with the brake input at 1 whenever any wheel brakes.
+    AidInput in;
+    for (int i = 0; i < kWheelCount; ++i) {
+        const WheelTelemetry& w = m_telemetry.wheels[i];
+        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed};
+    }
+    in.throttle = cmd.throttle;
+    in.brake = cmd.brake;
+    in.maxBrakeTorque = m_config.tuning.maxBrakeTorque;
+    in.dt = dt;
+    m_aidOut = m_aids.update(m_config.tuning.aids, m_controls, in);
+    float maxTorque = 0.0f;
+    for (int i = 0; i < kWheelCount; ++i) maxTorque = std::max(maxTorque, m_aidOut.brakeTorque[i]);
+    for (int i = 0; i < kWheelCount; ++i) m_wheelSettings[i]->mMaxBrakeTorque = m_aidOut.brakeTorque[i];
+
+    tr.mClutchStrength = clutchStrength(m_aidOut.throttle);
     // Jolt automatic: the sign of the forward input selects forward or reverse.
-    const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * cmd.throttle;
-    m_controller->SetDriverInput(forward, cmd.steer, cmd.brake, cmd.handBrake);
+    const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * m_aidOut.throttle;
+    m_controller->SetDriverInput(forward, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);
 }
 
 // Jolt clamps the engine at its minimum rpm, so while the clutch slips at launch the clamp, not the engine, would
@@ -298,6 +377,11 @@ void Vehicle::postPhysics(float dt) {
     t.direction = m_direction;
     t.lowRange = m_lowRange;
     t.command = m_command;
+    t.controls = m_controls;
+    t.absActive = m_aidOut.absActive;
+    t.tcActive = m_aidOut.tcActive;
+    t.throttleFactor = m_aidOut.throttleFactor;
+    t.engineThrottle = m_aidOut.throttle;
 
     const RMat44 bodyXf = bi.GetWorldTransform(m_bodyId);
     float steerSum = 0.0f;
@@ -322,6 +406,21 @@ void Vehicle::postPhysics(float dt) {
         wt.combinedLongFriction = wt.contact ? w->mCombinedLongitudinalFriction : 0.0f;
         wt.suspensionTop = Vec3(bodyXf * s->mPosition);
         wt.suspensionDir = bodyXf.Multiply3x3(s->mSuspensionDirection);
+        wt.rollingSpeed = wt.angularVelocity * s->mRadius;
+        wt.brakeTorque = m_aidOut.brakeTorque[i];
+        wt.absPressure = m_aidOut.absPressure[i];
+        wt.tcBrake = m_aidOut.tcBrake[i];
+        {
+            // Heading of the wheel: body forward turned by the steer angle about the body up axis.
+            const Vec3 heading = rot * (Quat::sRotation(Vec3::sAxisY(), w->GetSteerAngle()) * Vec3::sAxisZ());
+            const RVec3 hub = RVec3(wt.suspensionTop + wt.suspensionDir * wt.suspensionLength);
+            if (w->HasContact()) {
+                const Vec3 rel = Vec3(bi.GetPointVelocity(m_bodyId, w->GetContactPosition())) - w->GetContactPointVelocity();
+                wt.groundSpeed = rel.Dot(w->GetContactLongitudinal());
+            } else {
+                wt.groundSpeed = Vec3(bi.GetPointVelocity(m_bodyId, hub)).Dot(heading);
+            }
+        }
         if (wt.contact) {
             wt.surface = m_contactSurface[i];
             wt.contactPosition = Vec3(w->GetContactPosition());

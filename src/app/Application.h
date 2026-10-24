@@ -147,6 +147,9 @@ private:
     float m_camClearance = 0.0f;     // m: camera height above the surface below it
     float m_minCamClearance = 1e9f;  // minimum since the last reset_stats (follow camera only)
     int m_maxAirWheels = 0;          // maximum number of wheels without contact since the last reset_stats
+    int m_maxLockedWheels = 0;       // maximum number of locked wheels (in contact, > 2 m/s) since the last reset_stats
+    double m_lockedWheelTime = 0.0; // wheel-seconds of locked wheels since the last reset_stats (sampled per frame)
+    bool m_absSeen = false, m_tcSeen = false; // ABS / TC acted in a sampled frame since the last reset_stats
 };
 
 } // namespace tf

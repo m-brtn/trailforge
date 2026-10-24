@@ -38,6 +38,7 @@ enum class TrackLayout {
     FlatWithWheelPit, // flat pad with a pit under the front left wheel (wheel lift test)
     SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass, rock, low grip
     SurfaceRamps,     // 15 and 20 degree ramps per surface, 10 m lanes, 22 m long (climb measurements)
+    SlopeWithWheelPit, // 15 degree concrete slope, hole under the front left wheel (differential tests)
 };
 
 struct TrackFeature {
@@ -91,6 +92,7 @@ private:
     void buildFlat(bool withPit);
     void buildSurfaceLanes();
     void buildSurfaceRamps();
+    void buildSlopeWithWheelPit();
 
     PhysicsWorld& m_world;
     TrackLayout m_layout;

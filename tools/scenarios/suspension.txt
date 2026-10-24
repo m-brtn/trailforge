@@ -8,7 +8,7 @@ wait 2.0
 tap L
 wait 0.3
 down W
-until z > -1.9 20
+until z > -1.5 20
 up W
 down S
 wait 2.5

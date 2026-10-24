@@ -5,8 +5,9 @@
 
 # ---------------------------------------------------------------- start
 wait 1.5
-# Sections that brake to a stop and hold use the classic mapping (S only brakes, Q selects reverse, W drives in the
-# selected direction); the reverse sections switch on the default auto reverse (S at a standstill engages reverse).
+# Most sections use the classic mapping (S only brakes, Q selects reverse, W drives in the selected direction); the
+# reverse and climb sections switch on the default auto reverse: S pressed while moving brakes and holds the vehicle
+# at the stop, released and pressed again at a standstill it engages reverse.
 set auto_reverse 0
 reset_stats
 log start
@@ -59,7 +60,13 @@ up W
 down S
 wait 0.4
 expect dir == 1                 # moving: S only brakes
-until dir == -1 6               # stopped with S still held: reverse engages
+until speed_kmh < 0.5 6
+wait 0.6
+expect dir == 1                 # S held through the stop keeps braking
+expect speed_kmh < 0.5
+up S
+down S                          # pressed again at a standstill: reverse engages
+until dir == -1 2
 expect msg:Reverse == 1
 expect hint == 1
 wait 1.0
@@ -71,7 +78,12 @@ up S
 down W
 wait 0.3
 expect dir == -1                # rolling backwards: W brakes
-until dir == 1 6                # stopped with W held: drive engages
+until speed_kmh < 0.5 6
+wait 0.6
+expect dir == -1                # W held through the stop keeps braking
+up W
+down W                          # pressed again: drive engages
+until dir == 1 2
 expect msg:Drive == 1
 wait 1.0
 expect fwd_kmh > 2
@@ -104,8 +116,11 @@ wait 1.0
 expect fwd_kmh < -4
 log reverse_q
 up S
-down W                          # W brakes the backward roll, then engages drive
-until dir == 1 6
+down W                          # W brakes the backward roll; released and pressed again it engages drive
+until speed_kmh < 0.5 6
+up W
+down W
+until dir == 1 2
 up W
 set auto_reverse 0
 down S
@@ -123,6 +138,83 @@ log handbrake
 capture /tmp/trailforge_04_handbrake.png
 until speed_kmh < 0.5 8
 up Space
+
+# ---------------------------------------------------------------- B ABS, T traction control, X diff locks
+expect abs == 0                 # defaults: aids off, front open, rear and center LSD
+expect tc == 0
+expect diff_locks == 0
+expect front_diff == 0
+expect rear_diff == 1
+expect center_diff == 1
+tap B
+wait 0.1
+expect abs == 1
+expect msg:ABS == 1
+tap T
+wait 0.1
+expect tc == 1
+expect msg:Traction == 1
+tap T
+wait 0.1
+expect tc == 2
+tap X
+wait 0.1
+expect diff_locks == 1
+expect rear_diff == 2
+expect center_diff == 1
+tap X
+wait 0.1
+expect diff_locks == 2
+expect center_diff == 2
+tap X
+wait 0.1
+expect diff_locks == 3
+expect front_diff == 2
+capture /tmp/trailforge_04b_aids_hud.png
+tap X
+wait 0.1
+expect diff_locks == 0
+expect front_diff == 0
+expect rear_diff == 1
+tap T
+wait 0.1
+expect tc == 0
+tap B
+wait 0.1
+expect abs == 0
+# ABS off: a full stop from ~45 km/h on the packed dirt lane locks the wheels; ABS on: they keep turning
+tap R
+wait 1.0
+down W
+wait 2.5
+up W
+reset_stats
+down S
+until speed_kmh < 0.5 6
+up S
+log brake_no_abs
+expect max_locked >= 2
+expect lock_time > 3            # wheel-seconds
+expect abs_seen == 0
+tap R
+wait 1.0
+tap B
+wait 0.1
+down W
+wait 2.5
+up W
+reset_stats
+down S
+wait 0.4
+capture /tmp/trailforge_04c_abs_stop.png
+until speed_kmh < 0.5 6
+up S
+log brake_abs
+expect abs_seen == 1
+expect lock_time < 0.5
+tap B
+wait 0.1
+expect abs == 0
 
 # ---------------------------------------------------------------- L low range: refused while moving, works when stopped
 down W
@@ -148,7 +240,10 @@ expect low == 1
 log low_reverse
 up S
 down W
-until dir == 1 6
+until speed_kmh < 0.5 6
+up W
+down W
+until dir == 1 2
 up W
 set auto_reverse 0
 down S
@@ -182,7 +277,10 @@ expect fwd_kmh < -3
 log reverse_after_reset
 up S
 down W
-until dir == 1 6
+until speed_kmh < 0.5 6
+up W
+down W
+until dir == 1 2
 up W
 set auto_reverse 0
 down S
@@ -282,7 +380,8 @@ expect low == 1
 reset_stats
 # Each climb starts from a standstill at the foot (low range, W); the brake goes on near the crest and the vehicle
 # stops on the descent (dirt mu 0.70: braking starts 0.3-0.8 m earlier than with the old 1.02).
-# The brake-hold checks use the classic mapping: with auto reverse a held S would back down the slope.
+# The brake-hold checks run with auto reverse: S pressed while moving keeps holding the vehicle on the slope.
+set auto_reverse 1
 down W
 until z > -38 8
 capture /tmp/trailforge_09_hill12.png
@@ -336,7 +435,9 @@ wait 1.0
 expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
 expect d_z > -0.05
 log hill28_top
-set auto_reverse 1              # stopped on the 28 degree hill with S held: reverse engages, S backs up the slope
+expect dir == 1                 # held for 1 s on the slope, no reverse
+up S                            # pressed again: reverse engages, S backs up the slope
+down S
 until dir == -1 3
 expect tilt > 10                # on the descent; with dirt mu 0.70 the stop varies from its top to its foot
 wait 1.0
@@ -344,9 +445,11 @@ expect fwd_kmh < -1
 log hill28_reverse
 up S
 down W
-until dir == 1 6
+until speed_kmh < 0.5 6
 up W
-set auto_reverse 0
+down W
+until dir == 1 3
+up W
 down W
 until z > 14 8
 up W
@@ -372,6 +475,7 @@ expect y > 1.6                  # above the foot: the 35 degree climb is done
 expect tilt < 45
 expect min_cam_clearance > 0.1  # the camera did not go underground on the slopes
 log hills_cam min_cam_clearance checked
+set auto_reverse 0
 
 # ---------------------------------------------------------------- 18 degree side slope
 teleport 5
@@ -463,9 +567,14 @@ expect tilt < 45
 teleport 3
 wait 1.0
 expect low == 0
+set tc 1                        # TC on: full throttle onto the low-grip patch spins the wheels, TC intervenes
+reset_stats
 down W
 until lowgrip_wheels >= 4 10
 log lowgrip_enter
+wait 0.5
+expect tc_seen == 1
+set tc 0
 capture /tmp/trailforge_18_low_grip.png
 up W
 set auto_reverse 1
@@ -474,7 +583,11 @@ down S
 wait 1.0
 expect d_speed_kmh > -18        # mu x0.35: brakes noticeably weaker than on concrete
 log lowgrip_brake
-until dir == -1 10              # S held through the stop engages reverse on low grip too
+until speed_kmh < 0.5 10
+expect dir == 1
+up S
+down S                          # pressed again at the stop: reverse on low grip too
+until dir == -1 3
 wait 0.8
 expect fwd_kmh < -0.5
 log lowgrip_reverse_start

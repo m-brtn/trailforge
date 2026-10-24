@@ -25,6 +25,7 @@ add_library(trailforge_sim STATIC
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
     src/vehicle/Vehicle.cpp
+    src/vehicle/DrivingAids.cpp
     src/sim/Simulation.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
@@ -111,7 +112,10 @@ if(TRAILFORGE_BUILD_TESTS)
             tire_marks_surfaces
             auto_reverse
             surface_launch_grip
-            skid_mark_profile tire_marks_boundary wheel_spray)
+            skid_mark_profile tire_marks_boundary wheel_spray
+            abs_prevents_lock
+            diff_locks_climb
+            traction_control_mud)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

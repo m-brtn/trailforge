@@ -107,6 +107,7 @@ private:
     std::map<std::string, UiItemRect> m_items;
 
     void drawDriveHud(const Simulation& sim);
+    void drawAidIndicators(const Simulation& sim);
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);
     void drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);
@@ -117,6 +118,7 @@ private:
     VehicleConfig m_config; // editable copy; applied with the "Rebuild vehicle" button
     bool m_vsync = true;
     int m_rateIndex = 1;
+    double m_absLastActive = -1.0e9, m_tcLastActive = -1.0e9; // simulated time the aid last acted (indicator blink)
 };
 
 } // namespace tf
