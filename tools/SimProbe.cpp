@@ -4,12 +4,15 @@
 //   trailforge_probe bench            - step cost and stability at 60/120/240 Hz
 //   trailforge_probe susp [feature throttle low secs steer] - per-wheel suspension travel over a track feature
 
+#include "audio/AudioMixer.h"
+#include "audio/VehicleAudioFeed.h"
 #include "sim/Simulation.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -277,6 +280,231 @@ void bench() {
     }
 }
 
+// Tire slip and the sound/mark response for standard maneuvers: straight ones on the 12 m surface lanes (concrete,
+// dirt, mud, grass), turns on the flat 500 m concrete pad (turning circles would leave a lane).
+// The mixer runs with an empty sound bank: no samples are mixed, but the smoothed layer gains are the real ones.
+struct SkidRig {
+    explicit SkidRig(int lane) : lane(lane) {}
+    int lane; // -1 = flat concrete pad
+    Simulation sim{[this] {
+        SimulationSettings s;
+        s.layout = lane < 0 ? TrackLayout::Flat : TrackLayout::SurfaceLanes;
+        return s;
+    }()};
+    SoundBank bank;
+    AudioMixer mixer{bank};
+    VehicleAudioFeed feed;
+    std::vector<float> buf = std::vector<float>(800);
+
+    struct Stats {
+        float longSlip = 0, latSlip = 0, ratio = 0, joltSlip = 0, slipDeg = 0, skid = 0, skidRaw = 0, mud = 0,
+              mark = 0, maxSpeed = 0;
+        double skidTime = 0, dist = 0, time = 0, t30 = -1;
+    } st;
+
+    void tick(const DriverIntent& in, bool record) {
+        sim.setIntent(in);
+        sim.tick();
+        feed.onTick(sim);
+        AudioFrame f = feed.frame();
+        f.listenerPos = f.vehiclePos - f.vehicleForward * 8.0f + AudioVec3{0, 2.6f, 0};
+        mixer.setFrame(f);
+        for (const AudioEvent& e : feed.events()) mixer.trigger(e);
+        feed.clearEvents();
+        mixer.render(buf.data(), 400);
+        if (!record) return;
+        const auto& t = sim.vehicle().telemetry();
+        st.maxSpeed = std::max(st.maxSpeed, t.speed);
+        st.time += sim.fixedStep();
+        st.dist += std::abs(t.speed) * sim.fixedStep();
+        if (st.t30 < 0 && t.speed * 3.6f >= 30.0f) st.t30 = st.time;
+        for (int i = 0; i < kWheelCount; ++i) {
+            const WheelContactSample& c = sim.vehicle().contacts()[std::size_t(i)];
+            const WheelTelemetry& w = t.wheels[std::size_t(i)];
+            if (!c.contact) continue;
+            st.longSlip = std::max(st.longSlip, std::abs(c.longitudinalSlipSpeed));
+            st.latSlip = std::max(st.latSlip, std::abs(c.lateralSlipSpeed));
+            st.ratio = std::max(st.ratio, f.wheels[std::size_t(i)].slipRatio);
+            if (w.contactSpeed > 2.0f) {
+                st.joltSlip = std::max(st.joltSlip, w.longitudinalSlip);
+                st.slipDeg = std::max(st.slipDeg, w.lateralSlipDeg);
+            }
+            st.mark = std::max(st.mark, markIntensity(c, sim.tireMarks().settings().referenceLoad,
+                                                      sim.tireMarks().treadSoil(std::size_t(i))).slip);
+        }
+        const TireLayerMix raw = tireLayerMix(f.wheels, f.referenceLoad);
+        st.skidRaw = std::max(st.skidRaw, raw.gain[0]);
+        st.skid = std::max(st.skid, mixer.stats().skid);
+        st.mud = std::max(st.mud, mixer.stats().mud);
+        if (mixer.stats().skid > 0.15f) st.skidTime += sim.fixedStep();
+    }
+    void run(double s, const DriverIntent& in, bool record = true) {
+        for (int i = 0; i < int(s * 120.0); ++i) tick(in, record);
+    }
+    // Hold a speed with a P controller (steering optional).
+    void cruise(double s, float kmh, float steer, bool record) {
+        for (int i = 0; i < int(s * 120.0); ++i) {
+            const float v = sim.vehicle().telemetry().speed * 3.6f;
+            DriverIntent in;
+            in.throttle = std::clamp(0.25f + 0.08f * (kmh - v), 0.0f, 1.0f);
+            in.steer = steer;
+            tick(in, record);
+        }
+    }
+    void spawn() {
+        if (lane >= 0) sim.requestTeleport(lane);
+        else sim.requestReset();
+        run(1.0, {}, false);
+        st = {};
+    }
+    void lowRange() {
+        sim.requestToggleLowRange();
+        run(0.1, {}, false);
+    }
+    void report(const char* lane, const char* what) {
+        std::printf("%-8s %-26s vmax %5.1f km/h | slip long %5.2f lat %5.2f m/s ratio %4.2f jolt %4.2f angle %5.1f deg"
+                    " | skid raw %4.2f mixed %4.2f (%.2f s > 0.15) mud %4.2f | mark %4.2f | dist %5.1f m, 0-30 %4.2f s\n",
+                    lane, what, st.maxSpeed * 3.6f, st.longSlip, st.latSlip, st.ratio, st.joltSlip, st.slipDeg,
+                    st.skidRaw, st.skid, st.skidTime, st.mud, st.mark, st.dist, st.t30);
+    }
+};
+
+void skid() {
+    const char* lanes[] = {"concrete", "dirt", "mud", "grass"};
+    for (int lane = 0; lane < 4; ++lane) {
+        SkidRig r(lane);
+        auto go = [&](const char* what, auto&& fn) {
+            r.spawn();
+            fn();
+            r.report(lanes[lane], what);
+        };
+        go("launch full throttle", [&] { r.run(5.0, {.throttle = 1.0f}); });
+        go("launch half throttle", [&] { r.run(5.0, {.throttle = 0.5f}); });
+        go("launch low range full", [&] {
+            r.lowRange();
+            r.run(3.0, {.throttle = 1.0f});
+        });
+        go("cruise 40 km/h", [&] {
+            r.cruise(6.0, 40.0f, 0.0f, false);
+            r.cruise(3.0, 40.0f, 0.0f, true);
+        });
+        go("full brake from 50 km/h", [&] {
+            r.cruise(8.0, 50.0f, 0.0f, false);
+            r.run(4.0, {.brake = 1.0f});
+        });
+        go("handbrake from 40 km/h", [&] {
+            r.cruise(7.0, 40.0f, 0.0f, false);
+            r.run(2.5, {.handBrake = 1.0f});
+        });
+    }
+    SkidRig r(-1);
+    auto go = [&](const char* what, auto&& fn) {
+        r.spawn();
+        fn();
+        r.report("pad", what);
+    };
+    go("turn 15 km/h steer 1.0", [&] {
+        r.cruise(5.0, 15.0f, 0.0f, false);
+        r.cruise(4.0, 15.0f, 1.0f, true);
+    });
+    go("turn 30 km/h steer 0.5", [&] {
+        r.cruise(6.0, 30.0f, 0.0f, false);
+        r.cruise(4.0, 30.0f, 0.5f, true);
+    });
+    go("turn 30 km/h steer 1.0", [&] {
+        r.cruise(6.0, 30.0f, 0.0f, false);
+        r.cruise(4.0, 30.0f, 1.0f, true);
+    });
+    go("turn 50 km/h steer 0.5", [&] {
+        r.cruise(8.0, 50.0f, 0.0f, false);
+        r.cruise(4.0, 50.0f, 0.5f, true);
+    });
+    go("launch while steering 1.0", [&] { r.run(5.0, {.throttle = 1.0f, .steer = 1.0f}); });
+    go("power turn low range", [&] {
+        r.lowRange();
+        r.run(4.0, {.throttle = 1.0f, .steer = 1.0f});
+    });
+    go("handbrake turn 40 km/h", [&] {
+        r.cruise(7.0, 40.0f, 0.0f, false);
+        r.run(2.5, {.steer = 0.6f, .handBrake = 1.0f});
+    });
+}
+
+// Per-tick trace of a full-throttle launch on one lane: wheel slip, Jolt slip ratio and the skid gains.
+void launchTrace(int lane, float throttle) {
+    SkidRig r{lane};
+    r.spawn();
+    if (std::getenv("PROBE_LOW_RANGE")) r.lowRange();
+    for (int i = 0; i < 4 * 120; ++i) {
+        r.tick({.throttle = throttle}, true);
+        if (i % 6 != 0 && i > 60 && !std::getenv("PROBE_ALL_TICKS")) continue;
+        const auto& t = r.sim.vehicle().telemetry();
+        std::printf("t=%4.2f v=%5.2f g=%d rpm=%4.0f thr=%.2f clutch=%.2f |", i / 120.0, t.speed, t.gear, t.engineRPM,
+                    t.command.throttle, t.clutchFriction);
+        for (int k = 0; k < kWheelCount; ++k) {
+            const WheelContactSample& c = r.sim.vehicle().contacts()[std::size_t(k)];
+            const WheelAudio& w = r.feed.frame().wheels[std::size_t(k)];
+            std::printf(" %c%d vs%5.2f/%5.2f r%4.2f q%4.2f", w.contact ? 'C' : '-', int(w.surface),
+                        c.longitudinalSlipSpeed, c.lateralSlipSpeed, w.slipRatio, w.squeal);
+        }
+        const TireLayerMix raw = tireLayerMix(r.feed.frame().wheels, r.feed.frame().referenceLoad);
+        std::printf(" | raw %.2f skid %.2f\n", raw.gain[0], r.mixer.stats().skid);
+    }
+}
+
+// Drives around the mud & puddles showcase (real proving ground surfaces) with wheelspin and turns, and reports
+// every stretch where the skid layer is audible with the surfaces under the wheels.
+void showcase() {
+    Simulation sim;
+    SoundBank bank;
+    AudioMixer mixer{bank};
+    VehicleAudioFeed feed;
+    std::vector<float> buf(800);
+    const float steers[] = {0.0f, 0.4f, -0.4f, 1.0f, -1.0f, 0.7f};
+    double skidTime = 0.0, total = 0.0;
+    std::array<double, kSurfaceCount> skidBySurface{};
+    for (int run = 0; run < 6; ++run) {
+        sim.requestTeleport(8);
+        for (int i = 0; i < 12 * 120; ++i) {
+            const double t = i / 120.0;
+            DriverIntent in;
+            in.throttle = (t > 1.0 && t < 7.0) || t > 9.0 ? 1.0f : 0.0f;
+            in.brake = t > 7.0 && t < 8.0 ? 1.0f : 0.0f;
+            in.steer = t > 2.0 ? steers[run] * (std::fmod(t, 4.0) < 2.0 ? 1.0f : -0.5f) : 0.0f;
+            sim.setIntent(in);
+            sim.tick();
+            feed.onTick(sim);
+            AudioFrame f = feed.frame();
+            f.listenerPos = f.vehiclePos - f.vehicleForward * 8.0f + AudioVec3{0, 2.6f, 0};
+            mixer.setFrame(f);
+            for (const AudioEvent& e : feed.events()) mixer.trigger(e);
+            feed.clearEvents();
+            mixer.render(buf.data(), 400);
+            if (t < 1.0) continue;
+            total += 1.0 / 120.0;
+            const float skid = mixer.stats().skid;
+            if (skid > 0.05f) {
+                skidTime += 1.0 / 120.0;
+                for (const WheelAudio& w : f.wheels)
+                    if (w.contact) skidBySurface[w.surface] += 0.25 / 120.0;
+            }
+            if (skid > 0.05f && i % 30 == 0) {
+                const auto p = sim.currentSnapshot().body.position;
+                std::printf("run %d t=%5.2f pos (%6.1f %6.1f) skid %.2f mud %.2f wheels:", run, t, p.GetX(), p.GetZ(),
+                            skid, mixer.stats().mud);
+                for (const WheelAudio& w : f.wheels)
+                    std::printf(" %s%d slip %.1f r %.2f", w.contact ? "" : "air:", int(w.surface), w.slipSpeed,
+                                w.slipRatio);
+                std::printf("\n");
+            }
+        }
+    }
+    std::printf("showcase: skid > 0.05 for %.2f of %.1f s; wheel-seconds by surface while skid audible:", skidTime,
+                total);
+    for (std::size_t s = 0; s < kSurfaceCount; ++s) std::printf(" %zu:%.2f", s, skidBySurface[s]);
+    std::printf("\n");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -290,6 +518,9 @@ int main(int argc, char** argv) {
                                   argc > 6 ? float(std::atof(argv[6])) : 0.0f);
     else if (mode == "corner") corner(TrackLayout::Flat, argc > 2 ? float(std::atof(argv[2])) : -0.45f, 4.0,
                                          argc > 3 ? std::atoi(argv[3]) : 1);
+    else if (mode == "skid") skid();
+    else if (mode == "showcase") showcase();
+    else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();
     return 0;
 }

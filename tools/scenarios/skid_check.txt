@@ -1,0 +1,133 @@
+# Tire squeal gating on the proving ground: silent for normal launches and turns on concrete, audible for lock-up
+# and handbrake slides, never while the mud layer is active. Needs the mixer (a device or an offline capture):
+#   ./build/release/trailforge --script tools/scenarios/skid_check.txt --audio-capture /tmp/trailforge_skid_check.wav
+#   python3 tools/audio/analyze_capture.py /tmp/trailforge_skid_check.wav
+# The scenario samples audio_skid every 0.25 s; the capture CSV has the per-tick values ("log" lines print audio_t).
+# The headless CTest audio_skid_gating checks the same per tick at 60, 120 and 240 Hz.
+set ui 0
+set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
+set hud 0
+time Noon
+expect audio_active == 1
+
+# ---------------------------------------------------------------- skid strip (concrete): full-throttle launch
+teleport 9
+wait 3
+log launch_begin
+expect audio_skid < 0.05
+down W
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+log launch_end
+expect speed_kmh > 35
+expect max_slip < 0.3            # the tires keep grip: no wheelspin on a straight launch
+
+# ---------------------------------------------------------------- full brake: locked rear wheels squeal
+up W
+down S
+until audio_skid > 0.3 2
+log brake_squeal
+until speed_kmh < 0.5 8
+up S
+wait 1.0
+log brake_end
+expect audio_skid < 0.05
+
+# ---------------------------------------------------------------- skid strip: handbrake slide (locked rear wheels)
+down W
+until speed_kmh > 40 6
+up W
+down Space
+until audio_skid > 0.3 1.5
+log handbrake_squeal
+until speed_kmh < 0.5 8
+up Space
+wait 1.0
+expect audio_skid < 0.05
+
+# ---------------------------------------------------------------- start pad: slow full-lock turn
+teleport 0
+wait 3
+down W
+wait 0.7
+up W
+down D
+log turn_begin
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+wait 0.25
+expect audio_skid < 0.05
+log turn_end
+up D
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.5
+
+# ---------------------------------------------------------------- mud showcase: low-range wheelspin and lock-up
+teleport 8
+wait 3
+tap L
+wait 0.3
+down W
+down A
+until audio_mud > 0.3 4
+log mud_begin
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+up A
+wait 0.25
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+up W
+down S
+wait 0.25
+expect audio_skid < 0.01
+wait 0.25
+expect audio_skid < 0.01
+until speed_kmh < 0.5 8
+up S
+log mud_end
+expect audio_skid < 0.01
+tap L
+wait 0.3
+expect audio_clipped == 0
+quit
