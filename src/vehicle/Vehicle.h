@@ -108,6 +108,8 @@ public:
 
 private:
     void buildTireCurves(const VehicleTuning& t);
+    float staticGripFriction(JPH::uint wheel, float curveFriction) const;
+    float clutchStrength(float throttle) const;
     void applyDifferentials();
 
     PhysicsWorld& m_world;

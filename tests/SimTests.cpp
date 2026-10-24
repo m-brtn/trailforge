@@ -336,7 +336,8 @@ void tireMarksSurfaces() {
           lockup.segments, lockup.maxSlip);
     CHECK(lockup.surfaceSegments[int(SurfaceId::Concrete)] == lockup.segments, "lock-up marks not tagged Concrete");
 
-    // Soft lanes: rolling leaves a load-driven imprint; wheelspin from standstill (low range) churns.
+    // Soft lanes: rolling leaves a load-driven imprint; a full-lock low-range launch churns (the unloaded inner
+    // wheels spin through the open differentials; a straight launch keeps grip on all three surfaces).
     const struct {
         int feature;
         SurfaceId surface;
@@ -363,9 +364,9 @@ void tireMarksSurfaces() {
         sim.requestToggleLowRange();
         run(sim, 0.1);
         w0 = marks.written();
-        run(sim, 1.5, DriverIntent{.throttle = 1.0f});
+        run(sim, 1.5, DriverIntent{.throttle = 1.0f, .steer = 1.0f});
         const MarkStats spin = marksSince(marks, w0);
-        std::snprintf(label, sizeof(label), "%s, wheelspin (low range):", lane.name);
+        std::snprintf(label, sizeof(label), "%s, power turn (low range):", lane.name);
         printMarks(label, spin, sim);
         CHECK(spin.segments >= 8 && spin.maxSlip > 0.3f, "%s: wheelspin churn %d segments, slip %.2f", lane.name,
               spin.segments, spin.maxSlip);

@@ -8,6 +8,7 @@
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <stdexcept>
@@ -138,9 +139,12 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         [this](uint wheel, float& ioLong, float& ioLat, const Body& body, const SubShapeID& subShape) {
             const SurfaceId id = m_surfaces.lookup(body.GetShape()->GetMaterial(subShape));
             const SurfaceProperties& s = m_surfaces.get(id);
+            if (wheel < kWheelCount) {
+                ioLong = staticGripFriction(wheel, ioLong);
+                m_contactSurface[wheel] = id;
+            }
             ioLong *= s.longitudinalFriction;
             ioLat *= s.lateralFriction;
-            if (wheel < kWheelCount) m_contactSurface[wheel] = id;
         });
 
     world.system().AddConstraint(m_constraint);
@@ -174,6 +178,19 @@ void Vehicle::buildTireCurves(const VehicleTuning& t) {
         w->mLateralFriction.AddPoint(30.0f, t.tireSlideLatFriction);
         w->mLateralFriction.AddPoint(90.0f, t.tireSlideLatFriction);
     }
+}
+
+// Jolt caps the longitudinal tire impulse at mu(slip) x load, with the slip ratio of the step start. The curve is
+// 0 at zero slip, so a wheel the solver has just brought to grip gets a zero cap on the next step, spins up freely
+// under drive torque (a 1st-gear wheel gains ~3 m/s of slip in one 1/120 s step), slides, grips again: a period-2
+// cycle that reads as wheelspin on every launch, from rest up to ~8 m/s. A tire that has not broken away (slip
+// below the peak) may therefore pass up to the peak friction; sliding wheels keep the curve value.
+float Vehicle::staticGripFriction(JPH::uint wheel, float curveFriction) const {
+    const VehicleTuning& t = m_config.tuning;
+    if (!t.tireStaticGrip) return curveFriction;
+    const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
+    if (w->mLongitudinalSlip >= t.tirePeakSlipRatio) return curveFriction;
+    return std::max(curveFriction, t.tirePeakLongFriction);
 }
 
 void Vehicle::applyTuning(const VehicleTuning& t) {
@@ -241,9 +258,28 @@ void Vehicle::prePhysics(const DriverCommand& cmd) {
     } else {
         tr.mMode = JPH::ETransmissionMode::Auto;
     }
+    tr.mClutchStrength = clutchStrength(cmd.throttle);
     // Jolt automatic: the sign of the forward input selects forward or reverse.
     const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * cmd.throttle;
     m_controller->SetDriverInput(forward, cmd.steer, cmd.brake, cmd.handBrake);
+}
+
+// Jolt clamps the engine at its minimum rpm, so while the clutch slips at launch the clamp, not the engine, would
+// supply S * (engine - clutch speed): up to ~840 N*m at the engine shaft at any throttle, 1.6x the maximum engine
+// torque. Close to the minimum rpm the clutch therefore passes at most what the engine makes at this throttle (at
+// least the creep torque), like a torque converter at stall; 400 rpm above it the full strength applies again and
+// the clutch may pull the flywheel down (shifts, engine braking).
+float Vehicle::clutchStrength(float throttle) const {
+    const VehicleTuning& t = m_config.tuning;
+    if (!t.launchClutchLimit) return t.clutchStrength;
+    const JPH::VehicleEngine& engine = m_controller->GetEngine();
+    const float rpm = engine.GetCurrentRPM();
+    const float slip = (rpm - m_controller->GetWheelSpeedAtClutch()) * (2.0f * 3.14159265f / 60.0f); // rad/s
+    if (slip <= 1.0f) return t.clutchStrength;
+    const float available = std::max(engine.GetTorque(std::clamp(throttle, 0.0f, 1.0f)), t.creepTorque);
+    const float limited = std::min(t.clutchStrength, available / slip);
+    const float x = std::clamp((rpm - m_config.engineMinRPM) / 400.0f, 0.0f, 1.0f);
+    return limited + (t.clutchStrength - limited) * x * x * (3.0f - 2.0f * x);
 }
 
 void Vehicle::postPhysics(float dt) {

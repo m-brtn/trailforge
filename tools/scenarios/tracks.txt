@@ -13,8 +13,8 @@ wait 1.5
 set marks_clear 1
 down W
 wait 2.5
-log launch                       # first gear at full throttle spins the wheels for ~2 s
-expect marks_s0 > 10
+log launch                       # full throttle in first gear: the tires keep grip, no rubber
+expect marks_s0 < 5
 mark marks_s0
 wait 1.5
 expect d_marks_s0 < 5            # rolling in second gear: no rubber
@@ -41,12 +41,16 @@ up S
 log meadow
 expect marks_s1 > 4              # rolling imprint in the dirt band between the strip and the meadow
 expect marks_s5 > 40             # pressed grass
-# Wheelspin in low range tears the turf.
+# A low-range power turn tears the turf (the unloaded inner wheels spin).
 tap L
 wait 0.3
+mark marks_s5
 down W
+down A
 wait 1.6
+up A
 up W
+expect d_marks_s5 > 4
 down S
 until speed_kmh < 0.5 8
 up S
@@ -108,14 +112,16 @@ wait 0.6
 capture /tmp/trailforge_tracks_concrete_drift.png
 wait 0.3
 
-# ---------------------------------------------------------------- dirt: wheelspin and rolling next to the pad
+# ---------------------------------------------------------------- dirt: low-range power turn next to the pad
 camera follow
 teleport 4
 wait 1.5
 tap L
 wait 0.3
 down W
+down D
 wait 1.5
+up D
 up W
 down S
 until speed_kmh < 0.5 8

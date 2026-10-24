@@ -26,6 +26,9 @@ struct VehicleTuning {
     float tirePeakLatFriction = 1.15f;
     float tireSlideLatFriction = 0.90f; // at 30 degrees and above
     float tirePeakSlipAngleDeg = 6.0f;  // degrees
+    // A tire below the peak slip ratio may transmit up to the peak longitudinal friction before it breaks away,
+    // instead of mu(slip of the previous step), which is 0 for a wheel that just gripped. false = plain Jolt curve.
+    bool tireStaticGrip = true;
 
     // Brakes
     float maxBrakeTorque = 3000.0f;     // N*m per wheel
@@ -34,6 +37,11 @@ struct VehicleTuning {
     // Engine and drivetrain
     float engineMaxTorque = 520.0f; // N*m
     float clutchStrength = 10.0f;   // kg*m^2/s (Jolt: Torque = S * dw)
+    // Near the minimum rpm the clutch passes at most the engine torque at the current throttle (at least the
+    // creep torque), like a torque converter at stall. Jolt clamps the engine at its minimum rpm, so an unlimited
+    // slipping clutch would deliver S * dw (~840 N*m at launch) whatever the throttle.
+    bool launchClutchLimit = true;
+    float creepTorque = 40.0f;      // N*m at the engine shaft, idle creep in gear
 
     // Differentials (Jolt supports open / limited slip)
     DiffMode frontDiff = DiffMode::Open;
