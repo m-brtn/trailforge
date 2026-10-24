@@ -23,6 +23,7 @@ add_library(trailforge_sim STATIC
     src/track/TestTrack.cpp
     src/vehicle/Vehicle.cpp
     src/sim/Simulation.cpp
+    src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
@@ -32,6 +33,20 @@ endif()
 
 add_executable(trailforge_probe tools/SimProbe.cpp)
 target_link_libraries(trailforge_probe PRIVATE trailforge_sim)
+
+# ------------------------------------------------------------------ audio model
+# Manifest, parameter mapping, mixer and the per-tick vehicle feed. No device and no miniaudio: runs headless.
+add_library(trailforge_audio STATIC
+    src/audio/Json.cpp
+    src/audio/AudioManifest.cpp
+    src/audio/AudioMapping.cpp
+    src/audio/AudioMixer.cpp
+    src/audio/VehicleAudioFeed.cpp)
+target_include_directories(trailforge_audio PUBLIC src)
+target_link_libraries(trailforge_audio PUBLIC trailforge_sim)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(trailforge_audio PRIVATE -Wall -Wextra)
+endif()
 
 # ------------------------------------------------------------------ application
 if(TRAILFORGE_BUILD_APP)
@@ -43,6 +58,7 @@ if(TRAILFORGE_BUILD_APP)
         src/app/Application.cpp
         src/app/Scenario.cpp
         src/app/AppIcon.cpp
+        src/audio/AudioSystem.cpp
         src/input/Input.cpp
         src/render/Renderer.cpp
         src/render/Mesh.cpp
@@ -55,12 +71,14 @@ if(TRAILFORGE_BUILD_APP)
         src/ui/DebugUI.cpp
         ${TRAILFORGE_SHADER_SOURCES}
         ${TRAILFORGE_ICON_SOURCES})
-    target_link_libraries(trailforge PRIVATE trailforge_sim SDL3::SDL3-static imgui glm_headers)
+    # trailforge_audio brings trailforge_sim.
+    target_link_libraries(trailforge PRIVATE trailforge_audio miniaudio_lib SDL3::SDL3-static imgui glm_headers)
     if(APPLE)
         target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
         target_link_libraries(trailforge PRIVATE "-framework Metal")
     endif()
-    target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES} ${TRAILFORGE_ICON_DEFINES})
+    target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES} ${TRAILFORGE_ICON_DEFINES}
+                                                  TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     trailforge_add_macos_bundle(trailforge)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)
@@ -83,6 +101,19 @@ if(TRAILFORGE_BUILD_TESTS)
             brake_holds_in_low_range
             tire_marks_surfaces)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+    endforeach()
+
+    # Audio parameter mapping and the offline mixer (no audio device).
+    add_executable(trailforge_audio_tests tests/AudioTests.cpp)
+    target_link_libraries(trailforge_audio_tests PRIVATE trailforge_audio)
+    target_compile_definitions(trailforge_audio_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name
+            audio_engine_layers
+            audio_tire_layers
+            audio_manifest
+            audio_feed_and_mixer)
+        add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
 endif()

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/AudioTypes.h"
 #include "render/DebugDraw.h"
 #include "render/RenderSettings.h"
 #include "vehicle/VehicleConfig.h"
@@ -59,6 +60,15 @@ struct GraphicsState {
     bool fillMarks = false;      // request: fill the ring with synthetic segments (performance test at the cap)
 };
 
+// Audio panel state (owned by the application; settings go to the audio thread with the next frame).
+struct AudioPanelState {
+    AudioSettings settings;
+    AudioStats stats;          // latest read-out from the audio thread
+    const char* status = "";   // device / capture / disabled
+    bool active = false;
+    bool visible = false;      // F3
+};
+
 // UI requests to the application (executed outside the ImGui frame).
 struct UiRequests {
     bool togglePause = false;
@@ -74,6 +84,7 @@ public:
     explicit DebugUI(const VehicleConfig& initial);
 
     UiRequests draw(Simulation& sim, const FrameStats& stats, GraphicsState& gfx);
+    void drawAudio(AudioPanelState& audio);
 
     bool visible = true;
     bool hud = true;               // the small always-on hint/perf window

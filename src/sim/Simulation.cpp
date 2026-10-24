@@ -21,6 +21,7 @@ float approach(float current, float target, float rate, float dt) {
 
 Simulation::Simulation(const SimulationSettings& settings) : m_settings(settings), m_tireMarks(settings.tireMarks) {
     m_world = std::make_unique<PhysicsWorld>(settings.physics);
+    m_world->system().SetContactListener(&m_impactListener);
     m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, settings.layout);
     spawnVehicle(settings.vehicle, m_track->spawn());
 }
@@ -38,6 +39,8 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);
+    m_impactListener.setBody(m_vehicle->bodyId());
+    ++m_spawnCount;
     m_smoothed = {};
     TireMarkSettings marks = m_tireMarks.settings();
     marks.referenceLoad = 0.25f * config.mass * 9.81f;
@@ -120,6 +123,7 @@ void Simulation::tick() {
 
     const auto t0 = Clock::now();
     m_vehicle->prePhysics(m_smoothed);
+    m_impactListener.beginTick();
     const JPH::EPhysicsUpdateError err = m_world->step(dt, m_settings.collisionSteps);
     m_physicsError = m_physicsError || err != JPH::EPhysicsUpdateError::None;
     // Jolt splits the step into collisionSteps substeps; constraint lambdas are impulses of the last substep.

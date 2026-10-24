@@ -112,9 +112,20 @@ Application::Application(const AppOptions& options)
         m_scenario = Scenario::load(options.scriptPath);
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
     }
+
+    AudioOptions audio;
+    audio.device = options.audio;
+    audio.capturePath = options.audioCapturePath;
+    if (const char* base = SDL_GetBasePath()) {
+        audio.assetDirs.push_back(std::string(base) + "assets/audio");
+        audio.assetDirs.push_back(std::string(base) + "../../assets/audio"); // build/<preset>/trailforge
+    }
+    audio.assetDirs.push_back(std::string(TRAILFORGE_SOURCE_DIR) + "/assets/audio");
+    m_audio = std::make_unique<AudioSystem>(audio);
 }
 
 Application::~Application() {
+    m_audio.reset(); // stop the audio thread first
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
     for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_springMesh,
@@ -140,8 +151,9 @@ void Application::processEvents() {
     if (m_input.pressed(Action::Quit)) m_running = false;
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
     if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
+    if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
     if (m_input.pressed(Action::ToggleHeadlights)) m_gfx.headlights = !m_gfx.headlights;
-    if (m_input.pressed(Action::TogglePause)) m_paused = !m_paused;
+    if (m_input.pressed(Action::TogglePause)) setPaused(!m_paused);
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
     if (m_input.pressed(Action::ToggleCamera)) m_camera.toggleMode();
     if (m_input.pressed(Action::ToggleDirection)) m_sim.requestToggleDirection();
@@ -159,21 +171,56 @@ void Application::processEvents() {
     m_sim.setIntent(intent);
 }
 
+void Application::setPaused(bool paused) {
+    if (paused == m_paused) return;
+    m_paused = paused;
+    // Gameplay sounds fade out and freeze while paused; the menu open/close sounds mark the toggle.
+    m_audio->playUi(paused ? UiSound::MenuOpen : UiSound::MenuClose);
+}
+
+void Application::publishAudio() {
+    AudioFrame f = m_audioFeed.frame();
+    const glm::mat4 v = m_camera.view();
+    const glm::vec3 pos = m_camera.position();
+    f.listenerPos = {pos.x, pos.y, pos.z};
+    f.listenerRight = {v[0][0], v[1][0], v[2][0]};
+    f.listenerForward = {-v[0][2], -v[1][2], -v[2][2]};
+    const SkyState sky = computeSky(m_gfx.settings.timeOfDay, m_gfx.settings.sunHeadingDeg);
+    f.dayAmount = std::clamp((sky.sunElevationDeg + 6.0f) / 12.0f, 0.0f, 1.0f);
+    f.paused = m_paused;
+    f.settings = m_audioPanel.settings;
+    m_audio->publish(f, m_audioFeed.events());
+    m_audioFeed.clearEvents();
+}
+
 void Application::stepSimulation(double frameTime) {
     if (m_clock.step() != m_sim.fixedStep()) m_clock.setStep(m_sim.fixedStep());
     m_stepsThisFrame = 0;
+    const bool capture = m_audio->capturing();
+    auto tick = [&] {
+        m_sim.tick();
+        m_audioFeed.onTick(m_sim);
+        if (capture) {
+            // Offline audio follows the physics clock: one tick of sound per physics tick.
+            publishAudio();
+            m_audio->captureAdvance(m_sim.fixedStep());
+        }
+    };
     if (m_paused) {
         m_clock.reset();
         if (m_stepOnce) {
-            m_sim.tick();
+            tick();
             m_stepsThisFrame = 1;
             m_stepOnce = false;
+        } else if (capture) {
+            publishAudio();
+            m_audio->captureAdvance(frameTime);
         }
         return;
     }
     // Input is already passed to Simulation; each tick applies it with smoothing over the fixed dt.
     const int steps = m_clock.advance(frameTime);
-    for (int i = 0; i < steps; ++i) m_sim.tick();
+    for (int i = 0; i < steps; ++i) tick();
     m_stepsThisFrame = steps;
 }
 
@@ -245,8 +292,13 @@ void Application::renderFrame(float frameTime) {
         fillTireMarks();
         m_gfx.fillMarks = false;
     }
+    m_audioPanel.stats = m_audio->stats();
+    m_audioPanel.status = m_audio->status().c_str();
+    m_audioPanel.active = m_audio->active();
+    m_ui.drawAudio(m_audioPanel);
     ImGui::Render();
-    if (req.togglePause) m_paused = !m_paused;
+    if (req.togglePause) setPaused(!m_paused);
+    if (!m_audio->capturing()) publishAudio();
     if (req.stepOnce && m_paused) m_stepOnce = true;
     if (req.setVSync) m_renderer->setVSync(req.vsync);
     if (m_gfx.timeLapse) {
@@ -717,6 +769,12 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
             else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
             else if (k == "marks") m_gfx.tireMarks = v != 0.0f;
+            else if (k == "audio_ui") m_audioPanel.visible = v != 0.0f;
+            else if (k == "audio_mute") m_audioPanel.settings.mute = v != 0.0f;
+            else if (k == "audio_master") m_audioPanel.settings.master = v;
+            else if (k == "audio_pitch") m_audioPanel.settings.enginePitch = v;
+            else if (k == "audio_whine") m_audioPanel.settings.whine = v;
+            else if (k == "audio_play_ui") m_audio->playUi(UiSound(std::clamp(int(v), 0, int(UiSound::MenuClose))));
             else if (k == "marks_clear") m_sim.tireMarks().clear();
             else if (k == "marks_fill") fillTireMarks();
             else if (k == "marks_gain") m_gfx.markGain.fill(v);
@@ -793,6 +851,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
                         w.contact ? m_sim.surfaces().get(w.surface).name : "AIR", w.load, 100.0f * w.compressionRatio,
                         w.bumpStop ? "!" : "", w.combinedLongFriction);
         }
+        if (m_audio->capturing()) std::printf("audio_t=%.3f ", m_audio->capturedSeconds());
         std::printf("msg='%s'\n", m_sim.lastMessage());
         return Exec::Done;
     }
@@ -860,6 +919,33 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         double count = 0;
         for (std::size_t i = 0; i < tm.size(); ++i) count += tm.oldest(i).surface == id ? 1.0 : 0.0;
         return count;
+    }
+    if (n.rfind("audio_", 0) == 0) {
+        const AudioStats a = m_audio->stats();
+        if (n == "audio_active") return m_audio->active() ? 1.0 : 0.0;
+        if (n == "audio_t") return m_audio->capturedSeconds();
+        if (n == "audio_frames") return double(a.framesRendered);
+        if (n == "audio_src_rpm") return a.sourceRpm;
+        if (n == "audio_load") return a.load;
+        if (n == "audio_skid") return a.skid;
+        if (n == "audio_gravel") return a.gravel;
+        if (n == "audio_dirt") return a.dirt;
+        if (n == "audio_mud") return a.mud;
+        if (n == "audio_grass") return a.grass;
+        if (n == "audio_wind") return a.wind;
+        if (n == "audio_day") return a.day;
+        if (n == "audio_night") return a.night;
+        if (n == "audio_gameplay") return a.gameplayGain;
+        if (n == "audio_voices") return a.activeVoices;
+        if (n == "audio_oneshots") return a.oneShotsPlayed;
+        if (n == "audio_peak_db") return a.peakDb;
+        if (n == "audio_clipped") return double(a.clippedSamples);
+        if (n == "audio_cpu") return a.cpuLoad;
+        // audio_ev<N>: events of AudioEventType N received by the mixer (0 start, 1 gear, 2 bump stop, 3 thump,
+        // 4 body impact, 5 splash, 6 creak, 7 UI).
+        if (n.size() == 9 && n.rfind("audio_ev", 0) == 0 && n[8] >= '0' && n[8] <= '7')
+            return a.eventsByType[std::size_t(n[8] - '0')];
+        return std::nullopt;
     }
     if (n == "draw_calls") return m_renderer->stats().drawCalls;
     if (n == "render_w") return m_renderer->stats().renderW;

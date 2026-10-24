@@ -11,12 +11,16 @@ namespace {
 
 void printUsage() {
     std::printf("Usage: trailforge [--quit-after <seconds>] [--demo] [--no-ui] [--capture <file.bmp>] [--capture-at <seconds>] [--script <file>]\n"
+                "                  [--no-audio] [--audio-capture <file.wav>]\n"
                 "  --quit-after N  exit automatically after N seconds (smoke test)\n"
                 "  --demo          scripted throttle/steering without user input\n"
                 "  --no-ui         start with the F1 diagnostics hidden\n"
                 "  --capture F     save one rendered frame to BMP file F (default at 3 s)\n"
                 "  --capture-at N  time of the capture in seconds\n"
-                "  --script F      run a test scenario (input via SDL events), exit code 1 on failures\n");
+                "  --script F      run a test scenario (input via SDL events), exit code 1 on failures\n"
+                "  --no-audio      do not open an audio device or load sounds\n"
+                "  --audio-capture F  render the mix offline to WAV file F (no device; one physics tick of\n"
+                "                  audio per tick) and the mix parameters to F.csv\n");
 }
 
 } // namespace
@@ -30,6 +34,8 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--script") == 0 && i + 1 < argc) options.scriptPath = argv[++i];
         else if (std::strcmp(argv[i], "--demo") == 0) options.demoDrive = true;
         else if (std::strcmp(argv[i], "--no-ui") == 0) options.startWithUi = false;
+        else if (std::strcmp(argv[i], "--no-audio") == 0) options.audio = false;
+        else if (std::strcmp(argv[i], "--audio-capture") == 0 && i + 1 < argc) options.audioCapturePath = argv[++i];
         else { printUsage(); return std::strcmp(argv[i], "--help") == 0 ? 0 : 2; }
     }
     try {

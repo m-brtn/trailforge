@@ -64,13 +64,32 @@ FetchContent_Declare(glm
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR header-only-no-cmake)
 
+# ---------------------------------------------------------------- miniaudio
+# 0.11.25 (single-file library; playback device, WAV decoding and encoding). Its own CMakeLists.txt is not used:
+# SOURCE_SUBDIR points to a nonexistent folder and the library is built below from miniaudio.c.
+FetchContent_Declare(miniaudio
+    URL https://github.com/mackron/miniaudio/archive/9634bedb5b5a2ca38c1ee7108a9358a4e233f14d.tar.gz
+    URL_HASH SHA256=1a3a79b80fc6f0b0cc155e28b954a598e0ddfa2db64e2afa8466be88c476fa55
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake)
+
 # Physics is always needed (including for headless tests).
 FetchContent_MakeAvailable(JoltPhysics)
 
 if(TRAILFORGE_BUILD_APP)
     # imgui has no CMakeLists.txt, and glm's SOURCE_SUBDIR points to
     # a nonexistent folder, so MakeAvailable only downloads the sources.
-    FetchContent_MakeAvailable(SDL3 imgui glm)
+    FetchContent_MakeAvailable(SDL3 imgui glm miniaudio)
+
+    # Only the low-level API is used (device, decoder, encoder); the engine, node graph, resource manager and
+    # the MP3/FLAC decoders are compiled out. The defines are PUBLIC so the header sees the same configuration.
+    add_library(miniaudio_lib STATIC ${miniaudio_SOURCE_DIR}/miniaudio.c)
+    target_include_directories(miniaudio_lib SYSTEM PUBLIC ${miniaudio_SOURCE_DIR})
+    target_compile_definitions(miniaudio_lib PUBLIC
+        MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_MP3 MA_NO_FLAC MA_NO_GENERATION)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(miniaudio_lib PRIVATE -w)
+    endif()
 
     add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp

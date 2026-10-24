@@ -1,0 +1,126 @@
+# Audio check: drives through the situations the mix reacts to and checks the mixer's own parameters.
+#   ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
+#   python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
+# With --audio-capture the mix is rendered offline (one physics tick of audio per tick, no device) and every tick's
+# mixer parameters go to <file>.csv; "log" lines print audio_t, the capture time in seconds.
+# audio_ev<N> counts events received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 thump, 4 body impact,
+# 5 splash, 6 creak, 7 UI.
+set ui 0
+set hud 0
+time Noon
+expect audio_active == 1
+
+# ---------------------------------------------------------------- concrete skid strip: idle, launch, braking
+teleport 9
+wait 4
+log idle
+expect audio_ev0 >= 1
+expect audio_src_rpm < 1000
+expect audio_skid < 0.05
+expect audio_day > 0.95
+down W
+until audio_src_rpm > 2500 3
+until speed_kmh > 30 6
+log accel
+until z > 6 8
+up W
+log brake_begin
+expect audio_ev1 >= 2
+down S
+until audio_skid > 0.4 3
+until speed_kmh < 0.5 8
+up S
+log brake_end
+wait 1.5
+expect audio_skid < 0.05
+
+# ---------------------------------------------------------------- mud path, puddle, meadow
+teleport 8
+wait 2.5
+log mud_begin
+down W
+down A
+wait 0.45
+up A
+until audio_mud > 0.3 4
+log mud
+until audio_ev5 >= 1 6
+log splash
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log mud_end
+down D
+down W
+until audio_grass > 0.3 8
+log grass
+up W
+up D
+down S
+until speed_kmh < 0.5 8
+up S
+
+# ---------------------------------------------------------------- bumps: suspension thumps and bump stops
+teleport 1
+wait 2.5
+log bumps_begin
+down W
+until audio_ev3 >= 3 12
+log bumps
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+
+# ---------------------------------------------------------------- rock field: articulation, bump stops, body hits
+teleport 7
+wait 2.5
+log rocks_begin
+tap L
+wait 0.3
+down W
+wait 6
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+tap L
+log rocks
+# Event counts for the record (always true).
+expect audio_ev2 >= 0
+expect audio_ev4 >= 0
+expect audio_ev6 >= 0
+
+# ---------------------------------------------------------------- night ambience, pause duck, UI sounds
+teleport 0
+wait 2.5
+log day
+expect audio_day > 0.95
+time Night
+wait 5
+log night
+expect audio_night > 0.95
+expect audio_day < 0.05
+tap Escape
+wait 2
+log paused
+expect audio_gameplay < 0.05
+tap Escape
+wait 2
+log resumed
+expect audio_gameplay > 0.95
+set audio_play_ui 0
+wait 0.4
+set audio_play_ui 2
+wait 0.4
+set audio_play_ui 3
+wait 0.6
+expect audio_ev7 >= 5
+expect audio_clipped == 0
+set ui 1
+set audio_ui 1
+wait 0.6
+capture /tmp/trailforge_audio_panel.png
+wait 0.3
+quit

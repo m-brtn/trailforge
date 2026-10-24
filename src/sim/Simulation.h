@@ -1,6 +1,7 @@
 #pragma once
 
 #include "physics/PhysicsWorld.h"
+#include "sim/BodyImpacts.h"
 #include "sim/TireMarks.h"
 #include "track/SurfaceProperties.h"
 #include "track/TestTrack.h"
@@ -100,6 +101,10 @@ public:
     // Visual-only tire marks written from the wheel contact samples after every tick.
     TireMarks& tireMarks() { return m_tireMarks; }
     const TireMarks& tireMarks() const { return m_tireMarks; }
+    // New contacts of the vehicle body during the last tick (observation only, for impact sounds).
+    const std::vector<BodyImpact>& bodyImpacts() const { return m_impactListener.impacts(); }
+    // Incremented whenever the vehicle is (re)created: start, R reset, teleport, rebuild.
+    unsigned spawnCount() const { return m_spawnCount; }
     const RenderSnapshot& previousSnapshot() const { return m_prev; }
     const RenderSnapshot& currentSnapshot() const { return m_curr; }
     // Latest messages about discrete commands (e.g. "reverse only near a stop").
@@ -119,10 +124,12 @@ private:
     JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
     SimulationSettings m_settings;
     SurfaceTable m_surfaces;
+    BodyImpactListener m_impactListener; // before m_world: registered with its PhysicsSystem
     std::unique_ptr<PhysicsWorld> m_world;
     std::unique_ptr<TestTrack> m_track;
     std::unique_ptr<Vehicle> m_vehicle;
     int m_spawnFeature = 0;
+    unsigned m_spawnCount = 0;
 
     DriverIntent m_intent;
     DriverCommand m_smoothed;

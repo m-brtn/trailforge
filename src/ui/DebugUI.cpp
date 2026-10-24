@@ -62,7 +62,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("W/S throttle/brake  A/D steer  Space handbrake  Q fwd/rev  L low range  R reset  C camera  "
-                            "H lights  F1 UI  F2 graphics");
+                            "H lights  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH);
         ImGui::End();
@@ -189,6 +189,57 @@ void DebugUI::drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsSt
     ImGui::Text("CPU update %.1f us/tick, upload %.1f KB/frame, live %.0f KB, 1 draw", sim.timing().marksUs,
                 double(stats.markUploadBytes) / 1024.0, double(bytes) / 1024.0);
     ImGui::TextDisabled("No effect on friction or ground height; the ground stays rigid.");
+}
+
+void DebugUI::drawAudio(AudioPanelState& a) {
+    if (!a.visible) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float w = std::min(400.0f, display.x * 0.3f);
+    ImGui::SetNextWindowPos(ImVec2(0.5f * (display.x - w), 80), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Audio (F3)", &a.visible);
+    remember("audio", true);
+    AudioSettings& s = a.settings;
+    const AudioStats& st = a.stats;
+    ImGui::TextWrapped("%s", a.status);
+    if (!a.active) ImGui::TextDisabled("No audio output (--no-audio, no device or no assets).");
+
+    ImGui::Checkbox("Mute", &s.mute);
+    ImGui::SliderFloat("Master", &s.master, 0.0f, 1.5f, "%.2f");
+    ImGui::SliderFloat("Engine", &s.engine, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Tires", &s.tires, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Impacts", &s.impacts, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Ambience & wind", &s.ambience, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("UI", &s.ui, 0.0f, 2.0f, "%.2f");
+    if (ImGui::CollapsingHeader("Engine model", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Pitch factor", &s.enginePitch, 0.6f, 1.1f, "%.2f");
+        ImGui::SliderFloat("Level spread [dB]", &s.levelSpreadDb, 0.0f, 40.0f, "%.1f");
+        ImGui::SliderFloat("Transmission whine", &s.whine, 0.0f, 3.0f, "%.2f");
+        ImGui::Text("Source rpm %.0f (engine x %.2f), load %.2f", st.sourceRpm, s.enginePitch, st.load);
+        ImGui::Text("Off-load  idle %.2f  mid %.2f  high %.2f", st.offWeights[0], st.offWeights[1], st.offWeights[2]);
+        ImGui::Text("Full load low  %.2f  mid %.2f  high %.2f", st.onWeights[0], st.onWeights[1], st.onWeights[2]);
+        ImGui::Text("Exhaust rates  %.2f / %.2f / %.2f, whine %.0f Hz", st.exhaustRates[0], st.exhaustRates[1],
+                    st.exhaustRates[2], st.whineHz);
+    }
+    if (ImGui::CollapsingHeader("Layers", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bar("skid", st.skid, 0, 1.2f, "%.2f");
+        bar("gravel", st.gravel, 0, 1.2f, "%.2f");
+        bar("dirt", st.dirt, 0, 1.2f, "%.2f");
+        bar("mud", st.mud, 0, 1.2f, "%.2f");
+        bar("grass", st.grass, 0, 1.2f, "%.2f");
+        bar("wind", st.wind, 0, 1, "%.2f");
+        ImGui::Text("Ambience day %.2f / night %.2f, gameplay %.2f", st.day, st.night, st.gameplayGain);
+    }
+    if (ImGui::CollapsingHeader("Output", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("%d voices, %d one-shots played, %d events dropped", st.activeVoices, st.oneShotsPlayed,
+                    st.eventsDropped);
+        ImGui::Text("Peak %.1f dBFS, limiter %.1f dB, %lld clamped samples", st.peakDb, st.limiterDb,
+                    st.clippedSamples);
+        ImGui::Text("Audio thread: %.0f us/callback (max %.0f), %.2f %% of real time", st.callbackUs,
+                    st.callbackMaxUs, 100.0 * st.cpuLoad);
+    }
+    ImGui::TextDisabled("Pause-menu UI sounds are loaded; the menu itself is not built yet.");
+    ImGui::End();
 }
 
 void DebugUI::drawTimeOfDay(GraphicsState& gfx) {

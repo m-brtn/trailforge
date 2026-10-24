@@ -1,6 +1,8 @@
 #pragma once
 
 #include "app/Scenario.h"
+#include "audio/AudioSystem.h"
+#include "audio/VehicleAudioFeed.h"
 #include "input/Input.h"
 #include "render/Camera.h"
 #include "render/DebugDraw.h"
@@ -27,6 +29,8 @@ struct AppOptions {
     std::string capturePath;   // non-empty: save a frame (BMP/PNG) at captureAtSeconds
     double captureAtSeconds = 3.0;
     std::string scriptPath;    // non-empty: run a verification scenario (see Scenario.h)
+    bool audio = true;         // false: --no-audio (no device, no sound assets loaded)
+    std::string audioCapturePath; // non-empty: offline audio render to this WAV instead of the device
 };
 
 // RAII wrapper for SDL initialization.
@@ -68,6 +72,8 @@ public:
 
 private:
     void processEvents();
+    void setPaused(bool paused);
+    void publishAudio();
     void stepSimulation(double frameTime);
     void renderFrame(float frameTime);
 
@@ -90,6 +96,11 @@ private:
     DebugDraw m_debugDraw;
     DebugUI m_ui;
     FixedStepClock m_clock;
+    // Audio: the feed turns every physics tick into sound parameters and events; the system owns the device
+    // (or the offline capture) and the mixer that runs on the audio thread.
+    VehicleAudioFeed m_audioFeed;
+    AudioPanelState m_audioPanel;
+    std::unique_ptr<AudioSystem> m_audio;
 
     void buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM);
     void updateCosmetics(float dt);

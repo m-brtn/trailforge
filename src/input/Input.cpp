@@ -43,9 +43,10 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         // it is applied in endEvents only when the UI does not own the keyboard.
         if (e.key.scancode < SDL_SCANCODE_COUNT) m_held[e.key.scancode] = true;
         if (e.key.repeat) break;
-        // F1 and Escape always work; everything else only if the UI does not own the keyboard.
+        // F1-F3 and Escape always work; everything else only if the UI does not own the keyboard.
         if (e.key.key == SDLK_F1) { press(Action::ToggleDebugUI); break; }
         if (e.key.key == SDLK_F2) { press(Action::ToggleGraphicsUI); break; }
+        if (e.key.key == SDLK_F3) { press(Action::ToggleAudioUI); break; }
         if (e.key.key == SDLK_ESCAPE) { press(Action::TogglePause); break; }
         if (uiWantsKeyboard) break;
         switch (e.key.key) {
