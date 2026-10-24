@@ -57,6 +57,11 @@ AudioMixer::AudioMixer(const SoundBank& bank, int sampleRate, std::uint32_t seed
     const SoundId tireIds[kTireLayerCount] = {SoundId::TireSkidLoop, SoundId::TireGravelLoop, SoundId::TireDirtLoop,
                                               SoundId::TireMudLoop, SoundId::GrassRustleLoop};
     for (int i = 0; i < kTireLayerCount; ++i) loopVoice(m_tires[std::size_t(i)], tireIds[i], Bus::Tires, true);
+    m_tires[std::size_t(TireLayer::Skid)].active = false;
+    for (SkidVoice& s : m_skid) {
+        loopVoice(s.voice, SoundId::TireSkidLoop, Bus::Tires, true);
+        s.wobblePhase = 6.2831853f * rand01();
+    }
     loopVoice(m_wind, SoundId::WindLoop, Bus::Ambience, true);
     loopVoice(m_day, SoundId::AmbienceDayLoop, Bus::Ambience, false);
     loopVoice(m_night, SoundId::AmbienceNightLoop, Bus::Ambience, false);
@@ -251,13 +256,60 @@ void AudioMixer::controlUpdate(float dt) {
     for (const WheelAudio& wa : f.wheels) meanRoll += 0.25f * wa.rollSpeed;
     const float rollT = std::clamp(meanRoll / 15.0f, 0.0f, 1.0f);
     for (int l = 0; l < kTireLayerCount; ++l) {
+        if (TireLayer(l) == TireLayer::Skid) continue;
         const std::size_t k = std::size_t(l);
         const float target = f.vehicleValid ? tm.gain[k] : 0.0f;
         m_tireGain[k] = approach(m_tireGain[k], target, target > m_tireGain[k] ? 0.04f : 0.12f, dt);
         Voice& v = m_tires[k];
-        v.rate = TireLayer(l) == TireLayer::Skid ? 0.9f + 0.2f * std::min(1.0f, m_tireGain[k]) : 0.8f + 0.4f * rollT;
+        v.rate = 0.8f + 0.4f * rollT;
         setLoop(v, m_tireGain[k] * kTireGain[k], place(tm.position[k]));
     }
+
+    // Rubber squeal: one voice per wheel, driven by that wheel's gated squeal (hard surfaces only, see
+    // VehicleAudioFeed). Every slide starts at a random point of the loop with its own pitch; pitch follows the
+    // sliding speed and load, brightness the intensity, and a slow wobble keeps a held slide from sounding static.
+    // A fresh slide starts with the short squeal; the loop is ducked under it and takes over as it decays.
+    float skidPower = 0.0f;
+    for (int i = 0; i < kAudioWheels; ++i) {
+        SkidVoice& sv = m_skid[std::size_t(i)];
+        const WheelAudio& wa = f.wheels[std::size_t(i)];
+        const float target = f.vehicleValid ? std::min(wa.squeal, 1.2f) : 0.0f;
+        if (!frozen) {
+            if (sv.gain < 1e-3f && target > 0.0f) {
+                sv.voice.pos = double(rand01()) * double(std::max<std::size_t>(sv.voice.data->frames, 1));
+                sv.jitter = 0.93f + 0.14f * rand01();
+                sv.wobbleHz = 2.0f + 3.0f * rand01();
+            }
+            const bool onset = target > 0.3f && sv.prevTarget <= 0.3f;
+            if (onset && m_time - sv.lastChirp > 0.8 && m_time - m_lastChirp > 0.25) {
+                const AudioVec3 p = wa.position;
+                startOneShot(SoundId::TireSkidShort, 0.32f * std::min(1.0f, target) * (0.85f + 0.3f * rand01()),
+                             Bus::Tires, &p, sv.jitter * (0.92f + 0.16f * rand01()));
+                sv.lastChirp = m_time;
+                sv.sinceChirp = 0.0;
+                m_lastChirp = m_time;
+                ++m_stats.skidChirps;
+            }
+            sv.prevTarget = target;
+            sv.sinceChirp += dt;
+            sv.wobblePhase = std::fmod(sv.wobblePhase + 6.2831853f * sv.wobbleHz * dt, 6.2831853f * 100.0f);
+        }
+        sv.gain = approach(sv.gain, target, target > sv.gain ? 0.06f : 0.10f, dt);
+        if (sv.gain < 1e-4f && target == 0.0f) sv.gain = 0.0f;
+        const float slide = smoothstep(1.0f, 12.0f, wa.slipSpeed);
+        const float load = std::clamp(wa.load / std::max(f.referenceLoad, 1.0f), 0.0f, 1.6f);
+        sv.voice.rate = sv.jitter * (0.90f + 0.14f * slide) * (1.04f - 0.05f * load) *
+                        (1.0f + 0.012f * std::sin(sv.wobblePhase));
+        const float cutoff = 2500.0f + 9500.0f * std::min(1.0f, sv.gain);
+        sv.voice.lowpass = 1.0f - std::exp(-6.2831853f * cutoff / float(m_rate));
+        const float wobble = 1.0f + 0.12f * std::sin(0.73f * sv.wobblePhase + 1.3f);
+        const float duck = 0.4f + 0.6f * smoothstep(0.15f, 0.8f, float(sv.sinceChirp));
+        // 0.5: four uncorrelated voices add up in power like the RMS of the four wheels.
+        setLoop(sv.voice, 0.5f * kTireGain[0] * sv.gain * wobble * duck, place(wa.position));
+        m_stats.skidWheel[std::size_t(i)] = sv.gain;
+        skidPower += sv.gain * sv.gain;
+    }
+    m_tireGain[std::size_t(TireLayer::Skid)] = std::sqrt(0.25f * skidPower);
     m_stats.skid = m_tireGain[0];
     m_stats.gravel = m_tireGain[1];
     m_stats.dirt = m_tireGain[2];
@@ -276,13 +328,6 @@ void AudioMixer::controlUpdate(float dt) {
             startOneShot(pick(SoundId::GrassSwish1, 3), 0.3f * std::min(1.0f, grass), Bus::Tires, &p,
                          0.9f + 0.2f * rand01());
         }
-        const float skid = m_tireGain[std::size_t(TireLayer::Skid)];
-        if (skid > 0.3f && m_prevSkid <= 0.3f && m_time - m_lastChirp > 1.0) {
-            const AudioVec3 p = tm.position[std::size_t(TireLayer::Skid)];
-            startOneShot(SoundId::TireSkidShort, 0.35f, Bus::Tires, &p, 0.95f + 0.1f * rand01());
-            m_lastChirp = m_time;
-        }
-        m_prevSkid = skid;
     }
 
     // ---- Wind and ambience
@@ -356,6 +401,12 @@ void AudioMixer::mixVoice(Voice& v, float* acc, int frames) {
             l = hermite(at(i0 - 1, 0), at(i0, 0), at(i0 + 1, 0), at(i0 + 2, 0), t);
             r = ch > 1 ? hermite(at(i0 - 1, 1), at(i0, 1), at(i0 + 1, 1), at(i0 + 2, 1), t) : l;
         }
+        if (v.lowpass > 0.0f) {
+            v.lpL += v.lowpass * (l - v.lpL);
+            v.lpR += v.lowpass * (r - v.lpR);
+            l = v.lpL;
+            r = v.lpR;
+        }
         acc[2 * i] += l * (v.gl + dl * float(i));
         acc[2 * i + 1] += r * (v.gr + dr * float(i));
         v.pos += double(v.rate);
@@ -379,6 +430,7 @@ void AudioMixer::renderBlock(float* out, int frames) {
     };
     for (Voice& v : m_engine) run(v);
     for (Voice& v : m_tires) run(v);
+    for (SkidVoice& s : m_skid) run(s.voice);
     run(m_wind);
     run(m_day);
     run(m_night);

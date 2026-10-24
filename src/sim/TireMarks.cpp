@@ -38,7 +38,34 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id) {
     }
 }
 
-MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad) {
+float rubberSlide(const WheelContactSample& c) {
+    if (!c.contact) return 0.0f;
+    const float ref = std::max({c.velocity.Length(), std::abs(c.rollingSpeed), 1.0f});
+    const float vl = std::abs(c.longitudinalSlipSpeed), vt = std::abs(c.lateralSlipSpeed);
+    const float spin = smoothstep(1.0f, 5.0f, vl) * smoothstep(0.2f, 0.55f, vl / ref);
+    const float scrub = smoothstep(2.5f, 7.0f, vt) * smoothstep(0.4f, 0.8f, vt / ref);
+    return std::max(spin, scrub);
+}
+
+float soilPickup(SurfaceId id) {
+    switch (id) {
+    case SurfaceId::PackedDirt: return 0.5f;
+    case SurfaceId::Mud: return 1.0f;
+    case SurfaceId::Grass: return 0.6f;
+    default: return 0.0f;
+    }
+}
+
+void TreadSoil::update(const WheelContactSample& c, float dt) {
+    if (!c.contact || dt <= 0.0f) return;
+    // Rolling and sliding both move tread over the ground.
+    const float d = (c.velocity.Length() + c.slipSpeed()) * dt;
+    const float pickup = soilPickup(c.surface);
+    if (pickup > amount) amount += (pickup - amount) * (1.0f - std::exp(-d / 1.0f));
+    else amount = pickup + (amount - pickup) * std::exp(-d / 10.0f);
+}
+
+MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, float soil) {
     MarkIntensity m;
     if (!c.contact) return m;
     const SurfaceMarkResponse r = surfaceMarkResponse(c.surface);
@@ -53,8 +80,8 @@ MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad) {
         m.slip = r.slip * smoothstep(0.5f, 3.5f, vs) * smoothstep(0.08f, 0.3f, ratio) * std::sqrt(load);
     } else {
         // Hard ground: rubber is laid down only when the patch really slides (lock-up, wheelspin, drift), darker
-        // with more sliding speed and more load. Rolling and hard acceleration below ~15 % slip leave nothing.
-        m.slip = r.slip * smoothstep(0.8f, 5.0f, vs) * smoothstep(0.15f, 0.45f, ratio) * load;
+        // with more sliding speed and more load; a tread full of soil leaves none.
+        m.slip = r.slip * rubberSlide(c) * load * (1.0f - saturate(soil));
     }
     // Swept width perpendicular to the travel direction: a sliding patch drags its length sideways.
     const float vLong = std::abs(c.velocity.Dot(c.longitudinal)), vLat = std::abs(c.velocity.Dot(c.lateral));
@@ -87,7 +114,10 @@ void TireMarks::clear() {
 }
 
 void TireMarks::breakRibbons() {
-    for (Trail& t : m_trails) t.active = false;
+    for (Trail& t : m_trails) {
+        t.active = false;
+        t.soil = {};
+    }
 }
 
 void TireMarks::push(const TireMarkSegment& s) {
@@ -115,6 +145,8 @@ void TireMarks::start(Trail& t, const WheelContactSample& c, const MarkIntensity
 
 void TireMarks::update(std::span<const WheelContactSample> wheels, double time) {
     expire(time);
+    const float dt = m_lastUpdate >= 0.0 ? float(std::clamp(time - m_lastUpdate, 0.0, 0.1)) : 0.0f;
+    m_lastUpdate = time;
     if (!m_settings.enabled) {
         breakRibbons();
         return;
@@ -127,7 +159,8 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
             t.active = false;
             continue;
         }
-        const MarkIntensity m = markIntensity(c, m_settings.referenceLoad);
+        t.soil.update(c, dt);
+        const MarkIntensity m = markIntensity(c, m_settings.referenceLoad, t.soil.amount);
         if (!t.active) {
             start(t, c, m, time);
             continue;

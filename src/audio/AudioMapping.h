@@ -39,25 +39,31 @@ float enginePlaybackRate(float engineRpm, float pitch, float rpmMeasured);
 // Map [minDb, maxDb] linearly onto [-spreadDb, 0] so quiet takes stay quieter, but only by spreadDb.
 float compressedLevelDb(float sourceDb, float minDb, float maxDb, float spreadDb);
 
-// Tires: loops shared by all wheels, aggregated per layer.
+// Tires: loose-ground loops shared by all wheels and aggregated per layer; the rubber squeal (Skid) is per wheel.
 enum class TireLayer : std::uint8_t { Skid, Gravel, Dirt, Mud, Grass, Count };
 inline constexpr int kTireLayerCount = int(TireLayer::Count);
 
-// How a surface drives each tire layer: `roll` scales the rolling intensity, `slip` the sliding intensity.
+// How a surface drives each loose-ground layer: `roll` scales the rolling intensity, `slip` the sliding intensity.
+// Skid is never driven from here: only squealSurface() and the per-wheel squeal state decide about rubber.
 struct TireSurfaceResponse {
     std::array<float, kTireLayerCount> roll{};
     std::array<float, kTireLayerCount> slip{};
 };
 TireSurfaceResponse tireSurfaceResponse(SurfaceId surface);
 
+// Rubber squeal gain of a surface: concrete 1, rock and the low-grip patch weaker, every loose surface 0.
+float squealSurface(SurfaceId surface);
+
 // Rolling and sliding intensity of one wheel, 0..~1.2. Rolling grows with patch speed; sliding with the sliding
-// speed gated by the slip ratio (as for the tire marks: steady small slip under traction stays quiet). Both
-// scale with the load relative to the static wheel load.
+// speed gated by the slip ratio. Both scale with the load relative to the static wheel load.
 float wheelRollIntensity(const WheelAudio& w, float referenceLoad);
 float wheelSlipIntensity(const WheelAudio& w, float referenceLoad);
+// Instantaneous squeal drive of one wheel, 0..~1.4: squealSurface x slide (rubberSlide, the dead zones shared with
+// the rubber marks) x load x clean tread. Smoothing and hysteresis are applied per tick in VehicleAudioFeed.
+float wheelSquealDrive(const WheelAudio& w, float referenceLoad);
 
 struct TireLayerMix {
-    std::array<float, kTireLayerCount> gain{};     // 0..~1.2 (RMS of the four wheel intensities)
+    std::array<float, kTireLayerCount> gain{};     // 0..~1.2 (RMS of the four wheel intensities); Skid from `squeal`
     std::array<AudioVec3, kTireLayerCount> position{}; // intensity-weighted wheel position
 };
 TireLayerMix tireLayerMix(const std::array<WheelAudio, kAudioWheels>& wheels, float referenceLoad);

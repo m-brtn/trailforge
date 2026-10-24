@@ -28,8 +28,9 @@ struct SoundBank {
 // mailbox delivered and then render(); the offline capture calls the same functions on the main thread.
 // All state is owned here; nothing allocates after construction.
 //
-// Voices: 12 engine loops (3 rpm bands x off/full load x exhaust/engine-bay mic), 5 tire loops, wind, day and
-// night ambience, the menu drone, a synthesized transmission whine, and a pool of one-shots. Gains ramp
+// Voices: 12 engine loops (3 rpm bands x off/full load x exhaust/engine-bay mic), 4 loose-ground tire loops, one
+// squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, and a
+// pool of one-shots. Gains ramp
 // linearly over each 64-frame control block; a look-ahead peak limiter guards the master output.
 class AudioMixer {
 public:
@@ -65,6 +66,19 @@ private:
         AudioVec3 position;
         float gain = 1.0f;
         int delay = 0;         // frames before the sound starts
+        float lowpass = 0.0f;  // one-pole low-pass coefficient per sample (0 = off)
+        float lpL = 0.0f, lpR = 0.0f;
+    };
+
+    // Rubber squeal of one wheel: its own voice of the skid loop with per-slide variation.
+    struct SkidVoice {
+        Voice voice;
+        float gain = 0.0f;          // smoothed squeal
+        float prevTarget = 0.0f;
+        float jitter = 1.0f;        // pitch factor drawn at every slide onset
+        float wobblePhase = 0.0f, wobbleHz = 3.0f;
+        double lastChirp = -1e9;    // s
+        double sinceChirp = 1e9;    // s, the loop is ducked under a fresh chirp
     };
 
     void controlUpdate(float dt);
@@ -87,7 +101,8 @@ private:
     std::array<float, 12> m_engineLevel{};   // compressed recorded level (linear)
     std::array<float, 12> m_engineRpm{};     // measured rpm per loop
     float m_levelSpread = -1.0f;
-    std::array<Voice, kTireLayerCount> m_tires{};
+    std::array<Voice, kTireLayerCount> m_tires{}; // loose-ground layers; [Skid] is unused (see m_skid)
+    std::array<SkidVoice, kAudioWheels> m_skid{};
     Voice m_wind, m_day, m_night, m_menu;
     std::array<Voice, kOneShots> m_shots{};
 
@@ -102,7 +117,6 @@ private:
     bool m_starterHandover = false;
     double m_time = 0.0;         // rendered time, s
     double m_lastChirp = -1e9;
-    float m_prevSkid = 0.0f;
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;
     float m_whineHz = 0.0f, m_whineGain = 0.0f, m_whineL = 0.0f, m_whineR = 0.0f, m_whineTl = 0.0f, m_whineTr = 0.0f;

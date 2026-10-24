@@ -61,14 +61,7 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
     auto roll = [&](L l, float v) { r.roll[std::size_t(l)] = v; };
     auto slip = [&](L l, float v) { r.slip[std::size_t(l)] = v; };
     switch (surface) {
-    case SurfaceId::Concrete:
-        slip(L::Skid, 1.0f);
-        break;
-    case SurfaceId::LowGrip: // hard, only a lower mu: a weaker squeal
-        slip(L::Skid, 0.55f);
-        break;
     case SurfaceId::Rock:
-        slip(L::Skid, 0.6f);
         roll(L::Gravel, 0.7f);
         slip(L::Gravel, 0.5f);
         break;
@@ -93,6 +86,15 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
     return r;
 }
 
+float squealSurface(SurfaceId surface) {
+    switch (surface) {
+    case SurfaceId::Concrete: return 1.0f;
+    case SurfaceId::LowGrip: return 0.55f; // hard, only a lower mu: a weaker squeal
+    case SurfaceId::Rock: return 0.45f;    // small, rough contact: mostly scrape (gravel layer)
+    default: return 0.0f;
+    }
+}
+
 namespace {
 float loadFactor(const WheelAudio& w, float referenceLoad) {
     return std::clamp(std::sqrt(std::max(w.load, 0.0f) / std::max(referenceLoad, 1.0f)), 0.0f, 1.4f);
@@ -111,6 +113,14 @@ float wheelSlipIntensity(const WheelAudio& w, float referenceLoad) {
     return std::clamp(w.slipSpeed / 6.0f, 0.0f, 1.0f) * gate * loadFactor(w, referenceLoad);
 }
 
+float wheelSquealDrive(const WheelAudio& w, float referenceLoad) {
+    if (!w.contact) return 0.0f;
+    const float surface = squealSurface(SurfaceId(w.surface));
+    if (surface <= 0.0f) return 0.0f;
+    return surface * std::clamp(w.slide, 0.0f, 1.0f) * loadFactor(w, referenceLoad) *
+           (1.0f - std::clamp(w.soil, 0.0f, 1.0f));
+}
+
 TireLayerMix tireLayerMix(const std::array<WheelAudio, kAudioWheels>& wheels, float referenceLoad) {
     TireLayerMix mix;
     std::array<float, kTireLayerCount> power{}, weight{};
@@ -122,7 +132,8 @@ TireLayerMix tireLayerMix(const std::array<WheelAudio, kAudioWheels>& wheels, fl
         const float slip = wheelSlipIntensity(w, referenceLoad);
         for (int l = 0; l < kTireLayerCount; ++l) {
             const std::size_t i = std::size_t(l);
-            const float c = std::max(r.roll[i] * roll, r.slip[i] * slip);
+            const float c = TireLayer(l) == TireLayer::Skid ? std::max(w.squeal, 0.0f)
+                                                            : std::max(r.roll[i] * roll, r.slip[i] * slip);
             power[i] += c * c;
             weight[i] += c;
             pos[i] = pos[i] + w.position * c;

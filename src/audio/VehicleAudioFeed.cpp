@@ -1,5 +1,6 @@
 #include "audio/VehicleAudioFeed.h"
 
+#include "audio/AudioMapping.h"
 #include "sim/Simulation.h"
 
 #include <algorithm>
@@ -40,6 +41,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
 
     const WaterInfo water = TestTrack::water();
     const bool newSpawn = !m_seen || sim.spawnCount() != m_spawnCount;
+    const float dt = float(sim.fixedStep());
     for (int i = 0; i < kAudioWheels; ++i) {
         const WheelContactSample& c = contacts[std::size_t(i)];
         const WheelTelemetry& wt = t.wheels[std::size_t(i)];
@@ -55,6 +57,24 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         const JPH::Vec3 p = c.patchCenter;
         w.inWater = c.contact && p.GetY() < water.level - 0.02f && p.GetX() > water.x0 && p.GetX() < water.x1 &&
                     p.GetZ() > water.z0 && p.GetZ() < water.z1;
+
+        const std::size_t k = std::size_t(i);
+        if (newSpawn) {
+            m_soil[k] = {};
+            m_squealEnv[k] = 0.0f;
+            m_squealOpen[k] = false;
+        }
+        m_soil[k].update(c, dt);
+        w.soil = m_soil[k].amount;
+        w.slide = rubberSlide(c);
+        const float drive = wheelSquealDrive(w, f.referenceLoad);
+        const bool hard = c.contact && squealSurface(c.surface) > 0.0f;
+        float& env = m_squealEnv[k];
+        const float tau = drive > env ? s.squealAttack : (hard ? s.squealRelease : s.squealReleaseLoose);
+        env += (drive - env) * (1.0f - std::exp(-dt / tau));
+        if (env > s.squealOn) m_squealOpen[k] = true;
+        else if (env < s.squealOff) m_squealOpen[k] = false;
+        w.squeal = m_squealOpen[k] ? (env - s.squealOff) / (1.0f - s.squealOff) : 0.0f;
     }
 
     if (newSpawn) {

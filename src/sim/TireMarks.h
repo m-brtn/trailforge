@@ -46,13 +46,29 @@ struct SurfaceMarkResponse {
 };
 SurfaceMarkResponse surfaceMarkResponse(SurfaceId id);
 
+// How much a patch on hard ground really slides, 0..1. Shared by the rubber marks and the tire squeal so that what
+// is drawn and what is heard agree. Longitudinal (wheelspin, lock-up) and lateral sliding are gated separately, each
+// by its sliding speed (m/s) and its ratio to max(patch speed, rolling speed, 1 m/s). Dead zones from
+// `trailforge_probe skid` on concrete: a full-lock turn at 30 km/h scrubs sideways at 3.7 m/s / 0.39, a turn at
+// 50 km/h at 3.8 m/s / 0.26, traction slip in 2nd gear stays below 2 m/s / 0.15 (all silent); the inner wheels of a
+// full-throttle full-lock launch spin at 7-10 m/s / 0.6-0.75, lock-up and handbrake reach 11-13 m/s at 1.0 (squeal).
+float rubberSlide(const WheelContactSample& c);
+
+// Soil carried in the tread (visual and sound only, never friction): picked up on loose ground, worn off by
+// distance rolled or slid on hard ground (~10 m). A dirty tread lays no rubber and does not squeal.
+float soilPickup(SurfaceId id); // 0 hard surfaces, up to 1 for mud
+struct TreadSoil {
+    float amount = 0.0f; // 0 clean .. 1 caked with mud
+    void update(const WheelContactSample& c, float dt);
+};
+
 // Mark intensities of one contact sample (before the per-surface render multipliers).
 struct MarkIntensity {
     float imprint = 0.0f;
     float slip = 0.0f;
     float halfWidth = 0.0f; // m
 };
-MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad);
+MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, float soil = 0.0f);
 
 // Persistent tire marks: per-wheel ribbons written from the per-tick contact samples into a fixed ring buffer.
 // Visual only and independent of the renderer (runs headless; the renderer reads the ring).
@@ -76,6 +92,7 @@ public:
     std::size_t headIndex() const { return m_head; }
     const TireMarkSegment* data() const { return m_ring.data(); }
     const TireMarkSegment& oldest(std::size_t i) const { return m_ring[(firstIndex() + i) % m_ring.size()]; }
+    float treadSoil(std::size_t wheel) const { return wheel < m_trails.size() ? m_trails[wheel].soil.amount : 0.0f; }
     std::uint64_t written() const { return m_written; }       // total segments ever written
     std::uint64_t generation() const { return m_generation; } // changes on clear / capacity change
 
@@ -89,6 +106,7 @@ private:
         double lastEmit = 0.0;
         float accImprint = 0.0f, accSlip = 0.0f, accHalfWidth = 0.0f;
         int accCount = 0;
+        TreadSoil soil;
     };
     void start(Trail& t, const WheelContactSample& c, const MarkIntensity& m, double time) const;
     void expire(double time);
@@ -97,6 +115,7 @@ private:
     std::vector<TireMarkSegment> m_ring;
     std::size_t m_head = 0, m_count = 0;
     std::uint64_t m_written = 0, m_generation = 0;
+    double m_lastUpdate = -1.0;
     std::array<Trail, 4> m_trails{};
 };
 

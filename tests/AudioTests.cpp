@@ -6,6 +6,7 @@
 #include "audio/AudioMixer.h"
 #include "audio/VehicleAudioFeed.h"
 #include "sim/Simulation.h"
+#include "sim/TireMarks.h"
 
 #include <algorithm>
 #include <cmath>
@@ -108,9 +109,15 @@ void tireLayers() {
     using L = TireLayer;
     auto g = [](const TireLayerMix& m, L l) { return m.gain[std::size_t(l)]; };
 
+    // The skid layer only follows the per-wheel squeal the feed computed (gated, smoothed); here it is set directly.
+    auto squealing = [&](WheelAudio w, float slide) {
+        w.slide = slide;
+        w.squeal = wheelSquealDrive(w, ref);
+        return w;
+    };
     const TireLayerMix concreteRoll = tireLayerMix(all(wheel(SurfaceId::Concrete, 10, 0.3f, 0.03f)), ref);
-    const TireLayerMix concreteLock = tireLayerMix(all(wheel(SurfaceId::Concrete, 8, 8, 1.0f)), ref);
-    const TireLayerMix tractionSlip = tireLayerMix(all(wheel(SurfaceId::Concrete, 8, 1.7f, 0.12f)), ref);
+    const TireLayerMix concreteLock = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 8, 1.0f), 1.0f)), ref);
+    const TireLayerMix tractionSlip = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 1.7f, 0.12f), 0.0f)), ref);
     const TireLayerMix dirtRoll = tireLayerMix(all(wheel(SurfaceId::PackedDirt, 8, 0.2f, 0.02f)), ref);
     const TireLayerMix dirtSpin = tireLayerMix(all(wheel(SurfaceId::PackedDirt, 2, 4, 0.8f)), ref);
     const TireLayerMix mudRoll = tireLayerMix(all(wheel(SurfaceId::Mud, 6, 0.3f, 0.05f)), ref);
@@ -142,9 +149,60 @@ void tireLayers() {
     CHECK(g(grassRoll, L::Grass) > 0.5f && g(grassRoll, L::Mud) == 0.0f && g(grassRoll, L::Dirt) == 0.0f,
           "grass selection");
     // Load: an unloaded wheel is quieter than a loaded one.
-    const float light = wheelSlipIntensity(wheel(SurfaceId::Concrete, 8, 8, 1, 1000), ref);
-    const float heavy = wheelSlipIntensity(wheel(SurfaceId::Concrete, 8, 8, 1, 6000), ref);
+    const float light = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 1000), ref);
+    const float heavy = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 6000), ref);
     CHECK(light < heavy, "slip x load: %.2f vs %.2f", light, heavy);
+    const float lightSq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 1000), 1.0f), ref);
+    const float heavySq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 6000), 1.0f), ref);
+    CHECK(lightSq < heavySq, "squeal x load: %.2f vs %.2f", lightSq, heavySq);
+
+    // Squeal surface gate: rubber on hard ground only; a full slide on soft ground never squeals.
+    std::printf("    squeal drive of a full slide:");
+    const SurfaceId surfaces[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Rock,
+                                  SurfaceId::LowGrip,  SurfaceId::Mud,        SurfaceId::Grass};
+    for (SurfaceId s : surfaces) {
+        const float d = wheelSquealDrive(squealing(wheel(s, 8, 8, 1.0f), 1.0f), ref);
+        std::printf(" %d:%.2f", int(s), d);
+        const bool hard = s == SurfaceId::Concrete || s == SurfaceId::Rock || s == SurfaceId::LowGrip;
+        CHECK(hard ? d > 0.3f : d == 0.0f, "surface %d squeal drive %.2f", int(s), d);
+    }
+    std::printf("\n");
+    WheelAudio dirty = wheel(SurfaceId::Concrete, 8, 8, 1.0f);
+    dirty.soil = 1.0f;
+    CHECK(wheelSquealDrive(squealing(dirty, 1.0f), ref) == 0.0f, "a tread full of soil squeals");
+
+    // rubberSlide dead zones (shared with the rubber marks), from measured concrete maneuvers.
+    auto patch = [](float speed, float rolling, float lateral) {
+        WheelContactSample c;
+        c.contact = true;
+        c.velocity = JPH::Vec3(lateral, 0.0f, speed);
+        c.rollingSpeed = rolling;
+        c.longitudinalSlipSpeed = rolling - speed;
+        c.lateralSlipSpeed = lateral;
+        return c;
+    };
+    const float traction = rubberSlide(patch(14.0f, 15.7f, 0.0f));    // 2nd-gear pull, 1.7 m/s
+    const float launch = rubberSlide(patch(4.0f, 6.4f, 0.0f));        // 2.4 m/s spike at ratio 0.38
+    const float fullLock = rubberSlide(patch(8.4f, 8.4f, 3.6f));      // 30 km/h full-lock scrub, 23 deg
+    const float lowRange = rubberSlide(patch(5.0f, 8.6f, 0.0f));      // 3.6 m/s wheelspin at ratio 0.42
+    const float lockup = rubberSlide(patch(12.0f, 0.0f, 0.0f));       // locked wheel
+    const float drift = rubberSlide(patch(8.0f, 8.0f, 7.0f));         // sideways at 41 deg
+    std::printf("    rubberSlide: traction %.2f launch %.2f full-lock %.2f low-range spin %.2f lock-up %.2f drift %.2f\n",
+                traction, launch, fullLock, lowRange, lockup, drift);
+    CHECK(traction == 0.0f && fullLock < 0.05f && launch < 0.25f, "normal driving slides: %.2f %.2f %.2f", traction,
+          fullLock, launch);
+    CHECK(lowRange > 0.3f && lockup > 0.99f && drift > 0.5f, "real slides: %.2f %.2f %.2f", lowRange, lockup, drift);
+
+    // Tread soil: picked up within ~1 m of mud, shed over ~10 m of clean ground.
+    TreadSoil soil;
+    WheelContactSample onMud = patch(5.0f, 5.0f, 0.0f), onConcrete = onMud;
+    onMud.surface = SurfaceId::Mud;
+    onConcrete.surface = SurfaceId::Concrete;
+    for (int i = 0; i < 60; ++i) soil.update(onMud, 1.0f / 120.0f); // 2.5 m
+    const float muddy = soil.amount;
+    for (int i = 0; i < 720; ++i) soil.update(onConcrete, 1.0f / 120.0f); // 30 m
+    std::printf("    tread soil: %.2f after 2.5 m of mud, %.3f after 30 m of concrete\n", muddy, soil.amount);
+    CHECK(muddy > 0.85f && soil.amount < 0.06f, "tread soil %.2f / %.3f", muddy, soil.amount);
 
     // Ambience and panning.
     for (float d = 0.0f; d <= 1.0f; d += 0.1f) {
@@ -218,15 +276,20 @@ SoundBank syntheticBank() {
 }
 
 struct Driver {
-    Simulation sim{[] {
-        SimulationSettings s;
-        s.layout = TrackLayout::SurfaceLanes;
-        return s;
-    }()};
+    explicit Driver(TrackLayout layout = TrackLayout::SurfaceLanes, double fixedStep = 1.0 / 120.0)
+        : sim([&] {
+              SimulationSettings s;
+              s.layout = layout;
+              s.fixedStep = fixedStep;
+              return s;
+          }()),
+          framesPerTick(int(std::lround(48000.0 * fixedStep))) {}
+    Simulation sim;
+    int framesPerTick;
     SoundBank bank = syntheticBank();
     AudioMixer mixer{bank};
     VehicleAudioFeed feed;
-    std::vector<float> buf = std::vector<float>(800);
+    std::vector<float> buf = std::vector<float>(2 * std::size_t(framesPerTick));
     bool paused = false;
     float maxAbs = 0.0f;
     bool finite = true;
@@ -252,24 +315,44 @@ struct Driver {
             mixer.trigger(e);
         }
         feed.clearEvents();
-        mixer.render(buf.data(), 400); // 1/120 s at 48 kHz
+        mixer.render(buf.data(), framesPerTick); // one physics tick at 48 kHz
         for (float x : buf) {
             finite = finite && std::isfinite(x);
             maxAbs = std::max(maxAbs, std::abs(x));
             outPower += double(x) * double(x);
         }
-        outFrames += 400;
+        outFrames += framesPerTick;
     }
+    int ticks(double seconds) const { return int(std::lround(seconds / sim.fixedStep())); }
     void run(double seconds, const DriverIntent& in = {}) {
-        for (int i = 0; i < int(seconds * 120.0); ++i) tick(in);
+        for (int i = 0; i < ticks(seconds); ++i) tick(in);
     }
-    void cruise(double seconds, float kmh) {
-        for (int i = 0; i < int(seconds * 120.0); ++i) {
+    void cruise(double seconds, float kmh, float steer = 0.0f) {
+        for (int i = 0; i < ticks(seconds); ++i) {
             const float v = sim.vehicle().telemetry().speed * 3.6f;
             DriverIntent in;
             in.throttle = std::fmin(0.6f, std::fmax(0.0f, 0.25f + 0.05f * (kmh - v)));
+            in.steer = steer;
             tick(in);
         }
+    }
+    // Runs and returns the peak of the mixed skid gain (and of the mud layer).
+    float peakSkid(double seconds, const DriverIntent& in, float* peakMud = nullptr) {
+        float skid = 0.0f;
+        for (int i = 0; i < ticks(seconds); ++i) {
+            tick(in);
+            skid = std::max(skid, mixer.stats().skid);
+            if (peakMud) *peakMud = std::max(*peakMud, mixer.stats().mud);
+        }
+        return skid;
+    }
+    float peakSkidCruise(double seconds, float kmh, float steer) {
+        float skid = 0.0f;
+        for (int i = 0; i < ticks(seconds); ++i) {
+            cruise(sim.fixedStep(), kmh, steer);
+            skid = std::max(skid, mixer.stats().skid);
+        }
+        return skid;
     }
     double rms() {
         const double r = outFrames ? std::sqrt(outPower / double(2 * outFrames)) : 0.0;
@@ -339,6 +422,89 @@ void feedAndMixer() {
     CHECK(d.mixer.stats().gameplayGain > 0.9f, "gameplay did not resume: %.3f", d.mixer.stats().gameplayGain);
 }
 
+// Tire squeal on the real simulation: silent for normal launches and turns on concrete, audible for lock-up,
+// handbrake and power slides, never on mud; the same at 60, 120 and 240 Hz physics.
+void skidGating() {
+    struct Result {
+        float launch, launchLow, turnTight, turnFast, handbrake, brake, powerSlide;
+        int chirps;
+    };
+    auto pad = [](double step) {
+        Driver d(TrackLayout::Flat, step);
+        Result r{};
+        auto spawn = [&] {
+            d.sim.requestReset();
+            d.run(1.0);
+        };
+        spawn();
+        r.launch = d.peakSkid(5.0, {.throttle = 1.0f});
+        spawn();
+        d.sim.requestToggleLowRange();
+        d.run(0.1);
+        r.launchLow = d.peakSkid(4.0, {.throttle = 1.0f});
+        d.sim.requestToggleLowRange();
+        spawn();
+        d.cruise(6.0, 30.0f);
+        r.turnTight = d.peakSkidCruise(4.0, 30.0f, 1.0f);
+        spawn();
+        d.cruise(8.0, 50.0f);
+        r.turnFast = d.peakSkidCruise(4.0, 50.0f, 0.5f);
+        const int chirps0 = d.mixer.stats().skidChirps;
+        spawn();
+        d.cruise(7.0, 40.0f);
+        r.handbrake = d.peakSkid(2.5, {.steer = 0.6f, .handBrake = 1.0f});
+        spawn();
+        d.cruise(8.0, 50.0f);
+        r.brake = d.peakSkid(3.0, {.brake = 1.0f});
+        spawn();
+        r.powerSlide = d.peakSkid(5.0, {.throttle = 1.0f, .steer = 1.0f});
+        r.chirps = d.mixer.stats().skidChirps - chirps0;
+        return r;
+    };
+    const double steps[] = {1.0 / 60.0, 1.0 / 120.0, 1.0 / 240.0};
+    Result rs[3];
+    for (int i = 0; i < 3; ++i) {
+        const Result& r = rs[i] = pad(steps[i]);
+        std::printf("    %3.0f Hz concrete skid: launch %.3f, low-range launch %.3f, turn 30 km/h full lock %.3f, "
+                    "turn 50 km/h half lock %.3f | handbrake %.2f, brake %.2f, power slide %.2f, %d chirps\n",
+                    1.0 / steps[i], r.launch, r.launchLow, r.turnTight, r.turnFast, r.handbrake, r.brake,
+                    r.powerSlide, r.chirps);
+        CHECK(r.launch < 0.05f && r.launchLow < 0.05f, "%.0f Hz: launch squeals %.3f / %.3f", 1.0 / steps[i],
+              r.launch, r.launchLow);
+        CHECK(r.turnTight < 0.05f && r.turnFast < 0.05f, "%.0f Hz: turn squeals %.3f / %.3f", 1.0 / steps[i],
+              r.turnTight, r.turnFast);
+        CHECK(r.handbrake > 0.3f && r.brake > 0.3f && r.powerSlide > 0.15f, "%.0f Hz: slides %.2f %.2f %.2f",
+              1.0 / steps[i], r.handbrake, r.brake, r.powerSlide);
+        CHECK(r.chirps >= 2, "%.0f Hz: %d onset chirps for 3 slides", 1.0 / steps[i], r.chirps);
+    }
+    // The squeal envelope is step independent; the slides themselves are not entirely: at 60 Hz Jolt locks a braked
+    // wheel once the brake torque exceeds |w| x inertia / dt, so the full brake locks all four wheels there.
+    CHECK(std::abs(rs[0].handbrake - rs[1].handbrake) < 0.1f && std::abs(rs[2].handbrake - rs[1].handbrake) < 0.1f,
+          "step dependence: handbrake %.2f / %.2f / %.2f", rs[0].handbrake, rs[1].handbrake, rs[2].handbrake);
+    CHECK(std::abs(rs[2].brake - rs[1].brake) < 0.1f && std::abs(rs[2].powerSlide - rs[1].powerSlide) < 0.1f,
+          "step dependence 120/240 Hz: brake %.2f / %.2f, power slide %.2f / %.2f", rs[1].brake, rs[2].brake,
+          rs[1].powerSlide, rs[2].powerSlide);
+
+    // Mud lane: wheelspin, lock-up and a handbrake slide drive the mud layer and never the squeal.
+    Driver d;
+    d.sim.requestTeleport(2);
+    d.run(1.0);
+    d.sim.requestToggleLowRange();
+    d.run(0.1);
+    float mud = 0.0f;
+    float skid = d.peakSkid(1.5, {.throttle = 1.0f, .steer = 1.0f}, &mud);
+    skid = std::max(skid, d.peakSkid(2.0, {.brake = 1.0f}, &mud));
+    d.sim.requestToggleLowRange();
+    d.sim.requestTeleport(2);
+    d.run(1.0);
+    d.cruise(5.0, 35.0f);
+    skid = std::max(skid, d.peakSkid(2.0, {.brake = 1.0f}, &mud));
+    d.cruise(5.0, 35.0f);
+    skid = std::max(skid, d.peakSkid(2.0, {.steer = 0.6f, .handBrake = 1.0f}, &mud));
+    std::printf("    mud lane: peak skid %.3f, peak mud %.2f\n", skid, mud);
+    CHECK(skid == 0.0f && mud > 0.3f, "mud: skid %.3f mud %.2f", skid, mud);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -347,6 +513,7 @@ int main(int argc, char** argv) {
         {"audio_tire_layers", tireLayers},
         {"audio_manifest", manifest},
         {"audio_feed_and_mixer", feedAndMixer},
+        {"audio_skid_gating", skidGating},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

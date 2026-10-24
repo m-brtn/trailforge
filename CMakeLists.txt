@@ -34,9 +34,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_sim PRIVATE -Wall -Wextra)
 endif()
 
-add_executable(trailforge_probe tools/SimProbe.cpp)
-target_link_libraries(trailforge_probe PRIVATE trailforge_sim)
-
 # ------------------------------------------------------------------ audio model
 # Manifest, parameter mapping, mixer and the per-tick vehicle feed. No device and no miniaudio: runs headless.
 add_library(trailforge_audio STATIC
@@ -50,6 +47,9 @@ target_link_libraries(trailforge_audio PUBLIC trailforge_sim)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_audio PRIVATE -Wall -Wextra)
 endif()
+
+add_executable(trailforge_probe tools/SimProbe.cpp)
+target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
 
 # ------------------------------------------------------------------ application
 if(TRAILFORGE_BUILD_APP)
@@ -121,7 +121,8 @@ if(TRAILFORGE_BUILD_TESTS)
             audio_engine_layers
             audio_tire_layers
             audio_manifest
-            audio_feed_and_mixer)
+            audio_feed_and_mixer
+            audio_skid_gating)
         add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

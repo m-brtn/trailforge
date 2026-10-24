@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/AudioTypes.h"
+#include "sim/TireMarks.h"
 
 #include <array>
 #include <vector>
@@ -21,6 +22,13 @@ struct AudioFeedSettings {
     float wheelEventInterval = 0.15f; // s, per wheel and event type
     float impactInterval = 0.08f;    // s
     float creakInterval = 2.5f;      // s
+    // Rubber squeal per wheel: the drive (wheelSquealDrive) is followed with attack/release time constants and
+    // gated with hysteresis, so single-tick slip spikes and steady small slip stay silent.
+    float squealAttack = 0.05f;      // s
+    float squealRelease = 0.15f;     // s, still on a hard surface
+    float squealReleaseLoose = 0.04f; // s, after the wheel left the hard surface or lost contact
+    float squealOn = 0.12f;          // gate opens above this smoothed drive
+    float squealOff = 0.05f;         // and closes below this one
 };
 
 // Runs on the game thread after every physics tick: keeps the latest continuous state (AudioFrame vehicle part)
@@ -53,6 +61,9 @@ private:
     std::array<double, kAudioWheels> m_lastThump{}, m_lastBump{}, m_lastSplash{};
     double m_lastImpact = -1e9, m_lastCreak = -1e9, m_lastShift = -1e9;
     float m_prevArticulation = 0.0f;
+    std::array<TreadSoil, kAudioWheels> m_soil{};
+    std::array<float, kAudioWheels> m_squealEnv{};
+    std::array<bool, kAudioWheels> m_squealOpen{};
 };
 
 } // namespace tf

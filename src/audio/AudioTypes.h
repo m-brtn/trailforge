@@ -41,6 +41,9 @@ struct WheelAudio {
     float slipSpeed = 0.0f;     // m/s, patch sliding speed over the ground
     float slipRatio = 0.0f;     // sliding speed / max(patch speed, rolling speed, 1 m/s)
     float rollSpeed = 0.0f;     // m/s, |patch speed over the ground|
+    float slide = 0.0f;         // 0..1, rubberSlide() of the contact (the same gate as the rubber marks)
+    float soil = 0.0f;          // 0..1, soil in the tread (TreadSoil): a dirty tread does not squeal
+    float squeal = 0.0f;        // 0..~1.2, rubber squeal of this wheel: smoothed, gated per tick in VehicleAudioFeed
     AudioVec3 position;         // world, contact patch
 };
 
@@ -98,6 +101,8 @@ struct AudioStats {
     std::array<float, 3> onWeights{};  // low/mid/high (full load)
     std::array<float, 3> exhaustRates{}; // playback rate of the off-load exhaust layers
     float skid = 0.0f, gravel = 0.0f, dirt = 0.0f, mud = 0.0f, grass = 0.0f; // tire layer intensities (0..~1)
+    std::array<float, kAudioWheels> skidWheel{}; // per-wheel squeal voice gains (skid = RMS of these)
+    int skidChirps = 0;            // short squeal one-shots started at slide onsets
     float wind = 0.0f;
     float day = 0.0f, night = 0.0f; // ambience weights
     float whineHz = 0.0f;
