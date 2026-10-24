@@ -36,7 +36,8 @@ enum class TrackLayout {
     ProvingGround,    // full proving ground, ~100x100 m
     Flat,             // flat pad (for tests)
     FlatWithWheelPit, // flat pad with a pit under the front left wheel (wheel lift test)
-    SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass (tire mark tests)
+    SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass, rock, low grip
+    SurfaceRamps,     // 15 and 20 degree ramps per surface, 10 m lanes, 22 m long (climb measurements)
 };
 
 struct TrackFeature {
@@ -89,6 +90,7 @@ private:
     void buildProvingGround();
     void buildFlat(bool withPit);
     void buildSurfaceLanes();
+    void buildSurfaceRamps();
 
     PhysicsWorld& m_world;
     TrackLayout m_layout;

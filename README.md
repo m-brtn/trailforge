@@ -105,8 +105,12 @@ Command-line options:
 - `susp [feature throttle low secs steer]` — per-wheel suspension length, compression and hub height in body space
   over a track feature (default 2, the diagonal twister), body-terrain contact ticks;
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
-  `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE` in the environment); `showcase` —
-  where the skid layer is audible on a scripted drive around the mud showcase.
+  `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
+  `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
+  on a scripted drive around the mud showcase;
+- `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
+  flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
+  headless only); `climb [lane]` — the force balance of one ramp climb.
 
 ### Scenario mode
 
@@ -271,7 +275,8 @@ Surrounded by an earth berm and concrete walls.
 - **Lane A** (center):
   - 0.18 m bumps every 3 m;
   - diagonal waves ±0.38 m — wheels lift diagonally on them;
-  - **low-grip section**: a hard surface with μ×0.35. Not mud or ice — just a low coefficient.
+  - **low-grip section**: a hard surface with an effective peak μ of 0.42 (lateral 0.40). Not mud or ice — just a
+    low coefficient.
 - **Lane B** (right of the start, −X): hills of 12°, 20°, 28° and 35°, 1.8 m high.
 - **Lane C** (left, +X):
   - 18° side slope;
@@ -283,8 +288,8 @@ Surrounded by an earth berm and concrete walls.
   concrete → dirt → grass.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
-  winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (μ×0.60/0.55),
-  the meadow is `Grass` (μ×0.80/0.78). There is **no sinkage and no water physics**: puddles are dips in the
+  winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (peak μ 0.35/0.32),
+  the meadow is `Grass` (peak μ 0.50/0.48). There is **no sinkage and no water physics**: puddles are dips in the
   hard ground, and the water surface is render-only. The ruts you see are tire marks, which are render-only too
   (see "Tire marks"). Deformable terrain is a later stage.
 
@@ -292,6 +297,26 @@ Rendering and collision are built from the same triangles (`TrackGeometry`). Eac
 The outer backdrop (hills, trees beyond the walls, distant mountains) and grass are render-only and cannot be reached.
 Grip is computed per wheel: `SetCombineFriction` takes the material under the contact patch
 and multiplies the tire curve by the surface coefficients — longitudinal and lateral separately.
+
+The tire curve peaks at μ 1.00 (longitudinal, slip ratio 0.10; sliding 0.80) and 1.00 (lateral, 6°; sliding 0.78);
+the surface multipliers therefore are the effective peak μ:
+
+| Surface | Longitudinal | Lateral | Was (tire 1.20 / 1.15 × old multiplier) |
+|---|---|---|---|
+| Concrete | 0.95 | 0.95 | 1.20 / 1.15 |
+| Rock | 0.75 | 0.75 | 1.08 / 1.04 |
+| Packed dirt | 0.70 | 0.68 | 1.02 / 0.98 |
+| Grass | 0.50 | 0.48 | 0.96 / 0.90 |
+| Mud | 0.35 | 0.32 | 0.72 / 0.63 |
+| Low grip (hard) | 0.42 | 0.40 | 0.42 / 0.40 (unchanged) |
+
+These are plausible dry-concrete-to-mud ranges for an all-terrain tire, not measured data. Every surface is rigid:
+mud and grass are only lower friction, with no sinkage, rutting or bulldozing. Measured with
+`trailforge_probe surfaces` (120 Hz, full throttle): straight launches keep grip on concrete (max slip 0.27 m/s,
+0–30 km/h 1.52 s) and spin on grass (7.3 m/s, 0–30 km/h 2.20 s) and mud (9.4 m/s, 3.07 s); 50 → 0 km/h takes
+13.7 m on concrete, 18.5 m on dirt, 25.4 m on grass and 36.2 m on mud; in low range a hill start fails on 15° and
+20° mud (the spinning tires drop to the sliding μ 0.28), and the 20° mud ramp is climbed only with momentum.
+
 Teleport points are in the Tuning window.
 
 ## Rendering
@@ -484,15 +509,18 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   Solid axles and articulation are not modeled; every wheel is independent.
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
   No Pacejka model, heat, pressure or sidewall deformation.
-- The ground is hard and non-deformable. Surfaces differ only in friction coefficients.
-  The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
+- The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
+  ground"). The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
   at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
   without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire
-  is stick/slip: below breakaway the measured slip is ~0 rather than a slip-stiffness curve.
+  is stick/slip: below breakaway the measured slip is ~0 rather than a slip-stiffness curve. At 60 Hz the lighter
+  front wheels still slip for one or two steps (~3 m/s) during a full-throttle concrete launch.
 - Launch clutch: near the minimum rpm the clutch passes at most the engine torque at the current throttle (at least
   a 40 N·m creep torque), like a torque converter at stall. Jolt clamps the engine rpm, so an unlimited slipping
   clutch delivered ~840 N·m at any throttle.
+- Once a tire spins up it is on the sliding part of the curve (μ × 0.80): full throttle from a standstill on a slope
+  near the limit spins in place where a careful throttle would climb. There is no traction control.
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven).
@@ -519,25 +547,27 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 15 of 15 tests pass in Debug, Release and headless (rows not listed are from earlier stages):
+- **CTest.** 16 of 16 tests pass in Debug, Release and headless (numbers below are from the latest run after the
+  friction retune where they changed):
 
 | Test | Result |
 |---|---|
 | Settling on suspension | No NaN; load sum 19623 N with m·g = 19620 N |
-| Throttle | 0 → 16.1 m/s in 4 s |
-| Braking | 16.1 → 8.1 m/s in 1 s, then a full stop |
+| Throttle | 0 → 16.0 m/s in 4 s |
+| Braking | 16.0 → 9.0 m/s in 1 s, then a full stop |
 | Wheel over a pit | FL has no contact, load 0, the others carry the weight |
 | Reset | Gear 0, 800 rpm, initial pose |
 | Frame schedule independence | Different frame patterns at the same step rate: position difference 0.000000 m |
 | Cornering load balance (40 km/h) | Average Σload = 19620 N with 1, 2 and 4 collision steps; outer front > 2× inner |
-| Brake in low range | 10.4 m/s → stop in 1.33 s, speed never increases, final 0 m/s |
-| Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 83 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; wheelspin: 68/76/68 segments, slip 0.56/0.48/0.54; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
+| Brake in low range | 11.7 m/s → stop in 1.59 s, speed never increases, final 0 m/s |
+| Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 82 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; low-range power turn: 95/66/85 segments, slip 0.35/0.95/0.76; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
 | Auto reverse | At 60/120/240 Hz S brakes 12.8–14.1 m/s to a stop and engages reverse 0.23–0.25 s later (hold 0.25 s, never while moving), −12.6…−12.9 m/s after 3 s; W brakes and engages drive the same way; low range reverse −4.8 m/s after 3 s; reverse again right after R; W+S never switches; classic mapping holds; on the 12° hill S stops, engages reverse and the vehicle backs down 7.4 m in 2 s |
 | Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
-| Audio: skid gating | At 60/120/240 Hz on concrete: squeal 0 for full-throttle and low-range launches and full-lock / half-lock turns; handbrake 0.63, full brake 0.98 / 0.49 / 0.49 (at 120/240 Hz only the rear wheels lock), power slide 0.24–0.41, 4–6 onset chirps; mud lane: skid 0, mud 1.00 |
-| Audio: feed and mixer | Simulated launch: 4 gear events, source rpm up to 3839; concrete skid 0.000 cruising vs 0.924 braking; mud lane mud 0.65; pause RMS 0.1414 → 0.0509; peak 0.672, 0 clipped |
+| Audio: feed and mixer | Simulated launch: 3 gear events, source rpm up to 3028; concrete skid 0.000 cruising vs 1.00 braking; mud lane mud 0.66; pause RMS 0.1486 → 0.0497; peak 0.660, 0 clipped |
+| Audio: skid gating | At 60/120/240 Hz on concrete: squeal ≤ 0.022 for launches (0 at 120/240 Hz) and full-lock / half-lock turns 0; handbrake 0.63–0.64, full brake 1.00–1.01 (with μ 0.95 the front wheels lock too, ~0.4 s after the rears), power slide 0.27–0.43, 6–7 onset chirps; mud lane: skid 0, mud 1.00 |
+| Surface launch grip | Full-throttle high-range launch at 60/120/240 Hz: concrete v(1 s) 5.1 m/s, max slip 0.27 / 0.11 m/s at 120 / 240 Hz (3.3 m/s for 0.03 s at 60 Hz); grass and mud spin (max slip 7.2–9.5 m/s for 1.7–1.8 s), v(1 s) 3.4 / 2.4 m/s stays below μ·g; v(2 s) orders concrete > dirt > grass > mud |
 
 - **Step cost** (`trailforge_probe bench`, Release, 20 s course drive):
   - 60 Hz: 0.038 ms per step on average, worst 0.11 ms; 2.3 ms CPU per simulated second;

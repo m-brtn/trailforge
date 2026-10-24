@@ -25,7 +25,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 14 tests; no window, no audio device)
+# headless physics and audio tests (CTest, 16 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -34,7 +34,8 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 ```
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
-(headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`).
+(headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
+`showcase`, `surfaces`, `climb`).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
 check failed:
@@ -45,6 +46,8 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
+./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
+./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
 python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
@@ -52,7 +55,7 @@ python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
 `--audio-capture file.wav`, `--version`. Scenario checks must not depend on an audio device: everything except
-`audio_check.txt` passes with `--no-audio`.
+`audio_check.txt` and `skid_check.txt` (both check the mixer) passes with `--no-audio`.
 The scenario command reference is in `README.md` ("Scenario mode").
 
 Before committing a code change, build both `debug` and `release`, run `ctest` for both, and run `full_check.txt`

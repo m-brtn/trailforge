@@ -280,13 +280,14 @@ tap L
 wait 0.1
 expect low == 1
 reset_stats
-# Each climb starts from a standstill at the foot (low range, W), stop with the brake on the 4 m plateau.
+# Each climb starts from a standstill at the foot (low range, W); the brake goes on near the crest and the vehicle
+# stops on the descent (dirt mu 0.70: braking starts 0.3-0.8 m earlier than with the old 1.02).
 # The brake-hold checks use the classic mapping: with auto reverse a held S would back down the slope.
 down W
 until z > -38 8
 capture /tmp/trailforge_09_hill12.png
 log hill12
-until z > -33 8
+until z > -33.6 8
 up W
 down S
 until speed_kmh < 0.5 6
@@ -306,7 +307,7 @@ down W
 until z > -13.5 8
 capture /tmp/trailforge_10_hill20.png
 log hill20
-until z > -10.5 6
+until z > -11.3 6
 up W
 down S
 until speed_kmh < 0.5 6
@@ -326,7 +327,7 @@ down W
 until z > 4 8
 capture /tmp/trailforge_11_hill28.png
 log hill28
-until z > 6 6
+until z > 5.7 6
 up W
 down S
 until speed_kmh < 0.5 6
@@ -337,7 +338,7 @@ expect d_z > -0.05
 log hill28_top
 set auto_reverse 1              # stopped on the 28 degree hill with S held: reverse engages, S backs up the slope
 until dir == -1 3
-expect tilt > 15
+expect tilt > 10                # on the descent; with dirt mu 0.70 the stop varies from its top to its foot
 wait 1.0
 expect fwd_kmh < -1
 log hill28_reverse

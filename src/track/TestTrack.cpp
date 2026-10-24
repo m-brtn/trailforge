@@ -297,6 +297,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     case TrackLayout::Flat: buildFlat(false); break;
     case TrackLayout::FlatWithWheelPit: buildFlat(true); break;
     case TrackLayout::SurfaceLanes: buildSurfaceLanes(); break;
+    case TrackLayout::SurfaceRamps: buildSurfaceRamps(); break;
     }
 
     JPH::TriangleList tris;
@@ -443,15 +444,41 @@ void TestTrack::buildFlat(bool withPit) {
 }
 
 void TestTrack::buildSurfaceLanes() {
-    // Lanes along Z, 12 m wide, centered at x = 0, 12, 24, 36; spawn points at the start of each lane.
+    // Lanes along Z, 12 m wide, centered at x = 0, 12, ..., 60; spawn points at the start of each lane.
     auto& g = m_geometry;
-    const SurfaceId lanes[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Mud, SurfaceId::Grass};
-    const char* names[] = {"Concrete lane", "Packed dirt lane", "Mud lane", "Grass lane"};
+    const SurfaceId lanes[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Mud,
+                               SurfaceId::Grass,    SurfaceId::Rock,       SurfaceId::LowGrip};
+    const char* names[] = {"Concrete lane", "Packed dirt lane", "Mud lane", "Grass lane", "Rock lane", "Low grip lane"};
     const float z0 = -100.0f, z1 = 200.0f;
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < 6; ++k) {
         const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
         g.addQuad(Vec3(x0, 0, z0), Vec3(x0, 0, z1), Vec3(x1, 0, z1), Vec3(x1, 0, z0), lanes[k]);
         m_features.push_back({names[k], Vec3(x0 + 6.0f, 0, -90.0f), 0.0f});
+    }
+}
+
+void TestTrack::buildSurfaceRamps() {
+    // Lane 2*s + a: surface s, slope 15 (a = 0) or 20 (a = 1) degrees. 20 m flat run-up, a 22 m ramp from z = 0,
+    // a 10 m plateau. Spawn 6 m before the ramp. Lanes are 10 m wide and have no side walls.
+    auto& g = m_geometry;
+    const SurfaceId surfaces[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Rock,
+                                  SurfaceId::Grass,    SurfaceId::Mud,        SurfaceId::LowGrip};
+    const float slopes[] = {15.0f, 20.0f};
+    const float zFlat = -20.0f, zRamp = 22.0f, zPlateau = 10.0f;
+    int k = 0;
+    for (SurfaceId s : surfaces) {
+        for (float slope : slopes) {
+            const float x0 = -5.0f + 10.0f * float(k), x1 = x0 + 10.0f;
+            const float h = zRamp * std::tan(deg(slope));
+            g.addQuad(Vec3(x0, 0, zFlat), Vec3(x0, 0, 0), Vec3(x1, 0, 0), Vec3(x1, 0, zFlat), s);
+            g.addQuad(Vec3(x0, 0, 0), Vec3(x0, h, zRamp), Vec3(x1, h, zRamp), Vec3(x1, 0, 0), s);
+            g.addQuad(Vec3(x0, h, zRamp), Vec3(x0, h, zRamp + zPlateau), Vec3(x1, h, zRamp + zPlateau),
+                      Vec3(x1, h, zRamp), s);
+            char name[64];
+            std::snprintf(name, sizeof(name), "Ramp %d deg, surface %d", int(slope), int(s));
+            m_features.push_back({name, Vec3(x0 + 5.0f, 0, -6.0f), 0.0f});
+            ++k;
+        }
     }
 }
 

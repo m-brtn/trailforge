@@ -108,7 +108,8 @@ if(TRAILFORGE_BUILD_TESTS)
             corner_load_balance
             brake_holds_in_low_range
             tire_marks_surfaces
-            auto_reverse)
+            auto_reverse
+            surface_launch_grip)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

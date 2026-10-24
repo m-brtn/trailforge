@@ -19,12 +19,13 @@ struct VehicleTuning {
     float antiRollFront = 0.0f; // N/m, anti-roll bar stiffness (0 = none; maximum articulation for an off-roader)
     float antiRollRear = 0.0f;
 
-    // Tires: longitudinal grip curve mu(slip ratio) and lateral mu(slip angle).
-    float tirePeakLongFriction = 1.20f; // mu at the peak
-    float tireSlideLongFriction = 0.95f; // mu at full slide (slip ratio >= 1)
+    // Tires: longitudinal grip curve mu(slip ratio) and lateral mu(slip angle) of an all-terrain tire on dry
+    // concrete; the surface multipliers scale the whole curve (SurfaceTable).
+    float tirePeakLongFriction = 1.00f; // mu at the peak
+    float tireSlideLongFriction = 0.80f; // mu at full slide (slip ratio >= 1)
     float tirePeakSlipRatio = 0.10f;    // dimensionless
-    float tirePeakLatFriction = 1.15f;
-    float tireSlideLatFriction = 0.90f; // at 30 degrees and above
+    float tirePeakLatFriction = 1.00f;
+    float tireSlideLatFriction = 0.78f; // at 30 degrees and above
     float tirePeakSlipAngleDeg = 6.0f;  // degrees
     // A tire below the peak slip ratio may transmit up to the peak longitudinal friction before it breaks away,
     // instead of mu(slip of the previous step), which is 0 for a wheel that just gripped. false = plain Jolt curve.

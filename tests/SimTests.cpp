@@ -337,7 +337,7 @@ void tireMarksSurfaces() {
     CHECK(lockup.surfaceSegments[int(SurfaceId::Concrete)] == lockup.segments, "lock-up marks not tagged Concrete");
 
     // Soft lanes: rolling leaves a load-driven imprint; a full-lock low-range launch churns (the unloaded inner
-    // wheels spin through the open differentials; a straight launch keeps grip on all three surfaces).
+    // wheels spin through the open differentials; a straight low-range launch keeps grip on packed dirt).
     const struct {
         int feature;
         SurfaceId surface;
@@ -522,6 +522,61 @@ void autoReverse() {
     }
 }
 
+// Full-throttle high-range launches on the surface lanes: concrete keeps grip, the low-mu surfaces spin up and their
+// acceleration stays below mu * g.
+void surfaceLaunchGrip() {
+    const struct {
+        int feature;
+        SurfaceId surface;
+        const char* name;
+    } lanes[] = {{0, SurfaceId::Concrete, "concrete"},
+                 {1, SurfaceId::PackedDirt, "dirt"},
+                 {3, SurfaceId::Grass, "grass"},
+                 {2, SurfaceId::Mud, "mud"}};
+    float prevV2 = 1e9f;
+    for (const auto& lane : lanes) {
+        for (double hz : {60.0, 120.0, 240.0}) {
+            SimulationSettings s = settingsFor(TrackLayout::SurfaceLanes);
+            s.fixedStep = 1.0 / hz;
+            Simulation sim(s);
+            sim.requestTeleport(lane.feature);
+            run(sim, 1.0);
+            const float mu = sim.surfaces().get(lane.surface).longitudinalFriction *
+                             sim.vehicleConfig().tuning.tirePeakLongFriction;
+            float maxSlip = 0.0f, v1 = 0.0f;
+            double spin = 0.0;
+            sim.setIntent({.throttle = 1.0f});
+            const int n = int(std::lround(2.0 / sim.fixedStep()));
+            for (int i = 1; i <= n; ++i) {
+                sim.tick();
+                float slip = 0.0f;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                maxSlip = std::max(maxSlip, slip);
+                if (slip > 1.0f) spin += sim.fixedStep();
+                if (i == n / 2) v1 = sim.vehicle().telemetry().speed;
+            }
+            const float v2 = sim.vehicle().telemetry().speed;
+            std::printf("    %-8s %3.0f Hz: mu %.2f, v(1 s) %.2f, v(2 s) %.2f m/s, max slip %.2f m/s, wheelspin %.2f s\n",
+                        lane.name, hz, mu, v1, v2, maxSlip, spin);
+            CHECK(v1 < mu * 9.81f * 1.05f, "%s: %.2f m/s^2 in the first second exceeds mu * g", lane.name, v1);
+            if (lane.surface == SurfaceId::Concrete) {
+                // At 60 Hz the lighter front wheels still slip for one or two steps (~3 m/s) near the peak.
+                CHECK(spin <= 0.05 && (hz < 100.0 || maxSlip < 0.5f), "concrete launch spins: max slip %.2f m/s, %.2f s",
+                      maxSlip, spin);
+                CHECK(v1 > 4.5f, "concrete launch too slow: %.2f m/s after 1 s", v1);
+            }
+            if (lane.surface == SurfaceId::Mud || lane.surface == SurfaceId::Grass)
+                CHECK(maxSlip > 2.0f && spin > 0.5, "%s launch keeps grip: max slip %.2f m/s, %.2f s", lane.name,
+                      maxSlip, spin);
+            if (hz == 120.0) {
+                CHECK(v2 < prevV2, "%s: v(2 s) %.2f not below the grippier surface's %.2f", lane.name, v2, prevV2);
+                prevV2 = v2;
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -536,6 +591,7 @@ int main(int argc, char** argv) {
         {"brake_holds_in_low_range", brakeHoldsInLowRange},
         {"tire_marks_surfaces", tireMarksSurfaces},
         {"auto_reverse", autoReverse},
+        {"surface_launch_grip", surfaceLaunchGrip},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
