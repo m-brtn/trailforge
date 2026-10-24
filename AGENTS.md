@@ -6,8 +6,11 @@ Instructions for coding agents working on TrailForge. Human-facing documentation
 
 TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 (window, input, gamepad),
 SDL GPU on Metal (rendering, MSL shaders only), Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
-Dear ImGui (diagnostics), GLM. The focus is believable vehicle behavior: mass, suspension travel, wheelspin,
-wheel lift, rocks, climbs. All geometry and textures are procedural; there are no external assets.
+Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
+believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry and
+textures are procedural; the only external assets are the sounds in `assets/audio/` (licenses in
+`assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY` from the
+environment — never write the key into any file).
 
 Only macOS / Apple Silicon / Metal has been run. Dependencies are fetched by CMake FetchContent as pinned
 archives with SHA256 checks (internet is needed for the first configure).
@@ -22,7 +25,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics tests (CTest, 9 tests)
+# headless physics and audio tests (CTest, 13 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -30,7 +33,7 @@ ctest --preset debug
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
 ```
 
-Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_probe`
+Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -42,9 +45,14 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
+# audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
+./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
+python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 ```
 
-Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`.
+Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
+`--audio-capture file.wav`. Scenario checks must not depend on an audio device: everything except
+`audio_check.txt` passes with `--no-audio`.
 The scenario command reference is in `README.md` ("Scenario mode").
 
 Before committing a code change, build both `debug` and `release`, run `ctest` for both, and run `full_check.txt`
@@ -56,19 +64,25 @@ in Release.
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (contact samples)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring)
+src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
+              BodyImpacts (chassis contact listener for impact sounds)
+src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
+              frame + events), AudioManifest, Json; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes), RenderSettings, TimeOfDay, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
               DebugDraw, GpuTimingMetal.m
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
-src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel)
+src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel)
 src/app/      Application (lifecycle, main loop), Scenario (scenario mode), main
 shaders/      scene.metal -> metallib at build time, embedded into the binary
-tests/        CTest physics tests (no window)
-tools/        SimProbe (headless measurements), scenarios/ (scripts for --script)
+tests/        CTest physics and audio tests (no window, no audio device)
+tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis)
+assets/audio/ WAV sounds, manifest.json, CREDITS.md
 devlog/       daily development log
 ```
 
-The physics library `trailforge_sim` must not depend on SDL or rendering. Resources are released via RAII;
+The physics library `trailforge_sim` must not depend on SDL or rendering; `trailforge_audio` depends only on
+`trailforge_sim` (no miniaudio, no device), so the sound model is testable headless. The audio thread never blocks
+the frame loop: the game publishes one `AudioFrame` per frame through a mailbox the callback reads with `try_lock`. Resources are released via RAII;
 member order defines destruction order. No ECS, no plugins, no graphics API abstraction.
 
 ## Coordinate system and units
@@ -125,6 +139,9 @@ Example stage entry:
 - Wheel and suspension visuals are placed from the Jolt wheel transforms and suspension length every frame;
   no decorative animation.
 - Render geometry and collision of the proving ground come from the same triangles.
+- Sound is cosmetic and never feeds back into physics. It is driven only by simulation data (rpm, throttle, wheel
+  contact samples, contacts); body impact strength is an estimated impulse (Jolt's listener has no solved impulse).
+  Sound quality claims must come from capture analysis; nobody has judged the mix by ear unless the devlog says so.
 - Keep the "Physics simplifications" list in `README.md` honest when behavior changes.
 - Only claim platforms that were actually run (currently macOS / Apple Silicon / Metal).
 
@@ -135,5 +152,6 @@ Example stage entry:
 - Commit only after the build and tests above pass; mention the verified numbers (ctest, `full_check`) in the
   devlog.
 - Do not commit build output, captures or local files (`build/`, `*.bmp`, `*.png` except `Banner.png`,
-  `imgui.ini`, `compile_commands.json`).
+  `imgui.ini`, `compile_commands.json`, audio captures `*.wav` / `*.wav.csv` outside `assets/audio/`).
+- Never commit secrets (the Freesound API key lives only in the environment).
 - Push to `origin/main` with a normal push. Rewrite history or force push only when the user explicitly asks.

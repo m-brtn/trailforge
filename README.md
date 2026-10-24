@@ -6,7 +6,8 @@ A small custom engine in C++20: SDL3 (window, input, gamepad), SDL GPU (renderin
 (`VehicleConstraint` + `WheeledVehicleController`), Dear ImGui (diagnostics), GLM. The focus of the prototype is
 vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs.
 
-All geometry and textures are procedural; there are no external assets.
+All geometry and textures are procedural. The only external assets are the sounds in `assets/audio/` (Freesound
+recordings, see [Audio](#audio) and `assets/audio/CREDITS.md`).
 
 ![Showcase](docs/showcase.jpg)
 
@@ -37,6 +38,7 @@ The physics core (`trailforge_sim`) and the tests do not depend on graphics and 
 | Jolt Physics | v5.6.0 | `e77f1755` |
 | Dear ImGui | v1.92.9b | `f1cc2ae1` |
 | GLM | 1.0.3 | `8d1fd52e` |
+| miniaudio | 0.11.25 | `9634bedb` |
 
 ## Build and run
 
@@ -67,7 +69,9 @@ Command-line options:
 - `--demo` — scripted drive without input;
 - `--quit-after N` — quit automatically after N seconds (smoke test);
 - `--capture file.bmp|file.png [--capture-at N]` — save one rendered frame;
-- `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed.
+- `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
+- `--no-audio` — no audio device, no sounds loaded;
+- `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio)).
 
 `build/<preset>/trailforge_probe` — headless measurements:
 - `brake`, `course`, `bench` — braking, course drive, step cost at 60/120/240 Hz;
@@ -106,7 +110,9 @@ Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/t
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
-cost of the marks with the ring empty and filled to 16k / 64k segments).
+cost of the marks with the ring empty and filled to 16k / 64k segments),
+`tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
+`--audio-capture`, see [Audio](#audio)).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
@@ -114,8 +120,14 @@ Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`,
 `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
-0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass), `msg:<substring>` (1 if the latest UI message contains the substring), and more.
-Full list: `Application::scenarioValue`.
+0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass), `msg:<substring>` (1 if the latest UI message contains the substring),
+audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
+`audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (pause duck
+gain), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
+received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 suspension thump, 4 body impact, 5 splash, 6 creak,
+7 UI), and more. Full list: `Application::scenarioValue`.
+Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_pitch`, `audio_whine`,
+`audio_play_ui N` (play UI sound N: 0 click, 1 hover, 2 confirm, 3 back, 4 slider tick, 5 menu open, 6 menu close).
 
 ## Controls
 
@@ -131,6 +143,7 @@ Full list: `Application::scenarioValue`.
 | Headlights | H | — |
 | Diagnostics | F1 | — |
 | Graphics panel (quality, look, cosmetic dirt) | F2 | — |
+| Audio panel (volumes, mute, engine pitch, read-outs) | F3 | — |
 | Pause | Escape | Start |
 | Single physics step (while paused) | N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
@@ -138,7 +151,7 @@ Full list: `Application::scenarioValue`.
 
 Brake and throttle are separate: S always brakes. To drive backwards, stop, press Q and hold W.
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
-F1, F2 and Escape always work.
+F1–F3 and Escape always work.
 
 To type a number into an ImGui slider on macOS use **Cmd+click** (in ImGui's macOS mode Ctrl+click acts as a right click);
 on other platforms use Ctrl+click.
@@ -149,19 +162,24 @@ on other platforms use Ctrl+click.
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (per-tick contact samples)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons)
+src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
+              BodyImpacts (contact listener: chassis hits for the sound)
+src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
+              VehicleAudioFeed (per-tick frame and events), AudioManifest + Json, AudioSystem (miniaudio device / WAV capture)
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
-src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport)
+src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels)
 src/app/      Application (lifecycle and main loop), Scenario (scenario mode), main
 shaders/      scene.metal → metallib at build time, embedded into the binary
-tests/        CTest physics tests (no window)
-tools/        SimProbe — headless measurements; scenarios/ — scripts for --script
+tests/        CTest physics and audio tests (no window, no audio device)
+tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis
+assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 ```
 
-The physics (`trailforge_sim`) does not depend on SDL or rendering. Resources are released via RAII;
+The physics (`trailforge_sim`) does not depend on SDL or rendering; the sound model (`trailforge_audio`) depends only
+on it, the audio device lives in the app. Resources are released via RAII;
 member order defines destruction order. There is no ECS, no plugins and no graphics API abstraction.
 
 ### Coordinate system and units
@@ -320,6 +338,64 @@ The panel also shows CPU frame time (without the swapchain wait), GPU time (from
 `GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed
 individually (the preset becomes "Custom"). Physics debug lines are off by default (Tuning → Debug drawing).
 
+## Audio
+
+Recorded sounds (`assets/audio/`, 55 WAV files, 48 kHz / 16-bit) driven by the simulation. The mixer is our own
+code on top of [miniaudio](https://miniaud.io) 0.11.25, of which only the low-level parts are used: `ma_device`
+(Core Audio playback, f32 stereo 48 kHz, 10 ms period), `ma_decoder` (WAV loading) and `ma_encoder` (capture).
+The `ma_engine` / node graph / resource manager are compiled out (`MA_NO_ENGINE`, `MA_NO_NODE_GRAPH`,
+`MA_NO_RESOURCE_MANAGER`): the 12 engine layers must change rate and gain together, sample-accurately, from one
+parameter set, and the offline capture must run the exact same code without a device or extra threads.
+
+- **Threads.** Once per frame the game thread publishes an `AudioFrame` (listener, vehicle pose, rpm, throttle,
+  gear, per-wheel contact data, time of day, pause, settings) and the events of the frame into a mailbox
+  (`std::mutex`, held only for a copy). The device callback takes it with `try_lock` and never waits for the game;
+  if the lock is busy it keeps the previous frame. The game never blocks on the audio thread either (stats come back
+  through the same `try_lock` mailbox). Events are detected per physics tick in `VehicleAudioFeed`.
+- **Engine.** 12 loops: 3 rpm bands × off-load / full-load × exhaust mic and engine-bay mic (two mics of the same
+  recorded engine). Each loop plays at `rate = rpm × pitch / rpm_recorded`; bands crossfade with equal power on
+  log rpm (idle → mid 1400–2000 rpm, mid → high 3200–4800 rpm of the played engine speed), throttle blends off-load
+  and full-load. `pitch` (default 0.80, Audio panel) lowers the sound of the recorded small inline-4 towards the
+  simulated 800–4800 rpm truck engine. The recorded level differences between layers (up to 40 dB) are compressed
+  into a 12 dB spread (panel: "Level spread"). Starter recording on start and on every reset, crossfaded into the
+  loops after it catches (or at once when the throttle opens); gear clunks when a gear engages; a quiet
+  synthesized transmission whine at the propeller-shaft mesh frequency.
+- **Tires.** From the per-wheel contact samples (surface, load, slip ratio, slip speed, rolling speed): skid on
+  concrete / low grip / rock by slip × load, gravel and dirt roll and scrub on packed dirt and rock, mud slosh plus
+  random squelches, grass rustle and swishes, a water splash when a wheel drops into a puddle (contact below the
+  puddle's water level inside its rectangle).
+- **Body.** Suspension thump on load steps, bump-stop hits, chassis creak at large articulation, metal impacts from a
+  Jolt contact listener on the chassis body (impulse threshold 600 N·s, see the simplifications below).
+- **Ambience.** Wind by speed (from 3 m/s, full at 30 m/s), day and night beds crossfaded by the sun elevation
+  (−6° … +6°).
+- **Space.** Every source has a position on the vehicle (exhaust, bay, wheels); gain and equal-power pan are
+  relative to the camera (inverse distance from 5 m, silent beyond 200 m). No Doppler, no occlusion, no reverb.
+- **Pause** (Escape) ramps the gameplay sounds to silence and freezes them; the ambience ducks to half. Menu
+  open/close UI sounds play on pause toggle; all UI sounds are loaded and reachable through
+  `AudioSystem::playUi` (there is no menu yet).
+- **Output.** 10 Hz DC blocker, 2 ms look-ahead limiter at −1.5 dBFS and a hard clamp at −1 dBFS.
+- **Without a device.** `--no-audio` skips everything; if no device can be opened or the assets are missing, the
+  game logs it and runs silent. Tests and the headless build never open a device.
+
+**Audio panel (F3):** master / engine / tires / impacts / ambience & wind / UI volumes, mute, pitch factor, level
+spread, whine; read-outs: played rpm, load, layer weights and playback rates, tire layers, wind, day/night, active
+voices, one-shots, output peak, limiter, audio-thread time per callback and in % of real time.
+
+**Offline capture.** `trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav`
+renders the mix without a device: every physics tick produces exactly one tick of audio (paused frames render frame
+time), so the sound lines up with the simulation regardless of the frame rate. The mixer parameters of every tick go
+to `out.wav.csv`. `tools/audio/analyze_capture.py out.wav` (needs numpy; uses ffmpeg and sox if installed) prints
+sample/true peak, clipping, integrated loudness, engine pitch tracking against the simulated rpm, the skid band level
+while braking and the day/night spectrum balance, and writes spectrograms `/tmp/trailforge_audio_*.png`. The
+capture is deterministic for the same tick sequence, but scenario input is timed in real time, so two runs differ
+slightly.
+
+**Assets.** `assets/audio/manifest.json` lists every file with its source, license, processing and verification;
+`assets/audio/CREDITS.md` has the attributions (54 files CC0 1.0, one CC BY 4.0 — credit required, see the file).
+`tools/audio/fetch_freesound.py` rebuilds the set from Freesound (needs `FREESOUND_API_KEY` in the environment,
+ffmpeg and sox; the key is never written to disk). The game reads the assets from `assets/audio/` next to the
+binary or in the source tree.
+
 ## Diagnostics (F1)
 
 - **HUD** (always visible): speed, gear, direction, rpm.
@@ -372,6 +448,11 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - Determinism is guaranteed only at the same step rate on the same platform.
   Trajectories differ at 60, 120 and 240 Hz, as the measurements below show.
 - No damage.
+- Sound is cosmetic: it never feeds back into the simulation. Mud slosh, puddle splashes and grass rustle are
+  triggered by contact data on rigid ground, not by any fluid or vegetation simulation. Body impact strength is an
+  estimate: Jolt's contact listener runs before the solver and reports no impulse, so the sound uses
+  `J = v_approach / (1/m + (r×n)·I⁻¹(r×n))` (N·s) from the approach speed at the contact point. The engine sound is
+  a recorded petrol inline-4 pitched down, not a synthesized model of the simulated engine.
 
 ## Verification results
 
@@ -380,7 +461,7 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 9 of 9 tests pass in Debug, Release and headless:
+- **CTest.** 13 of 13 tests pass in Debug, Release and headless:
 
 | Test | Result |
 |---|---|
@@ -393,6 +474,10 @@ Everything below was actually run on macOS 27 / M-series.
 | Cornering load balance (40 km/h) | Average Σload = 19620 N with 1, 2 and 4 collision steps; outer front > 2× inner |
 | Brake in low range | 10.4 m/s → stop in 1.33 s, speed never increases, final 0 m/s |
 | Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 83 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; wheelspin: 68/76/68 segments, slip 0.56/0.48/0.54; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
+| Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
+| Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
+| Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
+| Audio: feed and mixer | Simulated launch: 4 gear events, source rpm up to 3839; concrete skid 0.000 cruising vs 0.924 braking; mud lane mud 0.65; pause RMS 0.1414 → 0.0509; peak 0.672, 0 clipped |
 
 - **Step cost** (`trailforge_probe bench`, Release, 20 s course drive):
   - 60 Hz: 0.038 ms per step on average, worst 0.11 ms; 2.3 ms CPU per simulated second;
@@ -469,6 +554,20 @@ Everything below was actually run on macOS 27 / M-series.
 
   GPU time is the whole frame; the marks pass was not timed separately. Fewer grass blades are drawn with marks
   because torn turf kills blades, which partly offsets the marks cost.
+- **Audio** (`tools/scenarios/audio_check.txt`, Release): 30 checks, 0 failures, both with the Core Audio device and
+  with `--audio-capture`. `full_check.txt` 128 / 0, `time_of_day.txt` 8 / 0 and `tracks.txt` 18 / 0 both with audio
+  on (device open) and with `--no-audio`. Analysis of a 53 s capture (`analyze_capture.py`):
+  - sample peak −4.5 dBFS, true peak −4.3 dBTP, 0 clipped samples, limiter never engaged, integrated −23.0 LUFS
+    (loudness range 9.7 LU), DC offset −0.000002 (−0.005 before the DC blocker: the exhaust-mic loops carry DC);
+  - engine pitch: during the full-throttle run on the skid strip (1290 → 4800 rpm, three gears) the fundamental
+    found near the expected firing frequency (played rpm / 30, 32–128 Hz) is within 5 % in 98 % of 120 ms windows,
+    median error −0.3 %, correlation 0.999. An unconstrained search (15–250 Hz) lands on the crank frequency
+    (rpm / 60) in 84 % of the windows: the exhaust recording has a strong half order;
+  - braking on concrete raises the 1–6 kHz band by 11.7 dB over the run just before (mixer skid up to 0.84);
+  - day → night (engine idling in both): the night bed is 7.1 dB louder in 1–3 kHz and 4.6 dB in 3–6 kHz (steady
+    cricket lines in the spectrogram), the day bed shows short bird chirps instead;
+  - audio CPU 2.3 % of real time in capture (≈ 190 µs per 400-frame tick), 20 voices at most.
+  Nobody has listened to the result yet: everything above is measured, not judged by ear.
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;
@@ -496,7 +595,8 @@ Everything below was actually run on macOS 27 / M-series.
     but not the system HID or macOS focus handling);
   - gamepad (not connected);
   - manually dragging the window edge (resize was verified only via `SDL_SetWindowSize`);
-  - subjective handling feel.
+  - subjective handling feel;
+  - how the sound actually sounds (only measured from captures and spectrograms).
 
 ## Next stage: tires and deformable terrain
 
