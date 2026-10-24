@@ -1,5 +1,7 @@
 #include "app/Application.h"
 
+#include "app/AppIcon.h"
+
 #include "render/GroundMaps.h"
 #include "render/MathConvert.h"
 #include "render/Scenery.h"
@@ -37,6 +39,7 @@ Window::Window(const char* title, int w, int h) {
     m_window = SDL_CreateWindow(title, int(w * s), int(h * s), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!m_window) throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
     SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    if (setAppIcon(m_window)) SDL_Log("App icon set");
 }
 
 Window::~Window() { SDL_DestroyWindow(m_window); }

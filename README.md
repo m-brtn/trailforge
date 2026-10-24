@@ -55,6 +55,12 @@ ctest --preset release        # or debug
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
 ```
 
+App icon (`Icon.png`, macOS): the build converts it with `sips` to a 256×256 BMP that is embedded into the binary;
+at startup `SDL_SetWindowIcon` sets it (on Cocoa this is `NSApp.applicationIconImage`, i.e. the Dock icon of the
+running `trailforge` process), masked to the macOS rounded-square grid. The build also produces
+`build/<preset>/TrailForge.app` — a minimal bundle with `TrailForge.icns` (`sips` + `iconutil`, 16–1024 px) and a
+copy of the same executable, so Finder shows the icon before launch. `Logo.png` is reserved for a future menu.
+
 Command-line options:
 
 - `--no-ui` — start with diagnostics hidden;
