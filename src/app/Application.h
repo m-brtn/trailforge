@@ -1,0 +1,121 @@
+#pragma once
+
+#include "app/Scenario.h"
+#include "input/Input.h"
+#include "render/Camera.h"
+#include "render/DebugDraw.h"
+#include "render/Renderer.h"
+#include "sim/FixedStepClock.h"
+#include "sim/Simulation.h"
+#include "ui/DebugUI.h"
+
+#include <SDL3/SDL_video.h>
+
+#include <deque>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace tf {
+
+struct AppOptions {
+    double quitAfterSeconds = 0.0; // >0: quit automatically (startup smoke test)
+    bool demoDrive = false;        // scripted throttle/steering for a demo without input
+    bool startWithUi = true;
+    std::string capturePath;   // non-empty: save a frame (BMP/PNG) at captureAtSeconds
+    double captureAtSeconds = 3.0;
+    std::string scriptPath;    // non-empty: run a verification scenario (see Scenario.h)
+};
+
+// RAII wrapper for SDL initialization.
+class SdlContext {
+public:
+    SdlContext();
+    ~SdlContext();
+    SdlContext(const SdlContext&) = delete;
+    SdlContext& operator=(const SdlContext&) = delete;
+};
+
+class Window {
+public:
+    Window(const char* title, int w, int h);
+    ~Window();
+    Window(const Window&) = delete;
+    Window& operator=(const Window&) = delete;
+    SDL_Window* get() const { return m_window; }
+
+private:
+    SDL_Window* m_window = nullptr;
+};
+
+// RAII Dear ImGui context with SDL3 + SDL GPU backends.
+class ImGuiContextGuard {
+public:
+    ImGuiContextGuard(SDL_Window* window, const Renderer& renderer);
+    ~ImGuiContextGuard();
+    ImGuiContextGuard(const ImGuiContextGuard&) = delete;
+    ImGuiContextGuard& operator=(const ImGuiContextGuard&) = delete;
+};
+
+// Lifecycle and main loop: events -> fixed physics steps -> interpolation -> render.
+class Application {
+public:
+    explicit Application(const AppOptions& options);
+    ~Application();
+    int run();
+
+private:
+    void processEvents();
+    void stepSimulation(double frameTime);
+    void renderFrame(float frameTime);
+
+    // ---- Verification scenario (--script)
+    void updateScenario();
+    Scenario::Exec execScenario(const ScenarioCommand& c);
+    std::optional<double> scenarioValue(const std::string& name) const;
+    void queueEvent(const SDL_Event& e, int framesFromNow);
+    void queueClick(float x, float y, bool textInput);
+
+    AppOptions m_options;
+    // Member order = construction order; destruction is the reverse.
+    SdlContext m_sdl;
+    Window m_window;
+    std::unique_ptr<Renderer> m_renderer;
+    std::unique_ptr<ImGuiContextGuard> m_imgui;
+    Simulation m_sim;
+    Input m_input;
+    Camera m_camera;
+    DebugDraw m_debugDraw;
+    DebugUI m_ui;
+    FixedStepClock m_clock;
+
+    GpuMesh m_trackMesh, m_bodyMesh, m_wheelMesh;
+
+    bool m_running = true;
+    bool m_paused = false;
+    bool m_stepOnce = false;
+    bool m_captured = false;
+    int m_stepsThisFrame = 0;
+    double m_time = 0.0;
+    float m_fpsAccum = 0.0f;
+    int m_fpsFrames = 0;
+    float m_fps = 0.0f;
+    float m_frameMs = 0.0f;
+    int m_exitCode = 0;
+
+    std::optional<Scenario> m_scenario;
+    struct QueuedEvent { int frames; SDL_Event event; };
+    std::vector<QueuedEvent> m_queuedEvents;
+    std::deque<std::string> m_textStorage; // SDL_EVENT_TEXT_INPUT stores a pointer to the string
+    bool m_pushedThisFrame = false;
+    int m_scrollFrames = 0;
+    int m_scrollStableFrames = 0;
+    float m_scrollLastY = 0.0f;
+    std::string m_captureRequest;
+    float m_camClearance = 0.0f;     // m: camera height above the surface below it
+    float m_minCamClearance = 1e9f;  // minimum since the last reset_stats (follow camera only)
+    int m_maxAirWheels = 0;          // maximum number of wheels without contact since the last reset_stats
+};
+
+} // namespace tf

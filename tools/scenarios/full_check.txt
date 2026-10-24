@@ -1,0 +1,459 @@
+# Full controls check:
+#   ./build/release/trailforge --script tools/scenarios/full_check.txt
+# Input goes as SDL events (SDL_PushEvent) through ImGui -> Input -> Simulation on physics ticks,
+# the same path as the live keyboard/mouse. Frames: /tmp/trailforge_*.png. Exit code 1 on FAIL.
+
+# ---------------------------------------------------------------- start
+wait 1.5
+reset_stats
+log start
+expect depth_matches_window == 1
+expect speed_kmh < 0.5
+capture /tmp/trailforge_01_start.png
+
+# ---------------------------------------------------------------- W throttle, A/D steering and return, S brake
+down W
+wait 1.5
+expect throttle > 0.95
+expect fwd_kmh > 10
+log throttle
+up W
+mark speed_kmh
+down S
+wait 1.0
+expect brake > 0.95
+expect d_speed_kmh < -15        # concrete: noticeable deceleration within 1 s
+until speed_kmh < 0.5 5
+up S
+down W
+down D
+wait 0.6
+expect steer > 0.95
+expect steer_deg < -20          # D = right, UI angle: positive is left
+capture /tmp/trailforge_02_steer_right.png
+up D
+wait 0.1
+expect steer > 0.1              # smooth return (3.5 1/s), not a jump
+expect steer < 0.85
+wait 0.4
+expect steer == 0
+down A
+wait 0.3
+expect steer < -0.4
+up A
+up W
+wait 0.5
+expect steer == 0
+down S
+until speed_kmh < 0.5 5
+up S
+
+# ---------------------------------------------------------------- Q reverse: refused while moving, works when stopped
+down W
+wait 1.2
+tap Q
+wait 0.1
+expect dir == 1
+expect msg:standstill == 1
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.3
+tap Q
+wait 0.1
+expect dir == -1
+down W
+wait 1.5
+expect fwd_kmh < -4             # driving backwards
+capture /tmp/trailforge_03_reverse.png
+log reverse
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.2
+tap Q
+wait 0.1
+expect dir == 1
+
+# ---------------------------------------------------------------- Space handbrake
+down W
+wait 1.5
+up W
+down Space
+wait 0.5
+expect handbrake > 0.9
+log handbrake
+capture /tmp/trailforge_04_handbrake.png
+until speed_kmh < 0.5 8
+up Space
+
+# ---------------------------------------------------------------- L low range: refused while moving, works when stopped
+down W
+wait 1.0
+tap L
+wait 0.1
+expect low == 0
+expect msg:standstill == 1
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.2
+tap L
+wait 0.1
+expect low == 1
+tap L
+wait 0.1
+expect low == 0
+
+# ---------------------------------------------------------------- R reset
+down W
+down D
+wait 2.0
+up D
+up W
+expect speed_kmh > 5
+tap R
+wait 0.2
+expect fwd_kmh < 1              # after a reset the vehicle only settles (vertical speed does not count)
+expect fwd_kmh > -1
+expect gear == 0
+expect msg:reset == 1
+expect z < -39
+
+# ---------------------------------------------------------------- C camera, F1 UI
+tap C
+wait 0.1
+expect cam_free == 1
+down Up
+wait 0.5
+up Up
+capture /tmp/trailforge_05_free_camera.png
+expect ui_kb == 0
+tap C
+wait 0.1
+expect cam_free == 0
+tap F1
+wait 0.1
+expect ui_visible == 0
+capture /tmp/trailforge_06_no_ui.png
+tap F1
+wait 0.1
+expect ui_visible == 1
+
+# ---------------------------------------------------------------- Esc pause and N step
+down W
+wait 0.5
+tap Escape
+wait 0.1
+expect paused == 1
+mark ticks
+mark z
+wait 1.0
+expect d_ticks == 0             # while paused the physics is frozen even with W held
+expect d_z == 0
+tap N
+wait 0.1
+expect d_ticks == 1             # exactly one step
+tap N
+wait 0.1
+expect d_ticks == 2
+capture /tmp/trailforge_07_paused.png
+tap Escape
+wait 0.5
+expect paused == 0
+expect d_ticks > 40
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+
+# ---------------------------------------------------------------- ImGui input capture
+tap R
+wait 0.5
+down W
+wait 1.0
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.3
+inputclick front_spring
+wait 0.2
+expect ui_kb == 1
+expect ui_text == 1
+mark z
+down W
+tap R
+wait 1.0
+expect throttle == 0            # W does not reach the vehicle while ImGui owns the keyboard
+expect speed_kmh < 0.5
+expect d_z > -1                 # R is ignored too: the vehicle did not return to the start (residual roll without rolling resistance is centimeters)
+capture /tmp/trailforge_08_imgui_capture.png
+up W
+text 2.2
+tap Return
+wait 0.3
+expect ui_kb == 0
+expect front_spring == 2.2      # the UI value was applied to the vehicle between steps
+down W
+wait 0.5
+expect throttle > 0.5           # after leaving the field, input goes to the vehicle again
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+
+# ---------------------------------------------------------------- climbs (lane B), low range
+teleport 4
+wait 1.0
+log after_teleport4
+tap L
+wait 0.1
+expect low == 1
+reset_stats
+# Each climb starts from a standstill at the foot (low range, W), stop with the brake on the 4 m plateau.
+down W
+until z > -38 8
+capture /tmp/trailforge_09_hill12.png
+log hill12
+until z > -33 8
+up W
+down S
+until speed_kmh < 0.5 6
+mark z
+wait 1.0
+expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
+expect d_z > -0.05
+log hill12_top
+up S
+down W
+until z > -24 8
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+down W
+until z > -13.5 8
+capture /tmp/trailforge_10_hill20.png
+log hill20
+until z > -10.5 6
+up W
+down S
+until speed_kmh < 0.5 6
+mark z
+wait 1.0
+expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
+expect d_z > -0.05
+log hill20_top
+up S
+down W
+until z > -4 6
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+down W
+until z > 4 8
+capture /tmp/trailforge_11_hill28.png
+log hill28
+until z > 6 6
+up W
+down S
+until speed_kmh < 0.5 6
+mark z
+wait 1.0
+expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
+expect d_z > -0.05
+log hill28_top
+up S
+down W
+until z > 14 8
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+down W
+until z > 21.4 8
+capture /tmp/trailforge_12_hill35.png
+log hill35
+until z > 23.2 6
+up W
+down S
+until speed_kmh < 0.5 6
+mark z
+wait 1.0
+expect d_z < 0.05
+expect d_z > -0.05
+log hill35_top
+up S
+expect y > 1.6                  # above the foot: the 35 degree climb is done
+expect tilt < 45
+expect min_cam_clearance > 0.1  # the camera did not go underground on the slopes
+log hills_cam min_cam_clearance checked
+
+# ---------------------------------------------------------------- 18 degree side slope
+teleport 5
+wait 1.0
+expect low == 0                 # teleport/reset recreates the vehicle: default range and direction
+expect dir == 1
+reset_stats
+down W
+until z > -30 10
+up W
+down S
+until speed_kmh < 0.5 6
+log side_slope
+expect tilt > 12
+expect tilt < 30
+capture /tmp/trailforge_13_side_slope.png
+up S
+
+# ---------------------------------------------------------------- diagonal: wheel lift
+teleport 2
+wait 1.0
+log after_teleport2
+tap L
+wait 0.1
+expect low == 1
+reset_stats
+down W
+until air >= 1 10
+capture /tmp/trailforge_14_diagonal_lift.png
+log diagonal
+until z > 16 15
+expect max_air >= 1
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+
+# ---------------------------------------------------------------- steps 0.15 / 0.30 / 0.45 m
+teleport 6
+wait 1.0
+log after_teleport6
+tap L
+wait 0.1
+expect low == 1
+down W
+until z > -2 10
+log step015
+until z > 3 10
+capture /tmp/trailforge_15_step030.png
+log step030
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+log before_step045
+expect z < 7.2                  # the front wheel has not yet hit the 0.45 m step (face at z = 8.5)
+down W
+until z > 7.3 15                # borderline climb: depending on the stop point, wheelspin can last up to ~6 s
+capture /tmp/trailforge_16_step045.png
+log step045_climb
+until z > 12 8                  # 0.45 m is more than the wheel radius (0.4 m), but low range climbs it from a standstill
+log step045_done
+up W
+down S
+wait 0.5
+up S
+
+# ---------------------------------------------------------------- rocks
+teleport 7
+wait 1.0
+log after_teleport7
+tap L
+wait 0.1
+expect low == 1
+reset_stats
+down W
+until z > 26 15
+capture /tmp/trailforge_17_rocks.png
+log rocks
+until z > 38 20
+log rocks_end
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+expect tilt < 45
+
+# ---------------------------------------------------------------- low grip
+teleport 3
+wait 1.0
+expect low == 0
+down W
+until lowgrip_wheels >= 4 10
+log lowgrip_enter
+capture /tmp/trailforge_18_low_grip.png
+up W
+mark speed_kmh
+down S
+wait 1.0
+expect d_speed_kmh > -18        # mu x0.35: brakes noticeably weaker than on concrete
+log lowgrip_brake
+until speed_kmh < 0.5 10
+up S
+tap Q
+down W
+wait 0.8
+log lowgrip_reverse_start
+up W
+
+# ---------------------------------------------------------------- camera: orbit down and zoom near the ground
+tap R
+wait 1.0
+reset_stats
+orbit 0 400
+wheel -20
+wait 1.0
+expect min_cam_clearance > 0.1
+capture /tmp/trailforge_19_camera_low.png
+log camera_low
+
+# ---------------------------------------------------------------- resize window
+mark depth_creations
+resize 900 560
+wait 0.5
+expect win_w == 900
+expect depth_matches_window == 1
+expect d_depth_creations >= 1
+capture /tmp/trailforge_20_resize_small.png
+resize 320 200
+wait 0.5
+expect depth_matches_window == 1
+resize 1600 1000
+wait 0.5
+expect depth_matches_window == 1
+capture /tmp/trailforge_21_resize_large.png
+resize 1440 900
+wait 0.5
+expect depth_matches_window == 1
+
+# ---------------------------------------------------------------- Rebuild with a different mass
+tap R
+wait 0.5
+scrollto vehicle_header
+click vehicle_header
+wait 0.2
+scrollto mass
+inputclick mass
+wait 0.2
+expect ui_text == 1
+text 2600
+tap Return
+wait 0.2
+scrollto rebuild
+click rebuild
+wait 0.5
+expect mass == 2600
+expect front_spring == 2.2      # live tuning survives the rebuild
+expect msg:rebuilt == 1
+wait 1.5
+expect load_sum > 25000         # 2600 kg * 9.81 = 25506 N
+expect load_sum < 26000
+capture /tmp/trailforge_22_rebuilt.png
+log rebuilt
+quit

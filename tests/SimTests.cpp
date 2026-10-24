@@ -1,0 +1,305 @@
+// Headless TrailForge physics checks. Usage: trailforge_tests <test_name>
+// (CTest registers each test separately). Tolerances are engineering, not bitwise.
+
+#include "sim/FixedStepClock.h"
+#include "sim/Simulation.h"
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <vector>
+
+using namespace tf;
+
+namespace {
+
+int g_failures = 0;
+
+#define CHECK(cond, ...)                                                        \
+    do {                                                                        \
+        if (!(cond)) {                                                          \
+            std::printf("  FAIL %s:%d: %s — ", __FILE__, __LINE__, #cond);      \
+            std::printf(__VA_ARGS__);                                           \
+            std::printf("\n");                                                  \
+            ++g_failures;                                                       \
+        }                                                                       \
+    } while (0)
+
+bool finite(JPH::Vec3Arg v) { return std::isfinite(v.GetX()) && std::isfinite(v.GetY()) && std::isfinite(v.GetZ()); }
+
+SimulationSettings settingsFor(TrackLayout layout) {
+    SimulationSettings s;
+    s.layout = layout;
+    return s;
+}
+
+void run(Simulation& sim, double seconds, const DriverIntent& intent = {}) {
+    sim.setIntent(intent);
+    const int n = int(std::lround(seconds / sim.fixedStep()));
+    for (int i = 0; i < n; ++i) sim.tick();
+}
+
+JPH::Vec3 position(const Simulation& sim) { return sim.currentSnapshot().body.position; }
+JPH::Vec3 velocity(Simulation& sim) { return sim.world().bodies().GetLinearVelocity(sim.vehicle().bodyId()); }
+
+void printWheels(const VehicleTelemetry& t) {
+    for (int i = 0; i < kWheelCount; ++i) {
+        const auto& w = t.wheels[i];
+        std::printf("    %s contact=%d len=%.3f m load=%.0f N slipL=%.3f slipA=%.1f deg\n", kWheelNames[i], w.contact,
+                    w.suspensionLength, w.load, w.longitudinalSlip, w.lateralSlipDeg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+void settlesOnFlatGround() {
+    Simulation sim(settingsFor(TrackLayout::Flat));
+    const JPH::Vec3 start = position(sim);
+    run(sim, 4.0);
+    const auto& t = sim.vehicle().telemetry();
+    const JPH::Vec3 p = position(sim);
+    const JPH::Vec3 v = velocity(sim);
+    printWheels(t);
+    std::printf("    pos=(%.3f %.3f %.3f) |v|=%.4f m/s upDot=%.4f\n", p.GetX(), p.GetY(), p.GetZ(), v.Length(), t.upDot);
+
+    CHECK(finite(p) && finite(v), "NaN/Inf in body state");
+    CHECK(!sim.hadPhysicsError(), "Jolt reported update error");
+    CHECK(v.Length() < 0.05f, "body still moving: %.4f m/s", v.Length());
+    CHECK(std::abs(p.GetX() - start.GetX()) < 0.05f && std::abs(p.GetZ() - start.GetZ()) < 0.05f,
+          "drifted horizontally");
+    CHECK(p.GetY() > 0.4f && p.GetY() < 1.2f, "unexpected ride height %.3f", p.GetY());
+    CHECK(t.upDot > 0.999f, "body not level: %.4f", t.upDot);
+    float total = 0.0f;
+    for (const auto& w : t.wheels) {
+        CHECK(w.contact, "wheel without contact");
+        CHECK(!w.bumpStop, "suspension on bump stop at rest");
+        total += w.load;
+    }
+    const float weight = sim.vehicleConfig().mass * 9.81f;
+    std::printf("    sum(load)=%.0f N, m*g=%.0f N\n", total, weight);
+    CHECK(std::abs(total - weight) < 0.05f * weight, "sum of wheel loads %.0f N vs weight %.0f N", total, weight);
+}
+
+void throttleMovesVehicle() {
+    Simulation sim(settingsFor(TrackLayout::Flat));
+    run(sim, 1.0);
+    const JPH::Vec3 p0 = position(sim);
+    run(sim, 4.0, DriverIntent{.throttle = 1.0f});
+    const auto& t = sim.vehicle().telemetry();
+    const JPH::Vec3 p1 = position(sim);
+    std::printf("    forwardSpeed=%.2f m/s rpm=%.0f gear=%d dz=%.2f m\n", t.forwardSpeed, t.engineRPM, t.gear,
+                p1.GetZ() - p0.GetZ());
+    printWheels(t);
+    CHECK(finite(p1), "NaN");
+    CHECK(t.forwardSpeed > 5.0f, "too slow after 4 s full throttle: %.2f m/s", t.forwardSpeed);
+    CHECK(p1.GetZ() - p0.GetZ() > 8.0f, "did not travel forward (+Z)");
+    CHECK(std::abs(p1.GetX() - p0.GetX()) < 0.5f, "pulled sideways: %.2f m", p1.GetX() - p0.GetX());
+    CHECK(t.gear >= 1, "not in a forward gear: %d", t.gear);
+}
+
+void brakeReducesSpeed() {
+    Simulation sim(settingsFor(TrackLayout::Flat));
+    run(sim, 0.5);
+    run(sim, 4.0, DriverIntent{.throttle = 1.0f});
+    const float v0 = sim.vehicle().telemetry().forwardSpeed;
+    run(sim, 1.0, DriverIntent{.brake = 1.0f});
+    const float v1 = sim.vehicle().telemetry().forwardSpeed;
+    run(sim, 3.0, DriverIntent{.brake = 1.0f});
+    const float v2 = sim.vehicle().telemetry().forwardSpeed;
+    std::printf("    v before=%.2f m/s, after 1 s brake=%.2f, after 4 s=%.3f\n", v0, v1, v2);
+    CHECK(v0 > 5.0f, "precondition: speed %.2f", v0);
+    // 1 s of braking with mu~1: dv ~ 5..10 m/s. Require noticeable deceleration.
+    CHECK(v1 < v0 - 3.0f, "brake too weak: %.2f -> %.2f", v0, v1);
+    CHECK(std::abs(v2) < 0.2f, "did not stop: %.3f", v2);
+}
+
+// Brake without throttle in low range: the idling engine must not turn the wheels through the clutch
+// (previously speed under full brake grew until the automatic reached neutral).
+void brakeHoldsInLowRange() {
+    Simulation sim(settingsFor(TrackLayout::Flat));
+    run(sim, 0.5);
+    sim.requestToggleLowRange();
+    run(sim, 3.0, DriverIntent{.throttle = 1.0f});
+    const float v0 = sim.vehicle().telemetry().forwardSpeed;
+    sim.setIntent(DriverIntent{.brake = 1.0f});
+    float vMin = v0, worstRise = 0.0f, worstOverspin = 0.0f;
+    double stopTime = -1.0;
+    for (int i = 0; i < int(4.0 / sim.fixedStep()); ++i) {
+        sim.tick();
+        const auto& t = sim.vehicle().telemetry();
+        if (t.command.throttle > 0.0f) { vMin = t.forwardSpeed; continue; } // throttle is still ramping down
+        if (t.forwardSpeed > 0.5f) {
+            vMin = std::fmin(vMin, t.forwardSpeed);
+            worstRise = std::fmax(worstRise, t.forwardSpeed - vMin);
+        }
+        // A wheel the engine drives against the brake spins faster than rolling.
+        for (const auto& w : t.wheels)
+            worstOverspin = std::fmax(worstOverspin, w.angularVelocity * sim.vehicleConfig().wheelRadius - t.forwardSpeed);
+        if (stopTime < 0.0 && std::abs(t.forwardSpeed) < 0.05f) stopTime = (i + 1) * sim.fixedStep();
+    }
+    const auto& t = sim.vehicle().telemetry();
+    std::printf("    low range: v0=%.2f m/s, stop after %.2f s, worst speed rise %.3f m/s, worst wheel overspin %.2f m/s, "
+                "final v=%.3f gear=%d\n",
+                v0, stopTime, worstRise, worstOverspin, t.forwardSpeed, t.gear);
+    CHECK(t.lowRange && v0 > 3.0f, "precondition: low range, speed %.2f", v0);
+    CHECK(worstRise < 0.05f, "speed rose by %.3f m/s while braking", worstRise);
+    CHECK(stopTime > 0.0 && stopTime < 2.5, "stop time %.2f s", stopTime);
+    CHECK(worstOverspin < 0.5f, "wheel driven against the brake: w*r - v = %.2f m/s", worstOverspin);
+    CHECK(std::abs(t.forwardSpeed) < 0.05f, "still moving: %.3f", t.forwardSpeed);
+}
+
+void liftedWheelLosesLoad() {
+    Simulation sim(settingsFor(TrackLayout::FlatWithWheelPit));
+    run(sim, 3.0);
+    const auto& t = sim.vehicle().telemetry();
+    printWheels(t);
+    CHECK(finite(position(sim)), "NaN");
+    CHECK(!t.wheels[0].contact, "front-left wheel should hang over the pit");
+    CHECK(t.wheels[0].load == 0.0f, "hanging wheel has load %.1f N", t.wheels[0].load);
+    CHECK(t.wheels[0].compression < 0.02f, "hanging wheel should be at full droop, compression %.3f m",
+          t.wheels[0].compression);
+    // Without anti-roll bars the vehicle rests on the FR-RL diagonal, so RR also unloads;
+    // this is expected. Check that the other wheels carry the weight.
+    float total = 0.0f;
+    for (int i = 1; i < kWheelCount; ++i) total += t.wheels[i].load;
+    const float weight = sim.vehicleConfig().mass * 9.81f;
+    CHECK(t.wheels[1].contact && t.wheels[2].contact, "diagonal FR/RL must be in contact");
+    CHECK(std::abs(total - weight) < 0.1f * weight, "remaining wheels carry %.0f N of %.0f N", total, weight);
+}
+
+void resetRestoresState() {
+    Simulation sim(settingsFor(TrackLayout::Flat));
+    run(sim, 0.5);
+    const JPH::Vec3 spawnPos = position(sim);
+    run(sim, 4.0, DriverIntent{.throttle = 1.0f, .steer = 0.4f});
+    const auto before = sim.vehicle().telemetry();
+    std::printf("    before reset: v=%.2f m/s gear=%d rpm=%.0f\n", before.forwardSpeed, before.gear, before.engineRPM);
+    CHECK(before.gear >= 1 && before.speed > 3.0f, "precondition failed");
+
+    sim.requestReset();
+    sim.setIntent({});
+    sim.tick(); // the command runs at the start of the tick, then one step
+    const auto& t = sim.vehicle().telemetry();
+    const JPH::Vec3 v = velocity(sim);
+    const JPH::Vec3 p = position(sim);
+    std::printf("    after reset: |v|=%.3f m/s gear=%d rpm=%.0f pos=(%.2f %.2f %.2f)\n", v.Length(), t.gear, t.engineRPM,
+                p.GetX(), p.GetY(), p.GetZ());
+    CHECK(v.Length() < 0.2f, "velocity not reset: %.3f", v.Length());
+    CHECK(t.gear == 0, "gear not reset: %d", t.gear);
+    CHECK(t.engineRPM <= sim.vehicleConfig().engineMinRPM + 50.0f, "rpm not reset: %.0f", t.engineRPM);
+    CHECK(t.direction == DriveDirection::Forward && !t.lowRange, "direction/range not reset");
+    CHECK(std::abs(p.GetX() - spawnPos.GetX()) < 0.1f && std::abs(p.GetZ() - spawnPos.GetZ()) < 0.1f,
+          "not at spawn position");
+    for (const auto& w : t.wheels) CHECK(std::abs(w.angularVelocity) < 0.5f, "wheel still spinning %.2f", w.angularVelocity);
+}
+
+// Steady-state cornering at ~40 km/h on flat concrete: the time-averaged sum of wheel loads
+// must equal m*g (no average vertical acceleration, normals are vertical) for any
+// number of collision steps; Jolt lambdas refer to the last substep.
+void cornerLoadBalance() {
+    for (int steps : {1, 2, 4}) {
+        SimulationSettings s = settingsFor(TrackLayout::Flat);
+        s.collisionSteps = steps;
+        Simulation sim(s);
+        const float target = 40.0f / 3.6f;
+        double sum = 0.0;
+        int n = 0;
+        for (int i = 0; i < int(10.0 / sim.fixedStep()); ++i) {
+            const double time = i * sim.fixedStep();
+            const auto& t = sim.vehicle().telemetry();
+            DriverIntent in;
+            in.throttle = std::fmin(1.0f, std::fmax(0.0f, 0.3f + 0.4f * (target - t.speed)));
+            in.steer = time > 2.5 ? -0.45f : 0.0f;
+            run(sim, sim.fixedStep(), in);
+            if (time < 6.0) continue;
+            for (const auto& w : t.wheels) sum += w.load;
+            ++n;
+        }
+        const auto& t = sim.vehicle().telemetry();
+        const double mean = sum / n, weight = sim.vehicleConfig().mass * 9.81;
+        std::printf("    collisionSteps=%d: speed %.1f km/h, mean sum(load) %.0f N, m*g %.0f N\n", steps, t.speed * 3.6f,
+                    mean, weight);
+        CHECK(std::abs(t.speed * 3.6f - 40.0f) < 4.0f, "speed controller off: %.1f km/h", t.speed * 3.6f);
+        CHECK(std::abs(mean - weight) < 0.01 * weight, "collisionSteps=%d: mean load %.0f N vs %.0f N", steps, mean,
+              weight);
+        CHECK(t.wheels[1].load > 2.0f * t.wheels[0].load, "outer front should carry more than inner (left turn = right outer)");
+    }
+}
+
+// Command schedule by physics tick number.
+DriverIntent scriptedIntent(unsigned long long tick) {
+    DriverIntent in;
+    if (tick < 360) in.throttle = 1.0f;
+    if (tick >= 180 && tick < 420) in.steer = 0.6f;
+    if (tick >= 420 && tick < 520) in.brake = 0.7f;
+    if (tick >= 520) { in.throttle = 0.6f; in.steer = -0.5f; }
+    return in;
+}
+
+struct ScheduleResult { JPH::Vec3 pos; JPH::Quat rot; float speed; };
+
+ScheduleResult runSchedule(const std::function<double(int)>& frameTime, unsigned long long totalTicks) {
+    SimulationSettings s = settingsFor(TrackLayout::ProvingGround);
+    Simulation sim(s);
+    FixedStepClock clock(sim.fixedStep());
+    clock.maxStepsPerFrame = 1000; // nothing is dropped in the test
+    clock.maxFrameTime = 10.0;
+    for (int frame = 0; sim.timing().ticks < totalTicks; ++frame) {
+        int steps = clock.advance(frameTime(frame));
+        for (int i = 0; i < steps && sim.timing().ticks < totalTicks; ++i) {
+            sim.setIntent(scriptedIntent(sim.timing().ticks)); // input is tied to the tick, not the frame
+            sim.tick();
+        }
+    }
+    return {position(sim), sim.currentSnapshot().body.rotation, sim.vehicle().telemetry().speed};
+}
+
+void frameScheduleIndependence() {
+    const unsigned long long ticks = 720; // 6 s at 120 Hz
+    const auto a = runSchedule([](int) { return 1.0 / 60.0; }, ticks);
+    const auto b = runSchedule([](int f) { // uneven frames of 4..45 ms
+        std::uint32_t x = std::uint32_t(f) * 2654435761u + 12345u;
+        x ^= x >> 13;
+        return 0.004 + 0.041 * double(x % 1000) / 1000.0;
+    }, ticks);
+    const auto c = runSchedule([](int) { return 1.0 / 144.0; }, ticks);
+    const float dab = (a.pos - b.pos).Length(), dac = (a.pos - c.pos).Length();
+    std::printf("    A=(%.4f %.4f %.4f) B=(%.4f %.4f %.4f) C=(%.4f %.4f %.4f)\n", a.pos.GetX(), a.pos.GetY(), a.pos.GetZ(),
+                b.pos.GetX(), b.pos.GetY(), b.pos.GetZ(), c.pos.GetX(), c.pos.GetY(), c.pos.GetZ());
+    std::printf("    |A-B|=%.6f m |A-C|=%.6f m, speeds %.3f %.3f %.3f\n", dab, dac, a.speed, b.speed, c.speed);
+    CHECK(finite(a.pos) && finite(b.pos) && finite(c.pos), "NaN");
+    CHECK(dab < 0.05f && dac < 0.05f, "results diverge between frame schedules");
+    CHECK(std::abs(a.speed - b.speed) < 0.05f && std::abs(a.speed - c.speed) < 0.05f, "speed differs");
+    CHECK(std::abs(a.rot.Dot(b.rot)) > 0.9999f, "orientation differs");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"settles_on_flat_ground", settlesOnFlatGround},
+        {"throttle_moves_vehicle", throttleMovesVehicle},
+        {"brake_reduces_speed", brakeReducesSpeed},
+        {"lifted_wheel_loses_load", liftedWheelLosesLoad},
+        {"reset_restores_state", resetRestoresState},
+        {"frame_schedule_independence", frameScheduleIndependence},
+        {"corner_load_balance", cornerLoadBalance},
+        {"brake_holds_in_low_range", brakeHoldsInLowRange},
+    };
+    int ran = 0;
+    for (const auto& [name, fn] : tests) {
+        if (argc > 1 && std::strcmp(argv[1], name) != 0) continue;
+        std::printf("[ RUN ] %s\n", name);
+        const int before = g_failures;
+        fn();
+        std::printf("[%s] %s\n", g_failures == before ? "  OK " : "FAIL ", name);
+        ++ran;
+    }
+    if (ran == 0) {
+        std::printf("unknown test '%s'\n", argc > 1 ? argv[1] : "");
+        return 2;
+    }
+    return g_failures == 0 ? 0 : 1;
+}
