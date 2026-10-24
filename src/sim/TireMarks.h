@@ -5,6 +5,7 @@
 
 #include <Jolt/Jolt.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -24,11 +25,17 @@ struct TireMarkSegment {
     float side0[3]; // world: half-width vector at p0, perpendicular to the travel direction in the contact plane
     float birth;    // s: simulation time when the segment was written
     float side1[3];
-    float surface;  // SurfaceId as a float
-    float imprint0, imprint1; // 0..1: rolling imprint (load-driven) at p0/p1
+    float surface;  // packed: SurfaceId + 8 * soil code (packMarkSurface), an integer stored exactly in the float
+    float imprint0, imprint1; // 0..1: rolling imprint (soft ground) or soil print from the tread (hard ground)
     float slip0, slip1;       // 0..1: rubber (hard surfaces) or churn (soft surfaces) from the patch sliding speed
 };
 static_assert(sizeof(TireMarkSegment) == 80, "TireMarkSegment must match the shader layout");
+
+// Segment surface word: the SurfaceId in the low 3 bits, above it the colour (3 x 5 bits, sqrt-encoded linear
+// albedo up to 0.5) and the wetness (3 bits) of the soil the tread carried. 21 bits, exact in a float.
+float packMarkSurface(SurfaceId surface, const float soilColor[3], float soilWetness);
+SurfaceId markSurface(const TireMarkSegment& s);
+void markSoil(const TireMarkSegment& s, float color[3], float& wetness);
 
 struct TireMarkSettings {
     bool enabled = true;
@@ -54,21 +61,40 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id);
 // full-throttle full-lock launch spin at 7-10 m/s / 0.6-0.75, lock-up and handbrake reach 11-13 m/s at 1.0 (squeal).
 float rubberSlide(const WheelContactSample& c);
 
-// Soil carried in the tread (visual and sound only, never friction): picked up on loose ground, worn off by
-// distance rolled or slid on hard ground (~10 m). A dirty tread lays no rubber and does not squeal.
-float soilPickup(SurfaceId id); // 0 hard surfaces, up to 1 for mud
+// Sliding that lays rubber marks, 0..1: rubberSlide() plus a locked wheel down to ~1 m/s (a locked tire keeps
+// sliding until the stop, while the squeal gate fades it out below ~5 m/s).
+float markSlide(const WheelContactSample& c);
+
+// Loose soil of a surface as the tread picks it up (visual and sound only, never friction).
+struct SoilType {
+    float pickup = 0.0f;       // amount the tread settles at on this ground (0 hard surfaces, 1 mud)
+    float pickupLength = 1.0f; // m of tread travel to pick up ~63 % of it
+    float wetness = 0.0f;      // 0 dry dust .. 1 wet mud
+    float color[3] = {0, 0, 0}; // linear albedo of the soil
+};
+SoilType soilType(SurfaceId id);
+float soilPickup(SurfaceId id); // soilType(id).pickup
+
+// Soil carried in the tread: picked up on loose ground (fast on mud, slower on dirt, sand and grass), the colour
+// mixes with the ground it rolls on; shed by distance on hard ground (~3 m e-folding for dry dust, ~7 m for wet
+// mud, faster while spinning or sliding); a puddle rinses it to a thin wet film within ~1 m. A dirty tread lays
+// no rubber and does not squeal; it never changes grip.
 struct TreadSoil {
-    float amount = 0.0f; // 0 clean .. 1 caked with mud
-    void update(const WheelContactSample& c, float dt);
+    float amount = 0.0f;   // 0 clean .. 1 caked with mud
+    float wetness = 0.0f;  // 0 dry .. 1 wet
+    float color[3] = {0, 0, 0};
+    void update(const WheelContactSample& c, float dt, bool inWater = false);
 };
 
 // Mark intensities of one contact sample (before the per-surface render multipliers).
 struct MarkIntensity {
-    float imprint = 0.0f;
+    float imprint = 0.0f;   // soft ground: rolling imprint; hard ground: soil print of a dirty tread
     float slip = 0.0f;
     float halfWidth = 0.0f; // m
 };
-MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, float soil = 0.0f);
+// `slide` is the (heat-limited) rubber slide of a hard-ground patch, < 0: markSlide(c) without build-up.
+MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, const TreadSoil& soil = {},
+                            float slide = -1.0f);
 
 // Persistent tire marks: per-wheel ribbons written from the per-tick contact samples into a fixed ring buffer.
 // Visual only and independent of the renderer (runs headless; the renderer reads the ring).
@@ -92,7 +118,8 @@ public:
     std::size_t headIndex() const { return m_head; }
     const TireMarkSegment* data() const { return m_ring.data(); }
     const TireMarkSegment& oldest(std::size_t i) const { return m_ring[(firstIndex() + i) % m_ring.size()]; }
-    float treadSoil(std::size_t wheel) const { return wheel < m_trails.size() ? m_trails[wheel].soil.amount : 0.0f; }
+    const TreadSoil& soil(std::size_t wheel) const { return m_trails[std::min<std::size_t>(wheel, 3)].soil; }
+    float patchHeat(std::size_t wheel) const { return m_trails[std::min<std::size_t>(wheel, 3)].heat; }
     std::uint64_t written() const { return m_written; }       // total segments ever written
     std::uint64_t generation() const { return m_generation; } // changes on clear / capacity change
 
@@ -106,9 +133,14 @@ private:
         double lastEmit = 0.0;
         float accImprint = 0.0f, accSlip = 0.0f, accHalfWidth = 0.0f;
         int accCount = 0;
+        SurfaceId surface = SurfaceId::Concrete; // of the current ribbon
+        float heat = 0.0f; // 0..1: rubber laid by the sliding patch builds up over ~0.35 s (patch heating)
         TreadSoil soil;
     };
     void start(Trail& t, const WheelContactSample& c, const MarkIntensity& m, double time) const;
+    // Writes the segment from the trail's last point to the patch and advances the trail.
+    void emit(Trail& t, const WheelContactSample& c, float imprint, float slip, float halfWidth, float surfaceWord,
+              double time);
     void expire(double time);
 
     TireMarkSettings m_settings;

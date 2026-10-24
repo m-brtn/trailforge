@@ -924,12 +924,17 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "marks_written") return double(m_sim.tireMarks().written());
     if (n == "marks_drawn") return double(m_renderer->stats().markSegments);
     if (n == "marks_us") return m_sim.timing().marksUs;
+    if (n == "tread_soil_max") {
+        float v = 0.0f;
+        for (std::size_t i = 0; i < kWheelCount; ++i) v = std::max(v, m_sim.tireMarks().soil(i).amount);
+        return double(v);
+    }
     if (n.size() == 8 && n.rfind("marks_s", 0) == 0) {
-        // marks_s<SurfaceId>: live segments on that surface (0 Concrete .. 5 Grass).
+        // marks_s<SurfaceId>: live segments on that surface (0 Concrete .. 6 Sand).
         const TireMarks& tm = m_sim.tireMarks();
-        const float id = float(n[7] - '0');
+        const int id = n[7] - '0';
         double count = 0;
-        for (std::size_t i = 0; i < tm.size(); ++i) count += tm.oldest(i).surface == id ? 1.0 : 0.0;
+        for (std::size_t i = 0; i < tm.size(); ++i) count += int(markSurface(tm.oldest(i))) == id ? 1.0 : 0.0;
         return count;
     }
     if (n.rfind("audio_", 0) == 0) {

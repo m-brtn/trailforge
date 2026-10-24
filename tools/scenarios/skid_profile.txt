@@ -1,0 +1,30 @@
+# Locked-wheel stop on the concrete skid strip, top-down capture of the rubber marks:
+#   ./build/release/trailforge --script tools/scenarios/skid_profile.txt
+# Full throttle from the south end of the strip, full brake at z > 4, top-down capture of the stop
+# (/tmp/trailforge_skid_profile.png). The strip is 92 m long, so the stop starts from ~75-80 km/h, not 100 km/h
+# (the 100 -> 0 km/h profile is measured headless by the CTest skid_mark_profile).
+set ui 0
+set hud 0
+set auto_reverse 0               # S only brakes
+time Noon
+teleport 9
+wait 1.5
+set marks_clear 1
+down W
+until z > 4 14
+log brake_start
+expect speed_kmh > 60
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log stopped
+camera 42.0 30.0 17.0 42.0 0.0 17.01
+wait 0.8
+capture /tmp/trailforge_skid_profile.png
+wait 0.3
+camera 42.0 2.6 34.0 42.0 0.0 16.0
+wait 0.8
+capture /tmp/trailforge_skid_profile_end.png
+wait 0.3
+quit

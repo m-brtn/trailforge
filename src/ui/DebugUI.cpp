@@ -240,9 +240,9 @@ void DebugUI::drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsSt
     ImGui::SliderFloat("Fade time [s]", &ms.fadeTime, 10.0f, 1200.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
     apply |= ImGui::IsItemDeactivatedAfterEdit();
     if (apply) marks.setSettings(ms);
-    static const char* kNames[6] = {"Concrete", "Packed dirt", "Rock", "Low grip", "Mud", "Grass"};
+    static const char* kNames[7] = {"Concrete", "Packed dirt", "Rock", "Low grip", "Mud", "Grass", "Sand"};
     ImGui::TextUnformatted("Intensity per surface");
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         ImGui::PushID(i);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
         ImGui::SliderFloat(kNames[i], &gfx.markGain[std::size_t(i)], 0.0f, 2.0f, "%.2f");

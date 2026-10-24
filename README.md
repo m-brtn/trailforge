@@ -148,6 +148,10 @@ cost of the marks with the ring empty and filled to 16k / 64k segments),
 `--audio-capture`, see [Audio](#audio)),
 `tools/scenarios/suspension.txt` (stops on the diagonal twister with a wheel in the air; follow view with the HUD,
 rear and side views, `/tmp/trailforge_v_susp_*.png`),
+`tools/scenarios/tread_dirt.txt` (soil printed onto concrete after the mud bath and the sand, rolling and with
+wheelspin, top-down `/tmp/trailforge_tread_*.png`),
+`tools/scenarios/skid_profile.txt` (a 65 km/h locked-wheel stop on the skid strip, top-down
+`/tmp/trailforge_skid_profile*.png`),
 `tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, audible for
 lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
 
@@ -157,7 +161,8 @@ Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
-0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass), `msg:<substring>` (1 if the latest UI message contains the substring),
+0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
+`msg:<substring>` (1 if the latest UI message contains the substring),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (pause duck
 gain), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
@@ -283,9 +288,14 @@ Surrounded by an earth berm and concrete walls.
   - steps of 0.15 / 0.30 / 0.45 m;
   - a field of 28 rocks and two boulders. Rocks are angular convex chunks (a subdivided icosahedron cut by random
     planes), flat-shaded; the collision mesh is the same triangles.
-- **Skid strip** (east edge, x 39–45, z −48…44, teleport "Skid strip (concrete)"): a flat 6 × 92 m concrete strip
-  for braking and wheelspin on concrete; it ends in a short dirt band and the meadow, so one run crosses
-  concrete → dirt → grass.
+- **Skid strip** (east edge, x 39–45, z −48…48, teleport "Skid strip (concrete)"): a flat 6 × 96 m concrete strip
+  for braking and wheelspin on concrete; its north end meets the sand area directly (teleport "Sand to concrete"
+  starts on the sand facing south over the boundary).
+- **Sand area** (east meadow, x 28–45, z 48–84, teleport "Sand area (dunes)"): the rigid `Sand` surface (peak μ
+  0.55/0.52), flat next to the skid strip and with low dunes (crossing ridges up to ~0.9 m) in the north part.
+  There is **no sinkage**: sand is only a lower-μ rigid surface with a light sandy material.
+- **Mud bath and west strip** (west edge, x −44.5…−38.5, teleport "Mud bath to concrete"): a flat 6 × 12 m `Mud`
+  patch (z 34–46) that ends directly on a 30 m concrete strip (z 4–34), for driving out of mud onto concrete.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (peak μ 0.35/0.32),
@@ -306,12 +316,13 @@ the surface multipliers therefore are the effective peak μ:
 | Concrete | 0.95 | 0.95 | 1.20 / 1.15 |
 | Rock | 0.75 | 0.75 | 1.08 / 1.04 |
 | Packed dirt | 0.70 | 0.68 | 1.02 / 0.98 |
+| Sand | 0.55 | 0.52 | new in v0.3.0 |
 | Grass | 0.50 | 0.48 | 0.96 / 0.90 |
 | Mud | 0.35 | 0.32 | 0.72 / 0.63 |
 | Low grip (hard) | 0.42 | 0.40 | 0.42 / 0.40 (unchanged) |
 
 These are plausible dry-concrete-to-mud ranges for an all-terrain tire, not measured data. Every surface is rigid:
-mud and grass are only lower friction, with no sinkage, rutting or bulldozing. Measured with
+mud, sand and grass are only lower friction, with no sinkage, rutting or bulldozing. Measured with
 `trailforge_probe surfaces` (120 Hz, full throttle): straight launches keep grip on concrete (max slip 0.27 m/s,
 0–30 km/h 1.52 s) and spin on grass (7.3 m/s, 0–30 km/h 2.20 s) and mud (9.4 m/s, 3.07 s); 50 → 0 km/h takes
 13.7 m on concrete, 18.5 m on dirt, 25.4 m on grass and 36.2 m on mud; in low range a hill start fails on 15° and
@@ -367,7 +378,8 @@ and radius. `TireMarks` (`src/sim`, headless, no SDL) turns these samples into o
 segment stores both end points, the half-width vector in the contact plane (width from the wheel), surface, birth
 time, and two intensities per end:
 
-- **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9 at static load);
+- **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9, sand 0.9 at static load);
+  on hard surfaces it is the soil print of the tread (see below);
 - **slip** — rubber on hard surfaces, churn on soft ones, from the patch sliding speed *and* the slip ratio
   (sliding speed / max(patch speed, rolling speed)). The ratio gate keeps normal driving clean: a steady 12 % slip in
   2nd gear at full throttle (≈ 1.7 m/s) leaves nothing on concrete, while lock-up, handbrake slides and wheelspin on
@@ -375,7 +387,21 @@ time, and two intensities per end:
 
 Rubber marks and tire squeal share one per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio
 0.2..0.55, sideways sliding 2.5..7 m/s at 0.4..0.8. Only concrete, rock and the low-grip patch squeal; loose surfaces
-drive their own layers. Soil in the tread (picked up on loose ground, shed over ~10 m) suppresses both.
+drive their own layers. Soil in the tread suppresses both. Rubber marks additionally follow a patch "heat" that
+builds up over ~0.35 s of sliding and drops within ~0.1 s when the slide ends, and scale with √load, so a locked
+stop starts faint, stays even and does not darken toward the end (the front wheels lock later than the rears and
+are more loaded). A locked wheel keeps marking until the patch slides slower than ~1 m/s. In-place burnout stamps
+need a driven wheel spinning faster than the ground (+2 m/s), never a braking wheel.
+
+**Tread soil** (cosmetic, `TreadSoil`): each wheel carries an amount, colour and wetness of soil. Loose ground loads
+the tread toward its own level and colour (mud: full, dark, wet, within ~0.6 m; packed dirt: half, brown, dry;
+sand: light, dusty, dry; grass: greenish brown); colours mix when the ground changes. Puddles rinse the tread to a thin
+film of muddy water. On hard ground it sheds over the patch travel (rolling plus 3 × sliding distance): e-folding
+3 m for dry dust, 6 m for wet mud. While it lasts, the tread prints it onto the hard ground: lug pattern first,
+the full width while heavily loaded, tinted by the carried soil, glossy when wet and matte when dry. Measured with
+the synthetic boundary test: after wet mud the print starts at 0.94 and is visible for 18.5 m rolling (4–6 m with
+wheelspin or lock-up); after dirt 0.22 for 6.5 m, after sand 0.15 for 4.9 m. A ribbon never spans two surfaces:
+at a surface change it ends in the old surface's style and a new one starts.
 
 Per surface: concrete/rock/low-grip get dark rubber only while sliding; dirt gets a compacted tread imprint (lug
 pattern) and loose churned soil on wheelspin; mud gets a dark, wet, glossy rut with lighter raised edges (the mark
@@ -510,7 +536,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
-  ground"). The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
+  ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
+  sinkage, flotation or bulldozing; puddles have no water physics.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
   at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
   without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire
@@ -523,7 +550,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   near the limit spins in place where a careful throttle would climb. There is no traction control.
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
-  every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven).
+  every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven). Soil in the tread and its
+  prints on hard ground are cosmetic too: the tread soil never changes grip.
 - No forced differential lock: Jolt supports only open and LSD.
   The LSD here limits the wheel speed ratio; it is not a preloaded clutch pack.
 - No aerodynamics or rolling resistance (linear damping = 0).

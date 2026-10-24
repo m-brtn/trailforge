@@ -1117,7 +1117,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                             marks->settings().fadeTime);
         mu.params = glm::vec4(kMarkLift, 0, 0, 0);
         mu.gainA = glm::vec4(frame.markGain[0], frame.markGain[1], frame.markGain[2], frame.markGain[3]);
-        mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], 0, 0);
+        mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], frame.markGain[6], 0);
         float width[8] = {1, 1, 1, 1, 1, 1, 1, 1};
         for (std::size_t i = 0; i < kSurfaceCount; ++i) width[i] = surfaceMarkResponse(SurfaceId(i)).widthScale;
         mu.widthA = glm::vec4(width[0], width[1], width[2], width[3]);

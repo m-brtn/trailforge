@@ -80,6 +80,10 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
         slip(L::Grass, 0.5f);
         slip(L::Dirt, 0.5f); // spinning tears the turf
         break;
+    case SurfaceId::Sand:
+        roll(L::Dirt, 0.6f); // soft hiss, no stones
+        slip(L::Dirt, 0.8f);
+        break;
     default:
         break;
     }

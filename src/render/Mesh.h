@@ -26,6 +26,7 @@ enum class MatId : int {
     Amber = 12,       // emissive indicator / marker
     Foliage = 13,
     Paint = 14,       // metallic paint with a clear coat
+    Sand = 15,
 };
 
 struct Material {

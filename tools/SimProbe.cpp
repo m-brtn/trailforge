@@ -332,7 +332,7 @@ struct SkidRig {
                 st.slipDeg = std::max(st.slipDeg, w.lateralSlipDeg);
             }
             st.mark = std::max(st.mark, markIntensity(c, sim.tireMarks().settings().referenceLoad,
-                                                      sim.tireMarks().treadSoil(std::size_t(i))).slip);
+                                                      sim.tireMarks().soil(std::size_t(i))).slip);
         }
         const TireLayerMix raw = tireLayerMix(f.wheels, f.referenceLoad);
         st.skidRaw = std::max(st.skidRaw, raw.gain[0]);

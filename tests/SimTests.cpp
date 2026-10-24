@@ -5,8 +5,11 @@
 #include "sim/Simulation.h"
 
 #include <algorithm>
+#include <array>
+#include <span>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -291,7 +294,7 @@ MarkStats marksSince(const TireMarks& m, std::uint64_t writtenBefore) {
         ++st.segments;
         st.maxImprint = std::fmax(st.maxImprint, std::fmax(s.imprint0, s.imprint1));
         st.maxSlip = std::fmax(st.maxSlip, std::fmax(s.slip0, s.slip1));
-        ++st.surfaceSegments[int(s.surface)];
+        ++st.surfaceSegments[int(markSurface(s))];
     }
     return st;
 }
@@ -577,6 +580,196 @@ void surfaceLaunchGrip() {
     }
 }
 
+// Rubber mark profile of a locked-wheel stop from 100 km/h on concrete, per vehicle side (the rear wheel runs in the
+// front wheel's track, so both ribbons of a side are composited like the shader does: 1 - (1 - a)(1 - b)). Every
+// wheel also feeds its own TireMarks so the ribbons can be told apart.
+// A wheel leaving soft ground for concrete: the boundary must not carry soft-ground churn into a rubber mark, and
+// the soil print fades smoothly over the following meters (longest after wet mud). Synthetic contact samples, no
+// physics: the mark model alone is under test.
+void tireMarksBoundary() {
+    struct Drive {
+        const char* name;
+        float v, roll; // ground speed, tread speed [m/s]
+    };
+    const Drive drives[] = {{"rolling", 5.0f, 5.0f}, {"spinning", 4.0f, 9.0f}, {"locked", 5.0f, 0.0f}};
+    const SurfaceId soils[] = {SurfaceId::Mud, SurfaceId::PackedDirt, SurfaceId::Sand};
+    constexpr float kBoundary = 6.0f, kMin = 0.02f;
+    float mudEnd = 0.0f;
+    for (SurfaceId soft : soils) {
+        const char* name = soft == SurfaceId::Mud ? "mud" : soft == SurfaceId::Sand ? "sand" : "dirt";
+        for (const Drive& k : drives) {
+            TireMarks marks;
+            TireMarkSettings st = marks.settings();
+            st.referenceLoad = 4900.0f;
+            marks.setSettings(st);
+            double t = 0.0;
+            float z = 0.0f;
+            for (int i = 0; i < 2400 && z < 40.0f; ++i) {
+                WheelContactSample c;
+                c.contact = true;
+                c.surface = z < kBoundary ? soft : SurfaceId::Concrete;
+                c.patchCenter = JPH::Vec3(-300.0f, 0.0f, z); // far from the showcase water
+                c.velocity = JPH::Vec3(0.0f, 0.0f, k.v);
+                c.load = 4900.0f;
+                c.rollingSpeed = k.roll;
+                c.longitudinalSlipSpeed = k.roll - k.v;
+                c.width = 0.3f;
+                c.radius = 0.4f;
+                t += 1.0 / 120.0;
+                z += k.v / 120.0f;
+                marks.update(std::span(&c, 1), t);
+            }
+            float firstPrint = -1.0f, printEnd = kBoundary, maxRise = 0.0f, prev = 2.0f, blob = -1.0f, maxHalf = 0.0f;
+            float prevSlip = 0.0f, slipDrop = 0.0f;
+            int crossing = 0;
+            for (std::size_t i = 0; i < marks.size(); ++i) {
+                const TireMarkSegment& s = marks.oldest(i);
+                const bool hard = markSurface(s) == SurfaceId::Concrete;
+                if (!hard) continue;
+                const float half = std::hypot(s.side0[0], s.side0[2]);
+                maxHalf = std::max({maxHalf, half, std::hypot(s.side1[0], s.side1[2])});
+                if (s.p0[2] < kBoundary - 0.01f) ++crossing;
+                // Rubber may build up once the tread is clean, but never starts dark and never spikes and drops.
+                if (blob < 0.0f) blob = std::max(s.slip0, s.slip1);
+                if (s.p1[2] < kBoundary + 8.0f) slipDrop = std::max(slipDrop, prevSlip - s.slip1);
+                prevSlip = s.slip1;
+                if (firstPrint < 0.0f) firstPrint = s.imprint0;
+                maxRise = std::max(maxRise, s.imprint1 - prev);
+                prev = s.imprint1;
+                if (s.imprint1 >= kMin) printEnd = s.p1[2];
+            }
+            const float printLen = printEnd - kBoundary;
+            std::printf("  %-4s %-8s first print %.2f, print to +%.1f m, rubber at boundary %.2f, largest rubber drop "
+                        "%.2f, end rubber %.2f, half width %.3f, crossing segments %d\n", name, k.name, firstPrint,
+                        printLen, blob, slipDrop, prevSlip, maxHalf, crossing);
+            CHECK(crossing == 0, "%s/%s: %d concrete-style segments start on the soft side", name, k.name,
+                  crossing);
+            CHECK(blob < 0.1f, "%s/%s: rubber mark %.2f at the boundary", name, k.name, blob);
+            CHECK(slipDrop < 0.05f, "%s/%s: rubber mark drops by %.2f (blob)", name, k.name, slipDrop);
+            CHECK(maxHalf < 0.151f, "%s/%s: concrete mark half width %.3f m (soft-ground width carried over)",
+                  name, k.name, maxHalf);
+            CHECK(maxRise < 0.02f, "%s/%s: print rises by %.3f along the concrete", name, k.name, maxRise);
+            if (k.roll == k.v) {
+                if (soft == SurfaceId::Mud) {
+                    mudEnd = printLen;
+                    CHECK(firstPrint > 0.6f, "mud print starts at %.2f", firstPrint);
+                    CHECK(printLen > 10.0f && printLen < 22.0f, "mud print length %.1f m (want 10..20)", printLen);
+                } else {
+                    CHECK(firstPrint > 0.08f && firstPrint < 0.4f, "%s print starts at %.2f", name,
+                          firstPrint);
+                    CHECK(printLen > 2.0f && printLen < mudEnd, "%s print length %.1f m vs mud %.1f m",
+                          name, printLen, mudEnd);
+                }
+            }
+        }
+    }
+}
+
+void skidMarkProfile() {
+    for (double hz : {60.0, 120.0, 240.0}) {
+        SimulationSettings st = settingsFor(TrackLayout::Flat);
+        st.fixedStep = 1.0 / hz;
+        Simulation sim(st);
+        run(sim, 0.5);
+        for (int i = 0; i < int(40.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed < 100.0f / 3.6f; ++i)
+            run(sim, sim.fixedStep(), DriverIntent{.throttle = 1.0f});
+        cruise(sim, 1.0, 100.0f);
+        const float v0 = sim.vehicle().telemetry().speed;
+        std::array<TireMarks, kWheelCount> perWheel;
+        const float zBrake = position(sim).GetZ();
+        sim.setIntent(DriverIntent{.brake = 1.0f});
+        int stamps = 0;
+        const std::uint64_t w0 = sim.tireMarks().written();
+        for (int i = 0; i < int(8.0 / sim.fixedStep()); ++i) {
+            sim.tick();
+            for (int w = 0; w < kWheelCount; ++w)
+                perWheel[std::size_t(w)].update(std::span(&sim.vehicle().contacts()[std::size_t(w)], 1), sim.simTime());
+        }
+        const float zStop = position(sim).GetZ();
+        const TireMarks& all = sim.tireMarks();
+        for (std::size_t i = all.size() - std::min<std::uint64_t>(all.written() - w0, all.size()); i < all.size(); ++i)
+            stamps += all.oldest(i).u0 == 0.0f && all.oldest(i).u1 > 0.2f && all.oldest(i).u1 < 0.3f ? 1 : 0;
+
+        // 0.5 m bins along z over the stop; per side the composited cover (shader: saturate(slip * 1.1)).
+        constexpr float kBin = 0.5f;
+        const int bins = int(std::ceil((zStop + 3.0f - zBrake) / kBin)) + 1;
+        float worst = 0.0f;
+        for (int side = 0; side < 2; ++side) {
+            std::vector<float> keep(std::size_t(bins), 1.0f);
+            std::vector<int> count(std::size_t(bins), 0);
+            for (int w : {side, side + 2}) {
+                const TireMarks& m = perWheel[std::size_t(w)];
+                std::vector<float> wheelCover(std::size_t(bins), 0.0f);
+                for (std::size_t i = 0; i < m.size(); ++i) {
+                    const TireMarkSegment& s = m.oldest(i);
+                    const float z = 0.5f * (s.p0[2] + s.p1[2]);
+                    const int b = int((z - zBrake) / kBin);
+                    if (b < 0 || b >= bins) continue;
+                    const float a = std::clamp(0.5f * (s.slip0 + s.slip1) * 1.1f, 0.0f, 1.0f);
+                    wheelCover[std::size_t(b)] = std::max(wheelCover[std::size_t(b)], a);
+                    ++count[std::size_t(b)];
+                }
+                for (int b = 0; b < bins; ++b) keep[std::size_t(b)] *= 1.0f - wheelCover[std::size_t(b)];
+                if (std::getenv("TF_PROFILE") && hz == 120.0) {
+                    std::printf("    wheel %d:", w);
+                    for (int b = 0; b < bins; b += 2) std::printf(" %.2f", wheelCover[std::size_t(b)]);
+                    std::printf("\n");
+                }
+            }
+            std::vector<float> cover(std::size_t(bins), 0.0f);
+            int first = -1, last = -1;
+            for (int b = 0; b < bins; ++b) {
+                cover[std::size_t(b)] = 1.0f - keep[std::size_t(b)];
+                if (cover[std::size_t(b)] > 0.05f) {
+                    if (first < 0) first = b;
+                    last = b;
+                }
+            }
+            if (first < 0) {
+                CHECK(false, "%.0f Hz side %d: no rubber", hz, side);
+                continue;
+            }
+            const float len = float(last - first + 1) * kBin;
+            auto mean = [&](float from, float to) { // meters from the start of the mark
+                float sum = 0.0f;
+                int n = 0;
+                for (int b = first; b <= last; ++b) {
+                    const float d = float(b - first) * kBin;
+                    if (d >= from && d < to) sum += cover[std::size_t(b)], ++n;
+                }
+                return n ? sum / float(n) : 0.0f;
+            };
+            // The patch heats up over ~0.5 s of sliding, so the even middle starts after that build-up distance.
+            const float build = v0 * 0.5f;
+            const float start = mean(0.0f, 1.0f), middle = mean(build, len - 4.0f), end = mean(len - 2.0f, len + 1.0f);
+            int maxCount = 0;
+            for (int b = first; b <= last; ++b) maxCount = std::max(maxCount, count[std::size_t(b)]);
+            float minMid = 1.0f, maxMid = 0.0f;
+            for (int b = first; b <= last; ++b) {
+                const float d = float(b - first) * kBin;
+                if (d < build || d >= len - 4.0f) continue;
+                minMid = std::min(minMid, cover[std::size_t(b)]);
+                maxMid = std::max(maxMid, cover[std::size_t(b)]);
+            }
+            std::printf("    %3.0f Hz side %d: v0 %.1f km/h, stop %.1f m, mark %.1f m (from +%.1f m), cover start %.2f "
+                        "middle %.2f [%.2f..%.2f] last 2 m %.2f, max segments per 0.5 m %d, stamps %d\n",
+                        hz, side, v0 * 3.6f, zStop - zBrake, len, float(first) * kBin, start, middle, minMid, maxMid, end,
+                        maxCount, stamps);
+            worst = std::max(worst, end / std::max(middle, 1e-3f));
+            CHECK(start < 0.75f * middle, "%.0f Hz side %d: the mark does not start faint (%.2f vs %.2f)", hz, side,
+                  start, middle);
+            CHECK(middle > 0.4f && maxMid - minMid < 0.25f, "%.0f Hz side %d: uneven middle %.2f..%.2f", hz, side,
+                  minMid, maxMid);
+            CHECK(end < 1.1f * middle && end > 0.6f * middle, "%.0f Hz side %d: end %.2f vs middle %.2f", hz, side,
+                  end, middle);
+            CHECK(maxCount <= 2 * int(std::ceil(kBin / sim.tireMarks().settings().segmentLength)) + 2,
+                  "%.0f Hz side %d: %d segments stacked in one 0.5 m bin", hz, side, maxCount);
+        }
+        CHECK(stamps == 0, "%.0f Hz: %d in-place stamps during a braking stop", hz, stamps);
+        (void)worst;
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -592,6 +785,8 @@ int main(int argc, char** argv) {
         {"tire_marks_surfaces", tireMarksSurfaces},
         {"auto_reverse", autoReverse},
         {"surface_launch_grip", surfaceLaunchGrip},
+        {"skid_mark_profile", skidMarkProfile},
+        {"tire_marks_boundary", tireMarksBoundary},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

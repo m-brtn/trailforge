@@ -15,6 +15,7 @@ enum class SurfaceId : std::uint8_t {
     LowGrip,      // low-grip section (hard, only lower mu)
     Mud,          // showcase mud path: rigid, only lower mu (no sinkage; visuals are separate)
     Grass,        // showcase meadow: rigid, only mu
+    Sand,         // sand area: rigid, only a lower mu (no sinkage, no ruts that change the ground)
     Count
 };
 

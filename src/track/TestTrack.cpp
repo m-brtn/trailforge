@@ -65,7 +65,12 @@ constexpr float kLaneC0 = 16.0f, kLaneC1 = 36.0f;   // side slope, steps, rocks
 constexpr float kStartZ0 = -48.0f, kStartZ1 = -30.0f;
 constexpr float kLowGripZ0 = 24.0f, kLowGripZ1 = 42.0f;
 // Concrete skid strip along the east edge (flat ground between the side slope plateau and the berm).
-constexpr float kSkidX0 = 39.0f, kSkidX1 = 45.0f, kSkidZ0 = -48.0f, kSkidZ1 = 44.0f;
+// It runs north up to the sand area, so the end of the strip is a sand -> concrete boundary.
+constexpr float kSkidX0 = 39.0f, kSkidX1 = 45.0f, kSkidZ0 = -48.0f, kSkidZ1 = 48.0f;
+// Sand area in the east meadow (rigid, low mu), flat next to the strip, dunes further north.
+constexpr float kSandX0 = 28.0f, kSandX1 = 45.0f, kSandZ0 = 48.0f, kSandZ1 = 84.0f;
+// West concrete strip with a flat mud bath at its north end: a direct mud -> concrete boundary at z = kMudBathZ0.
+constexpr float kWestX0 = -44.5f, kWestX1 = -38.5f, kWestZ0 = 4.0f, kMudBathZ0 = 34.0f, kMudBathZ1 = 46.0f;
 
 // ---- Showcase (z > 46): a winding mud path with puddles through a grass meadow.
 constexpr float kShowZ0 = 46.0f;    // blend from the proving ground starts here
@@ -124,6 +129,9 @@ SurfaceId TestTrack::groundSurfaceAt(float x, float z) {
     if (x > kLaneA0 && x < kLaneA1 && z > kStartZ0 && z < kStartZ1) return SurfaceId::Concrete;
     if (x > kLaneA0 && x < kLaneA1 && z > kLowGripZ0 && z < kLowGripZ1) return SurfaceId::LowGrip;
     if (x > kSkidX0 && x < kSkidX1 && z > kSkidZ0 && z < kSkidZ1) return SurfaceId::Concrete;
+    if (x > kWestX0 && x < kWestX1 && z > kWestZ0 && z < kMudBathZ1)
+        return z < kMudBathZ0 ? SurfaceId::Concrete : SurfaceId::Mud;
+    if (x > kSandX0 && x < kSandX1 && z > kSandZ0 && z < kSandZ1) return SurfaceId::Sand;
     if (z > 47.0f) {
         if (showcaseMudWeight(x, z) > 0.45f) return SurfaceId::Mud;
         int n = 0;
@@ -282,6 +290,14 @@ float TestTrack::provingGroundHeight(float x, float z) {
     }
     // Showcase meadow to the north (blends in over z = 46..52).
     if (z > kShowZ0) h += smoothstep(kShowZ0, kShowZ1, z) * showcaseRelief(x, z);
+    // Dunes in the north part of the sand area: crossing ridges up to ~0.9 m, flat toward the skid strip.
+    {
+        const float w = window(x, kSandX0 + 2.0f, kSandX1 - 3.0f, 2.0f) * window(z, 62.0f, kSandZ1 - 5.0f, 8.0f);
+        if (w > 0.0f) {
+            const float ridge = 0.5f + 0.5f * std::sin(0.42f * z + 0.35f * x + 0.25f * std::sin(0.5f * x));
+            h += w * (0.75f * ridge * ridge + 0.15f * (1.0f + std::sin(0.9f * x - 0.3f * z)));
+        }
+    }
     // Berm around the perimeter.
     {
         const float d = std::min(std::min(x - kXMin, kXMax - x), std::min(z - kZMin, kZMax - z));
@@ -421,6 +437,10 @@ void TestTrack::buildProvingGround() {
     feature("Rock field", stepX, 14.0f);
     feature("Mud & puddles showcase", 0.0f, 48.5f);
     feature("Skid strip (concrete)", 0.5f * (kSkidX0 + kSkidX1), -46.0f);
+    feature("Sand area (dunes)", 36.0f, 52.0f);
+    // Facing south (-Z) over the boundary onto concrete.
+    m_features.push_back({"Sand to concrete", Vec3(42.0f, provingGroundHeight(42.0f, 60.0f), 60.0f), kPi});
+    m_features.push_back({"Mud bath to concrete", Vec3(0.5f * (kWestX0 + kWestX1), 0.0f, kMudBathZ1 - 1.5f), kPi});
 }
 
 void TestTrack::buildFlat(bool withPit) {

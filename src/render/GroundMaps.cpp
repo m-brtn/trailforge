@@ -175,6 +175,8 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
             float wet = 0.0f;
             if (z > 46.0f)
                 wet = std::clamp(blurMud * (1.0f - smooth(water.level, water.level + 0.15f, h)) + 0.35f * mudW, 0.0f, 1.0f);
+            else
+                wet = 0.45f * blurMud; // the flat mud bath on the proving ground: wet, no standing water
             std::uint8_t* px = &g.mask[(std::size_t(j) * g.width + i) * 4];
             px[0] = std::uint8_t(std::lround(std::clamp(grass, 0.0f, 1.0f) * 255.0f));
             px[1] = std::uint8_t(std::lround(std::clamp(mudW, 0.0f, 1.0f) * 255.0f));

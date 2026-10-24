@@ -28,6 +28,7 @@ constant int MAT_RUBBER = 11;
 constant int MAT_AMBER = 12;
 constant int MAT_FOLIAGE = 13;
 constant int MAT_PAINT = 14;
+constant int MAT_SAND = 15;
 
 struct FrameUniforms {
     float4x4 viewProj;
@@ -415,6 +416,19 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
         g.roughness = 0.78;
         g.height = t.r * 0.8 + tf.b * 0.6;
         g.bump = 0.35; // low, so the bump does not blur the facets
+    } else if (mat == MAT_SAND) {
+        // Light dry sand: wind ripples across the prevailing wind, fine grain speckle, darker damp hollows.
+        const float ripple = sin(dot(P.xz, float2(0.55, 2.4)) + nB.r * 5.0 + nA.g * 3.0);
+        const float3 lightS = float3(0.46, 0.37, 0.24), darkS = float3(0.30, 0.235, 0.15);
+        float3 c = mix(darkS, lightS, smoothstep(0.2, 0.8, large * 0.7 + 0.3 * (0.5 + 0.5 * ripple)));
+        c *= 0.92 + 0.16 * fine;
+        c = mix(c, float3(0.20, 0.17, 0.12), (1.0 - smoothstep(0.08, 0.2, nC.b)) * 0.35); // grit
+        const float grassAmt = saturate(mask.r * 1.2);
+        c = mix(c, float3(0.09, 0.09, 0.03), grassAmt * 0.6);
+        g.albedo = c;
+        g.roughness = 0.96;
+        g.height = 0.35 * (0.5 + 0.5 * ripple) + fine * 0.25;
+        g.bump = 0.35;
     } else { // MAT_LOWGRIP: sealed slab, smooth
         g.albedo = float3(0.075, 0.095, 0.12) * (0.9 + 0.2 * large);
         g.roughness = 0.30 + 0.1 * fine;
@@ -468,7 +482,7 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
     s.emissive = float3(0.0);
     s.clearCoat = 0.0;
 
-    const bool ground = mat >= MAT_DIRT && mat <= MAT_GRASS;
+    const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND;
     if (ground) {
         const float4 m = sampleMask(f, mask, maskSampler, P.xz);
         GroundSurface g = groundMaterial(mat, P, N, m, noise, noiseSampler);
@@ -921,7 +935,7 @@ struct TireMarkSegment {
     float4 p0u0;         // xyz: patch center at the start, w: distance along the ribbon (m)
     float4 p1u1;
     float4 side0Birth;   // xyz: half-width vector at p0, w: birth time (s)
-    float4 side1Surface; // xyz: half-width vector at p1, w: SurfaceId
+    float4 side1Surface; // xyz: half-width vector at p1, w: SurfaceId + 8 * packed tread soil (packMarkSurface)
     float4 imprintSlip;  // x/y: imprint at p0/p1, z/w: slip at p0/p1
 };
 
@@ -929,7 +943,7 @@ struct MarkUniforms {
     float4 info;   // x: first live segment, y: ring capacity, z: simulation time (s), w: fade time (s)
     float4 params; // x: lift along the contact normal (m)
     float4 gainA;  // per-surface intensity: Concrete, PackedDirt, Rock, LowGrip
-    float4 gainB;  // Mud, Grass
+    float4 gainB;  // Mud, Grass, Sand
     float4 widthA; // mark width / tire width per surface, same order
     float4 widthB;
 };
@@ -940,6 +954,9 @@ constant int SURF_DIRT = 1;
 constant int SURF_ROCK = 2;
 constant int SURF_MUD = 4;
 constant int SURF_GRASS = 5;
+constant int SURF_SAND = 6;
+
+bool softSurface(int s) { return s == SURF_DIRT || s == SURF_MUD || s == SURF_GRASS || s == SURF_SAND; }
 
 float surfaceParam(float4 a, float4 b, int surface) { return surface < 4 ? a[surface] : b[min(surface - 4, 3)]; }
 
@@ -951,6 +968,7 @@ struct MarkCorner {
     float slip;
     float fade;
     int surface;
+    float4 soil;  // rgb: linear albedo of the soil on the tread, a: wetness
     bool visible; // whole segment
 };
 
@@ -965,7 +983,11 @@ MarkCorner markCorner(constant MarkUniforms& mu, const device TireMarkSegment* s
     n = length_squared(n) > 1e-10 ? normalize(n) : float3(0, 1, 0);
     n *= n.y < 0.0 ? -1.0 : 1.0;
     MarkCorner m;
-    m.surface = int(s.side1Surface.w + 0.5);
+    const uint word = uint(s.side1Surface.w + 0.5);
+    m.surface = int(word & 7u);
+    const uint code = word >> 3;
+    const float3 q = float3(code & 31u, (code >> 5) & 31u, (code >> 10) & 31u) / 31.0;
+    m.soil = float4(q * q * 0.5, float((code >> 15) & 7u) / 7.0);
     const float gain = surfaceParam(mu.gainA, mu.gainB, m.surface);
     m.world = (end ? s.p1u1.xyz : s.p0u0.xyz) + side * c.y + n * mu.params.x;
     m.normal = n;
@@ -987,6 +1009,7 @@ struct MarkOut {
     float slip;
     float fade;
     int surface [[flat]];
+    float4 soil [[flat]];
 };
 
 vertex MarkOut mark_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant FrameUniforms& f [[buffer(0)]],
@@ -1001,6 +1024,7 @@ vertex MarkOut mark_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constan
     out.slip = c.slip;
     out.fade = c.fade;
     out.surface = c.surface;
+    out.soil = c.soil;
     return out;
 }
 
@@ -1041,8 +1065,8 @@ fragment float4 mark_fs(MarkOut in [[stage_in]], constant FrameUniforms& f [[buf
     float h;          // relief (m) for the bump normal
     float cover;      // blend weight over the ground
     float cavity = 0.0;
-    if (surface == SURF_DIRT || surface == SURF_MUD || surface == SURF_GRASS) {
-        const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : MAT_DIRT;
+    if (softSurface(surface)) {
+        const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : surface == SURF_SAND ? MAT_SAND : MAT_DIRT;
         const GroundSurface ground = groundMaterial(mat, P, N0, m, noise, ns);
         const GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, m.a), noise, ns);
         const float under = 1.0 - smoothstep(0.82, 0.98, atv);
@@ -1074,6 +1098,18 @@ fragment float4 mark_fs(MarkOut in [[stage_in]], constant FrameUniforms& f [[buf
             rough = mix(0.85, 0.95, torn);
             cover = saturate(max(imprint * 0.75, slip * 1.5));
             cavity = torn * 0.2;
+        } else if (surface == SURF_SAND) {
+            // Dry sand: the tread presses crisp lugs into a slightly darker, smoother floor; spinning digs a loose
+            // trench with sand heaped at the sides.
+            const float berm = smoothstep(0.85, 1.05, atv) * (1.0 - smoothstep(1.05, 1.35, atv));
+            h = -(0.012 * imprint + 0.03 * slip) * under - lugs * 0.010 * under + (0.006 * imprint + 0.02 * slip) * berm +
+                churn * (clods - 0.5) * 0.02 * under + baseH * mix(1.0, 0.3, imprint);
+            const float3 pressed = ground.albedo * 0.86 * (1.0 - 0.12 * lugs);
+            const float3 loose = ground.albedo * mix(0.78, 1.08, clods);
+            albedo = mix(pressed, loose, churn);
+            rough = 0.97;
+            cover = saturate(max(imprint * 0.85, slip * 1.3));
+            cavity = under * 0.12 * lugs;
         } else {
             // Packed dirt: compacted (darker, smoother) with the tread imprint; spinning smears it into loose soil.
             h = -(0.008 * imprint + 0.02 * slip) * under - lugs * 0.008 * under + churn * (clods - 0.5) * 0.03 * under +
@@ -1093,9 +1129,20 @@ fragment float4 mark_fs(MarkOut in [[stage_in]], constant FrameUniforms& f [[buf
         const float grooves = 1.0 - 0.6 * (1.0 - smoothstep(0.03, 0.08, abs(atv - 0.38))) -
                               0.6 * (1.0 - smoothstep(0.03, 0.08, atv));
         h = ground.height * 0.035 * ground.bump;
-        albedo = float3(0.018, 0.017, 0.016) * (0.8 + 0.4 * streak);
-        rough = mat == 4 ? 0.50 : 0.75;
-        cover = saturate(slip * 1.1 * (0.7 + 0.6 * streak)) * mix(1.0, grooves, 0.6 * lugAA);
+        const float rubber = saturate(slip * 1.1 * (0.7 + 0.6 * streak)) * mix(1.0, grooves, 0.6 * lugAA);
+        // Soil carried on the tread and printed back onto the hard ground: the lugs print first, the full width only
+        // while the tread is still loaded with soil. Its colour and gloss come from the soil (wet mud dark and glossy,
+        // dry dust light and matte); the print fades as the tread cleans.
+        const float lugsPrint = treadLugs(u, tv) * lugAA;
+        const float3 soilC = in.soil.rgb * mix(0.8, 1.15, clods);
+        const float wetS = in.soil.a;
+        const float print = saturate(imprint * 1.3) * mix(0.55 + 0.45 * lugsPrint, 1.0, smoothstep(0.55, 0.9, imprint)) *
+                            (0.8 + 0.4 * rag);
+        const float rubberW = rubber / max(rubber + print, 1e-4);
+        albedo = mix(soilC, float3(0.018, 0.017, 0.016) * (0.8 + 0.4 * streak), rubberW);
+        rough = mix(mix(0.95, 0.35, wetS), mat == 4 ? 0.50 : 0.75, rubberW);
+        h += print * (1.0 - rubberW) * (0.002 + 0.004 * lugsPrint);
+        cover = max(rubber, print);
     }
     cover *= edge * in.fade;
     float3 N = perturbNormal(N0, P, h, 1.0);
@@ -1132,7 +1179,7 @@ vertex MarkMaskOut mark_mask_vs(uint vid [[vertex_id]], uint iid [[instance_id]]
                                 constant MarkUniforms& mu [[buffer(1)]],
                                 const device TireMarkSegment* segs [[buffer(2)]]) {
     const MarkCorner c = markCorner(mu, segs, vid, iid);
-    const bool soft = c.surface == SURF_DIRT || c.surface == SURF_MUD || c.surface == SURF_GRASS;
+    const bool soft = softSurface(c.surface);
     const float2 uv = groundUV(f, c.world.xz);
     MarkMaskOut out;
     out.position = c.visible && soft ? float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0) : float4(-2.0, -2.0, 0.5, 1.0);

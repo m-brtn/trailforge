@@ -85,7 +85,7 @@ struct MarkUniforms {
     glm::vec4 info;   // x: first live segment (ring index), y: ring capacity, z: simulation time (s), w: fade time (s)
     glm::vec4 params; // x: lift along the contact normal (m)
     glm::vec4 gainA;  // per-surface intensity multipliers: Concrete, PackedDirt, Rock, LowGrip
-    glm::vec4 gainB;  // Mud, Grass
+    glm::vec4 gainB;  // Mud, Grass, Sand
     glm::vec4 widthA; // mark width / tire width per surface (SurfaceMarkResponse::widthScale), same order
     glm::vec4 widthB;
 };
@@ -154,7 +154,7 @@ struct FrameDesc {
     // segments written since the previous frame.
     const TireMarks* tireMarks = nullptr;
     double simTime = 0.0;                        // simulation time the segment birth times refer to (s)
-    std::array<float, 6> markGain{1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
+    std::array<float, 7> markGain{1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
 };
 
 struct RenderStats {

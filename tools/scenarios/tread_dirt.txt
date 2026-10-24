@@ -1,0 +1,56 @@
+# Tread dirt: soil picked up on mud / sand and printed onto concrete, fading as the tread cleans.
+# Captures: /tmp/trailforge_tread_*.png. Teleports: 11 "Sand to concrete", 12 "Mud bath to concrete" (both face -Z).
+set ui 0
+set hud 0
+set auto_reverse 0
+time Noon
+
+# Mud bath -> concrete at a steady ~25 km/h (boundary at z = 34).
+teleport 12
+wait 1.5
+set marks_clear 1
+down W
+until speed_kmh > 22 6
+up W
+until z < 10 12
+log mud_roll_done
+expect tread_soil_max < 0.2
+down S
+until speed_kmh < 0.5 6
+up S
+camera -41.5 24.0 24.0 -41.5 0.0 23.99
+capture /tmp/trailforge_tread_mud_roll.png
+wait 0.2
+camera -41.5 5.0 34.5 -41.5 0.0 34.49
+capture /tmp/trailforge_tread_mud_boundary.png
+wait 0.2
+
+# Mud bath -> concrete with full throttle: wheelspin out of the mud, no blob at the boundary.
+teleport 12
+wait 1.5
+set marks_clear 1
+down W
+until z < 20 8
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+camera -41.5 5.0 33.0 -41.5 0.0 32.99
+capture /tmp/trailforge_tread_mud_spin.png
+wait 0.2
+
+# Sand -> concrete at ~25 km/h (boundary at z = 48 on the skid strip).
+teleport 11
+wait 1.5
+set marks_clear 1
+down W
+until speed_kmh > 22 6
+up W
+until z < 30 12
+down S
+until speed_kmh < 0.5 6
+up S
+camera 42.0 18.0 41.0 42.0 0.0 40.99
+capture /tmp/trailforge_tread_sand_roll.png
+wait 0.2
+quit
