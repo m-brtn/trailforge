@@ -1,0 +1,61 @@
+# Time-of-day captures (screenshots to /tmp/trailforge_tod_*.png):
+#   ./build/release/trailforge --script tools/scenarios/time_of_day.txt
+# Each preset is shown from the follow camera in the showcase, plus a banner-like composition: camera low behind
+# the vehicle, looking north over the meadow toward the sunset and the layered mountains.
+set ui 0
+set hud 0
+teleport 8
+wait 2.0
+time Dawn
+expect tod > 5.7
+expect sun_el > 0
+wait 0.4
+capture /tmp/trailforge_tod_dawn.png
+wait 0.3
+time Noon
+expect sun_el > 50
+wait 0.4
+capture /tmp/trailforge_tod_noon.png
+wait 0.3
+time Sunset
+expect sun_el > 2
+expect sun_el < 8
+wait 0.4
+capture /tmp/trailforge_tod_sunset.png
+wait 0.3
+time Night
+expect sun_el < -20
+wait 0.4
+capture /tmp/trailforge_tod_night.png
+wait 0.3
+set headlights 0
+wait 0.3
+capture /tmp/trailforge_tod_night_lights_off.png
+wait 0.3
+set headlights 1
+wait 0.3
+# Banner-like composition.
+time Sunset
+camera 1.0 3.4 39.5 0.0 4.4 70.0
+wait 0.5
+capture /tmp/trailforge_tod_banner.png
+wait 0.3
+camera -6 6 40 -6 1.5 70
+wait 0.5
+capture /tmp/trailforge_tod_sunset_overview.png
+wait 0.3
+camera 24 1.8 14 26 0.2 24
+time Noon
+wait 0.5
+capture /tmp/trailforge_tod_rocks_noon.png
+wait 0.3
+camera follow
+# Time-lapse runs and wraps around midnight.
+time 23.8
+set tod_speed 2
+set tod_run 1
+wait 0.5
+expect tod_run == 1
+expect tod < 12
+set tod_run 0
+quit

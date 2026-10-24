@@ -3,6 +3,7 @@
 #include "render/GroundMaps.h"
 #include "render/MathConvert.h"
 #include "render/Scenery.h"
+#include "render/TimeOfDay.h"
 #include "render/VehicleModel.h"
 
 #include <SDL3/SDL.h>
@@ -96,12 +97,14 @@ Application::Application(const AppOptions& options)
     m_shockBodyMesh = m_renderer->upload(buildShockBodyMesh());
     m_shockShaftMesh = m_renderer->upload(buildShockShaftMesh());
     m_renderer->setGround(buildGroundMaps(m_sim.track()), TestTrack::water().level);
+    const std::vector<TreeInstance> trees = buildTreeInstances();
+    m_renderer->setTrees(buildPineMeshes(), trees);
     m_gfx.settings = m_renderer->settings();
     std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu, render triangles: track %zu, "
-                "scenery %zu, vehicle body %zu, scene build %.0f ms\n",
+                "scenery %zu, vehicle body %zu, trees %zu (instanced), scene build %.0f ms\n",
                 m_renderer->driverName(), m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount(),
                 trackMesh.vertices.size() / 3, sceneryMesh.vertices.size() / 3, bodyMesh.vertices.size() / 3,
-                1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
+                trees.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
     if (!options.scriptPath.empty()) {
         m_scenario = Scenario::load(options.scriptPath);
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
@@ -238,6 +241,11 @@ void Application::renderFrame(float frameTime) {
     if (req.togglePause) m_paused = !m_paused;
     if (req.stepOnce && m_paused) m_stepOnce = true;
     if (req.setVSync) m_renderer->setVSync(req.vsync);
+    if (m_gfx.timeLapse) {
+        // Cosmetic clock: runs in real time (also while the physics is paused), stopped with the UI pause button.
+        m_gfx.settings.timeOfDay = std::fmod(m_gfx.settings.timeOfDay + m_gfx.timeLapseSpeed * frameTime, 24.0f);
+        m_gfx.changed = true;
+    }
     if (m_gfx.changed) {
         m_renderer->setSettings(m_gfx.settings);
         m_gfx.settings = m_renderer->settings();
@@ -276,6 +284,11 @@ void Application::renderFrame(float frameTime) {
         frame.brakeLight = std::max(t.command.brake, t.command.handBrake) > 0.05f ? 1.0f : 0.0f;
         frame.reverseLight = t.direction == DriveDirection::Reverse ? 1.0f : 0.0f;
         frame.headlights = m_gfx.headlights ? 1.0f : 0.0f;
+        // Lamp lens centers in body space (see VehicleModel.cpp), beams pitched ~3 deg down.
+        const glm::vec3 lens(0.67f, 0.40f, 2.24f);
+        frame.headlightPos[0] = glm::vec3(bodyM * glm::vec4(lens.x, lens.y, lens.z, 1.0f));
+        frame.headlightPos[1] = glm::vec3(bodyM * glm::vec4(-lens.x, lens.y, lens.z, 1.0f));
+        frame.headlightDir = glm::normalize(glm::vec3(bodyM * glm::vec4(0.0f, -0.05f, 1.0f, 0.0f)));
         for (int i = 0; i < kWheelCount; ++i) {
             const auto& w = t.wheels[i];
             frame.wheelContacts[i] = glm::vec4(toGlm(w.contactPosition), w.contact ? 1.0f : 0.0f);
@@ -595,11 +608,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             if (arg == presetName(QualityPreset(p))) {
                 const RenderSettings look = m_gfx.settings;
                 m_gfx.settings = presetSettings(QualityPreset(p));
-                m_gfx.settings.exposure = look.exposure;
-                m_gfx.settings.sunElevationDeg = look.sunElevationDeg;
-                m_gfx.settings.sunAzimuthDeg = look.sunAzimuthDeg;
-                m_gfx.settings.fogDensity = look.fogDensity;
-                m_gfx.settings.bloomStrength = look.bloomStrength;
+                copyLook(m_gfx.settings, look);
                 m_gfx.preset = QualityPreset(p);
                 m_gfx.changed = true;
                 return Exec::Done;
@@ -627,12 +636,15 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "grass_dist") s.grassDistance = v;
         else if (k == "clouds") s.clouds = v != 0.0f;
         else if (k == "exposure") s.exposure = v;
-        else if (k == "sun_el") s.sunElevationDeg = v;
-        else if (k == "sun_az") s.sunAzimuthDeg = v;
         else if (k == "fog") s.fogDensity = v;
         else {
             render = false;
-            if (k == "mud") { m_gfx.mud = std::clamp(v, 0.0f, 1.0f); m_gfx.autoMud = false; }
+            // Look-only settings: they do not turn the quality preset into Custom.
+            if (k == "tod") { s.timeOfDay = v; m_gfx.changed = true; }
+            else if (k == "sun_heading") { s.sunHeadingDeg = v; m_gfx.changed = true; }
+            else if (k == "tod_speed") m_gfx.timeLapseSpeed = v;
+            else if (k == "tod_run") m_gfx.timeLapse = v != 0.0f;
+            else if (k == "mud") { m_gfx.mud = std::clamp(v, 0.0f, 1.0f); m_gfx.autoMud = false; }
             else if (k == "auto_mud") m_gfx.autoMud = v != 0.0f;
             else if (k == "headlights") m_gfx.headlights = v != 0.0f;
             else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
@@ -646,6 +658,21 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             m_gfx.preset = QualityPreset::Custom;
             m_gfx.changed = true;
         }
+        return Exec::Done;
+    }
+    if (c.op == "time") {
+        // time Dawn|Noon|Sunset|Night or time HOURS (0..24); stops the time-lapse so captures are repeatable.
+        float hours = -1.0f;
+        for (const TimePreset& p : kTimePresets)
+            if (arg == p.name) hours = p.hours;
+        if (hours < 0.0f) {
+            char* end = nullptr;
+            hours = std::strtof(arg.c_str(), &end);
+            if (arg.empty() || *end != '\0' || hours < 0.0f || hours > 24.0f) return Exec::Failed;
+        }
+        m_gfx.settings.timeOfDay = hours;
+        m_gfx.timeLapse = false;
+        m_gfx.changed = true;
         return Exec::Done;
     }
     if (c.op == "camera") {
@@ -733,6 +760,16 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "cpu_ms") return m_cpuMs;
     if (n == "gpu_ms") return m_renderer->stats().gpuMs;
     if (n == "mud") return m_gfx.mud;
+    if (n == "tod") return m_gfx.settings.timeOfDay;
+    if (n == "tod_run") return m_gfx.timeLapse ? 1.0 : 0.0;
+    if (n == "sun_el" || n == "sun_az") {
+        const SkyState sky = computeSky(m_gfx.settings.timeOfDay, m_gfx.settings.sunHeadingDeg);
+        return n == "sun_el" ? sky.sunElevationDeg : sky.sunAzimuthDeg;
+    }
+    if (n == "trees") {
+        const auto& t = m_renderer->stats().trees;
+        return t[0] + t[1] + t[2];
+    }
     if (n == "quality") return double(int(m_gfx.preset));
     if (n == "msaa") return m_renderer->settings().msaa;
     if (n == "grass_blades") return double(m_renderer->stats().grassBlades);

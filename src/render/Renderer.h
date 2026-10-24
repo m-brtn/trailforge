@@ -41,6 +41,15 @@ struct FrameUniforms {
     glm::vec4 vehicleParams;
     glm::vec4 clipPlane;
     glm::vec4 options;
+    glm::vec4 skySun;       // xyz: true sun direction (sky, glow), w: cos of the sun disc radius
+    glm::vec4 skySunGlow;   // rgb: glow / in-scatter color around the sun, w: star visibility
+    glm::vec4 sunDisc;      // rgb: sun disc radiance, w: moon disc brightness
+    glm::vec4 moonDir;      // xyz, w: night factor
+    glm::vec4 fogColor;     // rgb, w: world azimuth of the mountain valley (rad)
+    glm::vec4 skyAmbient;   // rgb: sky diffuse irradiance, w: unused
+    glm::vec4 headlightL;   // xyz: lamp position, w: intensity (0 = off)
+    glm::vec4 headlightR;   // xyz: lamp position
+    glm::vec4 headlightDir; // xyz: beam axis, w: cos of the outer cone angle
 };
 
 struct DrawUniforms {
@@ -59,6 +68,10 @@ struct GrassUniforms {
 
 struct ShadowUniforms {
     glm::mat4 lightViewProj;
+};
+
+struct TreeUniforms {
+    glm::vec4 info; // x: first instance in the per-frame instance buffer, y: time (s)
 };
 
 struct PostUniforms {
@@ -123,6 +136,8 @@ struct FrameDesc {
     float brakeLight = 0.0f;
     float reverseLight = 0.0f;
     float headlights = 1.0f;
+    std::array<glm::vec3, 2> headlightPos{};  // world positions of the two lamps (spot lights, no shadows)
+    glm::vec3 headlightDir{0, 0, 1};          // beam axis
     std::array<glm::vec4, 4> wheelContacts{}; // xyz contact point, w > 0 when the wheel touches the ground
 };
 
@@ -133,14 +148,17 @@ struct RenderStats {
     int shadowDraws = 0;
     int grassChunks = 0;
     std::uint64_t grassBlades = 0;            // blade instances submitted (before the mask test)
+    std::array<int, 3> trees{};               // tree instances drawn per LOD (main view)
+    int shadowTrees = 0;                      // tree instances per shadow cascade
     bool reflectionRendered = false;
     double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
     double gpuMsAvg = 0.0;                    // exponential average
     double acquireWaitMs = 0.0;               // CPU time blocked in SDL_WaitAndAcquireGPUSwapchainTexture
 };
 
-// SDL GPU renderer (Metal). Passes: sun shadow cascades -> puddle reflection -> HDR scene
-// (lit, grass, sky, water, lines) -> bloom -> tonemap (+ render-scale upscale) -> FXAA -> ImGui.
+// SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> puddle reflection -> HDR scene
+// (lit, instanced trees, grass, sky with mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale)
+// -> FXAA -> ImGui.
 class Renderer {
 public:
     explicit Renderer(SDL_Window* window, bool debugDevice);
@@ -156,6 +174,8 @@ public:
     GpuMesh upload(const MeshData& mesh);
     // Ground maps (height, mask, noise) and grass chunk list; call once after loading the track.
     void setGround(const GroundMaps& maps, float waterLevel);
+    // Instanced trees: one unit-height mesh per LOD (near, mid, far) and the static instance list.
+    void setTrees(const std::array<MeshData, 3>& lods, std::span<const TreeInstance> instances);
 
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
@@ -210,8 +230,15 @@ private:
     bool saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::uint32_t w, std::uint32_t h, const char* path);
 
     void computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj);
-    void fillLighting(FrameUniforms& fu) const;
+    void fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& exposure, float& bloomMul) const;
     std::uint32_t cullGrass(const FrameDesc& frame, const glm::mat4& viewProj, std::array<std::uint32_t, 3>& counts);
+    // Fills m_treeScratch: main view LOD 0/1/2, puddle reflection, shadow casters. Returns the total instance count.
+    struct TreeLists {
+        std::array<std::uint32_t, 3> first{}, count{};
+        std::uint32_t reflFirst = 0, reflCount = 0, shadowFirst = 0, shadowCount = 0;
+    };
+    std::uint32_t cullTrees(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* reflViewProj,
+                            TreeLists& lists);
 
     SDL_Window* m_window = nullptr;
     SDL_GPUDevice* m_device = nullptr;
@@ -235,6 +262,8 @@ private:
     SDL_GPUGraphicsPipeline* m_bloomUpPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_tonemapPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_fxaaPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_treeShadowPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_reflTreePipe = nullptr;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
     SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
@@ -243,6 +272,7 @@ private:
     SDL_GPUGraphicsPipeline* m_waterPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_linePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_lineOnTopPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
 
     // Frame targets.
     std::uint32_t m_outW = 0, m_outH = 0;
@@ -267,6 +297,14 @@ private:
     SDL_GPUBuffer* m_grassBuffer = nullptr;
     SDL_GPUTransferBuffer* m_grassTransfer = nullptr;
     static constexpr std::uint32_t kMaxGrassChunks = 8192;
+
+    // Trees (static instance list; the visible subsets are uploaded every frame).
+    std::array<GpuMesh, 3> m_treeMeshes;
+    std::vector<TreeInstance> m_trees;
+    std::vector<TreeInstance> m_treeScratch;
+    SDL_GPUBuffer* m_treeBuffer = nullptr;
+    SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
+    std::uint32_t m_treeCapacity = 0; // instances
 
     // Debug lines.
     SDL_GPUBuffer* m_lineBuffer = nullptr;

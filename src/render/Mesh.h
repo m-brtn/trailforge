@@ -44,6 +44,12 @@ struct LitVertex {
     glm::vec4 material; // x: MatId, y: roughness, z: metallic, w: mud receptivity
 };
 
+// Instance of a unit-height tree mesh. Layout matches the instance buffer read by tree_vs (two float4).
+struct TreeInstance {
+    glm::vec4 baseHeight; // xyz: trunk base, w: height (m)
+    glm::vec4 params;     // x: yaw (rad), y: color variation 0..1, z: width scale, w: unused
+};
+
 struct LineVertex {
     glm::vec3 position;
     glm::vec4 color;

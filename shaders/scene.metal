@@ -49,6 +49,15 @@ struct FrameUniforms {
     float4 vehicleParams;   // x: mud amount, y: brake light, z: reverse light, w: headlights
     float4 clipPlane;       // xyz normal, w offset; fragments with dot(n, p) + w < 0 are discarded (w > 1e5: off)
     float4 options;         // x: 1 m grid strength, y: exposure, z: wind strength, w: clouds on
+    float4 skySun;          // xyz: true sun direction (sunDir is the shadow light: sun or moon), w: cos disc radius
+    float4 skySunGlow;      // rgb: glow / in-scatter color around the sun, w: star visibility
+    float4 sunDisc;         // rgb: sun disc radiance, w: moon disc brightness
+    float4 moonDir;         // xyz, w: night factor
+    float4 fogColor;        // rgb, w: world azimuth of the mountain valley (rad)
+    float4 skyAmbient;      // rgb: sky diffuse irradiance
+    float4 headlightL;      // xyz: lamp position, w: intensity (0 = off)
+    float4 headlightR;      // xyz: lamp position
+    float4 headlightDir;    // xyz: beam axis, w: cos of the outer cone angle
 };
 
 struct DrawUniforms {
@@ -64,22 +73,37 @@ float3 sampleNoise(texture2d<float> tex, sampler s, float2 uv) { return tex.samp
 
 float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+float hash12(float2 p) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
 // Procedural sky radiance for a view direction (no sun disk), used by the sky pass and as environment light.
 float3 skyRadiance(constant FrameUniforms& f, float3 dir) {
-    const float3 sun = f.sunDir.xyz;
+    const float3 sun = f.skySun.xyz;
     const float y = dir.y;
     const float up = saturate(y);
-    float3 col = mix(f.skyHorizon.rgb, f.skyZenith.rgb, pow(up, 0.4));
+    // Toward the sun the warm horizon band reaches higher (sunset banding), away from it the sky stays cooler.
+    const float mu = dot(dir, sun);
+    const float toward = saturate(mu * 0.5 + 0.5);
+    const float band = mix(0.55, 0.28, toward * toward);
+    float3 col = mix(f.skyHorizon.rgb, f.skyZenith.rgb, pow(up, band));
     // Below the horizon: hazy ground color.
-    const float3 below = mix(f.skyHorizon.rgb * 0.75, f.groundAmbient.rgb * 1.4, saturate(-y * 4.0));
+    const float3 below = mix(f.fogColor.rgb * 0.85, f.groundAmbient.rgb * 1.4, saturate(-y * 4.0));
     col = y < 0.0 ? below : col;
     // Mie-like glow around the sun and a warmer horizon toward it.
-    const float mu = dot(dir, sun);
     const float g = 0.76;
     const float hg = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) / (4.0 * PI);
-    col += f.sunColor.rgb * hg * 0.055;
-    col += f.sunColor.rgb * 0.020 * pow(saturate(mu), 8.0) * (1.0 - up);
+    col += f.skySunGlow.rgb * hg * 0.10;
+    col += f.skySunGlow.rgb * 0.05 * pow(saturate(mu), 6.0) * (1.0 - up);
     return col;
+}
+
+// Haze color along a view ray: the fog color, warmed toward the sun.
+float3 hazeColor(constant FrameUniforms& f, float3 rd) {
+    const float sunAmt = pow(saturate(dot(rd, f.skySun.xyz)), 8.0);
+    return f.fogColor.rgb + f.skySunGlow.rgb * 0.22 * sunAmt * f.fogParams.z;
 }
 
 // Analytic height fog (exponential in height) with sun in-scattering. Returns rgb: fog color, a: amount.
@@ -93,9 +117,29 @@ float4 fogAt(constant FrameUniforms& f, float3 worldPos, float3 camPos) {
     const float camTerm = exp(-b * camPos.y);
     const float optical = abs(k) > 1e-4 ? a * camTerm * (1.0 - exp(-k * dist)) / k : a * camTerm * dist;
     const float fog = 1.0 - exp(-max(optical, 0.0));
-    const float sunAmt = pow(saturate(dot(rd, f.sunDir.xyz)), 8.0);
-    const float3 fogColor = mix(f.skyHorizon.rgb, f.sunColor.rgb * 0.12, sunAmt * f.fogParams.z);
-    return float4(fogColor, fog);
+    return float4(hazeColor(f, rd), fog);
+}
+
+// Low-beam headlights: two unshadowed spot lights on the vehicle (render-only). Returns irradiance.
+// Stylized for readability: wrapped N.L so the grazing ground still catches light, and the beam keeps its
+// brightness out to ~25 m (real low beams aim their hot spot far ahead) before the inverse-square falloff.
+float3 headlightIrradiance(constant FrameUniforms& f, float3 P, float3 N) {
+    const float I = f.headlightL.w;
+    if (I <= 0.0) return float3(0.0);
+    const float3 axis = f.headlightDir.xyz;
+    float sum = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        const float3 d = (i == 0 ? f.headlightL.xyz : f.headlightR.xyz) - P;
+        const float d2 = max(dot(d, d), 0.25);
+        const float3 l = d * rsqrt(d2);
+        const float cosA = dot(-l, axis);
+        float beam = smoothstep(f.headlightDir.w, mix(f.headlightDir.w, 1.0, 0.6), cosA) * 0.55 +
+                     smoothstep(0.94, 0.995, cosA) * 1.2;
+        beam *= 1.0 - smoothstep(0.015, 0.09, -l.y - axis.y); // sharp cut-off above the beam axis
+        const float falloff = clamp(d2 / 25.0, 1.0, 30.0) / d2 * (1.0 - smoothstep(38.0, 60.0, sqrt(d2)));
+        sum += beam * falloff * saturate(dot(N, l) * 0.75 + 0.25);
+    }
+    return float3(1.0, 0.93, 0.82) * I * sum;
 }
 
 float3 applyFog(constant FrameUniforms& f, float3 color, float3 worldPos, float3 camPos) {
@@ -173,12 +217,12 @@ struct ShadeInput {
     float specOcclusion;
     float3 emissive;
     float clearCoat;
+    float3 lamp; // headlight irradiance
 };
 
-// Diffuse irradiance from the sky hemisphere (the sky radiance itself is brighter than its cosine-weighted average).
+// Diffuse irradiance from the sky hemisphere (blended with the ground bounce by the normal).
 float3 ambientLight(constant FrameUniforms& f, float ny) {
-    const float3 skyUp = mix(f.skyHorizon.rgb, f.skyZenith.rgb, 0.6) * 0.55;
-    return mix(f.groundAmbient.rgb, skyUp, ny * 0.5 + 0.5);
+    return mix(f.groundAmbient.rgb, f.skyAmbient.rgb, ny * 0.5 + 0.5);
 }
 
 float3 envBRDFApprox(float3 F0, float rough, float NdotV) {
@@ -213,6 +257,7 @@ float3 shade(constant FrameUniforms& f, ShadeInput s) {
     const float3 spec = F * ggxSpec(NdotH, NdotV, NdotL, s.roughness);
     const float3 kd = (1.0 - F) * (1.0 - s.metallic);
     float3 color = (kd * s.albedo / PI + spec) * f.sunColor.rgb * NdotL * s.shadow;
+    color += kd * s.albedo / PI * s.lamp;
 
     // Ambient: sky hemisphere + ground bounce.
     const float3 amb = ambientLight(f, N.y);
@@ -293,13 +338,14 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
     g.bump = 0.6;
     if (mat == MAT_DIRT || mat == MAT_GRASS || mat == MAT_MUD) {
         // Soil: packed dirt with gravel, green undergrowth where the mask has grass.
-        const float3 dark = float3(0.085, 0.062, 0.040), light = float3(0.20, 0.155, 0.105);
+        // Warm earthy palette (ochre/umber), matching the stylized banner look.
+        const float3 dark = float3(0.100, 0.062, 0.035), light = float3(0.245, 0.160, 0.090);
         float3 dirt = mix(dark, light, smoothstep(0.25, 0.75, large));
         const float stone = 1.0 - smoothstep(0.18, 0.30, nC.b);
-        dirt = mix(dirt, float3(0.21, 0.195, 0.17) * (0.7 + 0.6 * nC.r), stone * 0.5);
+        dirt = mix(dirt, float3(0.25, 0.20, 0.155) * (0.7 + 0.6 * nC.r), stone * 0.5);
         float h = nC.r * 0.5 + fine * 0.35 + stone * 0.6;
         const float grassAmt = saturate(mask.r * 1.2);
-        const float3 under = mix(float3(0.030, 0.045, 0.012), float3(0.075, 0.085, 0.028), nB.r) * (0.8 + 0.4 * fine);
+        const float3 under = mix(float3(0.042, 0.048, 0.012), float3(0.100, 0.094, 0.028), nB.r) * (0.8 + 0.4 * fine);
         float3 albedo = mix(dirt, under, grassAmt * (0.8 + 0.2 * nA.g));
         float rough = 0.92;
         h = mix(h, fine * 0.6, grassAmt);
@@ -356,17 +402,20 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
         const float3 tx = sampleNoise(noise, ns, P.zy * 0.7), ty = sampleNoise(noise, ns, P.xz * 0.7), tz = sampleNoise(noise, ns, P.xy * 0.7);
         const float3 t = tx * w.x + ty * w.y + tz * w.z;
         const float3 tf = sampleNoise(noise, ns, P.zy * 3.1) * w.x + sampleNoise(noise, ns, P.xz * 3.1) * w.y + sampleNoise(noise, ns, P.xy * 3.1) * w.z;
-        float3 c = mix(float3(0.075, 0.072, 0.068), float3(0.22, 0.21, 0.19), smoothstep(0.3, 0.7, t.r)) * (0.75 + 0.5 * tf.g);
+        // Warm tan sandstone; N is the flat facet normal, so each facet gets its own slight tone (stylized low-poly).
+        const float facet = hash12(floor(N.xz * 9.0 + N.y * 5.0) + 0.37);
+        float3 c = mix(float3(0.085, 0.060, 0.046), float3(0.235, 0.165, 0.118), smoothstep(0.3, 0.7, t.r)) * (0.85 + 0.3 * tf.g);
+        c *= 0.70 + 0.60 * facet;
         // Cracks from the cellular channel.
-        c *= 0.6 + 0.4 * smoothstep(0.05, 0.18, tf.b);
-        const float moss = smoothstep(0.45, 0.85, N.y) * smoothstep(0.40, 0.62, t.g);
-        c = mix(c, float3(0.045, 0.065, 0.018), moss * 0.85);
+        c *= 0.7 + 0.3 * smoothstep(0.05, 0.18, tf.b);
+        const float moss = smoothstep(0.55, 0.9, N.y) * smoothstep(0.45, 0.65, t.g);
+        c = mix(c, float3(0.055, 0.065, 0.020), moss * 0.6);
         // Dirt splashed onto the steep sides.
-        c = mix(c, float3(0.09, 0.065, 0.04), (1.0 - smoothstep(0.0, 0.6, abs(N.y))) * 0.15);
+        c = mix(c, float3(0.10, 0.068, 0.04), (1.0 - smoothstep(0.0, 0.6, abs(N.y))) * 0.15);
         g.albedo = c;
-        g.roughness = 0.75;
+        g.roughness = 0.78;
         g.height = t.r * 0.8 + tf.b * 0.6;
-        g.bump = 1.4;
+        g.bump = 0.35; // low, so the bump does not blur the facets
     } else { // MAT_LOWGRIP: sealed slab, smooth
         g.albedo = float3(0.075, 0.095, 0.12) * (0.9 + 0.2 * large);
         g.roughness = 0.30 + 0.1 * fine;
@@ -483,6 +532,7 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
     }
     s.N = N;
     s.V = V;
+    s.lamp = headlightIrradiance(f, P, N);
     s.shadow = shadowFactor(f, shadowMap, shadowSampler, P, normalize(in.normal) * (front ? 1.0 : -1.0));
     float3 color = shade(f, s);
     color = applyFog(f, color, P, f.cameraPos.xyz);
@@ -502,6 +552,54 @@ vertex float4 shadow_vs(LitIn in [[stage_in]], constant ShadowUniforms& su [[buf
 
 fragment void shadow_fs() {}
 
+// ---------------------------------------------------------------- instanced trees (render-only backdrop)
+
+struct TreeUniforms {
+    float4 info; // x: first instance, y: time (s)
+};
+
+struct TreeInstance {
+    float4 baseHeight; // xyz: trunk base, w: height (m)
+    float4 params;     // x: yaw, y: color variation, z: width scale
+};
+
+// Unit-height tree vertex -> world, with a gentle sway that grows with height (same in the shadow pass).
+float3 treeWorld(TreeInstance t, float3 lp, float time) {
+    const float c = cos(t.params.x), s = sin(t.params.x);
+    const float h = t.baseHeight.w, wsc = t.params.z;
+    float3 p = float3((c * lp.x - s * lp.z) * wsc, lp.y, (s * lp.x + c * lp.z) * wsc) * h;
+    const float sway = (sin(time * 0.9 + t.baseHeight.x * 0.13 + t.baseHeight.z * 0.11) * 0.6 +
+                        sin(time * 1.7 + t.baseHeight.x * 0.31) * 0.25) * 0.010 * lp.y * lp.y * h;
+    p.xz += float2(0.8, 0.6) * sway;
+    return t.baseHeight.xyz + p;
+}
+
+vertex LitOut tree_vs(LitIn in [[stage_in]], uint iid [[instance_id]], constant FrameUniforms& frame [[buffer(0)]],
+                      constant TreeUniforms& tu [[buffer(1)]], const device TreeInstance* trees [[buffer(2)]]) {
+    const TreeInstance t = trees[uint(tu.info.x) + iid];
+    LitOut out;
+    const float3 world = treeWorld(t, in.position, frame.cameraPos.w);
+    out.position = frame.viewProj * float4(world, 1.0);
+    out.worldPos = world;
+    const float c = cos(t.params.x), s = sin(t.params.x);
+    const float3 n = float3(c * in.normal.x - s * in.normal.z, in.normal.y, s * in.normal.x + c * in.normal.z);
+    out.normal = normalize(float3(n.x / t.params.z, n.y, n.z / t.params.z));
+    // Per-tree hue: from olive/yellow-green to deep blue-green.
+    const float v = t.params.y;
+    out.color = in.color * mix(float3(1.18, 1.08, 0.70), float3(0.80, 0.95, 1.10), v) * (0.85 + 0.3 * fract(v * 7.31));
+    out.material = float4(in.material.xyz, 0.0);
+    out.localPos = in.position;
+    out.localNormal = in.normal;
+    out.mudMode = 0.0;
+    return out;
+}
+
+vertex float4 tree_shadow_vs(LitIn in [[stage_in]], uint iid [[instance_id]], constant ShadowUniforms& su [[buffer(0)]],
+                             constant TreeUniforms& tu [[buffer(1)]], const device TreeInstance* trees [[buffer(2)]]) {
+    const TreeInstance t = trees[uint(tu.info.x) + iid];
+    return su.lightViewProj * float4(treeWorld(t, in.position, tu.info.y), 1.0);
+}
+
 // ---------------------------------------------------------------- sky
 
 struct FullscreenOut {
@@ -517,31 +615,126 @@ vertex FullscreenOut fullscreen_vs(uint vid [[vertex_id]]) {
     return out;
 }
 
+// Ridge vertex height (0..1) of mountain layer `seed`: jitter plus broader peaks every third vertex.
+// n is a multiple of 3, so the pattern wraps around the full circle without a seam.
+float ridgeHeight(float k, float seed) {
+    const float r = hash12(float2(k, seed));
+    const float big = hash12(float2(floor(k / 3.0), seed + 5.1));
+    return 0.30 + 0.70 * (0.5 * r + 0.5 * big * big);
+}
+
+// Distant layered mountains, drawn in the sky pass (render-only, at infinity, no collision): faceted ridgelines
+// from piecewise-linear hashed heights, two flat-shaded facets per ridge segment, aerial perspective toward the
+// haze color (farther layers are lighter and bluer). A valley opens where the sun sets. Returns rgb + coverage.
+float4 mountains(constant FrameUniforms& f, float3 dir) {
+    const float el = dir.y;
+    if (el > 0.205) return float4(0.0); // above the highest ridge (amp[0])
+    const float az = atan2(dir.x, dir.z);
+    const float dv = abs(fmod(az - f.fogColor.w + 3.0 * PI, 2.0 * PI) - PI); // angle from the valley center
+    const float aa = max(fwidth(el), 1e-5) * 1.2;
+    const float3 V0 = -float3(sin(az), 0.0, cos(az)); // facing the viewer
+    const float3 T = float3(cos(az), 0.0, -sin(az));  // along the ridge (increasing azimuth)
+    // Aerial perspective toward a cooler, violet version of the haze (stylized: distant ranges read blue-violet
+    // even against a warm sunset sky).
+    const float3 warmHaze = hazeColor(f, normalize(float3(dir.x, max(dir.y, 0.0), dir.z)));
+    const float3 haze = mix(warmHaze, luminance(warmHaze) * float3(0.78, 0.74, 1.12), 0.55);
+    const float segs[4] = {24.0, 36.0, 54.0, 81.0};
+    const float amp[4] = {0.200, 0.150, 0.110, 0.078};
+    const float keep[4] = {0.40, 0.48, 0.60, 0.75};   // ridge height kept at the valley center
+    const float hazeAmt[4] = {0.70, 0.55, 0.40, 0.26};
+    const float3 albedo[4] = {float3(0.20, 0.20, 0.36), float3(0.17, 0.17, 0.32), float3(0.13, 0.14, 0.27),
+                              float3(0.10, 0.12, 0.20)};
+    float3 col = float3(0.0);
+    float cover = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const float n = segs[i];
+        const float x = (az / (2.0 * PI) + 0.5) * n;
+        const float k = floor(x), t = x - k;
+        const float seed = float(i) * 17.3 + 3.0;
+        const float k0 = fmod(k, n), k1 = fmod(k + 1.0, n);
+        const float valley = mix(keep[i], 1.0, smoothstep(0.05, 0.40, dv));
+        const float h0 = amp[i] * ridgeHeight(k0, seed) * valley, h1 = amp[i] * ridgeHeight(k1, seed) * valley;
+        const float h = mix(h0, h1, t) - 0.003;
+        const float c = 1.0 - smoothstep(h - aa, h, el);
+        if (c <= 0.0) continue;
+        // Crease from the higher ridge vertex down to a hashed point at the base splits the segment into two facets.
+        const bool rightHigh = h1 > h0;
+        const float tp = rightHigh ? 1.0 : 0.0, hp = max(h0, h1);
+        const float tc = 0.15 + 0.7 * hash12(float2(k0, seed + 9.7));
+        const float side = (t - tp) * (-0.03 - hp) - (el - hp) * (tc - tp);
+        const bool slopeFacet = rightHigh ? side < 0.0 : side > 0.0;
+        const float slope = (h1 - h0) * n / (2.0 * PI);
+        const float facetId = k0 * 2.0 + (slopeFacet ? 1.0 : 0.0);
+        float3 N = slopeFacet ? normalize(V0 - T * clamp(slope * 3.0, -1.5, 1.5) + float3(0, 0.55, 0))
+                              : normalize(V0 + T * (rightHigh ? 0.5 : -0.5) + float3(0, 0.9, 0));
+        const float tone = 0.85 + 0.3 * hash12(float2(facetId, seed + 2.3));
+        float3 lit = albedo[i] * tone * (f.skyAmbient.rgb * 1.1 + f.sunColor.rgb * saturate(dot(N, f.sunDir.xyz)) * 0.30);
+        // Backlit rim along the ridge toward the sun (sunset), and mist settling in the valleys.
+        const float rim = pow(saturate(dot(dir, f.skySun.xyz)), 5.0) * (1.0 - smoothstep(0.0, 0.006, h - el));
+        lit += f.skySunGlow.rgb * rim * 0.35;
+        const float mist = 1.0 - smoothstep(-0.02, hp * 0.9, el);
+        const float3 layer = mix(lit, haze, saturate(hazeAmt[i] + (1.0 - hazeAmt[i]) * 0.35 * mist));
+        col = mix(col, layer, c);
+        cover = max(cover, c);
+    }
+    return float4(col, cover);
+}
+
 fragment float4 sky_fs(FullscreenOut in [[stage_in]], constant FrameUniforms& f [[buffer(0)]],
                        texture2d<float> noise [[texture(0)]], sampler ns [[sampler(0)]]) {
     const float2 ndc = float2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
     const float4 w = f.invViewProj * float4(ndc, 1.0, 1.0);
     const float3 dir = normalize(w.xyz / w.w - f.cameraPos.xyz);
     float3 col = skyRadiance(f, dir);
-    // Sun disk.
-    const float mu = dot(dir, f.sunDir.xyz);
-    col += f.sunColor.rgb * 18.0 * smoothstep(0.99985, 0.99993, mu);
-    // Clouds on a plane far above.
+    const float mu = dot(dir, f.skySun.xyz);
+    const float muMoon = dot(dir, f.moonDir.xyz);
+    // Stars (hashed cells on a direction grid), fading toward the horizon.
+    if (f.skySunGlow.w > 0.01 && dir.y > 0.0) {
+        const float3 p = dir * 260.0;
+        const float3 cell = floor(p);
+        const float r = hash12(cell.xy + cell.z * 13.71);
+        if (r > 0.982) {
+            const float3 center = cell + 0.5 + (float3(hash12(cell.yz + 3.1), hash12(cell.zx + 7.7), hash12(cell.xy + 1.3)) - 0.5) * 0.5;
+            const float star = smoothstep(0.42, 0.0, length(p - center)) * (0.3 + 0.7 * (r - 0.982) / 0.018);
+            col += float3(0.75, 0.82, 1.0) * star * 0.30 * f.skySunGlow.w * smoothstep(0.02, 0.25, dir.y);
+        }
+    }
+    // Sun disc: large and stylized (radius from skySun.w), slightly brighter core; the glow comes from skyRadiance.
+    {
+        const float cosR = f.skySun.w;
+        const float edge = (1.0 - cosR) * 0.04;
+        const float disc = smoothstep(cosR - edge, cosR + edge, mu);
+        const float core = saturate((mu - cosR) / (1.0 - cosR));
+        col = mix(col, f.sunDisc.rgb * (0.85 + 0.35 * sqrt(core)), disc * saturate(luminance(f.sunDisc.rgb) * 4.0));
+    }
+    // Moon disc with a faint halo.
+    if (f.sunDisc.w > 0.0) {
+        const float cosM = 0.99975;
+        const float disc = smoothstep(cosM - 0.00002, cosM + 0.00002, muMoon);
+        const float maria = noise.sample(ns, (dir.xz - f.moonDir.xz) * 40.0 + 0.5).r;
+        col = mix(col, float3(0.80, 0.84, 0.95) * (0.9 + 0.4 * maria) * 1.4, disc * f.sunDisc.w);
+        col += float3(0.10, 0.12, 0.18) * pow(saturate(muMoon), 400.0) * f.sunDisc.w * 0.6;
+    }
+    // Clouds on a plane far above, stretched into streaks.
     if (f.options.w > 0.5 && dir.y > 0.01) {
         const float t = f.cameraPos.w;
-        const float2 uv = dir.xz / (dir.y + 0.08) * 0.22 + float2(t * 0.0025, t * 0.001);
+        const float2 uv = dir.xz / (dir.y + 0.08) * float2(0.10, 0.24) + float2(t * 0.0012, t * 0.001);
         const float n0 = noise.sample(ns, uv).r * 0.65 + noise.sample(ns, uv * 2.7 + 0.3).g * 0.35;
         const float n = saturate((n0 - 0.5) * 2.6 + 0.5); // the fbm is centered at 0.5 with a small spread
         const float cover = f.fogParams.w;
         const float c = smoothstep(1.0 - cover, 1.0 - cover + 0.3, n) * smoothstep(0.01, 0.20, dir.y);
         const float thick = noise.sample(ns, uv * 1.3 + 0.17).r;
-        const float3 lit = f.sunColor.rgb * 0.11 * (0.75 + 0.6 * pow(saturate(mu), 4.0)) + f.skyZenith.rgb * 0.5;
+        const float muL = dot(dir, f.sunDir.xyz);
+        float3 lit = f.sunColor.rgb * 0.11 * (0.75 + 0.6 * pow(saturate(muL), 4.0)) + f.skyZenith.rgb * 0.5;
+        lit += f.skySunGlow.rgb * (0.06 + 0.25 * pow(saturate(mu), 3.0)); // sunset-lit undersides
         const float3 cloudCol = mix(lit, lit * 0.55 + f.skyHorizon.rgb * 0.2, thick * c);
         col = mix(col, cloudCol, c * 0.9);
     }
     // Horizon haze matches the fog color.
     const float haze = pow(1.0 - saturate(abs(dir.y)), 6.0) * 0.6;
-    col = mix(col, f.skyHorizon.rgb, haze);
+    col = mix(col, hazeColor(f, dir), haze);
+    const float4 m = mountains(f, dir);
+    col = mix(col, m.rgb, m.a);
     return float4(col, 1.0);
 }
 
@@ -611,12 +804,6 @@ struct GrassOut {
     float3 color;
     float t; // 0 at the root, 1 at the tip
 };
-
-float hash12(float2 p) {
-    float3 p3 = fract(float3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
 
 vertex GrassOut grass_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant FrameUniforms& f [[buffer(0)]],
                          constant GrassUniforms& g [[buffer(1)]], const device float4* chunks [[buffer(2)]],
@@ -694,9 +881,9 @@ vertex GrassOut grass_vs(uint vid [[vertex_id]], uint iid [[instance_id]], const
     // Color: dark root, lighter yellow-green tips, per-blade hue variation and dry patches.
     const float dry = smoothstep(0.55, 0.85, hash12(floor(root * 0.5)) * 0.6 + r2 * 0.4);
     const float patchHue = hash12(floor(root * 0.25) + 3.7);
-    const float3 base = mix(float3(0.018, 0.030, 0.006), float3(0.040, 0.050, 0.012), r3);
-    const float3 green = mix(float3(0.070, 0.115, 0.022), float3(0.115, 0.140, 0.035), r1);
-    const float3 tipC = mix(mix(green, float3(0.085, 0.125, 0.045), patchHue * 0.6), float3(0.20, 0.165, 0.075), dry * 0.8);
+    const float3 base = mix(float3(0.022, 0.030, 0.006), float3(0.048, 0.050, 0.012), r3);
+    const float3 green = mix(float3(0.085, 0.118, 0.018), float3(0.140, 0.150, 0.030), r1);
+    const float3 tipC = mix(mix(green, float3(0.110, 0.125, 0.032), patchHue * 0.6), float3(0.24, 0.17, 0.06), dry * 0.8);
     out.color = mix(base, tipC, tt);
     out.t = tt;
     return out;
@@ -710,7 +897,7 @@ fragment float4 grass_fs(GrassOut in [[stage_in]], constant FrameUniforms& f [[b
     const float shadow = shadowFactor(f, shadowMap, shadowSampler, P, float3(0, 1, 0));
     const float NdotL = saturate(dot(N, f.sunDir.xyz) * 0.6 + 0.4); // wrapped diffuse
     const float ao = mix(0.3, 1.0, in.t) * vehicleAO(f, P);
-    float3 c = in.color * (f.sunColor.rgb * NdotL * shadow / PI + ambientLight(f, 1.0) * ao);
+    float3 c = in.color * ((f.sunColor.rgb * NdotL * shadow + headlightIrradiance(f, P, N)) / PI + ambientLight(f, 1.0) * ao);
     // Translucency when looking toward the sun.
     const float back = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
     c += in.color * f.sunColor.rgb * back * 0.25 * shadow * in.t;

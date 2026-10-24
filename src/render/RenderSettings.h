@@ -33,12 +33,22 @@ struct RenderSettings {
 
     // Look
     float exposure = 1.1f;
-    float sunElevationDeg = 32.0f;
-    float sunAzimuthDeg = 240.0f;  // 0 = sun toward +Z, 90 = toward +X
+    float timeOfDay = 9.0f;        // hours 0..24, drives sun, moon, sky, fog and eye adaptation (render/TimeOfDay.h)
+    float sunHeadingDeg = 81.0f;   // compass rotation: world azimuth = compass azimuth + heading (81: sunset toward +Z)
     float fogDensity = 1.0f;       // multiplier
     float bloomStrength = 0.05f;
     bool groundGrid = false;       // 1 m grid on the ground (reading speed / terrain)
 };
+
+// Look fields survive a quality preset change.
+inline void copyLook(RenderSettings& dst, const RenderSettings& src) {
+    dst.exposure = src.exposure;
+    dst.timeOfDay = src.timeOfDay;
+    dst.sunHeadingDeg = src.sunHeadingDeg;
+    dst.fogDensity = src.fogDensity;
+    dst.bloomStrength = src.bloomStrength;
+    dst.groundGrid = src.groundGrid;
+}
 
 inline RenderSettings presetSettings(QualityPreset p) {
     RenderSettings s;

@@ -214,12 +214,31 @@ void TrackGeometry::addRock(Vec3Arg center, Vec3Arg radii, float yaw, std::uint3
         f2.push_back({a, b, c});
     }
     const JPH::Quat q = JPH::Quat::sRotation(Vec3::sAxisY(), yaw);
-    const float ph1 = float(seed % 97) * 0.37f, ph2 = float(seed % 89) * 0.53f;
+    // Chunky faceted shape: the unit sphere is cut by random planes (a convex polytope), and every vertex is pulled
+    // in along its direction to the nearest plane. Vertices on the same plane form one flat facet. The radius depends
+    // only on the direction, so coincident vertices of the subdivision stay identical (no cracks).
+    Lcg prng{seed * 2654435761u + 17u};
+    struct Cut {
+        Vec3 n;
+        float d;
+    };
+    std::vector<Cut> cuts;
+    cuts.push_back({Vec3(0, 1, 0), prng.range(0.62f, 0.74f)}); // flat-ish top
+    for (int k = 0; k < 12; ++k) {
+        // Spread the cut normals around the rock (golden angle) so no side is left round.
+        const float a = float(k) * 2.39996f + prng.range(-0.4f, 0.4f), y = prng.range(-0.30f, 0.80f);
+        const float rxz = std::sqrt(std::max(0.0f, 1.0f - y * y));
+        const Vec3 n(rxz * std::cos(a), y, rxz * std::sin(a));
+        cuts.push_back({n.Normalized(), prng.range(0.64f, 0.80f)});
+    }
     auto warp = [&](Vec3 d) {
-        // Noise depends only on direction d, so it is identical for coincident vertices.
-        const float n = 0.82f + 0.12f * std::sin(3.1f * d.GetX() + ph1) * std::cos(2.7f * d.GetZ() + ph2)
-                      + 0.08f * std::sin(5.3f * d.GetY() + ph2 + 1.3f * d.GetX());
-        return center + q * (d * radii * n);
+        float r = 1.0f;
+        for (const Cut& c : cuts) {
+            const float cosA = d.Dot(c.n);
+            if (cosA > 1e-3f) r = std::min(r, c.d / cosA);
+        }
+        r = std::max(r, 0.55f);
+        return center + q * (d * radii * r);
     };
     for (auto& tri : f2)
         addTriangle(warp(v[tri[0]]), warp(v[tri[1]]), warp(v[tri[2]]), s);

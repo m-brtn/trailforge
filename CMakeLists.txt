@@ -46,6 +46,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/GroundMaps.cpp
         src/render/VehicleModel.cpp
         src/render/Scenery.cpp
+        src/render/TimeOfDay.cpp
         src/render/Camera.cpp
         src/render/DebugDraw.cpp
         src/ui/DebugUI.cpp

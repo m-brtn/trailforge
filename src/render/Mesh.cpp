@@ -224,7 +224,7 @@ void MeshData::append(const MeshData& other) {
 
 MeshData buildTrackMesh(const TrackGeometry& g, const SurfaceTable& surfaces) {
     // Smooth normals: average face normals at shared positions, but only across faces within
-    // ~50 degrees of each other (box edges of steps and walls stay sharp, terrain and rocks are smooth).
+    // ~50 degrees of each other (box edges of steps and walls stay sharp, terrain is smooth). Rocks are flat.
     const std::size_t triCount = g.triangleCount();
     std::vector<glm::vec3> faceN(triCount);
     auto pos = [&](std::size_t t, int k) {
@@ -249,6 +249,13 @@ MeshData buildTrackMesh(const TrackGeometry& g, const SurfaceTable& surfaces) {
     for (std::size_t t = 0; t < triCount; ++t) {
         const glm::vec3 nf = safeNormalize(faceN[t]);
         glm::vec3 vn[3];
+        if (g.surfaces[t] == SurfaceId::Rock) {
+            // Rocks are flat-shaded so their cut facets read clearly (stylized low-poly).
+            const auto& s = surfaces.get(SurfaceId::Rock);
+            Material mat{MatId::Rock, glm::vec3(s.color[0], s.color[1], s.color[2]), 0.9f, 0.0f, 0.0f};
+            m.addTri(pos(t, 0), pos(t, 1), pos(t, 2), nf, nf, nf, mat);
+            continue;
+        }
         for (int k = 0; k < 3; ++k) {
             glm::vec3 sum(0.0f);
             for (std::uint32_t o : shared[key(pos(t, k))]) {

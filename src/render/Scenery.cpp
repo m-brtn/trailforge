@@ -34,20 +34,26 @@ float outsideDistance(float x, float z) {
     return std::sqrt(dx * dx + dz * dz);
 }
 
+// 1 inside the view corridor north of the showcase (toward the sunset with the default sun heading), 0 elsewhere.
+// It keeps the line of sight from the meadow to the distant mountains open.
+float viewCorridor(float x, float z) {
+    const OuterRect r = wallRect();
+    const float ang = std::abs(std::atan2(x, z - 60.0f));
+    return smooth(r.z1 - 10.0f, r.z1 + 4.0f, z) * (1.0f - smooth(0.42f, 0.75f, ang));
+}
+
 float outerHeight(float x, float z) {
     const float d = outsideDistance(x, z);
     // The perimeter wall (top at 5 m) reads as a retaining wall: the embankment behind it starts just below its top.
     float h = 4.85f + smooth(0.0f, 30.0f, d) * (-1.0f + 9.0f * fbm2(x * 0.012f, z * 0.012f, 4, 91u));
     const float ridge = 1.0f - std::abs(2.0f * fbm2(x * 0.0045f + 3.0f, z * 0.0045f, 4, 92u) - 1.0f);
-    h += smooth(110.0f, 360.0f, d) * 85.0f * ridge * ridge;
+    const float corridor = viewCorridor(x, z);
+    // Foothills: lower than before so the layered mountains in the sky pass show above them.
+    h += smooth(110.0f, 360.0f, d) * 46.0f * ridge * ridge * (1.0f - 0.85f * corridor);
+    // A shallow valley inside the corridor that rises again to a low rim at the far edge of the backdrop.
+    h -= corridor * smooth(15.0f, 140.0f, d) * 12.0f * (1.0f - smooth(300.0f, 460.0f, d));
+    h += corridor * smooth(330.0f, 460.0f, d) * 5.0f;
     return h;
-}
-
-glm::vec3 outerNormal(float x, float z) {
-    const float e = 1.5f;
-    const float hx = outerHeight(x + e, z) - outerHeight(x - e, z);
-    const float hz = outerHeight(x, z + e) - outerHeight(x, z - e);
-    return glm::normalize(glm::vec3(-hx, 2.0f * e, -hz));
 }
 
 std::vector<float> axis(std::initializer_list<std::pair<float, float>> ranges, float step) {
@@ -66,28 +72,28 @@ std::uint32_t lcg(std::uint32_t& s) {
 }
 float rnd(std::uint32_t& s) { return float(lcg(s) >> 8) / float(1u << 24); }
 
-// Branch tier of a pine: a star-shaped cone (alternating long/short branch tips that droop at the ends).
-void addCone(MeshData& m, const glm::vec3& base, float radius, float height, int seg, const Material& mat,
-             std::uint32_t& seed) {
-    const glm::vec3 apex = base + glm::vec3(0, height, 0);
-    const float slope = radius / height;
-    const float twist = rnd(seed) * 2.0f * kPi;
+// One branch tier of a stylized pine (unit tree height): a faceted cone skirt with alternating long/short branch tips
+// that droop at the ends, plus an underside. Flat-shaded, so every face reads as a facet.
+void addTier(MeshData& m, float baseY, float radius, float height, int seg, float twist, const Material& mat,
+             bool underside) {
+    const glm::vec3 apex(0.0f, baseY + height, 0.0f);
+    const glm::vec3 under(0.0f, baseY + 0.25f * height, 0.0f);
+    const glm::vec3 inside(0.0f, baseY + 0.45f * height, 0.0f);
     auto tip = [&](int i) {
         const float a = twist + 2.0f * kPi * float(i) / float(seg);
-        const float r = radius * ((i % 2 == 0) ? 1.0f : 0.72f);
-        const float droop = (i % 2 == 0) ? -0.12f * height : 0.05f * height;
-        return std::pair<glm::vec3, glm::vec3>(base + glm::vec3(std::cos(a) * r, droop, std::sin(a) * r),
-                                               glm::normalize(glm::vec3(std::cos(a), slope, std::sin(a))));
+        const bool lng = (i % 2 == 0);
+        const float r = radius * (lng ? 1.0f : 0.70f);
+        const float droop = lng ? -0.16f * height : 0.06f * height;
+        return glm::vec3(std::cos(a) * r, baseY + droop, std::sin(a) * r);
     };
-    const glm::vec3 under = base + glm::vec3(0, 0.3f * height, 0);
     for (int i = 0; i < seg; ++i) {
-        const auto [p0, n0] = tip(i);
-        const auto [p1, n1] = tip((i + 1) % seg);
-        const glm::vec3 na = glm::normalize(n0 + n1 + glm::vec3(0, 0.6f, 0));
-        m.addTri(p0, apex, p1, n0, na, n1, mat);
-        // Underside (branches seen from below).
-        m.addTri(p1, under, p0, -n1 * 0.3f + glm::vec3(0, -0.7f, 0), glm::vec3(0, -1, 0), -n0 * 0.3f + glm::vec3(0, -0.7f, 0),
-                 mat);
+        const glm::vec3 p0 = tip(i), p1 = tip((i + 1) % seg);
+        m.addTriangleOutward(p0, apex, p1, inside, mat);
+        if (underside) {
+            Material dark = mat;
+            dark.color *= 0.55f;
+            m.addTriangleOutward(p0, p1, under, apex, dark);
+        }
     }
 }
 
@@ -105,35 +111,59 @@ MeshData buildSceneryMesh() {
             if (cx > r.x0 && cx < r.x1 && cz > r.z0 && cz < r.z1) continue; // inside the walls
             auto P = [&](float x, float z) { return glm::vec3(x, outerHeight(x, z), z); };
             const glm::vec3 a = P(xs[i], zs[j]), b = P(xs[i], zs[j + 1]), c = P(xs[i + 1], zs[j]), d = P(xs[i + 1], zs[j + 1]);
-            m.addTri(a, b, c, outerNormal(a.x, a.z), outerNormal(b.x, b.z), outerNormal(c.x, c.z), ground);
-            m.addTri(c, b, d, outerNormal(c.x, c.z), outerNormal(b.x, b.z), outerNormal(d.x, d.z), ground);
+            // Flat-shaded: the backdrop reads as faceted low-poly hills.
+            m.addTriangle(a, b, c, ground);
+            m.addTriangle(c, b, d, ground);
         }
-
-    // Pine tree line.
-    std::uint32_t seed = 2024u;
-    int placed = 0;
-    for (int attempt = 0; attempt < 30000 && placed < 420; ++attempt) {
-        const float x = -260.0f + 520.0f * rnd(seed), z = -230.0f + 560.0f * rnd(seed);
-        const float d = outsideDistance(x, z);
-        const float density = smooth(2.5f, 9.0f, d) * (1.0f - smooth(110.0f, 190.0f, d)) *
-                              smooth(0.38f, 0.62f, fbm2(x * 0.02f, z * 0.02f, 3, 93u));
-        if (rnd(seed) > density) continue;
-        const float h = 7.0f + 9.0f * rnd(seed);
-        const float y = outerHeight(x, z) - 0.3f;
-        const float g = rnd(seed);
-        const Material bark{MatId::Generic, {0.10f, 0.07f, 0.045f}, 0.9f, 0.0f, 0.0f};
-        const Material needles{MatId::Foliage, {0.030f + 0.02f * g, 0.060f + 0.03f * g, 0.025f + 0.01f * g}, 0.9f, 0.0f, 0.0f};
-        m.addCylinder({x, y, z}, {x, y + 0.35f * h, z}, 0.12f + 0.02f * h * 0.1f, 7, bark, false);
-        const int layers = 6;
-        for (int k = 0; k < layers; ++k) {
-            const float t = float(k) / float(layers);
-            const float baseY = y + h * (0.16f + 0.68f * t);
-            const float rad = (0.27f - 0.20f * t) * h * (0.85f + 0.3f * rnd(seed));
-            addCone(m, {x, baseY, z}, rad, h * (0.30f - 0.10f * t), 12, needles, seed);
-        }
-        ++placed;
-    }
     return m;
+}
+
+std::array<MeshData, 3> buildPineMeshes() {
+    const Material bark{MatId::Generic, {0.10f, 0.07f, 0.045f}, 0.9f, 0.0f, 0.0f};
+    auto needles = [](float t) {
+        // Lower tiers are darker (self-occlusion), upper tiers catch more light.
+        return Material{MatId::Foliage, glm::vec3(0.050f, 0.090f, 0.026f) * (0.70f + 0.45f * t), 0.9f, 0.0f, 0.0f};
+    };
+    struct Lod {
+        int tiers, seg;
+        bool trunk, underside;
+    };
+    const Lod lods[3] = {{6, 8, true, true}, {4, 6, true, false}, {2, 5, false, false}};
+    std::array<MeshData, 3> out;
+    for (int l = 0; l < 3; ++l) {
+        MeshData& m = out[l];
+        const Lod& lod = lods[l];
+        if (lod.trunk) m.addCylinder({0, -0.02f, 0}, {0, 0.32f, 0}, 0.022f, l == 0 ? 6 : 4, bark, false);
+        for (int k = 0; k < lod.tiers; ++k) {
+            const float t = float(k) / float(lod.tiers);
+            // The same silhouette at every LOD: tiers span 0.14..0.84 of the height, the top tier reaches 1.0.
+            const float baseY = 0.14f + 0.70f * t;
+            const float radius = (0.30f - 0.22f * t) * (lod.tiers == 2 ? 1.05f : 1.0f);
+            const bool top = k + 1 == lod.tiers;
+            const float height = top ? 1.0f - baseY : (0.32f - 0.12f * t) * 4.5f / float(lod.tiers);
+            addTier(m, baseY, radius, height, lod.seg, 0.9f * float(k), needles(t), lod.underside);
+        }
+    }
+    return out;
+}
+
+std::vector<TreeInstance> buildTreeInstances() {
+    std::vector<TreeInstance> trees;
+    std::uint32_t seed = 2024u;
+    for (int attempt = 0; attempt < 60000 && trees.size() < 900; ++attempt) {
+        const float x = -280.0f + 560.0f * rnd(seed), z = -250.0f + 600.0f * rnd(seed);
+        const float d = outsideDistance(x, z);
+        const float density = smooth(2.5f, 9.0f, d) * (1.0f - smooth(120.0f, 210.0f, d)) *
+                              smooth(0.36f, 0.60f, fbm2(x * 0.02f, z * 0.02f, 3, 93u)) *
+                              (1.0f - 0.92f * viewCorridor(x, z));
+        if (rnd(seed) > density) continue;
+        TreeInstance t;
+        const float h = 7.0f + 9.5f * rnd(seed);
+        t.baseHeight = glm::vec4(x, outerHeight(x, z) - 0.3f, z, h);
+        t.params = glm::vec4(rnd(seed) * 2.0f * kPi, rnd(seed), 0.85f + 0.3f * rnd(seed), 0.0f);
+        trees.push_back(t);
+    }
+    return trees;
 }
 
 MeshData buildWaterMesh() {

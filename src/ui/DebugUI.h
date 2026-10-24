@@ -49,6 +49,8 @@ struct GraphicsState {
     bool autoMud = true;         // accumulate while driving on the mud surface, wash off in water
     bool headlights = true;
     bool visible = false;        // F2
+    bool timeLapse = false;      // advance settings.timeOfDay in real time
+    float timeLapseSpeed = 0.25f; // game hours per real second
 };
 
 // UI requests to the application (executed outside the ImGui frame).
@@ -81,8 +83,9 @@ private:
     std::map<std::string, UiItemRect> m_items;
 
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
-    void drawTuning(Simulation& sim, UiRequests& req);
+    void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);
     void drawGraphics(const FrameStats& stats, GraphicsState& gfx);
+    void drawTimeOfDay(GraphicsState& gfx);
 
     VehicleTuning m_tuning;
     VehicleConfig m_config; // editable copy; applied with the "Rebuild vehicle" button

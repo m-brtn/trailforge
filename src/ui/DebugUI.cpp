@@ -1,5 +1,6 @@
 #include "ui/DebugUI.h"
 
+#include "render/TimeOfDay.h"
 #include "sim/Simulation.h"
 
 #include <imgui.h>
@@ -70,7 +71,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
     if (gfx.visible) drawGraphics(stats, gfx);
     if (!visible) return req;
     drawTelemetry(sim, stats, req);
-    drawTuning(sim, req);
+    drawTuning(sim, req, gfx);
     return req;
 }
 
@@ -95,12 +96,7 @@ void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
     if (ImGui::Combo("Quality", &preset, presets, 5) && preset != int(QualityPreset::Custom)) {
         const RenderSettings look = s;
         s = presetSettings(QualityPreset(preset));
-        s.exposure = look.exposure;
-        s.sunElevationDeg = look.sunElevationDeg;
-        s.sunAzimuthDeg = look.sunAzimuthDeg;
-        s.fogDensity = look.fogDensity;
-        s.bloomStrength = look.bloomStrength;
-        s.groundGrid = look.groundGrid;
+        copyLook(s, look);
         gfx.preset = QualityPreset(preset);
         gfx.changed = true;
     }
@@ -137,9 +133,9 @@ void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
         edited |= ImGui::Checkbox("Clouds", &s.clouds);
     }
     if (ImGui::CollapsingHeader("Look", ImGuiTreeNodeFlags_DefaultOpen)) {
+        drawTimeOfDay(gfx);
         gfx.changed |= ImGui::SliderFloat("Exposure", &s.exposure, 0.3f, 3.0f, "%.2f");
-        gfx.changed |= ImGui::SliderFloat("Sun elevation [deg]", &s.sunElevationDeg, 3.0f, 85.0f, "%.0f");
-        gfx.changed |= ImGui::SliderFloat("Sun azimuth [deg]", &s.sunAzimuthDeg, 0.0f, 360.0f, "%.0f");
+        gfx.changed |= ImGui::SliderFloat("Sun path heading [deg]", &s.sunHeadingDeg, 0.0f, 360.0f, "%.0f");
         gfx.changed |= ImGui::SliderFloat("Fog density", &s.fogDensity, 0.0f, 4.0f, "%.2f");
         gfx.changed |= ImGui::SliderFloat("Bloom strength", &s.bloomStrength, 0.0f, 0.2f, "%.3f");
         gfx.changed |= ImGui::Checkbox("1 m ground grid", &s.groundGrid);
@@ -157,6 +153,28 @@ void DebugUI::drawGraphics(const FrameStats& stats, GraphicsState& gfx) {
         gfx.changed = true;
     }
     ImGui::End();
+}
+
+void DebugUI::drawTimeOfDay(GraphicsState& gfx) {
+    RenderSettings& s = gfx.settings;
+    const int minutes = int(s.timeOfDay * 60.0f + 0.5f) % (24 * 60);
+    char label[32];
+    std::snprintf(label, sizeof(label), "%02d:%02d", minutes / 60, minutes % 60);
+    gfx.changed |= ImGui::SliderFloat("Time of day [h]", &s.timeOfDay, 0.0f, 24.0f, label);
+    for (std::size_t i = 0; i < std::size(kTimePresets); ++i) {
+        if (i > 0) ImGui::SameLine();
+        if (ImGui::Button(kTimePresets[i].name)) {
+            s.timeOfDay = kTimePresets[i].hours;
+            gfx.changed = true;
+        }
+    }
+    ImGui::Checkbox("Time-lapse", &gfx.timeLapse);
+    ImGui::SameLine();
+    if (ImGui::Button(gfx.timeLapse ? "Pause##tod" : "Run##tod")) gfx.timeLapse = !gfx.timeLapse;
+    ImGui::SliderFloat("Speed [h/s]", &gfx.timeLapseSpeed, 0.01f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+    const SkyState sky = computeSky(s.timeOfDay, s.sunHeadingDeg);
+    ImGui::TextDisabled("Sun elevation %.1f deg, azimuth %.0f deg; shadows from the %s", sky.sunElevationDeg,
+                        sky.sunAzimuthDeg, sky.sunElevationDeg > -4.0f ? "sun" : "moon");
 }
 
 void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req) {
@@ -244,7 +262,7 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     ImGui::End();
 }
 
-void DebugUI::drawTuning(Simulation& sim, UiRequests&) {
+void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float tw = std::min(400.0f, display.x * 0.28f);
     ImGui::SetNextWindowPos(ImVec2(display.x - tw - 10.0f, 60), ImGuiCond_FirstUseEver);
@@ -353,6 +371,7 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&) {
         for (std::size_t i = 0; i < f.size(); ++i)
             if (ImGui::Button(f[i].name.c_str(), ImVec2(-1, 0))) sim.requestTeleport(int(i));
     }
+    if (ImGui::CollapsingHeader("Time of day (render only)", ImGuiTreeNodeFlags_DefaultOpen)) drawTimeOfDay(gfx);
     ImGui::End();
 }
 

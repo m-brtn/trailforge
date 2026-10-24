@@ -1,6 +1,7 @@
 #include "render/Renderer.h"
 
 #include "render/GroundMaps.h"
+#include "render/TimeOfDay.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
@@ -213,8 +214,11 @@ Renderer::~Renderer() {
     releaseTargets();
     releaseScenePipelines();
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
-                                       m_tonemapPipe, m_fxaaPipe})
+                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
+    for (GpuMesh& m : m_treeMeshes) m.release();
+    if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
+    if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
     releaseTexture(m_noise);
     releaseTexture(m_mask);
     releaseTexture(m_height);
@@ -254,7 +258,8 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.grassLevel = std::clamp(s.grassLevel, 0, 4);
     s.grassDistance = std::clamp(s.grassDistance, 5.0f, 120.0f);
     s.exposure = std::clamp(s.exposure, 0.1f, 8.0f);
-    s.sunElevationDeg = std::clamp(s.sunElevationDeg, 2.0f, 89.0f);
+    s.timeOfDay = std::fmod(std::fmod(s.timeOfDay, 24.0f) + 24.0f, 24.0f);
+    s.sunHeadingDeg = std::fmod(std::fmod(s.sunHeadingDeg, 360.0f) + 360.0f, 360.0f);
     const bool targets = s.renderScale != m_settings.renderScale || s.msaa != m_settings.msaa ||
                          s.shadowCascades != m_settings.shadowCascades || s.shadowMapSize != m_settings.shadowMapSize ||
                          s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
@@ -396,6 +401,10 @@ void Renderer::createStaticPipelines() {
                                    false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_treeShadowPipe = createPipeline("tree_shadow_vs", "shadow_fs", 2, 0, 0, 0, 1, kLayoutLit, none, s1, true, true,
+                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, true);
+    m_reflTreePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, s1, true, true,
+                                    SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
 }
 
 void Renderer::createScenePipelines() {
@@ -413,11 +422,14 @@ void Renderer::createScenePipelines() {
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
     m_lineOnTopPipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, false, false,
                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
+    m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, sc, true, true,
+                                SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     m_sceneMsaa = m_settings.msaa;
 }
 
 void Renderer::releaseScenePipelines() {
-    for (SDL_GPUGraphicsPipeline** p : {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe}) {
+    for (SDL_GPUGraphicsPipeline** p :
+         {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe}) {
         if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
         *p = nullptr;
     }
@@ -587,6 +599,29 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
     SDL_Log("TrailForge: ground maps %dx%d, %zu grass chunks", maps.width, maps.height, m_grassChunks.size());
 }
 
+void Renderer::setTrees(const std::array<MeshData, 3>& lods, std::span<const TreeInstance> instances) {
+    SDL_WaitForGPUIdle(m_device);
+    for (int i = 0; i < 3; ++i) m_treeMeshes[i] = upload(lods[i]);
+    m_trees.assign(instances.begin(), instances.end());
+    if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
+    if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
+    m_treeBuffer = nullptr;
+    m_treeTransfer = nullptr;
+    // Main view, reflection and shadow lists can each hold every tree.
+    m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 3);
+    SDL_GPUBufferCreateInfo bi{};
+    bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+    bi.size = m_treeCapacity * sizeof(TreeInstance);
+    m_treeBuffer = SDL_CreateGPUBuffer(m_device, &bi);
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = bi.size;
+    m_treeTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
+    if (!m_treeBuffer || !m_treeTransfer) fail("tree buffers");
+    SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
+            m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3);
+}
+
 void Renderer::ensureLineCapacity(std::uint32_t bytes) {
     if (bytes <= m_lineCapacity) return;
     std::uint32_t cap = m_lineCapacity ? m_lineCapacity : 64 * 1024;
@@ -655,21 +690,75 @@ void Renderer::pollGpuTiming() {
 
 // ---------------------------------------------------------------- per-frame setup
 
-void Renderer::fillLighting(FrameUniforms& fu) const {
+void Renderer::fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& exposure, float& bloomMul) const {
     const RenderSettings& s = m_settings;
-    const float el = glm::radians(s.sunElevationDeg), az = glm::radians(s.sunAzimuthDeg);
-    const glm::vec3 sun(std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az));
-    const float h = std::sin(el);
-    const float day = glm::smoothstep(0.0f, 0.55f, h);
-    const glm::vec3 sunTint = glm::mix(glm::vec3(1.0f, 0.50f, 0.22f), glm::vec3(1.0f, 0.93f, 0.84f), day);
-    const float sunI = 5.2f * glm::smoothstep(-0.02f, 0.12f, h);
-    fu.sunDir = glm::vec4(sun, 0.0f);
-    fu.sunColor = glm::vec4(sunTint * sunI, 0.0f);
-    const float skyI = glm::mix(0.5f, 1.5f, day);
-    fu.skyZenith = glm::vec4(glm::mix(glm::vec3(0.12f, 0.18f, 0.34f), glm::vec3(0.12f, 0.30f, 0.80f), day) * skyI, 0.0f);
-    fu.skyHorizon = glm::vec4(glm::mix(glm::vec3(0.80f, 0.55f, 0.38f), glm::vec3(0.46f, 0.60f, 0.78f), day) * skyI, 0.0f);
-    fu.groundAmbient = glm::vec4(glm::vec3(0.10f, 0.085f, 0.06f) * skyI * 0.5f, 0.0f);
-    fu.fogParams = glm::vec4(0.0016f * s.fogDensity, 0.05f, 1.0f, s.clouds ? 0.55f : 0.0f);
+    const SkyState sky = computeSky(s.timeOfDay, s.sunHeadingDeg);
+    fu.sunDir = glm::vec4(sky.lightDir, 0.0f);
+    fu.sunColor = glm::vec4(sky.lightColor, 0.0f);
+    fu.skyZenith = glm::vec4(sky.zenith, 0.0f);
+    fu.skyHorizon = glm::vec4(sky.horizon, 0.0f);
+    fu.groundAmbient = glm::vec4(sky.groundAmbient, 0.0f);
+    fu.fogParams = glm::vec4(0.0016f * s.fogDensity * sky.fogMul, 0.05f, 1.0f, s.clouds ? 0.55f : 0.0f);
+    fu.skySun = glm::vec4(sky.sunDir, sky.sunDiscCos);
+    fu.skySunGlow = glm::vec4(sky.sunGlow, sky.stars);
+    fu.sunDisc = glm::vec4(sky.sunDisc, sky.moonDisc);
+    fu.moonDir = glm::vec4(sky.moonDir, sky.night);
+    // The mountain valley lies where the sun sets (compass azimuth ~279 deg at the sunset preset).
+    fu.fogColor = glm::vec4(sky.fogColor, glm::radians(std::fmod(279.0f + s.sunHeadingDeg, 360.0f)));
+    fu.skyAmbient = glm::vec4(sky.skyAmbient, 0.0f);
+    // Low-beam spot lights (render-only, unshadowed). Intensity in HDR irradiance units at 1 m.
+    const float lamp = frame.headlights > 0.0f ? 110.0f : 0.0f;
+    fu.headlightL = glm::vec4(frame.headlightPos[0], lamp);
+    fu.headlightR = glm::vec4(frame.headlightPos[1], 0.0f);
+    fu.headlightDir = glm::vec4(glm::normalize(frame.headlightDir), std::cos(glm::radians(32.0f)));
+    exposure = s.exposure * sky.exposure;
+    bloomMul = sky.bloomMul;
+}
+
+std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* reflViewProj,
+                                  TreeLists& lists) {
+    lists = {};
+    m_treeScratch.clear();
+    if (m_trees.empty()) return 0;
+    const Frustum fr(viewProj);
+    const glm::vec3 cam = frame.cameraPos;
+    constexpr float kLod0 = 55.0f, kLod1 = 140.0f;
+    std::vector<TreeInstance> lod[3];
+    for (const TreeInstance& t : m_trees) {
+        const glm::vec3 base(t.baseHeight);
+        const float h = t.baseHeight.w;
+        const glm::vec3 c = base + glm::vec3(0, 0.5f * h, 0);
+        if (!fr.sphere(c, 0.6f * h)) continue;
+        const float d = glm::length(c - cam);
+        lod[d < kLod0 ? 0 : d < kLod1 ? 1 : 2].push_back(t);
+    }
+    for (int l = 0; l < 3; ++l) {
+        lists.first[l] = std::uint32_t(m_treeScratch.size());
+        lists.count[l] = std::uint32_t(lod[l].size());
+        m_treeScratch.insert(m_treeScratch.end(), lod[l].begin(), lod[l].end());
+    }
+    if (reflViewProj) {
+        const Frustum rf(*reflViewProj);
+        lists.reflFirst = std::uint32_t(m_treeScratch.size());
+        for (const TreeInstance& t : m_trees) {
+            const glm::vec3 c = glm::vec3(t.baseHeight) + glm::vec3(0, 0.5f * t.baseHeight.w, 0);
+            if (rf.sphere(c, 0.6f * t.baseHeight.w) && glm::length(c - cam) < 160.0f) m_treeScratch.push_back(t);
+        }
+        lists.reflCount = std::uint32_t(m_treeScratch.size()) - lists.reflFirst;
+    }
+    if (m_settings.shadowCascades > 0) {
+        // Casters near the camera: the last cascade ends at the shadow distance; tall trees just beyond it still
+        // throw shadows into it.
+        const float r = m_settings.shadowDistance + 25.0f;
+        lists.shadowFirst = std::uint32_t(m_treeScratch.size());
+        for (const TreeInstance& t : m_trees) {
+            const glm::vec2 dxz(t.baseHeight.x - cam.x, t.baseHeight.z - cam.z);
+            if (glm::dot(dxz, dxz) < r * r) m_treeScratch.push_back(t);
+        }
+        lists.shadowCount = std::uint32_t(m_treeScratch.size()) - lists.shadowFirst;
+    }
+    if (m_treeScratch.size() > m_treeCapacity) m_treeScratch.resize(m_treeCapacity);
+    return std::uint32_t(m_treeScratch.size());
 }
 
 void Renderer::computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj) {
@@ -797,13 +886,14 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     fu.vehicleInv = glm::inverse(frame.vehicleModel);
     fu.cameraPos = glm::vec4(frame.cameraPos, frame.time);
     fu.cameraFwd = glm::vec4(-glm::vec3(glm::inverse(frame.view)[2]), 0.0f);
-    fillLighting(fu);
+    float exposure = s.exposure, bloomMul = 1.0f;
+    fillLighting(frame, fu, exposure, bloomMul);
     glm::mat4 lightViewProj[4];
     computeCascades(frame, aspect, fu, lightViewProj);
     fu.groundRect = m_groundRect;
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
     fu.clipPlane = glm::vec4(0, 0, 0, 1);
-    fu.options = glm::vec4(s.groundGrid ? 0.35f : 0.0f, s.exposure, 1.0f, s.clouds ? 1.0f : 0.0f);
+    fu.options = glm::vec4(s.groundGrid ? 0.35f : 0.0f, exposure, 1.0f, s.clouds ? 1.0f : 0.0f);
 
     // Puddle reflection only when the camera is above the water and near enough to see it.
     const bool wantRefl = s.reflections && m_reflColor.tex && frame.water && frame.water->vertexCount() > 0 &&
@@ -819,12 +909,21 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     }
     fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
     m_stats.reflectionRendered = reflVisible;
+    glm::mat4 mirror(1.0f);
+    mirror[1][1] = -1.0f;
+    mirror[3][1] = 2.0f * m_waterLevel;
+    const glm::mat4 reflView = frame.view * mirror;
+    const glm::mat4 reflViewProj = frame.proj * reflView;
 
-    // ---- Uploads (lines, grass chunks, ImGui) before any render pass
+    // ---- Uploads (lines, grass chunks, tree instances, ImGui) before any render pass
     const std::uint32_t lineBytes = std::uint32_t(frame.lines.size_bytes());
     std::array<std::uint32_t, 3> grassCounts{};
     const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
-    if (lineBytes > 0 || grassTotal > 0) {
+    TreeLists trees;
+    const std::uint32_t treeTotal = cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, trees);
+    for (int l = 0; l < 3; ++l) m_stats.trees[l] = int(trees.count[l]);
+    m_stats.shadowTrees = int(trees.shadowCount);
+    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         if (lineBytes > 0) {
             ensureLineCapacity(lineBytes);
@@ -844,6 +943,15 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_GPUBufferRegion region{m_grassBuffer, 0, bytes};
             SDL_UploadToGPUBuffer(copy, &src, &region, true);
         }
+        if (treeTotal > 0) {
+            const std::uint32_t bytes = treeTotal * sizeof(TreeInstance);
+            void* dst = SDL_MapGPUTransferBuffer(m_device, m_treeTransfer, true);
+            std::memcpy(dst, m_treeScratch.data(), bytes);
+            SDL_UnmapGPUTransferBuffer(m_device, m_treeTransfer);
+            SDL_GPUTransferBufferLocation src{m_treeTransfer, 0};
+            SDL_GPUBufferRegion region{m_treeBuffer, 0, bytes};
+            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        }
         SDL_EndGPUCopyPass(copy);
     }
     if (frame.ui) ImGui_ImplSDLGPU3_PrepareDrawData(frame.ui, cmd);
@@ -858,6 +966,16 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
         SDL_DrawGPUPrimitives(pass, d.mesh->vertexCount(), 1, 0, 0);
+    };
+    // Instanced trees; the pipeline (and its vertex uniform slot 0) must already be bound.
+    auto drawTrees = [&](SDL_GPURenderPass* pass, const GpuMesh& mesh, std::uint32_t first, std::uint32_t count) {
+        if (count == 0 || mesh.vertexCount() == 0) return;
+        TreeUniforms tu{glm::vec4(float(first), frame.time, 0, 0)};
+        SDL_PushGPUVertexUniformData(cmd, 1, &tu, sizeof(tu));
+        SDL_BindGPUVertexStorageBuffers(pass, 0, &m_treeBuffer, 1);
+        SDL_GPUBufferBinding binding{mesh.buffer(), 0};
+        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+        SDL_DrawGPUPrimitives(pass, mesh.vertexCount(), count, 0, 0);
     };
 
     // ---- 1. Sun shadow cascades
@@ -889,6 +1007,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             drawLit(pass, d);
             ++m_stats.shadowDraws;
         }
+        if (trees.shadowCount > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_treeShadowPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+            drawTrees(pass, m_treeMeshes[1], trees.shadowFirst, trees.shadowCount);
+            ++m_stats.shadowDraws;
+        }
         SDL_EndGPURenderPass(pass);
     }
 
@@ -899,11 +1023,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     // ---- 2. Puddle reflection (mirrored camera, clip plane at the water level)
     if (reflVisible) {
         FrameUniforms rf = fu;
-        glm::mat4 mirror(1.0f);
-        mirror[1][1] = -1.0f;
-        mirror[3][1] = 2.0f * m_waterLevel;
-        const glm::mat4 rview = frame.view * mirror;
-        rf.viewProj = frame.proj * rview;
+        rf.viewProj = reflViewProj;
         rf.invViewProj = glm::inverse(rf.viewProj);
         const glm::vec3 rcam(frame.cameraPos.x, 2.0f * m_waterLevel - frame.cameraPos.y, frame.cameraPos.z);
         rf.cameraPos = glm::vec4(rcam, frame.time);
@@ -938,6 +1058,14 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             drawSphere(d, center, radius);
             if (center.y + radius < m_waterLevel - 0.05f || !fr.sphere(center, radius)) continue;
             drawLit(pass, d);
+            ++m_stats.drawCalls;
+        }
+        if (trees.reflCount > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_reflTreePipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            drawTrees(pass, m_treeMeshes[1], trees.reflFirst, trees.reflCount);
             ++m_stats.drawCalls;
         }
         SDL_BindGPUGraphicsPipeline(pass, m_reflSkyPipe);
@@ -987,6 +1115,19 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             if (!fr.sphere(center, radius)) continue;
             drawLit(pass, d);
             ++m_stats.drawCalls;
+        }
+
+        // Trees (one instanced draw per LOD).
+        if (trees.count[0] + trees.count[1] + trees.count[2] > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_treePipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            for (int l = 0; l < 3; ++l) {
+                if (trees.count[l] == 0) continue;
+                drawTrees(pass, m_treeMeshes[l], trees.first[l], trees.count[l]);
+                ++m_stats.drawCalls;
+            }
         }
 
         // Grass blades (one instanced draw per LOD).
@@ -1103,7 +1244,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     {
         PostUniforms pu{};
         pu.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(w), 1.0f / float(h));
-        pu.params = glm::vec4(0.0f, bloom ? s.bloomStrength : 0.0f, s.exposure, 0.0f);
+        pu.params = glm::vec4(0.0f, bloom ? s.bloomStrength * bloomMul : 0.0f, exposure, 0.0f);
         pu.extra = glm::vec4(0.28f, s.fxaa ? 1.0f : 0.0f, 1.0f, 1.0f);
         SDL_GPUTextureSamplerBinding tex[2] = {{m_hdr.tex, m_clampSampler},
                                                {bloom ? m_bloom[0].tex : m_hdr.tex, m_clampSampler}};
