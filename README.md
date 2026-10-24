@@ -103,7 +103,10 @@ Command-line options:
 - `demo` — loads along the `--demo` trajectory in 1 s windows (Σload, Σ(F·ŷ), bump stop hits);
 - `hillbrake` — holding on climbs with the brake;
 - `susp [feature throttle low secs steer]` — per-wheel suspension length, compression and hub height in body space
-  over a track feature (default 2, the diagonal twister), body-terrain contact ticks.
+  over a track feature (default 2, the diagonal twister), body-terrain contact ticks;
+- `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
+  `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE` in the environment); `showcase` —
+  where the skid layer is audible on a scripted drive around the mud showcase.
 
 ### Scenario mode
 
@@ -140,10 +143,12 @@ cost of the marks with the ring empty and filled to 16k / 64k segments),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
 `--audio-capture`, see [Audio](#audio)),
 `tools/scenarios/suspension.txt` (stops on the diagonal twister with a wheel in the air; follow view with the HUD,
-rear and side views, `/tmp/trailforge_v_susp_*.png`).
+rear and side views, `/tmp/trailforge_v_susp_*.png`),
+`tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, audible for
+lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
@@ -340,8 +345,12 @@ time, and two intensities per end:
 - **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9 at static load);
 - **slip** — rubber on hard surfaces, churn on soft ones, from the patch sliding speed *and* the slip ratio
   (sliding speed / max(patch speed, rolling speed)). The ratio gate keeps normal driving clean: a steady 12 % slip in
-  2nd gear at full throttle (≈ 1.7 m/s) leaves nothing on concrete, while lock-up, a 1st-gear launch with real
-  wheelspin (3–4.5 m/s in the sim), handbrake slides and wheelspin on loose ground do.
+  2nd gear at full throttle (≈ 1.7 m/s) leaves nothing on concrete, while lock-up, handbrake slides and wheelspin on
+  loose ground do.
+
+Rubber marks and tire squeal share one per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio
+0.2..0.55, sideways sliding 2.5..7 m/s at 0.4..0.8. Only concrete, rock and the low-grip patch squeal; loose surfaces
+drive their own layers. Soil in the tread (picked up on loose ground, shed over ~10 m) suppresses both.
 
 Per surface: concrete/rock/low-grip get dark rubber only while sliding; dirt gets a compacted tread imprint (lug
 pattern) and loose churned soil on wheelspin; mud gets a dark, wet, glossy rut with lighter raised edges (the mark
@@ -395,8 +404,9 @@ parameter set, and the offline capture must run the exact same code without a de
   into a 12 dB spread (panel: "Level spread"). Starter recording on start and on every reset, crossfaded into the
   loops after it catches (or at once when the throttle opens); gear clunks when a gear engages; a quiet
   synthesized transmission whine at the propeller-shaft mesh frequency.
-- **Tires.** From the per-wheel contact samples (surface, load, slip ratio, slip speed, rolling speed): skid on
-  concrete / low grip / rock by slip × load, gravel and dirt roll and scrub on packed dirt and rock, mud slosh plus
+- **Tires.** From the per-wheel contact samples (surface, load, slip ratio, slip speed, rolling speed): squeal on
+  concrete / low grip / rock through the shared `rubberSlide` gate (see "Tire marks"), one voice per wheel (random
+  loop start and pitch per slide, pitch from sliding speed and load, an onset chirp), gravel and dirt roll and scrub on packed dirt and rock, mud slosh plus
   random squelches, grass rustle and swishes, a water splash when a wheel drops into a puddle (contact below the
   puddle's water level inside its rectangle).
 - **Body.** Suspension thump on load steps, bump-stop hits, chassis creak at large articulation, metal impacts from a
@@ -446,6 +456,8 @@ bundle or next to the binary, and in development builds also from the source tre
 - **Tuning:**
   - springs, dampers, anti-roll bars, tire curves, surface coefficients, engine, brakes
     and differentials are applied between physics steps;
+  - toggles for the two tire/drivetrain fixes, also applied between steps: Tires → "Static grip" (`tireStaticGrip`)
+    and Drivetrain → "Launch clutch limit" (`launchClutchLimit`) with the creep torque;
   - mass, inertia, center of mass, suspension travel, wheel radius, steering angle and gear ratios are applied
     with the **Rebuild vehicle** button (the vehicle is recreated);
   - physics rate, collision steps, input smoothing, debug lines, teleport.
@@ -474,6 +486,13 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients.
   The "mud" is a low-μ rigid surface, not a mud simulation; puddles have no water physics.
+- Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
+  at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
+  without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire
+  is stick/slip: below breakaway the measured slip is ~0 rather than a slip-stiffness curve.
+- Launch clutch: near the minimum rpm the clutch passes at most the engine torque at the current throttle (at least
+  a 40 N·m creep torque), like a torque converter at stall. Jolt clamps the engine rpm, so an unlimited slipping
+  clutch delivered ~840 N·m at any throttle.
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven).
@@ -500,7 +519,7 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 14 of 14 tests pass in Debug, Release and headless:
+- **CTest.** 15 of 15 tests pass in Debug, Release and headless (rows not listed are from earlier stages):
 
 | Test | Result |
 |---|---|
@@ -517,6 +536,7 @@ Everything below was actually run on macOS 27 / M-series.
 | Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
+| Audio: skid gating | At 60/120/240 Hz on concrete: squeal 0 for full-throttle and low-range launches and full-lock / half-lock turns; handbrake 0.63, full brake 0.98 / 0.49 / 0.49 (at 120/240 Hz only the rear wheels lock), power slide 0.24–0.41, 4–6 onset chirps; mud lane: skid 0, mud 1.00 |
 | Audio: feed and mixer | Simulated launch: 4 gear events, source rpm up to 3839; concrete skid 0.000 cruising vs 0.924 braking; mud lane mud 0.65; pause RMS 0.1414 → 0.0509; peak 0.672, 0 clipped |
 
 - **Step cost** (`trailforge_probe bench`, Release, 20 s course drive):

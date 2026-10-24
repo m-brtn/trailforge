@@ -442,6 +442,10 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         changed |= ImGui::SliderFloat("Lat. peak mu", &m_tuning.tirePeakLatFriction, 0.2f, 2.0f, "%.2f");
         changed |= ImGui::SliderFloat("Lat. sliding mu", &m_tuning.tireSlideLatFriction, 0.1f, 2.0f, "%.2f");
         changed |= ImGui::SliderFloat("Peak slip angle [deg]", &m_tuning.tirePeakSlipAngleDeg, 1.0f, 20.0f, "%.1f");
+        changed |= ImGui::Checkbox("Static grip (peak mu below breakaway)", &m_tuning.tireStaticGrip);
+        remember("static_grip");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Off: plain Jolt curve, mu(0) = 0; gripping wheels alternate grip / free spin.");
     }
     if (ImGui::CollapsingHeader("Surfaces (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("Multiplier on tire curve. Ground is rigid in this MVP.");
@@ -457,6 +461,12 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
     if (ImGui::CollapsingHeader("Drivetrain (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         changed |= ImGui::SliderFloat("Engine torque [N*m]", &m_tuning.engineMaxTorque, 100.0f, 1200.0f, "%.0f");
         changed |= ImGui::SliderFloat("Clutch strength", &m_tuning.clutchStrength, 1.0f, 40.0f, "%.1f");
+        changed |= ImGui::Checkbox("Launch clutch limit", &m_tuning.launchClutchLimit);
+        remember("clutch_limit");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Near min rpm the clutch passes at most the engine torque at this throttle.\n"
+                              "Off: the slipping clutch delivers ~840 N*m at any throttle.");
+        changed |= ImGui::SliderFloat("Creep torque [N*m]", &m_tuning.creepTorque, 0.0f, 150.0f, "%.0f");
         changed |= ImGui::SliderFloat("Brake torque [N*m/wheel]", &m_tuning.maxBrakeTorque, 500.0f, 8000.0f, "%.0f");
         changed |= ImGui::SliderFloat("Handbrake torque [N*m]", &m_tuning.maxHandBrakeTorque, 0.0f, 8000.0f, "%.0f");
         const char* modes[] = {"Open", "Limited slip"};

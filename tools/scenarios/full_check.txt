@@ -510,6 +510,24 @@ resize 1440 900
 wait 0.5
 expect depth_matches_window == 1
 
+# ---------------------------------------------------------------- Tuning toggles: static grip, launch clutch limit
+expect static_grip == 1
+expect clutch_limit == 1
+scrollto static_grip
+click static_grip
+wait 0.2
+expect static_grip == 0         # the checkbox reached the vehicle between steps
+click static_grip
+wait 0.2
+expect static_grip == 1
+scrollto clutch_limit
+click clutch_limit
+wait 0.2
+expect clutch_limit == 0
+click clutch_limit
+wait 0.2
+expect clutch_limit == 1
+
 # ---------------------------------------------------------------- Rebuild with a different mass
 tap R
 wait 0.5

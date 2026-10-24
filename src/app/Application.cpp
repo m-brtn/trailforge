@@ -899,6 +899,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "max_air") return m_maxAirWheels;
     if (n == "front_spring") return m_sim.vehicleConfig().tuning.frontSpringFrequency;
     if (n == "mass") return m_sim.vehicleConfig().mass;
+    if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;
+    if (n == "clutch_limit") return m_sim.vehicleConfig().tuning.launchClutchLimit ? 1.0 : 0.0;
     if (n == "fps") return m_fps;
     if (n == "frame_ms") return m_frameMs;
     if (n == "cpu_ms") return m_cpuMs;
