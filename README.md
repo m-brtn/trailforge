@@ -10,9 +10,11 @@ All geometry and textures are procedural; there are no external assets.
 
 ![Showcase](docs/showcase.jpg)
 
-Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun shadows, procedural sky with clouds and
-height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass with LOD, planar puddle reflections.
-A small mud & puddles showcase meadow sits north of the proving ground.
+Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun/moon shadows, a time of day (0–24 h, presets,
+time-lapse) that drives the sun, sky, fog and ambient light, procedural sky with clouds, a large sun disc and layered
+distant mountains, height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass and pines with LOD,
+planar puddle reflections, headlights that light the ground at night. A small mud & puddles showcase meadow sits north
+of the proving ground.
 
 ## Platforms
 
@@ -89,18 +91,20 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `sun_el`, `sun_az`, `fog`, `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync` |
+| `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
 Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
+`tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
-`grass_blades`, `reflection`, `mud`, `msg:<substring>` (1 if the latest UI message contains the substring), and more.
+`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `msg:<substring>` (1 if the latest UI message contains the substring), and more.
 Full list: `Application::scenarioValue`.
 
 ## Controls
@@ -137,7 +141,7 @@ src/track/    SurfaceProperties (materials and grip), TestTrack (procedural prov
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
-              Scenery (backdrop terrain, trees), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
+              Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport)
@@ -204,7 +208,8 @@ Surrounded by an earth berm and concrete walls.
 - **Lane C** (left, +X):
   - 18° side slope;
   - steps of 0.15 / 0.30 / 0.45 m;
-  - a field of 28 rocks and two boulders.
+  - a field of 28 rocks and two boulders. Rocks are angular convex chunks (a subdivided icosahedron cut by random
+    planes), flat-shaded; the collision mesh is the same triangles.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (μ×0.60/0.55),
@@ -212,7 +217,7 @@ Surrounded by an earth berm and concrete walls.
   hard ground, and the water surface is render-only. Deformable terrain is a later stage.
 
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
-The outer backdrop (hills, trees beyond the walls) and grass are render-only and cannot be reached.
+The outer backdrop (hills, trees beyond the walls, distant mountains) and grass are render-only and cannot be reached.
 Grip is computed per wheel: `SetCombineFriction` takes the material under the contact patch
 and multiplies the tire curve by the surface coefficients — longitudinal and lateral separately.
 Teleport points are in the Tuning window.
@@ -221,7 +226,8 @@ Teleport points are in the Tuning window.
 
 SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per frame:
 
-1. Sun shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with 1/4/12 taps).
+1. Sun (or moon) shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with
+   1/4/12 taps).
 2. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
 3. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
    rock/concrete/dirt, mask-blended grass/mud/wet ground, instanced grass (2.4 m chunks, 3 LOD levels, distance fade,
@@ -229,6 +235,26 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
    height fog, debug lines.
 4. Bloom (5-level downsample/upsample chain).
 5. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+
+### Time of day and environment
+
+- **Time of day** (F2 → Look, or F1 → Tuning → "Time of day"): a 0–24 h slider, presets Dawn (5:45), Noon,
+  Sunset (18:12) and Night (23:30), and a time-lapse with a speed slider (0.01–4 h/s) and Run/Pause. The sun follows
+  a simple solar path (latitude 45°, declination 10°: sunrise ~5:20, sunset ~18:40, noon elevation 55°); the
+  "Sun path heading" rotates the path so the sunset lies north, behind the showcase meadow. Sun color and intensity,
+  the sky gradient, fog color and density, sky/ground ambient, exposure and bloom are interpolated from a palette
+  keyed by sun elevation (`src/render/TimeOfDay.cpp`), so time-lapse transitions are smooth.
+- **Night:** a full moon (opposite the sun) lights the scene dimly and casts the shadows, with stars and a moonlit
+  blue ambient. The shadow light switches from the sun to the moon while both are below about −4°, so nothing is lit
+  or shadowed from below the horizon. Headlights (H) are two unshadowed spot lights on the vehicle that light the
+  ground, grass and rocks (render-only, stylized falloff).
+- **Sky:** large stylized sun disc (bigger near the horizon), sunset-lit cloud undersides, horizon haze that matches
+  the fog. Four layers of faceted distant mountains are drawn in the sky pass at infinity (render-only, no
+  collision) with aerial perspective toward a violet haze; a valley opens where the sun sets.
+- **Backdrop:** flat-shaded terrain beyond the walls with a lower view corridor toward the sunset; ~900 instanced
+  low-poly pines (faceted tiers, per-tree size, yaw and tint, wind sway) with three LODs by distance (55 / 140 m),
+  culled per frame on the CPU, also drawn into the shadow cascades and the puddle reflection.
+- The perimeter wall (5 m, collision) stays and crosses low camera views of the horizon.
 
 Vehicle dirt is **cosmetic only**: a mud layer on the body (splash line from the bottom up) and wheels. In auto mode it
 builds up while the wheels roll on `Mud` or through puddles and slowly dries off; it never affects the physics.
@@ -290,6 +316,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - No aerodynamics or rolling resistance (linear damping = 0).
   The engine is a torque curve, with no flywheel inertia beyond Jolt's model.
 - Body collision is a compound of three boxes.
+- Time of day, moonlight and headlights are lighting only: they do not change grip, temperature or anything else in
+  the simulation.
 - Determinism is guaranteed only at the same step rate on the same platform.
   Trajectories differ at 60, 120 and 240 Hz, as the measurements below show.
 - No damage.
@@ -362,6 +390,19 @@ Everything below was actually run on macOS 27 / M-series.
   frame counts quantized at 60/120 Hz. Treat the FPS column as an upper bound and the GPU time as the cost;
   one contended Ultra+VSync run dropped to 51 FPS average with a 316 ms hitch.
   Showcase frames: `tools/scenarios/visual_tour.txt` → `/tmp/trailforge_vis_01_follow.png` … `07_muddy_side.png`.
+- **Time of day and environment cost.** The previous commit (`4826485`) and the new build were run back-to-back
+  with `perf_presets.txt` in the same session (default time 9:00, VSync off, GPU ms average, follow / overview):
+
+| Preset | Before | After |
+|---|---|---|
+| Low | 4.10 / 3.92 | 4.04 / 4.21 |
+| Medium | 4.24 / 3.89 | 4.29 / 4.01 |
+| High | 4.56 / 4.64 | 5.13 / 4.89 |
+| Ultra | 6.46 / 7.17 | 6.86 / 7.50 |
+
+  Run-to-run noise in that session was ±0.3 ms; absolute numbers are higher than the table above because the display
+  ran at 60 Hz that day (VSync runs at 58–59 FPS) and the GPU clocked lower. Draw calls 46 → 49 (follow), 10 → 13
+  (overview): the pines are three instanced draws instead of being part of the scenery mesh.
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;

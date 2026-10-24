@@ -39,6 +39,7 @@ check failed:
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
+./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ```
 
@@ -55,7 +56,7 @@ src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job sys
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock
-src/render/   Renderer (SDL GPU passes), RenderSettings, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
+src/render/   Renderer (SDL GPU passes), RenderSettings, TimeOfDay, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
               DebugDraw, GpuTimingMetal.m
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel)
