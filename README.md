@@ -13,9 +13,9 @@ recordings, see [Audio](#audio) and `assets/audio/CREDITS.md`).
 
 Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun/moon shadows, a time of day (0–24 h, presets,
 time-lapse) that drives the sun, sky, fog and ambient light, procedural sky with clouds, a large sun disc and layered
-distant mountains, height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass and pines with LOD,
-planar puddle reflections, headlights that light the ground at night. A small mud & puddles showcase meadow sits north
-of the proving ground.
+distant mountains, height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass (several species,
+flower clusters, a wheat test patch, travelling wind gusts) and pines with LOD, planar puddle reflections, headlights
+that light the ground at night. A small mud & puddles showcase meadow sits north of the proving ground.
 
 ## Platforms
 
@@ -143,7 +143,7 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
@@ -151,6 +151,8 @@ One command per line, `#` starts a comment:
 Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
+`tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
+the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
 cost of the marks with the ring empty and filled to 16k / 64k segments),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
@@ -405,6 +407,9 @@ Surrounded by an earth berm and concrete walls.
   patch (z 34–46) that ends directly on a 30 m concrete strip (z 4–34), for driving out of mud onto concrete.
 - Teleports "Meadow (grass)" (open grass east of the mud path) and "Puddle (splash)" (on the mud path just before a
   puddle) are spawn points for the wheel spray checks.
+- **Wheat test patch** (west meadow, x −46…−28, z 56…76, teleport "Wheat patch (visual)"): render-only wheat. The
+  ground under it is the ordinary `Grass` surface; the stalks have no collision and no drag, they only bend under the
+  wheel contacts and in the trample mask. The real field comes with a later level.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (peak μ 0.35/0.32),
@@ -452,10 +457,39 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
 3. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
 4. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
    rock/concrete/dirt, mask-blended grass/mud/wet ground, tire marks (one instanced draw), instanced grass (2.4 m
-   chunks, 3 LOD levels, distance fade, wind, flattened under the wheel contacts and in the trample mask), procedural
-   sky with clouds, water with Fresnel, ripples and reflection, height fog, debug lines.
+   chunks, 3 LOD levels, see "Grass, flowers and wheat"), procedural sky with clouds, water with Fresnel, ripples and
+   reflection, height fog, debug lines.
 5. Bloom (5-level downsample/upsample chain).
 6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+
+### Grass, flowers and wheat
+
+Grass is render-only (no collision, no effect on grip). One instanced draw per LOD; every instance is one blade on a
+regular grid per preset (cell 0.2 / 0.15 / 0.1 / 0.075 m), and coarser LODs keep a subset of the same blades. The
+vertex shader decides everything per blade from hashes, the ground maps and a tiled noise texture:
+
+- **Species zones** (noise, shared with the ground shader): short lawn grass, tall wild grass (a third of it with
+  seed-head panicles), clover leaves, and dry straw-coloured blades on slopes and in sparse margins (near rocks, tufts
+  in the dirt). Growth is clumped (0.55 m clumps, blades lean out of the clump centre and share a height), with
+  dense patches and sparse spots.
+- **Blades:** quadratic Bezier curves (the base leaves the ground at a fraction of the tip angle), wider at the base
+  with a pointed tip, normals rounded across the blade, root occlusion that grows with the clump density, lighter
+  tips, per-blade and per-clump hue and value, translucency toward the sun (warm at sunset) and a small tip sheen.
+- **Flowers** in clusters (at most one per 3.2 m cell, plus rare lone flowers): daisies, buttercups, bellflowers,
+  poppies and clover heads, a stem plus a head quad facing up and toward the camera whose petals are cut in the
+  fragment shader; they sway with their stems. The far LOD draws a flower as a blade with a coloured tip.
+- **Wheat** (mask channel A, the test patch): stalks on rows along x with ears (zigzag spikelets) and awns, golden to
+  green-yellow by noise and per stalk, stiffer than grass; the gusts lighten the bent stalks so they roll over the
+  field as bright waves.
+- **Wind:** travelling gust bands (downwind, with wobbly fronts and a slower swell) bend every species by its own
+  flexibility, plus a small flutter across the wind; no independent per-blade jitter.
+- **Wheels** flatten every species: blades within the contact radius and in the trample mask lie down (lean up to
+  83°, away from the wheel when it is near) and torn turf removes them, so driven lanes stay visible in grass and wheat.
+- **Distance:** blades fade out toward the grass distance and the coarser LODs widen; the ground under grass takes
+  the same zone colours as a canopy colour, fully at distance and partly near the camera (more on Low/Medium, whose
+  grids are sparser), so there is no visible LOD ring. With grass off the ground shows the canopy colour everywhere.
+- **Per preset:** density and distance (table below), flower density 0.5 / 0.8 / 1 / 1, fine detail (awns,
+  seed-head spikelets, clover leaf marks) off on Low. The Graphics panel has "Flowers" and "Grass detail".
 
 ### Time of day and environment
 
@@ -583,12 +617,12 @@ per quality preset; dust is limited to a sixth of the cap and at most 500 puffs,
 
 Quality presets (Graphics panel, F2; default High):
 
-| Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance | Wheel spray cap |
-|---|---|---|---|---|---|---|---|---|
-| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m | 600, no dust |
-| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m | 1500 |
-| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m | 3000 |
-| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m | 6000 |
+| Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance | Flowers / grass detail | Wheel spray cap |
+|---|---|---|---|---|---|---|---|---|---|
+| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m | 0.5 / off | 600, no dust |
+| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m | 0.8 / on | 1500 |
+| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m | 1 / on | 3000 |
+| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m | 1 / on | 6000 |
 
 The panel also shows CPU frame time (without the swapchain wait), GPU time (from `MTLCommandBuffer`
 `GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed
@@ -704,6 +738,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
   sinkage, flotation or bulldozing; puddles have no water physics.
+- Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
+  the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
   at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
   without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire
