@@ -235,26 +235,37 @@ void roundLamp(MeshData& m, const glm::vec3& center, const glm::vec3& axis, floa
 
 // ---------------------------------------------------------------- accessories
 
-void roofRack(MeshData& m, float halfW, float z0, float z1, float yBase, float height, const Material& steel) {
-    const float y = yBase + height, r = 0.018f;
+float roofRails(MeshData& m, float halfW, float z0, float z1, float yBase, const std::vector<float>& crossZ,
+                const Material& rail, const Material& feet) {
+    const glm::vec3 up(0, 1, 0);
+    const float yRail = yBase + 0.050f, railH = 0.013f, railW = 0.017f;
     for (float sx : {1.0f, -1.0f}) {
         const float x = sx * halfW;
-        m.addCylinder({x, y, z0}, {x, y, z1}, r, 10, steel);
-        // Gallery rail on posts.
-        m.addCylinder({x, y + 0.07f, z0 + 0.10f}, {x, y + 0.07f, z1 - 0.10f}, 0.014f, 8, steel);
-        for (float t : {0.0f, 0.33f, 0.66f, 1.0f}) {
-            const float z = z0 + 0.10f + (z1 - z0 - 0.20f) * t;
-            m.addCylinder({x, y, z}, {x, y + 0.07f, z}, 0.011f, 6, steel);
-        }
-        // Feet on the roof gutters.
-        for (float t : {0.04f, 0.5f, 0.96f}) {
-            const float z = z0 + (z1 - z0) * t;
-            m.addBar({x, yBase, z}, {x, y, z}, 0.025f, 0.035f, {0, 0, 1}, steel, 0.006f);
-        }
+        // Rail with chamfered edges; both ends slope down onto the roof.
+        m.addBar({x, yRail, z0 + 0.07f}, {x, yRail, z1 - 0.07f}, railW, railH, up, rail, 0.008f);
+        m.addBar({x, yRail, z1 - 0.07f}, {x, yBase + 0.012f, z1 + 0.01f}, railW, railH, up, rail, 0.008f);
+        m.addBar({x, yRail, z0 + 0.07f}, {x, yBase + 0.012f, z0 - 0.01f}, railW, railH, up, rail, 0.008f);
+        for (float t : {0.12f, 0.5f, 0.88f})
+            m.addBeveledBox({x, 0.5f * (yBase + yRail), z0 + (z1 - z0) * t}, {0.020f, 0.5f * (yRail - yBase), 0.032f},
+                            0.006f, feet);
     }
-    for (float z : {z0, z1}) m.addCylinder({-halfW, y, z}, {halfW, y, z}, r, 10, steel);
-    for (float z = z0 + 0.12f; z < z1 - 0.06f; z += 0.12f)
-        m.addBox({0.0f, y - 0.004f, z}, {halfW - 0.01f, 0.007f, 0.028f}, steel);
+    // Aero crossbars on clamps.
+    const float yBar = yRail + railH + 0.013f;
+    for (float z : crossZ) {
+        m.addBar({-halfW - 0.02f, yBar, z}, {halfW + 0.02f, yBar, z}, 0.026f, 0.011f, up, rail, 0.008f);
+        for (float sx : {1.0f, -1.0f})
+            m.addBeveledBox({sx * halfW, yRail + railH, z}, {0.030f, 0.012f, 0.030f}, 0.006f, feet);
+    }
+    return yBar + 0.011f;
+}
+
+void cargoStrap(MeshData& m, const glm::vec3& a, const glm::vec3& top0, const glm::vec3& top1, const glm::vec3& b,
+                const Material& strap) {
+    const glm::vec3 pts[] = {a, top0, top1, b};
+    for (int i = 0; i < 3; ++i) {
+        m.addBar(pts[i], pts[i + 1], 0.0035f, 0.018f, {0, 0, 1}, strap); // band 36 mm wide along Z
+    }
+    m.addBeveledBox(0.5f * (top0 + top1), {0.02f, 0.008f, 0.02f}, 0.003f, strap); // ratchet
 }
 
 void lightBar(MeshData& m, const glm::vec3& c, float halfLen, const Material& housing, const Material& ledMat) {
@@ -501,7 +512,8 @@ MeshData buildWheel(float radius, float width, const WheelStyle& st) {
                    kSeg, tire);
 
     // ---- Tread: staggered chevron blocks; mud terrain adds shoulder lugs that wrap onto the sidewall.
-    const int pitches = mud ? 24 : 34;
+    // About 9.5 cm (mud) / 7.5 cm (all-terrain) per pitch, so bigger tires get more, not bigger, blocks.
+    const int pitches = std::max(mud ? 24 : 32, int(std::round(2.0f * kPi * radius / (mud ? 0.095f : 0.075f))));
     const float pitchLen = 2.0f * kPi * radius / float(pitches);
     const float yaw = mud ? 0.24f : 0.12f, bx = hw * (mud ? 0.36f : 0.27f), bz = pitchLen * (mud ? 0.31f : 0.34f);
     // Flat block tops: the corners (tangential reach tz) touch `radius`.

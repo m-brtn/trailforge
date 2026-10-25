@@ -1451,6 +1451,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (view == "rear") dir = {0.0f, 0.05f, -1.0f};
             else if (view == "three_quarter") dir = {0.72f, 0.30f, 0.62f};
             else if (view == "three_quarter_rear") dir = {-0.72f, 0.30f, -0.62f};
+            else if (view == "roof") dir = {-0.20f, 0.80f, -0.56f}; // high behind, onto the roof
             else return Exec::Failed;
             const float dist = c.args.size() > 2 ? float(std::atof(c.args[2].c_str())) : 30.0f;
             const float fov = c.args.size() > 3 ? float(std::atof(c.args[3].c_str()))

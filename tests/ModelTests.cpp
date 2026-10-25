@@ -44,7 +44,7 @@ void modelParts() {
         CHECK(p.parent.empty() || names.count(p.parent), "part '%s' has unknown parent '%s'", p.name.c_str(),
               p.parent.c_str());
     for (const char* n : {"hood", "tailgate", "door_front_left", "door_rear_right", "bumper_front", "fender_front_left",
-                          "flare_rear_right", "roof_rack"}) {
+                          "flare_rear_right", "roof_rails"}) {
         const VehiclePart* p = v.find(n);
         CHECK(p && p->deformable && p->detachable, "'%s' should be deformable and detachable", n);
     }
@@ -53,7 +53,7 @@ void modelParts() {
         CHECK(p && p->detachable, "'%s' should be detachable", n);
     }
     CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
-    CHECK(v.spares.size() == 2, "%zu spare mounts", v.spares.size());
+    CHECK(v.spares.size() == 1, "%zu spare mounts", v.spares.size());
     for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
     std::printf("  %zu parts, %zu triangles\n", v.parts.size(), v.mesh.vertices.size() / 3);
 }
