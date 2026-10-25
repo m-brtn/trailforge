@@ -173,6 +173,10 @@ struct AxleConfig {
     float suspensionMaxLength = 0.55f; // m, full droop (0.40 m travel)
     float suspensionPreload = 0.0f;    // m
     float maxSteerAngleDeg = 0.0f;     // degrees, 0 = not steered
+    // Visual only (wheel mesh; no effect on physics). The tire's outer radius and width are always
+    // wheelRadius / wheelWidth; these only shape the rim and the tread.
+    float rimRatio = 0.58f;            // rim diameter / tire diameter (sidewall height = (1 - rimRatio) * radius)
+    std::string tread = "mud_terrain"; // mud_terrain | all_terrain
 
     float wheelInertiaOrDisc() const { return wheelInertia > 0.0f ? wheelInertia : 0.5f * wheelMass * wheelRadius * wheelRadius; }
     bool operator==(const AxleConfig&) const = default;

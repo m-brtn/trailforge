@@ -17,7 +17,7 @@
   "axles": {
     "front": {
       "track": 1.80,
-      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2},
+      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2, "rimRatio": 0.58, "tread": "mud_terrain"},
       "suspension": {
         "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
@@ -28,7 +28,7 @@
     },
     "rear": {
       "track": 1.80,
-      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2},
+      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2, "rimRatio": 0.58, "tread": "mud_terrain"},
       "suspension": {
         "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,

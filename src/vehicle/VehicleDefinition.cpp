@@ -135,6 +135,10 @@ void readAxle(Obj& axles, const char* key, AxleConfig& a, AxleTuning& t, bool fr
         w.num("mass", a.wheelMass, 5.0, 200.0, "kg");
         w.num("inertia", a.wheelInertia, 0.0, 50.0, "kg*m^2 (0 = solid disc)");
         w.num("angularDamping", a.wheelAngularDamping, 0.0, 5.0, "1/s");
+        w.num("rimRatio", a.rimRatio, 0.35, 0.85, "(rim / tire diameter, visual)", false);
+        w.str("tread", a.tread, false);
+        if (a.tread != "mud_terrain" && a.tread != "all_terrain")
+            w.error(w.child("tread"), "unknown tread '" + a.tread + "' (known: mud_terrain, all_terrain)");
     }
     {
         Obj s(o.member("suspension"), o.child("suspension"), source, errors);
