@@ -1,0 +1,13 @@
+{
+  "comment": "Terrain material layers (shader layer order). Sources: Poly Haven (CC0). Rebuilt by tools/textures/fetch_textures.py, which checks the md5 of every download. tile: world size of one texture repeat (m); tint: optional linear albedo multiplier.",
+  "albedoSize": 4096,
+  "nraSize": 2048,
+  "layers": [
+    {"id": "grass", "asset": "forrest_ground_01", "tile": 2.5},
+    {"id": "soil", "asset": "dirt_floor", "tile": 2.5},
+    {"id": "road", "asset": "rocky_trail", "tile": 2.5, "tint": [0.92, 0.86, 0.78]},
+    {"id": "rock", "asset": "rock_face_03", "tile": 4.0},
+    {"id": "sand", "asset": "coast_sand_01", "tile": 6.0},
+    {"id": "snow", "asset": "snow_02", "tile": 4.5}
+  ]
+}
