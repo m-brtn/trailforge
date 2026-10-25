@@ -16,6 +16,10 @@ if(APPLE)
     enable_language(OBJC)
 endif()
 
+# Jolt builds with the static MSVC runtime (USE_STATIC_MSVC_RUNTIME_LIBRARY); everything else must match. It also
+# means the Windows package needs no Visual C++ redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 include(cmake/Dependencies.cmake)
 
 # ------------------------------------------------------------------ simulation
