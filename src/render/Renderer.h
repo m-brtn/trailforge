@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <span>
+#include <string>
 #include <vector>
 
 struct ImDrawData;
@@ -81,6 +82,12 @@ struct GrassUniforms {
 
 struct ShadowUniforms {
     glm::mat4 lightViewProj;
+};
+
+struct TerrainTextureUniforms {
+    glm::vec4 invTile[2]; // 1 / repeat size (m) per layer: grass, soil, road, rock | sand, snow
+    glm::vec4 tint[6];    // rgb albedo multiplier per layer
+    glm::vec4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength
 };
 
 struct TreeUniforms {
@@ -205,6 +212,10 @@ struct RenderStats {
     int terrainChunks = 0;                    // level terrain chunks drawn (main view)
     std::uint64_t terrainTriangles = 0;
     std::array<int, 4> terrainLod{};          // chunks per LOD (step 1, 2, 4, 8 samples)
+    int terrainTexAlbedo = 0, terrainTexNra = 0; // loaded terrain texture sizes (0 = procedural ground)
+    std::uint64_t terrainTexBytes = 0;          // GPU bytes of the two texture arrays
+    double terrainTexLoadMs = 0.0;              // last load (read + upload)
+    int terrainTexLoads = 0;
 };
 
 // Level terrain for the renderer: the physics height grid and the per-cell splat weights (render-only copy).
@@ -237,6 +248,9 @@ public:
     void setGround(const GroundMaps& maps, float waterLevel);
     // Level terrain (quadtree of 64 x 64 cell chunks, step 1..8 samples, skirts); nullptr removes it.
     void setTerrain(const TerrainSource* terrain);
+    // Folder with terrain.json and the material KTX2 files (assets/textures/terrain). Loaded while a terrain is set,
+    // at RenderSettings::terrainTextureSize; missing or invalid files fall back to the procedural ground.
+    void setTerrainTextureDir(const std::string& dir) { m_terrainTexDir = dir; m_terrainTexWanted = -1; }
     // Instanced trees: one unit-height mesh per LOD (near, mid, far, crossed cards) and the static instance list.
     void setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances);
 
@@ -397,6 +411,13 @@ private:
     int m_terrainRoots = 0;                         // root nodes per side (step 8)
     std::array<std::vector<TerrainNode>, 4> m_terrainNodes; // per level (step 8, 4, 2, 1), row-major
     std::vector<TerrainChunk> m_terrainScratch, m_terrainShadowScratch;
+    // Terrain material textures (BC7 arrays, one layer per material) or 1 x 1 placeholders.
+    void updateTerrainTextures();
+    Texture m_terrainAlbedo, m_terrainNra;
+    SDL_GPUSampler* m_terrainSampler = nullptr;
+    std::string m_terrainTexDir;
+    int m_terrainTexWanted = -1; // size the arrays were loaded for (-1: not tried)
+    TerrainTextureUniforms m_terrainTexUniforms{};
 
     // Grass: chunks sorted into square buckets of kGrassBucket x kGrassBucket chunks for culling.
     struct GrassBucket {

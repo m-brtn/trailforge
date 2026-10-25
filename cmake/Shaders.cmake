@@ -25,7 +25,8 @@ set(TRAILFORGE_SHADER_ENTRIES
     fullscreen_vs:vertex sky_fs:fragment water_fs:fragment grass_vs:vertex grass_fs:fragment mark_vs:vertex
     mark_fs:fragment mark_mask_vs:vertex mark_mask_fs:fragment spray_vs:vertex spray_fs:fragment line_vs:vertex
     line_fs:fragment bloom_down_fs:fragment bloom_up_fs:fragment tonemap_fs:fragment fxaa_fs:fragment
-    blur_down_fs:fragment blur_up_fs:fragment blur_composite_fs:fragment terrain_vs:vertex terrain_shadow_vs:vertex)
+    blur_down_fs:fragment blur_up_fs:fragment blur_composite_fs:fragment terrain_vs:vertex terrain_shadow_vs:vertex
+    terrain_fs:fragment)
 
 set(_metal_ok OFF)
 if(APPLE)

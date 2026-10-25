@@ -1,0 +1,125 @@
+# Terrain material textures on Exploration Peaks (assets/textures/terrain, BC7 KTX2, needs `git lfs pull`):
+#   ./build/release/trailforge --script tools/scenarios/terrain_textures.txt --no-audio
+# Checks the texture size per quality preset (Low 512, Medium 1024, High 2048, Ultra 4096; normal maps at most 2048)
+# and the Off setting, that driving does not reload them (they are loaded once per level entry / size change, not
+# streamed), prints frame times textured vs procedural per preset (PERF lines, vsync off) and the load time of each
+# size. Captures /tmp/trailforge_tex_*.png. Exit code 1 on FAIL.
+set ui 0
+set hud 0
+set auto_reverse 0
+set vsync 0
+quality High
+level exploration_peaks
+until level == 1 10
+wait 1.5
+expect terrain_tex == 2048
+expect terrain_tex_nra == 2048
+expect terrain_tex_mb > 60
+expect terrain_tex_ms < 400
+expect terrain_tex_loads == 1
+
+# ---------------------------------------------------------------- captures (High)
+capture /tmp/trailforge_tex_01_spawn.png
+wait 0.3
+camera vehicle three_quarter 7
+wait 0.5
+capture /tmp/trailforge_tex_02_spawn_close.png
+wait 0.3
+camera follow
+teleport 9
+wait 2.5
+capture /tmp/trailforge_tex_03_village.png
+wait 0.3
+teleport 3
+wait 2.5
+capture /tmp/trailforge_tex_04_quarry.png
+wait 0.3
+teleport 11
+wait 2.5
+capture /tmp/trailforge_tex_05_beach.png
+wait 0.3
+teleport 1
+wait 2.5
+capture /tmp/trailforge_tex_06_peaks.png
+wait 0.3
+camera -560 45 290 -510 0 380
+wait 1.0
+capture /tmp/trailforge_tex_07_meadow.png
+wait 0.3
+camera 0 400 900 0 60 -200
+wait 1.5
+capture /tmp/trailforge_tex_08_overview.png
+wait 0.3
+camera follow
+
+# ---------------------------------------------------------------- a drive: no texture loads, no stalls
+place -300 443 88
+wait 1.5
+mark terrain_tex_loads
+pedal throttle 0.5
+until tile_x == 3 25
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect d_terrain_tex_loads == 0
+expect tile_stall_ms < 30
+
+# ---------------------------------------------------------------- presets, Off, frame times (village, follow camera)
+teleport 9
+wait 2.0
+quality Low
+wait 2.0
+expect terrain_tex == 512
+expect terrain_tex_nra == 512
+perf_begin low_tex
+wait 4
+perf_end
+set terrain_tex 0
+wait 1.5
+expect terrain_tex == 0
+perf_begin low_proc
+wait 4
+perf_end
+quality Medium
+wait 2.0
+expect terrain_tex == 1024
+expect terrain_tex_nra == 1024
+perf_begin med_tex
+wait 4
+perf_end
+set terrain_tex 0
+wait 1.5
+perf_begin med_proc
+wait 4
+perf_end
+quality High
+wait 2.0
+expect terrain_tex == 2048
+perf_begin high_tex
+wait 4
+perf_end
+set terrain_tex 0
+wait 1.5
+perf_begin high_proc
+wait 4
+perf_end
+quality Ultra
+wait 2.0
+expect terrain_tex == 4096
+expect terrain_tex_nra == 2048
+expect terrain_tex_mb > 160
+expect terrain_tex_ms < 800
+perf_begin ultra_tex
+wait 4
+perf_end
+capture /tmp/trailforge_tex_09_village_ultra.png
+wait 0.3
+set terrain_tex 0
+wait 1.5
+perf_begin ultra_proc
+wait 4
+perf_end
+quality High
+wait 2.0
+expect terrain_tex == 2048

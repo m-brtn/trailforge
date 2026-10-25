@@ -834,6 +834,238 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
 }
 #endif
 
+// ---------------------------------------------------------------- level terrain (textured)
+// Six CC0 material layers (assets/textures/terrain, src/core/TerrainTextureSet.h order) in two BC7 texture arrays:
+// albedo (sRGB) + height in alpha, and normal x / y (DirectX convention) + roughness + AO. Layers are blended by
+// the baked splat and the ground mask, sharpened by their heights. Without the textures (repository without
+// `git lfs pull`) the procedural terrainMaterial is used.
+
+#if defined(TF_ENTRY_terrain_fs)
+Texture2DArray<float> shadowMap : TEX(0);
+SamplerComparisonState shadowSampler : SMP(0);
+Texture2D<float4> noiseTex : TEX(1);
+SamplerState noiseSampler : SMP(1);
+Texture2D<float4> mask : TEX(2);
+SamplerState maskSampler : SMP(2);
+Texture2DArray<float4> layerAlbedo : TEX(3);
+SamplerState layerAlbedoSampler : SMP(3);
+Texture2DArray<float4> layerNra : TEX(4);
+SamplerState layerNraSampler : SMP(4);
+
+// Must match TerrainTextureUniforms in src/render/Renderer.h.
+struct TerrainTextureUniforms {
+    float4 invTile[2]; // 1 / repeat size (m): grass, soil, road, rock | sand, snow
+    float4 tint[6];    // rgb albedo multiplier per layer
+    float4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength
+};
+ConstantBuffer<TerrainTextureUniforms> tt : UBO(1);
+
+static const int LAYER_GRASS = 0;
+static const int LAYER_SOIL = 1;
+static const int LAYER_ROAD = 2;
+static const int LAYER_ROCK = 3;
+static const int LAYER_SAND = 4;
+static const int LAYER_SNOW = 5;
+
+struct LayerSample {
+    float3 albedo;
+    float height;
+    float3 dn; // world-space normal offset (added to the geometric normal)
+    float rough;
+    float ao;
+};
+
+float layerInvTile(int i) { return i < 4 ? tt.invTile[0][i] : tt.invTile[1][i - 4]; }
+
+// One planar projection: uv in repeats, u / v the world directions of the texture axes. far: 0..1 from ~15 m,
+// fade: 0..1 from ~60 m to ~250 m, where the layer turns into its mean (the 1x1 mip): seen from hundreds of
+// meters the repeats of a 2.5 m tile line up into a regular pattern even in the small mips.
+LayerSample sampleProjection(int layer, float2 uv, float3 u, float3 v, float far, float fade) {
+    LayerSample r;
+    const float3 at = float3(uv, float(layer));
+    float4 a;
+    float4 n;
+    if (fade >= 1.0) {
+        a = layerAlbedo.SampleLevel(layerAlbedoSampler, at, 16.0);
+        n = layerNra.SampleLevel(layerNraSampler, at, 16.0);
+    } else {
+        a = layerAlbedo.Sample(layerAlbedoSampler, at);
+        // Beyond ~15 m a second, rotated sample at 0.29 x the frequency breaks up the repeats (near the camera
+        // only a few repeats are in view).
+        if (far > 0.0) {
+            const float2 uv2 = float2(uv.x * 0.81 - uv.y * 0.59, uv.x * 0.59 + uv.y * 0.81) * 0.29 + 0.37;
+            a = lerp(a, layerAlbedo.Sample(layerAlbedoSampler, float3(uv2, float(layer))), 0.55 * far);
+        }
+        n = layerNra.Sample(layerNraSampler, at);
+        if (fade > 0.0) {
+            a = lerp(a, layerAlbedo.SampleLevel(layerAlbedoSampler, at, 16.0), fade);
+            n = lerp(n, layerNra.SampleLevel(layerNraSampler, at, 16.0), fade);
+        }
+    }
+    r.albedo = a.rgb * tt.tint[layer].rgb;
+    r.height = lerp(a.a, 0.5, fade); // mean heights differ per layer and would tip the far blend
+    const float2 nxy = n.rg * 2.0 - 1.0;
+    r.dn = (u * nxy.x + v * nxy.y) * tt.params.y; // DirectX normal map: +y points along +v (down the image)
+    r.rough = n.b;
+    r.ao = n.a;
+    return r;
+}
+
+// Ground layers: top-down projection (x -> u, z -> v).
+LayerSample sampleLayer(int layer, float3 P, float far, float fade) {
+    return sampleProjection(layer, P.xz * layerInvTile(layer), float3(1, 0, 0), float3(0, 0, 1), far, fade);
+}
+
+// Rock: triplanar on steep faces (projections with a negligible weight are skipped).
+LayerSample sampleRock(float3 P, float3 N, float far, float fade) {
+    float3 w = pow(abs(N), 4.0);
+    w /= w.x + w.y + w.z;
+    const float k = layerInvTile(LAYER_ROCK);
+    LayerSample r;
+    r.albedo = ((float3)(0.0));
+    r.height = 0.0;
+    r.dn = ((float3)(0.0));
+    r.rough = 0.0;
+    r.ao = 0.0;
+    if (w.y > 0.02) {
+        const LayerSample s = sampleProjection(LAYER_ROCK, P.xz * k, float3(1, 0, 0), float3(0, 0, 1), far, fade);
+        r.albedo += s.albedo * w.y; r.height += s.height * w.y; r.dn += s.dn * w.y; r.rough += s.rough * w.y; r.ao += s.ao * w.y;
+    }
+    if (w.x > 0.02) {
+        const LayerSample s = sampleProjection(LAYER_ROCK, float2(P.z, -P.y) * k, float3(0, 0, 1), float3(0, -1, 0), far, fade);
+        r.albedo += s.albedo * w.x; r.height += s.height * w.x; r.dn += s.dn * w.x; r.rough += s.rough * w.x; r.ao += s.ao * w.x;
+    }
+    if (w.z > 0.02) {
+        const LayerSample s = sampleProjection(LAYER_ROCK, float2(P.x, -P.y) * k, float3(1, 0, 0), float3(0, -1, 0), far, fade);
+        r.albedo += s.albedo * w.z; r.height += s.height * w.z; r.dn += s.dn * w.z; r.rough += s.rough * w.z; r.ao += s.ao * w.z;
+    }
+    const float sum = (w.y > 0.02 ? w.y : 0.0) + (w.x > 0.02 ? w.x : 0.0) + (w.z > 0.02 ? w.z : 0.0);
+    const float inv = 1.0 / max(sum, 1e-4);
+    r.albedo *= inv; r.height *= inv; r.dn *= inv; r.rough *= inv; r.ao *= inv;
+    return r;
+}
+
+// Blend factor of a layer of weight w over the current surface: the higher one wins near w = 0.5, and the
+// result is exactly 0 at w = 0 and 1 at w = 1 (heights are 0..1).
+float heightBlend(float w, float hLayer, float hBase) {
+    return saturate((w * 2.0 - 1.0 + (hLayer - hBase) * 0.8) * 4.0 + 0.5);
+}
+
+void blendLayer(inout LayerSample g, LayerSample l, float t) {
+    g.albedo = lerp(g.albedo, l.albedo, t);
+    g.height = lerp(g.height, l.height, t);
+    g.dn = lerp(g.dn, l.dn, t);
+    g.rough = lerp(g.rough, l.rough, t);
+    g.ao = lerp(g.ao, l.ao, t);
+}
+
+float4 terrain_fs(LitOut vin) : SV_Target0 {
+    float3 N = normalize(vin.normal);
+    const float3 V = normalize(f.cameraPos.xyz - vin.worldPos);
+    const float3 P = vin.worldPos;
+    const float4 m = sampleMask(mask, maskSampler, P.xz);
+    const float far = grassFar(P);
+
+    ShadeInput s;
+    s.metallic = 0.0;
+    s.emissive = ((float3)(0.0));
+    s.clearCoat = 0.0;
+    s.specOcclusion = 0.75;
+    s.ao = vehicleAO(P);
+    if (tt.params.x < 0.5) {
+        const GroundSurface g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, far);
+        s.albedo = g.albedo;
+        s.roughness = g.roughness;
+        N = perturbNormal(N, P, g.height * 0.035, g.bump);
+    } else {
+        const float dist = length(P - f.cameraPos.xyz);
+        const float farTex = smoothstep(15.0, 120.0, dist);
+        const float fadeTex = smoothstep(60.0, 250.0, dist);
+        const float2 nz = noiseTex.Sample(noiseSampler, P.xz * 0.13).rg;
+        const float slope = sqrt(max(1.0 - N.y * N.y, 0.0)) / max(N.y, 0.1);
+        const GrassZones zones = grassZones(noiseTex, noiseSampler, P.xz, m.r, slope);
+        // The sparse spots of the patch noise repeat every ~11.5 m; with the light soil texture under them they
+        // read as a regular grid from far away, so they fade out with distance.
+        const float grass = saturate(m.r * lerp(zones.patch, 1.0, fadeTex) * 1.2);
+        const float road = saturate(vin.localNormal.x * 1.3 - 0.15 + (nz.r - 0.5) * 0.35) * step(0.01, vin.localNormal.x);
+        const float3 w = vin.color;
+        const float rock = saturate((w.x - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, w.x);
+        const float sand = saturate((w.y - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, w.y);
+        const float snow = saturate((w.z - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, w.z);
+
+        // Full grass hides the soil whatever the heights (heightBlend(1, ...) == 1), so the soil is not sampled.
+        LayerSample g;
+        if (grass >= 1.0) {
+            g = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+        } else {
+            g = sampleLayer(LAYER_SOIL, P, farTex, fadeTex);
+            if (grass > 0.001) {
+                const LayerSample l = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+                blendLayer(g, l, heightBlend(grass, l.height, g.height));
+            }
+        }
+        if (road > 0.001) {
+            const LayerSample l = sampleLayer(LAYER_ROAD, P, farTex, fadeTex);
+            blendLayer(g, l, heightBlend(road, l.height, g.height));
+        }
+        if (sand > 0.001) {
+            const LayerSample l = sampleLayer(LAYER_SAND, P, farTex, fadeTex);
+            blendLayer(g, l, heightBlend(sand, l.height, g.height));
+        }
+        if (rock > 0.001) {
+            const LayerSample l = sampleRock(P, N, farTex, fadeTex);
+            blendLayer(g, l, heightBlend(rock, l.height, g.height));
+        }
+        if (snow > 0.001) {
+            const LayerSample l = sampleLayer(LAYER_SNOW, P, farTex, fadeTex);
+            blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
+        }
+        // Large-scale tone variation so the repeats do not line up over hundreds of meters.
+        const float macro = noiseTex.Sample(noiseSampler, P.xz * 0.011).r;
+        float3 albedo = g.albedo * (0.86 + 0.28 * macro);
+        float rough = g.rough;
+        float flat = 1.0;
+
+        // Mud near water (mask G, smooth, edges broken up by noise): dark, wet and smoother.
+        const float mudBlend = smoothstep(0.30, 0.55, m.g + (nz.g - 0.5) * 0.30);
+        if (mudBlend > 0.0) {
+            const float wetN = smoothstep(0.45, 0.65, nz.r * 0.7 + macro * 0.3);
+            const float wet = saturate(wetN * 0.8 + m.b * 0.5);
+            const float3 mudAlb = lerp(float3(0.125, 0.078, 0.042), float3(0.045, 0.029, 0.016), wet) *
+                                  (0.8 + 0.4 * g.height);
+            albedo = lerp(albedo, mudAlb, mudBlend);
+            rough = lerp(rough, lerp(0.85, 0.40, wet), mudBlend);
+            flat = lerp(1.0, 0.5, mudBlend * wet);
+        }
+        // Sown wheat: light tilled soil with straw between the rows.
+        albedo = lerp(albedo, lerp(albedo * 1.15, float3(0.20, 0.155, 0.075), 0.45 + 0.3 * nz.g), m.a);
+        // Far from the camera the ground under the grass takes the blade canopy colour (the blades thin out).
+        albedo = lerp(albedo, grassCanopyAlbedo(zones, m.a), max(grass * (1.0 - max(road, max(rock, snow))), m.a) * far);
+        // Wet ground near the water (dark, glossy, flatter).
+        const float wetG = m.b * lerp(1.0, 0.5, rock);
+        albedo *= lerp(1.0, 0.6, wetG);
+        rough = lerp(rough, 0.38, wetG * 0.8);
+        flat *= 1.0 - 0.5 * wetG;
+
+        s.albedo = albedo;
+        s.roughness = rough;
+        s.ao *= lerp(1.0, g.ao, 0.8);
+        N = normalize(N + g.dn * flat);
+    }
+    if (f.options.x > 0.0) {
+        const float2 cell = abs(frac(P.xz) - 0.5);
+        s.albedo *= 1.0 - f.options.x * smoothstep(0.47, 0.5, max(cell.x, cell.y));
+    }
+    s.N = N;
+    s.V = V;
+    s.lamp = headlightIrradiance(P, N);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal));
+    float3 color = shade(s);
+    color = applyFog(color, P, f.cameraPos.xyz);
+    return float4(color, 1.0);
+}
+#endif
+
 // ---------------------------------------------------------------- shadow pass (depth only)
 
 struct ShadowUniforms {

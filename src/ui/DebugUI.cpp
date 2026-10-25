@@ -278,6 +278,13 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         edited |= ImGui::SliderInt("Spray particles", &s.sprayMax, 0, 8192);
         ImGui::SameLine();
         edited |= ImGui::Checkbox("Dust", &s.sprayDust);
+        const int ts = s.terrainTextureSize;
+        int texIdx = ts >= 4096 ? 4 : ts >= 2048 ? 3 : ts >= 1024 ? 2 : ts > 0 ? 1 : 0;
+        const char* texSizes[] = {"Off (procedural)", "512", "1024", "2048", "4096"};
+        if (ImGui::Combo("Level ground textures", &texIdx, texSizes, 5)) {
+            s.terrainTextureSize = texIdx == 0 ? 0 : 256 << texIdx;
+            edited = true;
+        }
     }
     if (ImGui::CollapsingHeader("Look", ImGuiTreeNodeFlags_DefaultOpen)) {
         drawTimeOfDay(gfx);

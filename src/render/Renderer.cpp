@@ -1,5 +1,6 @@
 #include "render/Renderer.h"
 
+#include "core/TerrainTextureSet.h"
 #include "render/GroundMaps.h"
 #include "render/ShaderBlobs.h"
 #include "render/TimeOfDay.h"
@@ -197,7 +198,8 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         si.max_anisotropy = 8.0f;
         si.max_lod = 16.0f;
         m_repeatSampler = SDL_CreateGPUSampler(m_device, &si);
-        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler) fail("samplers");
+        m_terrainSampler = SDL_CreateGPUSampler(m_device, &si);
+        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler) fail("samplers");
     }
 
     // Grass chunk storage buffer.
@@ -226,6 +228,12 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         uploadTexture(m_height.tex, &h, 1, 1, 4);
         m_trample = makeTexture(1, 1, kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
         clearTrample();
+        m_terrainAlbedo = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                                      SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
+        m_terrainNra = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                                   SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
+        uploadTexture(m_terrainAlbedo.tex, px, 1, 1, 4);
+        uploadTexture(m_terrainNra.tex, px, 1, 1, 4);
     }
 
     m_settings = presetSettings(QualityPreset::High);
@@ -249,6 +257,8 @@ Renderer::~Renderer() {
     m_terrainPatch.release();
     releaseTexture(m_terrainHeight);
     releaseTexture(m_terrainSplat);
+    releaseTexture(m_terrainAlbedo);
+    releaseTexture(m_terrainNra);
     if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
     if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
     if (m_sprayBuffer) SDL_ReleaseGPUBuffer(m_device, m_sprayBuffer);
@@ -259,7 +269,7 @@ Renderer::~Renderer() {
     releaseTexture(m_noise);
     releaseTexture(m_mask);
     releaseTexture(m_height);
-    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler})
+    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler})
         if (s) SDL_ReleaseGPUSampler(m_device, s);
     if (m_grassBuffer) SDL_ReleaseGPUBuffer(m_device, m_grassBuffer);
     if (m_grassTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_grassTransfer);
@@ -489,7 +499,7 @@ void Renderer::createScenePipelines() {
     m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, sc, true, true,
                                 SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     // Skirts hang down from both sides of a chunk edge, so the terrain is drawn without culling.
-    m_terrainPipe = createPipeline("terrain_vs", "lit_fs", 2, 1, 2, 3, 0, kLayoutLit, kHdrFormat, sc, true, true,
+    m_terrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, sc, true, true,
                                    SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_sceneMsaa = m_settings.msaa;
 }
@@ -1176,8 +1186,135 @@ std::uint32_t Renderer::cullGrass(const FrameDesc& frame, const glm::mat4& viewP
 
 // ---------------------------------------------------------------- frame
 
+void Renderer::updateTerrainTextures() {
+    // Wanted size: 0 without a terrain or with the textures off (placeholders, procedural ground).
+    const int wanted = m_terrainSamples > 0 && m_settings.terrainTextureSize > 0
+                           ? std::clamp(m_settings.terrainTextureSize, 512, 4096)
+                           : 0;
+    if (wanted == m_terrainTexWanted) return;
+    m_terrainTexWanted = wanted;
+    const Uint64 start = SDL_GetPerformanceCounter();
+    const auto placeholders = [&] {
+        releaseTexture(m_terrainAlbedo);
+        releaseTexture(m_terrainNra);
+        const std::uint8_t px[4] = {128, 128, 128, 255};
+        for (Texture* t : {&m_terrainAlbedo, &m_terrainNra}) {
+            *t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                             SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
+            uploadTexture(t->tex, px, 1, 1, 4);
+        }
+        m_terrainTexUniforms.params.x = 0.0f;
+        m_stats.terrainTexAlbedo = m_stats.terrainTexNra = 0;
+        m_stats.terrainTexBytes = 0;
+    };
+    if (wanted == 0) {
+        if (m_stats.terrainTexAlbedo != 0) placeholders();
+        return;
+    }
+
+    constexpr auto kAlbedoFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB;
+    constexpr auto kNraFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM;
+    constexpr int kLayers = TerrainTextureSet::kLayers;
+    TerrainTextureSet set;
+    std::string error = "no texture folder";
+    std::array<ktx2::Image, kLayers> albedo, nra;
+    bool ok = !m_terrainTexDir.empty() && loadTerrainTextureSet(m_terrainTexDir, set, error);
+    if (ok && !(SDL_GPUTextureSupportsFormat(m_device, kAlbedoFmt, SDL_GPU_TEXTURETYPE_2D_ARRAY,
+                                             SDL_GPU_TEXTUREUSAGE_SAMPLER) &&
+                SDL_GPUTextureSupportsFormat(m_device, kNraFmt, SDL_GPU_TEXTURETYPE_2D_ARRAY,
+                                             SDL_GPU_TEXTUREUSAGE_SAMPLER))) {
+        ok = false;
+        error = "BC7 textures are not supported by this GPU";
+    }
+    const std::uint32_t skipA = ok ? terrainTextureSkip(set.albedoSize, std::uint32_t(wanted)) : 0;
+    const std::uint32_t skipN = ok ? terrainTextureSkip(set.nraSize, std::uint32_t(std::min(wanted, 2048))) : 0;
+    for (int i = 0; ok && i < kLayers; ++i) {
+        const TerrainTextureSet::Layer& l = set.layers[std::size_t(i)];
+        ok = loadTerrainTextureMap(l.albedoPath, true, skipA, albedo[std::size_t(i)], error) &&
+             loadTerrainTextureMap(l.nraPath, false, skipN, nra[std::size_t(i)], error);
+        if (ok && (albedo[std::size_t(i)].width != albedo[0].width || nra[std::size_t(i)].width != nra[0].width ||
+                   albedo[std::size_t(i)].levels.size() != albedo[0].levels.size() ||
+                   nra[std::size_t(i)].levels.size() != nra[0].levels.size())) {
+            ok = false;
+            error = "layer '" + l.id + "' differs in size from the first layer";
+        }
+    }
+    if (!ok) {
+        SDL_Log("TrailForge: terrain textures unavailable (%s); procedural ground", error.c_str());
+        placeholders();
+        return;
+    }
+
+    // One upload per layer: all mip levels of that layer in one transfer buffer.
+    std::uint64_t bytes = 0;
+    const auto build = [&](const std::array<ktx2::Image, kLayers>& images, SDL_GPUTextureFormat fmt, Texture& dst) {
+        releaseTexture(dst);
+        const ktx2::Image& first = images[0];
+        dst = makeTexture(first.width, first.height, fmt, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1,
+                          kLayers, std::uint32_t(first.levels.size()), SDL_GPU_TEXTURETYPE_2D_ARRAY);
+        for (int layer = 0; layer < kLayers; ++layer) {
+            const ktx2::Image& img = images[std::size_t(layer)];
+            std::size_t total = 0;
+            for (const ktx2::Level& lv : img.levels) total += lv.data.size();
+            SDL_GPUTransferBufferCreateInfo ti{};
+            ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+            ti.size = std::uint32_t(total);
+            SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
+            if (!tb) fail("terrain texture transfer buffer");
+            auto* mapped = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, tb, false));
+            std::size_t offset = 0;
+            for (const ktx2::Level& lv : img.levels) {
+                std::memcpy(mapped + offset, lv.data.data(), lv.data.size());
+                offset += lv.data.size();
+            }
+            SDL_UnmapGPUTransferBuffer(m_device, tb);
+            SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            offset = 0;
+            for (std::size_t level = 0; level < img.levels.size(); ++level) {
+                const ktx2::Level& lv = img.levels[level];
+                SDL_GPUTextureTransferInfo src{};
+                src.transfer_buffer = tb;
+                src.offset = std::uint32_t(offset);
+                SDL_GPUTextureRegion region{};
+                region.texture = dst.tex;
+                region.mip_level = std::uint32_t(level);
+                region.layer = std::uint32_t(layer);
+                region.w = lv.width;
+                region.h = lv.height;
+                region.d = 1;
+                SDL_UploadToGPUTexture(copy, &src, &region, false);
+                offset += lv.data.size();
+            }
+            SDL_EndGPUCopyPass(copy);
+            SDL_SubmitGPUCommandBuffer(cmd);
+            SDL_ReleaseGPUTransferBuffer(m_device, tb);
+            bytes += total;
+        }
+    };
+    build(albedo, kAlbedoFmt, m_terrainAlbedo);
+    build(nra, kNraFmt, m_terrainNra);
+
+    for (int i = 0; i < kLayers; ++i) {
+        const TerrainTextureSet::Layer& l = set.layers[std::size_t(i)];
+        m_terrainTexUniforms.invTile[i / 4][i % 4] = 1.0f / l.tile;
+        m_terrainTexUniforms.tint[i] = glm::vec4(l.tint[0], l.tint[1], l.tint[2], 0.0f);
+    }
+    m_terrainTexUniforms.params = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+    m_stats.terrainTexAlbedo = int(albedo[0].width);
+    m_stats.terrainTexNra = int(nra[0].width);
+    m_stats.terrainTexBytes = bytes;
+    m_stats.terrainTexLoadMs = 1000.0 * double(SDL_GetPerformanceCounter() - start) / double(SDL_GetPerformanceFrequency());
+    ++m_stats.terrainTexLoads;
+    SDL_Log("TrailForge: terrain textures %d layers, albedo %u / normal %u texels (BC7, %zu / %zu levels), %.1f MB, "
+            "%.0f ms",
+            kLayers, albedo[0].width, nra[0].width, albedo[0].levels.size(), nra[0].levels.size(), double(bytes) / 1e6,
+            m_stats.terrainTexLoadMs);
+}
+
 bool Renderer::drawFrame(const FrameDesc& frame) {
     pollGpuTiming();
+    updateTerrainTextures();
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
     if (!cmd) fail("SDL_AcquireGPUCommandBuffer");
 
@@ -1594,7 +1731,11 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_terrainPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_PushGPUFragmentUniformData(cmd, 1, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
+            const SDL_GPUTextureSamplerBinding terrainTex[5] = {litTex[0], litTex[1], litTex[2],
+                                                                {m_terrainAlbedo.tex, m_terrainSampler},
+                                                                {m_terrainNra.tex, m_terrainSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, terrainTex, 5);
             m_stats.drawCalls += drawTerrain(pass, m_terrainScratch, 2, nullptr);
         }
 

@@ -158,6 +158,13 @@ Application::Application(const AppOptions& options)
     m_renderer = std::make_unique<Renderer>(m_window.get(), debugDevice);
     m_imgui = std::make_unique<ImGuiContextGuard>(m_window.get(), *m_renderer);
     m_menu.load(*m_renderer, assetDirs("fonts"), assetDirs("images"));
+    for (const std::string& dir : assetDirs("textures")) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dir + "/terrain/terrain.json", ec)) continue;
+        m_renderer->setTerrainTextureDir(dir + "/terrain");
+        std::printf("Textures: terrain materials from %s/terrain\n", dir.c_str());
+        break;
+    }
     m_ui.visible = options.startWithUi;
 
     const Uint64 t0 = SDL_GetPerformanceCounter();
@@ -1725,6 +1732,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "fog") s.fogDensity = v;
         else if (k == "tree_dist") s.treeDistance = v;
         else if (k == "terrain_detail") s.terrainDetail = v;
+        else if (k == "terrain_tex") s.terrainTextureSize = int(v);
         else {
             render = false;
             // Look-only settings: they do not turn the quality preset into Custom.
@@ -2091,6 +2099,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "recoveries") return m_sim.recoveries();
     if (n == "terrain_chunks") return m_renderer->stats().terrainChunks;
     if (n == "terrain_tris") return double(m_renderer->stats().terrainTriangles);
+    if (n == "terrain_tex") return m_renderer->stats().terrainTexAlbedo;
+    if (n == "terrain_tex_nra") return m_renderer->stats().terrainTexNra;
+    if (n == "terrain_tex_mb") return double(m_renderer->stats().terrainTexBytes) / 1e6;
+    if (n == "terrain_tex_ms") return m_renderer->stats().terrainTexLoadMs;
+    if (n == "terrain_tex_loads") return m_renderer->stats().terrainTexLoads;
     if (const TerrainTiles* tt = m_sim.terrain()) {
         const TerrainStreamingStats& st = tt->stats();
         if (n == "tiles_loaded") return st.loaded;
