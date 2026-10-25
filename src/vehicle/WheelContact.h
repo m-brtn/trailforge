@@ -4,6 +4,7 @@
 
 #include <Jolt/Jolt.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace tf {
@@ -32,6 +33,13 @@ struct WheelContactSample {
     float slipSpeed() const {
         return std::sqrt(longitudinalSlipSpeed * longitudinalSlipSpeed + lateralSlipSpeed * lateralSlipSpeed);
     }
+    // Slip ratios shared by the rubber marks (TireMarks) and the squeal gate (VehicleAudioFeed / squealSlip):
+    // sliding speed over max(patch speed, rolling speed, 1 m/s); 1 for a locked wheel or one spinning in place.
+    float slipReference() const {
+        return std::max({velocity.Length(), std::abs(rollingSpeed), 1.0f});
+    }
+    float longSlipRatio() const { return std::abs(longitudinalSlipSpeed) / slipReference(); }
+    float latSlipRatio() const { return std::abs(lateralSlipSpeed) / slipReference(); }
 };
 
 } // namespace tf

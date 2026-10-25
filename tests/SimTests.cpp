@@ -761,7 +761,7 @@ void suvMarksKeyboard() {
     report("SUV full brake at 50 km/h:", full);
 
     CHECK(rolling.marks.maxSlip < 0.05f, "SUV rolling left rubber: %.2f", rolling.marks.maxSlip);
-    CHECK(instant.maxSlip > 2.0f && instant.marks.maxSlip > 0.3f,
+    CHECK(instant.maxSlip > 2.0f && instant.marks.maxSlip > 0.05f,
           "instant full throttle no longer spins the 2H rears (%.2f m/s, mark %.2f): update KeyboardPedals' notes",
           instant.maxSlip, instant.marks.maxSlip);
     CHECK(keyW.maxPedal > 0.99f && keyW.maxSlip < 1.5f && keyW.marks.maxSlip < 0.05f,
@@ -774,6 +774,104 @@ void suvMarksKeyboard() {
           "keyboard brake hold: pedal %.2f, stop %.2f s vs %.2f s", keyHold.maxPedal, keyHold.stop, full.stop);
     CHECK(full.marks.segments >= 20 && full.marks.maxSlip > 0.5f, "SUV lock-up marks: %d segments, %.2f",
           full.marks.segments, full.marks.maxSlip);
+}
+
+// Launch rubber follows how much and how long the tire spins (shipped SUV, flat concrete): normal pull-aways leave
+// none, a full-pedal 2H launch (~2 s of spin at < 5 m/s) a faint, narrow mark, 4H none; a stationary burnout
+// (brake 0.6 + full throttle, rears at ~10 m/s) builds up from light and narrow after 2 s to dark and full width
+// after 5 s. Burnout stamps are composited per spot like the shader (cover = 1 - prod(1 - 1.1 x slip)).
+void launchMarksProportional() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    CHECK(loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json", def, errors),
+          "SUV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    SimulationSettings st = settingsFor(TrackLayout::Flat);
+    st.vehicle = def.config;
+    Simulation sim(st);
+    const float tireWidth = def.config.axles[kRearAxle].wheelWidth;
+    struct Result {
+        float maxSlip = 0.0f, ribbonMax = 0.0f, ribbonWidth = 0.0f, spotCover = 0.0f, spotWidth = 0.0f;
+        double ribbonLength = 0.0;
+    };
+    auto drive = [&](TransferMode mode, float throttle, float brake, double seconds, bool keyboard) {
+        sim.requestReset();
+        run(sim, 1.0);
+        sim.requestTransfer(mode);
+        run(sim, 0.2);
+        sim.tireMarks().clear();
+        KeyboardPedals pedals;
+        Result r;
+        for (int i = 0; i < int(std::lround(seconds / sim.fixedStep())); ++i) {
+            pedals.update(keyboard, false, float(sim.fixedStep()));
+            run(sim, sim.fixedStep(), {.throttle = keyboard ? pedals.throttle() : throttle, .brake = brake});
+            for (const WheelContactSample& c : sim.vehicle().contacts())
+                if (c.contact) r.maxSlip = std::max(r.maxSlip, c.longitudinalSlipSpeed);
+        }
+        const TireMarks& m = sim.tireMarks();
+        struct Spot {
+            float x, z, keep, width;
+        };
+        std::vector<Spot> spots;
+        double widthSum = 0.0;
+        for (std::size_t i = 0; i < m.size(); ++i) {
+            const TireMarkSegment& s = m.oldest(i);
+            const float slip = 0.5f * (s.slip0 + s.slip1);
+            const float w = 2.0f * std::sqrt(s.side1[0] * s.side1[0] + s.side1[1] * s.side1[1] + s.side1[2] * s.side1[2]);
+            if (s.u0 == 0.0f && s.u1 == 0.25f) { // burnout stamp
+                const float x = 0.5f * (s.p0[0] + s.p1[0]), z = 0.5f * (s.p0[2] + s.p1[2]);
+                Spot* spot = nullptr;
+                for (Spot& q : spots)
+                    if (std::hypot(q.x - x, q.z - z) < 0.3f) spot = &q;
+                if (!spot) spot = &spots.emplace_back(Spot{x, z, 1.0f, 0.0f});
+                spot->keep *= 1.0f - std::min(1.0f, 1.1f * slip);
+                spot->width = std::max(spot->width, w);
+                continue;
+            }
+            if (slip < 0.02f) continue;
+            const float dx = s.p1[0] - s.p0[0], dz = s.p1[2] - s.p0[2];
+            const double l = std::sqrt(dx * dx + dz * dz);
+            r.ribbonLength += l;
+            widthSum += w * l;
+            r.ribbonMax = std::max(r.ribbonMax, slip);
+        }
+        if (r.ribbonLength > 0.0) r.ribbonWidth = float(widthSum / r.ribbonLength);
+        for (const Spot& q : spots)
+            if (1.0f - q.keep > r.spotCover) r.spotCover = 1.0f - q.keep, r.spotWidth = q.width;
+        return r;
+    };
+    auto print = [](const char* what, const Result& r) {
+        std::printf("    %-24s spin peak %5.2f m/s | ribbon %5.1f m, max %.2f, width %.2f m | burnout spot cover %.2f, "
+                    "width %.2f m\n",
+                    what, r.maxSlip, r.ribbonLength, r.ribbonMax, r.ribbonWidth, r.spotCover, r.spotWidth);
+    };
+    const Result gentle = drive(TransferMode::TwoHigh, 0.3f, 0.0f, 5.0, false);
+    const Result key = drive(TransferMode::TwoHigh, 0.0f, 0.0f, 5.0, true);
+    const Result hard = drive(TransferMode::TwoHigh, 0.7f, 0.0f, 5.0, false);
+    const Result full = drive(TransferMode::TwoHigh, 1.0f, 0.0f, 5.0, false);
+    const Result full4 = drive(TransferMode::FourHigh, 1.0f, 0.0f, 5.0, false);
+    const Result burn2 = drive(TransferMode::TwoHigh, 1.0f, 0.6f, 2.0, false);
+    const Result burn5 = drive(TransferMode::TwoHigh, 1.0f, 0.6f, 5.0, false);
+    print("2H gentle 0.3", gentle);
+    print("2H keyboard W", key);
+    print("2H hard 0.7", hard);
+    print("2H full pedal", full);
+    print("4H full pedal", full4);
+    print("2H burnout 2 s", burn2);
+    print("2H burnout 5 s", burn5);
+    for (const Result* r : {&gentle, &key, &hard, &full4})
+        CHECK(r->ribbonMax < 0.05f && r->spotCover < 0.05f, "normal launch left rubber: %.2f / %.2f", r->ribbonMax,
+              r->spotCover);
+    CHECK(full.maxSlip > 3.0f, "the 2H full-pedal launch no longer spins (%.2f m/s): update the test", full.maxSlip);
+    CHECK(full.ribbonLength > 2.0 && full.ribbonMax > 0.05f && full.ribbonMax < 0.3f,
+          "2H full-pedal launch mark: %.1f m, max %.2f (want faint)", full.ribbonLength, full.ribbonMax);
+    CHECK(full.ribbonWidth < 0.6f * tireWidth, "2H full-pedal launch mark %.2f m wide (tire %.2f m, want narrow)",
+          full.ribbonWidth, tireWidth);
+    CHECK(burn5.maxSlip > 8.0f && burn5.spotCover > 0.85f && burn5.spotWidth > 0.9f * tireWidth,
+          "5 s burnout: spin %.2f m/s, cover %.2f, width %.2f m (want dark, full width)", burn5.maxSlip,
+          burn5.spotCover, burn5.spotWidth);
+    CHECK(burn2.spotCover < burn5.spotCover - 0.3f && burn2.spotWidth < 0.7f * tireWidth,
+          "2 s burnout cover %.2f width %.2f m vs 5 s %.2f (want lighter, narrower)", burn2.spotCover,
+          burn2.spotWidth, burn5.spotCover);
 }
 
 void skidMarkProfile() {
@@ -1381,6 +1479,7 @@ int main(int argc, char** argv) {
         {"surface_launch_grip", surfaceLaunchGrip},
         {"skid_mark_profile", skidMarkProfile},
         {"suv_marks_keyboard", suvMarksKeyboard},
+        {"launch_marks_proportional", launchMarksProportional},
         {"tire_marks_boundary", tireMarksBoundary},
         {"wheel_spray", wheelSpray},
         {"abs_prevents_lock", absPreventsLock},

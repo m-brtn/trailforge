@@ -61,6 +61,16 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id);
 // full-throttle full-lock launch spin at 7-10 m/s / 0.6-0.75, lock-up and handbrake reach 11-13 m/s at 1.0 (marks).
 float rubberSlide(const WheelContactSample& c);
 
+// The driven-wheelspin part of rubberSlide (the tread turns faster than the ground passes; lock-up and sideways
+// sliding excluded), 0..1. Ratios from WheelContactSample::longSlipRatio, as for the squeal gate.
+float wheelspinSlide(const WheelContactSample& c);
+
+// Rubber laid by wheelspin at a tread heat of `heat` (0..1, TireMarks::spinHeat), 0..1, and the share of the tire
+// width it covers. Wheelspin lays rubber only once the tread is hot: a brief or slow spin leaves a faint, narrow
+// streak, several seconds at a high sliding speed (a burnout) a dark mark of the full width.
+float spinLaydown(float heat);
+float spinLaydownWidth(float heat);
+
 // Sliding that lays rubber marks, 0..1: rubberSlide() plus a locked wheel down to ~1 m/s (a locked tire keeps
 // sliding until the stop, while the rubberSlide gate fades out below ~5 m/s).
 float markSlide(const WheelContactSample& c);
@@ -98,9 +108,10 @@ struct MarkIntensity {
     float slip = 0.0f;
     float halfWidth = 0.0f; // m
 };
-// `slide` is the (heat-limited) rubber slide of a hard-ground patch, < 0: markSlide(c) without build-up.
+// `slide` is the (heat-limited) rubber slide of a hard-ground patch, < 0: markSlide(c) without build-up;
+// `widthFactor` narrows the mark (wheelspin on a cool tread).
 MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, const TreadSoil& soil = {},
-                            float slide = -1.0f);
+                            float slide = -1.0f, float widthFactor = 1.0f);
 
 // Persistent tire marks: per-wheel ribbons written from the per-tick contact samples into a fixed ring buffer.
 // Visual only and independent of the renderer (runs headless; the renderer reads the ring).
@@ -126,6 +137,7 @@ public:
     const TireMarkSegment& oldest(std::size_t i) const { return m_ring[(firstIndex() + i) % m_ring.size()]; }
     const TreadSoil& soil(std::size_t wheel) const { return m_trails[std::min<std::size_t>(wheel, 3)].soil; }
     float patchHeat(std::size_t wheel) const { return m_trails[std::min<std::size_t>(wheel, 3)].heat; }
+    float spinHeat(std::size_t wheel) const { return m_trails[std::min<std::size_t>(wheel, 3)].spinHeat; }
     std::uint64_t written() const { return m_written; }       // total segments ever written
     std::uint64_t generation() const { return m_generation; } // changes on clear / capacity change
 
@@ -140,7 +152,11 @@ private:
         float accImprint = 0.0f, accSlip = 0.0f, accHalfWidth = 0.0f;
         int accCount = 0;
         SurfaceId surface = SurfaceId::Concrete; // of the current ribbon
-        float heat = 0.0f; // 0..1: rubber laid by the sliding patch builds up over ~0.35 s (patch heating)
+        float heat = 0.0f; // 0..1: lock-up / sideways rubber builds up over ~0.35 s of sliding (patch heating)
+        // 0..1: tread heat from wheelspin, rises with the sliding distance (spinning speed x time) and cools in
+        // a few seconds; drives spinLaydown.
+        float spinHeat = 0.0f;
+        float stampCover = 0.0f; // composited cover of the burnout stamps on the current spot
         TreadSoil soil;
     };
     void start(Trail& t, const WheelContactSample& c, const MarkIntensity& m, double time) const;
