@@ -19,6 +19,7 @@ namespace tf {
 
 struct GroundMaps;
 class TireMarks;
+class WheelSpray;
 
 // Uniform block layouts; must match the structs of the same name in shaders/scene.metal.
 struct FrameUniforms {
@@ -157,6 +158,7 @@ struct FrameDesc {
     // Persistent tire marks (render-only). The renderer keeps a GPU copy of the segment ring and uploads only the
     // segments written since the previous frame.
     const TireMarks* tireMarks = nullptr;
+    const WheelSpray* spray = nullptr;           // wheel spray particles (one instanced draw)
     double simTime = 0.0;                        // simulation time the segment birth times refer to (s)
     std::array<float, 7> markGain{1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
 };
@@ -173,6 +175,7 @@ struct RenderStats {
     bool reflectionRendered = false;
     std::uint32_t markSegments = 0;           // tire mark segments drawn (one instanced draw)
     std::uint32_t markUploadBytes = 0;        // tire mark bytes uploaded this frame
+    std::uint32_t sprayParticles = 0;         // wheel spray particles drawn
     bool trampleUpdated = false;              // grass trample mask re-rendered this frame
     double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
     double gpuMsAvg = 0.0;                    // exponential average
@@ -302,6 +305,7 @@ private:
     SDL_GPUGraphicsPipeline* m_lineOnTopPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_markPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_sprayPipe = nullptr;
 
     // Frame targets.
     std::uint32_t m_outW = 0, m_outH = 0;
@@ -334,6 +338,11 @@ private:
     SDL_GPUBuffer* m_treeBuffer = nullptr;
     SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
     std::uint32_t m_treeCapacity = 0; // instances
+
+    // Wheel spray: all live particles are uploaded every frame (at most kMaxSpray).
+    static constexpr std::uint32_t kMaxSpray = 8192;
+    SDL_GPUBuffer* m_sprayBuffer = nullptr;
+    SDL_GPUTransferBuffer* m_sprayTransfer = nullptr;
 
     // Tire marks: GPU copy of the simulation's segment ring (same capacity and indices).
     SDL_GPUBuffer* m_markBuffer = nullptr;

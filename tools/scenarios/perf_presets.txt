@@ -51,6 +51,44 @@ perf_begin ultra_overview
 wait 4
 perf_end
 camera follow
+# Wheel spray at the preset cap around the vehicle (synthetic fill, worst case: every particle on screen).
+quality Low
+wait 0.2
+set spray_clear 1
+set spray_fill 1
+wait 1.5
+expect spray_drawn == 600
+perf_begin low_spray
+wait 4
+perf_end
+quality Medium
+wait 0.2
+set spray_clear 1
+set spray_fill 1
+wait 1.5
+expect spray_drawn == 1500
+perf_begin med_spray
+wait 4
+perf_end
+quality High
+wait 0.2
+set spray_clear 1
+set spray_fill 1
+wait 1.5
+expect spray_drawn == 3000
+perf_begin high_spray
+wait 4
+perf_end
+quality Ultra
+wait 0.2
+set spray_clear 1
+set spray_fill 1
+wait 1.5
+expect spray_drawn == 6000
+perf_begin ultra_spray
+wait 4
+perf_end
+set spray_clear 1
 set vsync 1
 quality High
 wait 1.5

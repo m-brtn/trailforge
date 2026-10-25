@@ -58,6 +58,8 @@ struct GraphicsState {
     bool tireMarks = true;
     std::array<float, 7> markGain{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     bool fillMarks = false;      // request: fill the ring with synthetic segments (performance test at the cap)
+    bool spray = true;           // wheel spray particles (render-only)
+    std::size_t sprayLive = 0, sprayDrawn = 0;
 };
 
 // Audio panel state (owned by the application; settings go to the audio thread with the next frame).

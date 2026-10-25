@@ -150,8 +150,9 @@ float3 applyFog(constant FrameUniforms& f, float3 color, float3 worldPos, float3
     return mix(color, fog.rgb, fog.a);
 }
 
-// Cascaded shadow lookup. Returns 1 = lit.
-float shadowFactor(constant FrameUniforms& f, depth2d_array<float> sm, sampler cmp, float3 P, float3 N) {
+// Cascaded shadow lookup. Returns 1 = lit. maxFilter caps the filter (0: one tap, for large translucent particles).
+float shadowFactor(constant FrameUniforms& f, depth2d_array<float> sm, sampler cmp, float3 P, float3 N,
+                   int maxFilter = 2) {
     const int cascades = int(f.shadowParams.x);
     if (cascades <= 0) return 1.0;
     const float viewDepth = dot(P - f.cameraPos.xyz, f.cameraFwd.xyz);
@@ -167,7 +168,7 @@ float shadowFactor(constant FrameUniforms& f, depth2d_array<float> sm, sampler c
     uv.y = 1.0 - uv.y;
     const float z = sc.z;
     if (any(uv < 0.0) || any(uv > 1.0) || z > 1.0) return 1.0;
-    const int filter = int(f.shadowParams.z);
+    const int filter = min(int(f.shadowParams.z), maxFilter);
     float lit = 0.0;
     if (filter == 0) {
         lit = sm.sample_compare(cmp, uv, uint(c), z);
@@ -1227,6 +1228,125 @@ vertex MarkMaskOut mark_mask_vs(uint vid [[vertex_id]], uint iid [[instance_id]]
 fragment float4 mark_mask_fs(MarkMaskOut in [[stage_in]]) {
     const float edge = 1.0 - smoothstep(0.75, 1.0, abs(in.v));
     return float4(saturate(in.amount.x * 1.5) * edge, saturate(in.amount.y * 2.0) * edge, 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------- wheel spray (render-only particles)
+
+// Must match SprayInstance in src/sim/WheelSpray.h.
+struct SprayInstance {
+    float4 posSize; // xyz, radius (m)
+    float4 color;   // linear rgb, alpha
+    float4 velKind; // xyz velocity, w: kind (0 clod, 1 crumb, 2 dust, 3 grass, 4 water) + 0.5 when resting
+};
+
+struct SprayOut {
+    float4 position [[position]];
+    float3 worldPos;
+    float2 uv;            // -1..1 over the billboard
+    float4 color;
+    float3 axisA [[flat]]; // world axes of the billboard (A: along the motion)
+    float3 axisB [[flat]];
+    int kind [[flat]];
+    float seed [[flat]];
+    float3 dustBase [[flat]]; // dust only: lighting per puff (ambient + headlights, sunlight before shadow), fog
+    float3 dustSun [[flat]];
+    float4 dustFog [[flat]];
+};
+
+vertex SprayOut spray_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant FrameUniforms& f [[buffer(0)]],
+                         constant float4& info [[buffer(1)]], const device SprayInstance* ps [[buffer(2)]]) {
+    const SprayInstance p = ps[iid];
+    const float2 c = kMarkCorners[vid % 6] * float2(2.0, 1.0) - float2(1.0, 0.0);
+    const float3 P = p.posSize.xyz;
+    const float3 toCam = normalize(f.cameraPos.xyz - P);
+    float3 right = cross(float3(0, 1, 0), toCam);
+    right = length_squared(right) > 1e-6 ? normalize(right) : float3(1, 0, 0);
+    const float3 up = cross(toCam, right);
+    const int kind = int(p.velKind.w);
+    // Solid bits are stretched along their screen-plane velocity (about 1/80 s of travel), dust is not.
+    const float3 v = p.velKind.xyz - toCam * dot(p.velKind.xyz, toCam);
+    const float vl = length(v);
+    const bool stretch = kind != 2 && vl > 0.5;
+    const float3 a = stretch ? v / vl : right;
+    const float3 b = stretch ? normalize(cross(toCam, a)) : up;
+    const float r = p.posSize.w;
+    const float along = r + (stretch ? vl * 0.0125 : 0.0);
+    const float3 world = P + a * (c.x * along) + b * (c.y * r);
+    SprayOut out;
+    out.position = f.viewProj * float4(world, 1.0);
+    out.worldPos = world;
+    out.uv = c;
+    out.color = p.color;
+    out.axisA = a;
+    out.axisB = b;
+    out.kind = kind;
+    out.seed = fract(float(iid) * 0.6180339);
+    out.dustBase = float3(0.0);
+    out.dustSun = float3(0.0);
+    out.dustFog = float4(0.0);
+    if (kind == 2) {
+        // A puff is soft and small on screen: one lighting value per puff, normal half toward the sky.
+        const float3 N = normalize(float3(0, 0.6, 0) + toCam * 0.4);
+        const float3 albedo = p.color.rgb;
+        const float forward = pow(saturate(dot(-toCam, f.sunDir.xyz)), 4.0);
+        out.dustBase = albedo * (ambientLight(f, N.y) + headlightIrradiance(f, P, N) / PI);
+        out.dustSun = albedo * f.sunColor.rgb * (saturate(dot(N, f.sunDir.xyz)) / PI + 0.15 + 0.45 * forward);
+        out.dustFog = fogAt(f, P, f.cameraPos.xyz);
+    }
+    (void)info;
+    return out;
+}
+
+fragment float4 spray_fs(SprayOut in [[stage_in]], constant FrameUniforms& f [[buffer(0)]],
+                         depth2d_array<float> shadowMap [[texture(0)]], texture2d<float> noise [[texture(1)]],
+                         texture2d<float> mask [[texture(2)]], sampler shadowSampler [[sampler(0)]],
+                         sampler ns [[sampler(1)]], sampler maskSampler [[sampler(2)]]) {
+    const float3 P = in.worldPos;
+    const float3 V = normalize(f.cameraPos.xyz - P);
+    const float2 uv = in.uv;
+    const float r2 = dot(uv, uv);
+    const float n = noise.sample(ns, uv * 0.35 + in.seed * 7.31).a;
+    float alpha = in.color.a;
+    float3 N;
+    float rough = 0.9;
+    if (in.kind == 2) {
+        // Dust: soft, lumpy puff, lit per puff (vertex stage); only the shape and a one-tap shadow per pixel.
+        alpha *= exp(-2.6 * r2) * (0.55 + 0.9 * n);
+        if (alpha < 0.004) discard_fragment();
+        const float sh = shadowFactor(f, shadowMap, shadowSampler, P, float3(0, 1, 0), 0);
+        const float3 c = in.dustBase + in.dustSun * sh;
+        return float4(mix(c, in.dustFog.rgb, in.dustFog.a), saturate(alpha));
+    } else if (in.kind == 3) {
+        // Grass bit: a thin torn blade.
+        if (abs(uv.y) > 0.35 + 0.25 * n || r2 > 1.0) discard_fragment();
+        N = normalize(V + float3(0, 0.5, 0));
+        rough = 0.8;
+    } else {
+        // Clods, crumbs, grains, drops: lumpy round blobs with a spherical shading normal.
+        if (r2 > 0.75 + 0.5 * n) discard_fragment();
+        const float z = sqrt(saturate(1.0 - r2));
+        N = normalize(in.axisA * uv.x + in.axisB * uv.y + V * z);
+        rough = in.kind == 4 ? 0.08 : 0.85;
+    }
+    ShadeInput s;
+    s.albedo = in.color.rgb * (in.kind == 2 ? 1.0 : (0.85 + 0.3 * n));
+    s.roughness = rough;
+    s.metallic = 0.0;
+    s.N = N;
+    s.V = V;
+    s.shadow = shadowFactor(f, shadowMap, shadowSampler, P, N);
+    s.ao = 1.0;
+    s.specOcclusion = in.kind == 4 ? 1.0 : 0.5;
+    s.emissive = float3(0.0);
+    s.clearCoat = 0.0;
+    s.lamp = headlightIrradiance(f, P, N);
+    if (in.kind != 0) {
+        // Grains, drops, grass bits and dust are thin: they scatter sunlight through, strongest toward the sun.
+        const float forward = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
+        s.emissive = s.albedo * f.sunColor.rgb * s.shadow * (0.10 + 0.30 * forward);
+    }
+    const float3 color = applyFog(f, shade(f, s), P, f.cameraPos.xyz);
+    return float4(color, saturate(alpha));
 }
 
 // ---------------------------------------------------------------- debug lines

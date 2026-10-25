@@ -27,7 +27,8 @@ add_library(trailforge_sim STATIC
     src/vehicle/Vehicle.cpp
     src/sim/Simulation.cpp
     src/sim/BodyImpacts.cpp
-    src/sim/TireMarks.cpp)
+    src/sim/TireMarks.cpp
+    src/sim/WheelSpray.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -110,7 +111,7 @@ if(TRAILFORGE_BUILD_TESTS)
             tire_marks_surfaces
             auto_reverse
             surface_launch_grip
-            skid_mark_profile tire_marks_boundary)
+            skid_mark_profile tire_marks_boundary wheel_spray)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

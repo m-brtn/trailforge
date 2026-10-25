@@ -3,6 +3,7 @@
 #include "render/GroundMaps.h"
 #include "render/TimeOfDay.h"
 #include "sim/TireMarks.h"
+#include "sim/WheelSpray.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
@@ -227,6 +228,8 @@ Renderer::~Renderer() {
     for (GpuMesh& m : m_treeMeshes) m.release();
     if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
     if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
+    if (m_sprayBuffer) SDL_ReleaseGPUBuffer(m_device, m_sprayBuffer);
+    if (m_sprayTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_sprayTransfer);
     releaseTexture(m_trample);
     if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
     if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
@@ -438,6 +441,8 @@ void Renderer::createScenePipelines() {
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 2, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
+    m_sprayPipe = createPipeline("spray_vs", "spray_fs", 2, 1, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
+                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
     m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
     m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
@@ -451,7 +456,8 @@ void Renderer::createScenePipelines() {
 
 void Renderer::releaseScenePipelines() {
     for (SDL_GPUGraphicsPipeline** p :
-         {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe}) {
+         {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe,
+          &m_sprayPipe}) {
         if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
         *p = nullptr;
     }
@@ -1013,9 +1019,31 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const std::uint32_t markCount = marks ? std::uint32_t(marks->size()) : 0;
     m_stats.markSegments = markCount;
     m_stats.markUploadBytes = 0;
-    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || markSync) {
+    const std::uint32_t sprayCount =
+        frame.spray ? std::uint32_t(std::min<std::size_t>(frame.spray->size(), kMaxSpray)) : 0;
+    m_stats.sprayParticles = sprayCount;
+    if (sprayCount > 0 && !m_sprayBuffer) {
+        SDL_GPUBufferCreateInfo bi{};
+        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+        bi.size = kMaxSpray * std::uint32_t(sizeof(SprayInstance));
+        m_sprayBuffer = SDL_CreateGPUBuffer(m_device, &bi);
+        SDL_GPUTransferBufferCreateInfo ti{};
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = bi.size;
+        m_sprayTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
+        if (!m_sprayBuffer || !m_sprayTransfer) fail("wheel spray buffers");
+    }
+    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || markSync || sprayCount > 0) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         if (markSync) m_stats.markUploadBytes = uploadMarks(copy, *marks);
+        if (sprayCount > 0) {
+            auto* dst = static_cast<SprayInstance*>(SDL_MapGPUTransferBuffer(m_device, m_sprayTransfer, true));
+            frame.spray->write(dst, sprayCount);
+            SDL_UnmapGPUTransferBuffer(m_device, m_sprayTransfer);
+            SDL_GPUTransferBufferLocation src{m_sprayTransfer, 0};
+            SDL_GPUBufferRegion region{m_sprayBuffer, 0, sprayCount * std::uint32_t(sizeof(SprayInstance))};
+            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        }
         if (lineBytes > 0) {
             ensureLineCapacity(lineBytes);
             void* dst = SDL_MapGPUTransferBuffer(m_device, m_lineTransfer, true);
@@ -1339,6 +1367,20 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             DrawItem wd;
             wd.mesh = frame.water;
             drawLit(pass, wd);
+            ++m_stats.drawCalls;
+        }
+
+        // Wheel spray: one instanced draw of camera-facing particles, lit like the scene (sun shadows, ambient,
+        // headlights, fog), blended after the water.
+        if (sprayCount > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_sprayPipe);
+            const glm::vec4 sprayInfo(float(sprayCount), 0, 0, 0);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUVertexUniformData(cmd, 1, &sprayInfo, sizeof(sprayInfo));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_sprayBuffer, 1);
+            SDL_DrawGPUPrimitives(pass, 6, sprayCount, 0, 0);
             ++m_stats.drawCalls;
         }
 

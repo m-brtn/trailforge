@@ -197,6 +197,9 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         edited |= ImGui::Checkbox("Bloom", &s.bloom);
         ImGui::SameLine();
         edited |= ImGui::Checkbox("Clouds", &s.clouds);
+        edited |= ImGui::SliderInt("Spray particles", &s.sprayMax, 0, 8192);
+        ImGui::SameLine();
+        edited |= ImGui::Checkbox("Dust", &s.sprayDust);
     }
     if (ImGui::CollapsingHeader("Look", ImGuiTreeNodeFlags_DefaultOpen)) {
         drawTimeOfDay(gfx);
@@ -255,6 +258,12 @@ void DebugUI::drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsSt
     ImGui::Text("CPU update %.1f us/tick, upload %.1f KB/frame, live %.0f KB, 1 draw", sim.timing().marksUs,
                 double(stats.markUploadBytes) / 1024.0, double(bytes) / 1024.0);
     ImGui::TextDisabled("No effect on friction or ground height; the ground stays rigid.");
+    ImGui::Separator();
+    ImGui::Checkbox("Wheel spray", &gfx.spray);
+    ImGui::SameLine();
+    ImGui::Text("%zu live, %zu drawn, cap %d%s", gfx.sprayLive, gfx.sprayDrawn, gfx.settings.sprayMax,
+                gfx.settings.sprayDust ? "" : ", no dust");
+    ImGui::TextDisabled("Cosmetic particles, not physics bodies.");
 }
 
 void DebugUI::drawAudio(AudioPanelState& a) {

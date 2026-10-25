@@ -134,7 +134,7 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap) |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
@@ -150,6 +150,8 @@ cost of the marks with the ring empty and filled to 16k / 64k segments),
 rear and side views, `/tmp/trailforge_v_susp_*.png`),
 `tools/scenarios/tread_dirt.txt` (soil printed onto concrete after the mud bath and the sand, rolling and with
 wheelspin, top-down `/tmp/trailforge_tread_*.png`),
+`tools/scenarios/spray.txt` (wheel spray: nothing while rolling calmly, wheelspin on mud, dirt, sand and grass, a
+puddle crossing, a locked-wheel slide, the cap; `/tmp/trailforge_spray_*.png`),
 `tools/scenarios/skid_profile.txt` (a 65 km/h locked-wheel stop on the skid strip, top-down
 `/tmp/trailforge_skid_profile*.png`),
 `tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, audible for
@@ -162,6 +164,7 @@ Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
+`spray` (live spray particles), `spray_emitted`, `spray_drawn`, `spray_max`,
 `msg:<substring>` (1 if the latest UI message contains the substring),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (pause duck
@@ -296,6 +299,8 @@ Surrounded by an earth berm and concrete walls.
   There is **no sinkage**: sand is only a lower-μ rigid surface with a light sandy material.
 - **Mud bath and west strip** (west edge, x −44.5…−38.5, teleport "Mud bath to concrete"): a flat 6 × 12 m `Mud`
   patch (z 34–46) that ends directly on a 30 m concrete strip (z 4–34), for driving out of mud onto concrete.
+- Teleports "Meadow (grass)" (open grass east of the mud path) and "Puddle (splash)" (on the mud path just before a
+  puddle) are spawn points for the wheel spray checks.
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (peak μ 0.35/0.32),
@@ -424,14 +429,41 @@ Graphics panel (F2) → "Tire marks (visual only)": draw / generate toggles, max
 per-surface intensity multipliers, Clear, "Fill to cap" (synthetic random ribbons for stress testing), live
 count / capacity, ring size, CPU cost per tick and upload size per frame.
 
+### Wheel spray (cosmetic)
+
+`WheelSpray` (in `trailforge_sim`, no rendering dependency) throws material off the wheels: clods, crumbs and sand
+grains, dust puffs, grass bits and puddle splashes. These are simple CPU particles, **not Jolt bodies**: gravity,
+quadratic air drag and a collision with the ground height only (no collision with the vehicle, rocks or each other),
+and they never touch the simulation. Emission comes only from the wheel contact samples. The tread surface moves
+over the ground at `velocity − rollingSpeed × longitudinal`, so a spinning wheel throws a fan backward and up off the
+tread, a locked or nearly locked wheel pushes material ahead of the patch, and a wheel rolling without slip throws
+almost nothing (the rate grows with slip above 0.6 m/s, plus a small amount per meter rolled, most on mud).
+
+| Surface | Thrown on wheelspin | Rolling |
+|---|---|---|
+| Mud | dark wet clods (3–7.5 cm) and crumbs | a few clods |
+| Packed dirt | crumbs, some clods, dust | rare crumbs, dust above 6 m/s |
+| Sand | many light grains, a dust cloud | a few grains, a little dust |
+| Grass | torn grass bits and clods | rare clods |
+| Puddles | muddy water drops (by slip and speed) | splashes by speed |
+| Concrete, rock, low grip | nothing | nothing |
+
+The colour mixes the ground's soil with what the tread carries. Clods bounce once on a hard landing, everything else
+comes to rest and fades; drops vanish on landing; dust grows, drifts and thins out. Rendering: all particles are one
+instanced draw of camera-facing billboards from a storage buffer (48 bytes each, full upload per frame), solid bits
+stretched along their screen-plane velocity. Solids are shaded per pixel with the scene lighting (sun with cascaded
+shadows, sky ambient, headlights, fog), small bits also scatter some sunlight through; dust is lit once per puff in
+the vertex stage with a one-tap shadow per pixel, because large overlapping puffs are the expensive part. The cap is
+per quality preset; dust is limited to a sixth of the cap and at most 500 puffs, and Low has no dust.
+
 Quality presets (Graphics panel, F2; default High):
 
-| Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance |
-|---|---|---|---|---|---|---|---|
-| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m |
-| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m |
-| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m |
-| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m |
+| Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance | Wheel spray cap |
+|---|---|---|---|---|---|---|---|---|
+| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m | 600, no dust |
+| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m | 1500 |
+| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m | 3000 |
+| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m | 6000 |
 
 The panel also shows CPU frame time (without the swapchain wait), GPU time (from `MTLCommandBuffer`
 `GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed
@@ -556,6 +588,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven). Soil in the tread and its
   prints on hard ground are cosmetic too: the tread soil never changes grip.
+- Wheel spray is cosmetic CPU particles, not Jolt bodies: they collide only with the ground height function, not with
+  the vehicle, rocks or each other, remove no material from the ground and never push the vehicle.
 - No forced differential lock: Jolt supports only open and LSD.
   The LSD here limits the wheel speed ratio; it is not a preloaded clutch pack.
 - No aerodynamics or rolling resistance (linear damping = 0).

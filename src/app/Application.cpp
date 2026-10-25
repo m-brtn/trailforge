@@ -294,6 +294,7 @@ void Application::renderFrame(float frameTime) {
     stats.reflection = rs.reflectionRendered;
     stats.maxMsaa = m_renderer->maxMsaa();
     stats.markUploadBytes = rs.markUploadBytes;
+    m_gfx.sprayDrawn = rs.sprayParticles;
     const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
     if (m_gfx.fillMarks) {
         fillTireMarks();
@@ -323,6 +324,22 @@ void Application::renderFrame(float frameTime) {
     std::array<glm::mat4, kWheelCount> wheelM;
     for (int i = 0; i < kWheelCount; ++i) wheelM[i] = interp(a.wheels[i], b.wheels[i]);
     updateCosmetics(frameTime);
+    {
+        WheelSpraySettings ss = m_spray.settings();
+        const std::size_t cap = std::size_t(std::clamp(m_gfx.settings.sprayMax, 0, 8192));
+        if (ss.maxParticles != cap || ss.dust != m_gfx.settings.sprayDust || ss.enabled != m_gfx.spray) {
+            ss.maxParticles = cap;
+            ss.dust = m_gfx.settings.sprayDust;
+            ss.enabled = m_gfx.spray;
+            m_spray.setSettings(ss);
+        }
+        if (!m_paused) {
+            std::array<TreadSoil, kWheelCount> soil;
+            for (std::size_t i = 0; i < kWheelCount; ++i) soil[i] = m_sim.tireMarks().soil(i);
+            m_spray.update(m_sim.vehicle().contacts(), soil, std::min(frameTime, 0.05f));
+        }
+        m_gfx.sprayLive = m_spray.size();
+    }
     buildDraws(bodyM, wheelM);
 
     m_debugDraw.clear();
@@ -362,6 +379,7 @@ void Application::renderFrame(float frameTime) {
         }
     }
     frame.tireMarks = m_gfx.tireMarks ? &m_sim.tireMarks() : nullptr;
+    frame.spray = m_gfx.spray ? &m_spray : nullptr;
     frame.simTime = m_sim.simTime();
     frame.markGain = m_gfx.markGain;
     frame.lines = m_debugDraw.lines();
@@ -762,6 +780,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "grass") s.grassLevel = int(v);
         else if (k == "grass_dist") s.grassDistance = v;
         else if (k == "clouds") s.clouds = v != 0.0f;
+        else if (k == "spray_max") s.sprayMax = int(v);
+        else if (k == "spray_dust") s.sprayDust = v != 0.0f;
         else if (k == "exposure") s.exposure = v;
         else if (k == "fog") s.fogDensity = v;
         else {
@@ -788,6 +808,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "audio_whine") m_audioPanel.settings.whine = v;
             else if (k == "audio_play_ui") m_audio->playUi(UiSound(std::clamp(int(v), 0, int(UiSound::MenuClose))));
             else if (k == "marks_clear") m_sim.tireMarks().clear();
+            else if (k == "spray") m_gfx.spray = v != 0.0f;
+            else if (k == "spray_clear") m_spray.clear();
+            else if (k == "spray_fill") m_spray.fill(m_sim.currentSnapshot().body.position);
             else if (k == "marks_fill") fillTireMarks();
             else if (k == "marks_gain") m_gfx.markGain.fill(v);
             else if (k == "marks_gen" || k == "marks_max" || k == "marks_fade") {
@@ -924,6 +947,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "msaa") return m_renderer->settings().msaa;
     if (n == "grass_blades") return double(m_renderer->stats().grassBlades);
     if (n == "marks") return double(m_sim.tireMarks().size());
+    if (n == "spray") return double(m_spray.size());
+    if (n == "spray_emitted") return double(m_spray.emitted());
+    if (n == "spray_drawn") return double(m_renderer->stats().sprayParticles);
+    if (n == "spray_max") return double(m_spray.settings().maxParticles);
     if (n == "marks_cap") return double(m_sim.tireMarks().capacity());
     if (n == "marks_written") return double(m_sim.tireMarks().written());
     if (n == "marks_drawn") return double(m_renderer->stats().markSegments);

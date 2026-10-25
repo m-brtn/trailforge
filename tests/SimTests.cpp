@@ -3,6 +3,7 @@
 
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
+#include "sim/WheelSpray.h"
 
 #include <algorithm>
 #include <array>
@@ -770,6 +771,93 @@ void skidMarkProfile() {
     }
 }
 
+// Cosmetic wheel spray from synthetic contact samples on flat ground: rolling throws almost nothing, wheelspin throws
+// material backward and up, a locked wheel pushes it forward, concrete throws nothing, particles land and expire, and
+// the cap and the dust switch hold.
+void wheelSpray() {
+    struct Run {
+        std::size_t live = 0;
+        std::uint64_t emitted = 0, dropped = 0;
+        float meanVz = 0.0f, meanVy = 0.0f;
+        int dust = 0, resting = 0, below = 0;
+    };
+    auto drive = [](SurfaceId surface, float v, float roll, double seconds, WheelSpraySettings st = {},
+                    double coast = 0.0) {
+        WheelSpray spray;
+        spray.setSettings(st);
+        spray.setGround([](float, float) { return 0.0f; });
+        WheelContactSample c;
+        c.contact = true;
+        c.surface = surface;
+        c.patchCenter = JPH::Vec3(-300.0f, 0.0f, 0.0f); // far from the showcase water
+        c.velocity = JPH::Vec3(0.0f, 0.0f, v);
+        c.load = 4900.0f;
+        c.rollingSpeed = roll;
+        c.longitudinalSlipSpeed = roll - v;
+        c.width = 0.3f;
+        c.radius = 0.4f;
+        const TreadSoil soil{};
+        Run r;
+        constexpr float dt = 1.0f / 60.0f;
+        for (int i = 0; i < int(seconds / dt); ++i) {
+            spray.update(std::span(&c, 1), std::span(&soil, 1), dt);
+            c.patchCenter += c.velocity * dt;
+            if (i == int(0.2 / dt)) { // fresh particles: direction of the throw
+                int n = 0;
+                for (const SprayParticle& p : spray.particles())
+                    if (p.kind != SprayKind::Dust && p.age < 0.1f) r.meanVz += p.vel.GetZ(), r.meanVy += p.vel.GetY(), ++n;
+                if (n) r.meanVz /= float(n), r.meanVy /= float(n);
+            }
+        }
+        c.contact = false;
+        for (int i = 0; i < int(coast / dt); ++i) {
+            spray.update(std::span(&c, 1), std::span(&soil, 1), dt);
+            if (i == int(1.0 / dt))
+                for (const SprayParticle& p : spray.particles()) r.resting += p.resting ? 1 : 0;
+        }
+        for (const SprayParticle& p : spray.particles()) {
+            r.dust += p.kind == SprayKind::Dust ? 1 : 0;
+            r.below += p.pos.GetY() < -0.01f ? 1 : 0;
+        }
+        r.live = spray.size();
+        r.emitted = spray.emitted();
+        r.dropped = spray.dropped();
+        return r;
+    };
+
+    const Run calm = drive(SurfaceId::PackedDirt, 5.0f, 5.0f, 2.0);
+    const Run spin = drive(SurfaceId::Mud, 1.0f, 9.0f, 1.0);
+    const Run locked = drive(SurfaceId::PackedDirt, 5.0f, 0.0f, 1.0);
+    const Run concrete = drive(SurfaceId::Concrete, 1.0f, 9.0f, 1.0);
+    const Run land = drive(SurfaceId::Mud, 1.0f, 9.0f, 1.0, {}, 6.0);
+    WheelSpraySettings capped;
+    capped.maxParticles = 50;
+    const Run cap = drive(SurfaceId::Mud, 1.0f, 9.0f, 1.0, capped);
+    WheelSpraySettings noDust;
+    noDust.dust = false;
+    const Run sand = drive(SurfaceId::Sand, 1.0f, 9.0f, 1.0);
+    const Run sandNoDust = drive(SurfaceId::Sand, 1.0f, 9.0f, 1.0, noDust);
+    std::printf("  calm dirt roll 2 s: %llu emitted; mud spin 1 s: %llu emitted, fresh vz %.2f vy %.2f m/s; "
+                "dirt locked: vz %.2f m/s; concrete spin: %llu\n",
+                (unsigned long long)calm.emitted, (unsigned long long)spin.emitted, spin.meanVz, spin.meanVy,
+                locked.meanVz, (unsigned long long)concrete.emitted);
+    std::printf("  after 1 s coasting %d resting, after 6 s %zu live (%d below ground); cap 50: %zu live, %llu "
+                "dropped; sand dust %d, without dust %d\n",
+                land.resting, land.live, land.below, cap.live, (unsigned long long)cap.dropped, sand.dust,
+                sandNoDust.dust);
+    CHECK(calm.emitted <= 3, "calm roll emitted %llu", (unsigned long long)calm.emitted);
+    CHECK(spin.emitted > 100, "mud wheelspin emitted only %llu", (unsigned long long)spin.emitted);
+    CHECK(spin.meanVz < -1.0f && spin.meanVy > 1.0f, "wheelspin throw vz %.2f vy %.2f (want backward and up)",
+          spin.meanVz, spin.meanVy);
+    CHECK(locked.emitted > 0 && locked.meanVz > 1.0f, "locked wheel push vz %.2f (want forward)", locked.meanVz);
+    CHECK(concrete.emitted == 0, "concrete emitted %llu", (unsigned long long)concrete.emitted);
+    CHECK(land.resting > 0 && land.live == 0 && land.below == 0, "landing: %d resting, %zu live, %d below",
+          land.resting, land.live, land.below);
+    CHECK(cap.live <= 50 && cap.dropped > 0, "cap: %zu live, %llu dropped", cap.live,
+          (unsigned long long)cap.dropped);
+    CHECK(sand.dust > 0 && sandNoDust.dust == 0, "dust %d, with dust off %d", sand.dust, sandNoDust.dust);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -787,6 +875,7 @@ int main(int argc, char** argv) {
         {"surface_launch_grip", surfaceLaunchGrip},
         {"skid_mark_profile", skidMarkProfile},
         {"tire_marks_boundary", tireMarksBoundary},
+        {"wheel_spray", wheelSpray},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

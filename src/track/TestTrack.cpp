@@ -441,6 +441,8 @@ void TestTrack::buildProvingGround() {
     // Facing south (-Z) over the boundary onto concrete.
     m_features.push_back({"Sand to concrete", Vec3(42.0f, provingGroundHeight(42.0f, 60.0f), 60.0f), kPi});
     m_features.push_back({"Mud bath to concrete", Vec3(0.5f * (kWestX0 + kWestX1), 0.0f, kMudBathZ1 - 1.5f), kPi});
+    feature("Meadow (grass)", 19.0f, 50.0f);
+    feature("Puddle (splash)", pathCenterX(57.0f), 49.5f); // the first path puddle is 4-5 m ahead
 }
 
 void TestTrack::buildFlat(bool withPit) {

@@ -9,6 +9,7 @@
 #include "render/Renderer.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
+#include "sim/WheelSpray.h"
 #include "ui/DebugUI.h"
 
 #include <SDL3/SDL_video.h>
@@ -91,6 +92,7 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<ImGuiContextGuard> m_imgui;
     Simulation m_sim;
+    WheelSpray m_spray; // cosmetic particles thrown by the wheels (render-only)
     Input m_input;
     Camera m_camera;
     DebugDraw m_debugDraw;
