@@ -130,14 +130,15 @@ tools/release/package_linux.sh [--smoke-window]               # -> dist/TrailFor
 pwsh tools/release/package_windows.ps1 [-SmokeWindow]         # -> dist/TrailForge-<version>-windows-x64.zip
 ```
 
-Both do a clean packaged Release build in `build/package`, run CTest, put the executable, `assets/audio` and a
+Both do a clean packaged Release build in `build/package`, run CTest, put the executable, `assets/` (audio, music, fonts, images) and a
 `README.txt` into `dist/TrailForge-<version>-<os>-<arch>/`, archive it, extract the archive into a temporary
-directory and check from another working directory that `--version` matches and that `--paths` reports exactly one
-asset directory, the one inside the package. The optional window smoke test needs a GPU (CI runs the Linux package
+directory and check from another working directory that `--version` matches, that `--paths` reports exactly one
+sound asset directory, the one inside the package, and that its music directory has `intro.mp3`. The optional window smoke test needs a GPU (CI runs the Linux package
 on lavapipe in a separate step instead).
 
 Command-line options:
 
+- `--no-intro` — skip the intro and go straight to the start menu (scripts and `--demo` start in gameplay);
 - `--no-ui` — start with diagnostics hidden;
 - `--demo` — scripted drive without input;
 - `--quit-after N` — quit automatically after N seconds (smoke test);
@@ -145,7 +146,8 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
-- `--paths` — print the asset lookup directories and the user data directory, then exit;
+- `--paths` — print the asset lookup directories (`assets:` sounds, `music:`, `fonts:`, `images:`) and the user data
+  directory, then exit;
 - `--version` — print the version and exit.
 
 `build/<preset>/trailforge_probe` — headless measurements:
@@ -197,9 +199,15 @@ One command per line, `#` starts a comment:
 | `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
+| `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
+| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `back` |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
-Other scenarios: `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
+Scenarios start in gameplay (no intro, no menu) and never read or write the settings file.
+
+Other scenarios: `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
+and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
+`/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
@@ -221,7 +229,12 @@ spray and wheel close-ups; `/tmp/trailforge_spray2_*.png`),
 `tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, audible for
 lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
 
-Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused`,
+Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
+simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
+1 start menu, 2 playing, 3 paused), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
+`menu_cursor`, `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
+`setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
+`abs`, `tc`, `diff`, `auto_reverse`),
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
@@ -237,8 +250,8 @@ speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu
 `rear_bumper`, `front_bumper`),
 `msg:<substring>` (1 if the latest UI message contains the substring),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
-`audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (pause duck
-gain), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
+`audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (gain of the
+gameplay sounds, 0 while paused), `audio_music` (music bus gain 0..1), `audio_music_t` (seconds of music played), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
 received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 suspension thump, 4 body impact, 5 splash, 6 creak,
 7 UI), and more. Full list: `Application::scenarioValue`.
 Driver aid `set` keys: `abs 0/1`, `tc 0/1/2`, `diff_locks 0..3`.
@@ -254,7 +267,7 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s) | L | Y (North) |
-| Reset to the last start point | R | Back |
+| Reset to the last start point | R | Back / View |
 | Camera: follow ↔ free | C | RB |
 | ABS on / off | B | D-pad up |
 | Traction control: off → on → off-road | T | D-pad right |
@@ -263,10 +276,20 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Diagnostics | F1 | — |
 | Graphics panel (quality, look, cosmetic dirt) | F2 | — |
 | Audio panel (volumes, mute, engine pitch, read-outs) | F3 | — |
-| Pause | Escape | Start |
-| Single physics step (while paused) | N | — |
+| Pause menu (Resume, Reset vehicle, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
+| Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | arrow keys, PgUp/PgDn, Shift — faster | — |
+
+**Menus.** The game starts with an intro (logo over `intro.mp3`; any key, click or gamepad button skips it), then
+the start menu: Start, Settings, Quit. Up / Down (arrows, W / S, D-pad or left stick) move, Enter / Space / gamepad A
+select, Left / Right (A / D, D-pad, stick) change a setting, Esc / Backspace / gamepad B go back; the mouse hovers and
+clicks rows (clicking the arrows of a setting steps it down / up). Esc during play opens the pause menu. Settings
+(shared by both menus): graphics preset, resolution scale, VSync, master / music / effects / UI volume, the driver
+aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and a controls overview.
+They are saved to `settings.cfg` in the user data directory (`trailforge --paths`) when a Settings page is closed and
+loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
+the settings for the session; they are hidden while a menu is open.
 
 **Reverse.** W is the forward pedal and S the backward pedal (RT / LT on a gamepad). While moving forward, S brakes,
 and an S press that started while moving keeps braking through the stop and holds the vehicle for as long as it is
@@ -284,7 +307,7 @@ blinking amber = acting) and the effective mode of each differential (F / C / R:
 switches survive R and teleports; the diff locks reset to none. Both aids are off by default. Details and limits are
 under "Driver aids" below.
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
-F1–F3 and Escape always work.
+F1–F3, P and Escape always work (Escape opens the pause menu, which takes all input until it is closed).
 
 To type a number into an ImGui slider on macOS use **Cmd+click** (in ImGui's macOS mode Ctrl+click acts as a right click);
 on other platforms use Ctrl+click.
@@ -304,13 +327,18 @@ src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), Vehic
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
-src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels)
-src/app/      Application (lifecycle and main loop), Scenario (scenario mode), Paths (asset / user dirs), main
+src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,
+              pause and Settings menus drawn with ImGui draw lists)
+src/app/      Application (lifecycle and main loop), GameFlow (screen / menu state machine, no SDL: intro, start
+              menu, playing, paused; level and vehicle select pages can slot in as further pages), GameSettings
+              (settings.cfg), Scenario (scenario mode), Paths (asset / user dirs), main
 shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedded into the binary
 tests/        CTest physics and audio tests (no window, no audio device)
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
               shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
+assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
+              assets/images/ logo.png; each with a CREDITS.md
 ```
 
 The physics (`trailforge_sim`) does not depend on SDL or rendering; the sound model (`trailforge_audio`) depends only
@@ -336,7 +364,10 @@ Input is smoothed inside the tick with a fixed dt, so it does not depend on FPS:
 - steering — 2.2 1/s toward the target and 3.5 1/s back to center;
 - pedals — 3 1/s on press and 6 1/s on release (analog gamepad input is not smoothed).
 
-While paused the physics is frozen; N performs exactly one step.
+The pause menu is a real pause: the accumulator is frozen (no ticks, no accumulated time, the interpolation alpha
+stays put) while rendering continues; Resume continues from the same tick. The debug freeze (P) does the same
+without a menu and allows single steps with N. During the intro and behind the start menu the world ticks (the
+vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 
 ## Vehicle
 
@@ -513,11 +544,15 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
    chunks, 3 LOD levels, see "Grass, flowers and wheat"), procedural sky with clouds, water with Fresnel, ripples and
    reflection, height fog, debug lines.
 5. Bloom (5-level downsample/upsample chain).
-6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA.
+7. Menu blur (only while a menu covers the world): dual-Kawase blur of the tonemapped frame, 4 levels down to 1/16
+   resolution (5-tap down, 8-tap up), composited with a dim and slight desaturation; then ImGui (debug panels and
+   the menus, drawn with the Rajdhani font from `assets/fonts/` at the framebuffer scale, so text stays crisp on
+   HiDPI).
 
 ### Shader pipeline
 
-`shaders/scene.hlsl` holds all 23 entry points (10 vertex, 13 fragment). Each entry's resources are declared inside
+`shaders/scene.hlsl` holds all 26 entry points (10 vertex, 16 fragment). Each entry's resources are declared inside
 `#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
 in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
 fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
@@ -750,14 +785,22 @@ parameter set, and the offline capture must run the exact same code without a de
   (−6° … +6°).
 - **Space.** Every source has a position on the vehicle (exhaust, bay, wheels); gain and equal-power pan are
   relative to the camera (inverse distance from 5 m, silent beyond 200 m). No Doppler, no occlusion, no reverb.
-- **Pause** (Escape) ramps the gameplay sounds to silence and freezes them; the ambience ducks to half. Menu
-  open/close UI sounds play on pause toggle; all UI sounds are loaded and reachable through
-  `AudioSystem::playUi` (there is no menu yet).
+- **Pause.** In the pause menu (and the debug freeze) the gameplay sounds (engine, tires, body, wind) ramp to
+  silence and their voices freeze with the simulation. The day / night ambience beds keep playing at full level:
+  they are not driven by the simulation, and the brief asks for no ducking. No music plays in pause. The world
+  behind the intro and the start menu is treated the same way (gameplay sounds silent).
+- **Menu sounds.** UI sounds (`assets/audio/ui/`) for move, select, back, setting changes, menu open and close, on
+  their own bus (UI volume).
+- **Music.** `assets/music/intro.mp3` plays from the intro through the start menu and fades out over 3 s when
+  gameplay starts (1.5 s fade-in; it loops if the menu stays open longer than the track). It is decoded by
+  `ma_decoder` (MP3) in the app layer (`AudioSystem`) and streamed from memory through the `MusicSource` interface,
+  so the mixer stays free of miniaudio; it is only decoded while audible. The music bus has its own volume; the
+  effects volume scales engine, tires, impacts and ambience.
 - **Output.** 10 Hz DC blocker, 2 ms look-ahead limiter at −1.5 dBFS and a hard clamp at −1 dBFS.
 - **Without a device.** `--no-audio` skips everything; if no device can be opened or the assets are missing, the
   game logs it and runs silent. Tests and the headless build never open a device.
 
-**Audio panel (F3):** master / engine / tires / impacts / ambience & wind / UI volumes, mute, pitch factor, level
+**Audio panel (F3):** master / engine / tires / impacts / ambience & wind / UI / music volumes, mute, pitch factor, level
 spread, whine; read-outs: played rpm, load, layer weights and playback rates, tire layers, wind, day/night, active
 voices, one-shots, output peak, limiter, audio-thread time per callback and in % of real time.
 
@@ -887,7 +930,7 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 26 of 26 tests pass in Debug, Release and headless (numbers below are from the latest run where they
+- **CTest.** 30 of 30 tests pass in Debug, Release and headless (numbers below are from the latest run where they
   changed):
 
 | Test | Result |

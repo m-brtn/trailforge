@@ -28,7 +28,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 26 tests; no window, no audio device)
+# headless physics and audio tests (CTest, 30 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -40,7 +40,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
 
-Shaders: `shaders/scene.hlsl` is the only shader source (23 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
+Shaders: `shaders/scene.hlsl` is the only shader source (26 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
 register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
 tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
 MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->
@@ -58,6 +58,7 @@ check failed:
 
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
+./build/release/trailforge --script tools/scenarios/menus.txt         # intro, start/pause/settings menus, /tmp/trailforge_menu_*.png
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
@@ -114,8 +115,9 @@ src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure ma
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, VehicleModel, Scenery,
               GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
-src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel)
-src/app/      Application (lifecycle, main loop), Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
+src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
+src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), GameSettings (settings.cfg),
+              Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
               dir via SDL_GetPrefPath), main
 shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
 tests/        CTest physics and audio tests (no window, no audio device)
@@ -124,7 +126,8 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
               packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics)
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
-assets/audio/ WAV sounds, manifest.json, CREDITS.md
+assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
+              assets/images/ logo.png (each with CREDITS.md)
 external_assets/ images/ (Icon.png app icon source, Logo.png, Banner.png, Cars.png vehicle concept sheet),
  music/ (user-provided tracks, not wired in yet)
 devlog/       daily development log
