@@ -530,10 +530,23 @@ up W
 down S
 until speed_kmh < 0.5 6
 up S
-log before_step045
-expect z < 7.2                  # the front wheel has not yet hit the 0.45 m step (face at z = 8.5)
+log step030_stop
+tap Q                           # the stop pose after the bouncy 0.30 m drop varies (z 5.6-6.7); between the steps the
+wait 0.3                        # car can wedge (rear wheels on the 0.30 m step, fronts at the 0.45 m face) and stall,
+expect dir == -1                # so back up onto the 0.30 m step and climb from a defined standstill
 down W
-until z > 7.3 15                # borderline climb: depending on the stop point, wheelspin can last up to ~6 s
+until z < 3.8 8
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+tap Q
+wait 0.3
+expect dir == 1
+log before_step045
+expect z < 4.5                  # standstill on (or behind) the 0.30 m step, 4-8 m before the 0.45 m face (z = 8.5)
+down W
+until z > 7.3 15                # the rear wheels drop off the 0.30 m step, the fronts reach the 0.45 m face
 capture /tmp/trailforge_16_step045.png
 log step045_climb
 until z > 12 8                  # 0.45 m is more than the wheel radius (0.4 m), but low range climbs it from a standstill

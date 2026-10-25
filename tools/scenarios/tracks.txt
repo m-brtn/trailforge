@@ -1,7 +1,7 @@
 # Tire marks on different surfaces (screenshots to /tmp/trailforge_tracks_*.png):
 #   ./build/release/trailforge --script tools/scenarios/tracks.txt
 # Marks are render-only: they come from the per-tick wheel contact samples (load, slip, surface) and never change
-# friction or ground height. marks_s<N> counts live segments on SurfaceId N (0 Concrete, 1 PackedDirt, 4 Mud, 5 Grass).
+# friction or ground height. marks_s<N> counts live segments on SurfaceId N (0 Concrete, 1 PackedDirt, 4 Mud, 5 Grass, 6 Sand).
 set ui 0
 set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 set hud 0
@@ -39,7 +39,7 @@ down S
 until speed_kmh < 0.5 8
 up S
 log meadow
-expect marks_s1 > 4              # rolling imprint in the dirt band between the strip and the meadow
+expect marks_s6 > 4              # rolling imprint in the sand area (x 28-45, z 48-84) between the strip and the meadow
 expect marks_s5 > 40             # pressed grass
 # A low-range power turn tears the turf (the unloaded inner wheels spin).
 tap L
