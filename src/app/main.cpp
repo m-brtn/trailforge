@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--version") == 0) { std::printf("TrailForge %s\n", TRAILFORGE_VERSION); return 0; }
         else if (std::strcmp(argv[i], "--paths") == 0) {
             for (const std::string& d : tf::assetDirs("audio")) std::printf("assets: %s\n", d.c_str());
-            for (const char* sub : {"music", "fonts", "images"})
+            for (const char* sub : {"music", "fonts", "images", "vehicles"})
                 for (const std::string& d : tf::assetDirs(sub)) std::printf("%s: %s\n", sub, d.c_str());
             std::printf("user data: %s\n", tf::userDataDir().c_str());
             return 0;

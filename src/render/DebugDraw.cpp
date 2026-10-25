@@ -23,8 +23,11 @@ void DebugDraw::axes(const glm::mat4& m, float s) {
     line(o, o + glm::vec3(m[2]) * s, {0.3f, 0.5f, 1, 1});
 }
 
-void drawVehicleDebug(DebugDraw& dd, const VehicleTelemetry& t, float sMin, float sMax, const VehicleDebugOptions& o) {
-    for (const WheelTelemetry& w : t.wheels) {
+void drawVehicleDebug(DebugDraw& dd, const VehicleTelemetry& t, const std::array<float, 2>& suspensionMin,
+                      const std::array<float, 2>& suspensionMax, const VehicleDebugOptions& o) {
+    for (std::size_t i = 0; i < t.wheels.size(); ++i) {
+        const WheelTelemetry& w = t.wheels[i];
+        const float sMin = suspensionMin[i / 2], sMax = suspensionMax[i / 2];
         const glm::vec3 top = toGlm(w.suspensionTop);
         const glm::vec3 dir = toGlm(w.suspensionDir);
         if (o.suspension) {

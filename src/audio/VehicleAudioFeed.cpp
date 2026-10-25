@@ -35,7 +35,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     f.referenceLoad = 0.25f * cfg.mass * 9.81f;
     float wheelOmega = 0.0f;
     for (const auto& w : t.wheels) wheelOmega += 0.25f * w.angularVelocity;
-    const float finalDrive = cfg.differentialRatio * (t.lowRange ? cfg.lowRangeRatio : 1.0f);
+    const float finalDrive = cfg.tuning.finalDrive * (t.lowRange ? cfg.lowRangeRatio : 1.0f);
     f.driveshaftHz = std::abs(wheelOmega) * finalDrive / 6.2831853f;
     f.vehicleValid = true;
 

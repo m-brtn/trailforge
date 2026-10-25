@@ -21,6 +21,26 @@ constexpr float kRadToDeg = 180.0f / 3.14159265358979f;
 
 } // namespace
 
+const char* driveLayoutName(DriveLayout l) {
+    switch (l) {
+    case DriveLayout::Rwd: return "RWD";
+    case DriveLayout::Fwd: return "FWD";
+    case DriveLayout::Awd: return "AWD";
+    case DriveLayout::PartTime: return "PART-TIME 4WD";
+    case DriveLayout::OnDemand: return "ON-DEMAND AWD";
+    }
+    return "";
+}
+
+const char* transferModeName(TransferMode m) {
+    switch (m) {
+    case TransferMode::TwoHigh: return "2H";
+    case TransferMode::FourHigh: return "4H";
+    case TransferMode::FourLow: return "4L";
+    }
+    return "";
+}
+
 Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const VehicleConfig& config,
                  JPH::RVec3Arg position, JPH::QuatArg rotation)
     : m_world(world), m_surfaces(surfaces), m_config(config) {
@@ -45,18 +65,22 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         throw std::runtime_error(std::string("Vehicle COM: ") + offsetResult.GetError().c_str());
     const RefConst<Shape> bodyShape = offsetResult.Get();
 
-    // ---- Mass and inertia: inertia from the shape (uniform density), scaled to mass x multiplier
+    // ---- Mass and inertia: inertia from the shape (uniform density), scaled to mass x multiplier, or the given
+    // principal moments
     MassProperties mp = rawShape->GetMassProperties();
     mp.ScaleToMass(c.mass);
-    mp.mInertia = Mat44::sScale(Vec3::sReplicate(c.inertiaScale)) * mp.mInertia;
+    if (c.inertia[0] > 0.0f && c.inertia[1] > 0.0f && c.inertia[2] > 0.0f)
+        mp.mInertia = Mat44::sScale(Vec3(c.inertia[0], c.inertia[1], c.inertia[2]));
+    else
+        mp.mInertia = Mat44::sScale(Vec3::sReplicate(c.inertiaScale)) * mp.mInertia;
     mp.mInertia(3, 3) = 1.0f;
 
     BodyCreationSettings bcs(bodyShape, position, rotation, EMotionType::Dynamic, Layers::Moving);
     bcs.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
     bcs.mMassPropertiesOverride = mp;
-    bcs.mFriction = 0.5f;           // body friction (when grounding the underbody / rolling over)
-    bcs.mLinearDamping = 0.0f;      // no hidden "air" drag
-    bcs.mAngularDamping = 0.02f;
+    bcs.mFriction = c.bodyFriction; // body friction (when grounding the underbody / rolling over)
+    bcs.mLinearDamping = 0.0f;      // no hidden "air" drag (aerodynamic drag is an explicit force, applyDrag)
+    bcs.mAngularDamping = c.bodyAngularDamping;
     bcs.mAllowSleeping = false;     // telemetry is always up to date
     m_body = world.bodies().CreateBody(bcs);
     if (m_body == nullptr)
@@ -70,28 +94,27 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     vs.mForward = Vec3::sAxisZ();
     vs.mMaxPitchRollAngle = JPH_PI; // rollover prevention disabled: the vehicle can roll over
 
-    const float hx = 0.5f * c.trackWidth;
     const float hz = 0.5f * c.wheelBase;
-    const Vec3 positions[kWheelCount] = {
-        Vec3(hx, c.attachHeight, hz), Vec3(-hx, c.attachHeight, hz),
-        Vec3(hx, c.attachHeight, -hz), Vec3(-hx, c.attachHeight, -hz)};
     for (int i = 0; i < kWheelCount; ++i) {
+        const int axle = i < 2 ? kFrontAxle : kRearAxle;
+        const AxleConfig& a = c.axles[axle];
+        const float hx = 0.5f * a.track;
         Ref<WheelSettingsWV> w = new WheelSettingsWV;
-        w->mPosition = positions[i];
+        w->mPosition = Vec3(i % 2 == 0 ? hx : -hx, c.attachHeight, axle == kFrontAxle ? hz : -hz);
         w->mSuspensionDirection = Vec3(0, -1, 0);
         w->mSteeringAxis = Vec3(0, 1, 0);
         w->mWheelUp = Vec3(0, 1, 0);
         w->mWheelForward = Vec3(0, 0, 1);
-        w->mSuspensionMinLength = c.suspensionMinLength;
-        w->mSuspensionMaxLength = c.suspensionMaxLength;
-        w->mSuspensionPreloadLength = c.suspensionPreload;
-        w->mRadius = c.wheelRadius;
-        w->mWidth = c.wheelWidth;
-        w->mInertia = 0.5f * c.wheelMass * c.wheelRadius * c.wheelRadius;
-        w->mAngularDamping = 0.2f;
-        const bool front = i < 2;
-        w->mMaxSteerAngle = front ? c.maxSteerAngleDeg * kDegToRad : 0.0f;
+        w->mSuspensionMinLength = a.suspensionMinLength;
+        w->mSuspensionMaxLength = a.suspensionMaxLength;
+        w->mSuspensionPreloadLength = a.suspensionPreload;
+        w->mRadius = a.wheelRadius;
+        w->mWidth = a.wheelWidth;
+        w->mInertia = a.wheelInertiaOrDisc();
+        w->mAngularDamping = a.wheelAngularDamping;
+        w->mMaxSteerAngle = a.maxSteerAngleDeg * kDegToRad;
         m_wheelSettings[i] = w;
+        m_prevSuspLength[i] = a.suspensionMaxLength;
         vs.mWheels.push_back(w.GetPtr());
     }
 
@@ -101,21 +124,27 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     vs.mAntiRollBars[1].mLeftWheel = 2;
     vs.mAntiRollBars[1].mRightWheel = 3;
 
-    // ---- Engine, gearbox, differentials (four-wheel drive: two axles at 50% each)
+    // ---- Engine, gearbox, differentials. Both axle differentials always exist; applyDifferentials disconnects an
+    // undriven axle (wheel indices -1) and sets the torque split of the layout.
+    if (c.engineType != EngineType::Combustion) throw std::runtime_error("Vehicle: only combustion engines are simulated");
     auto* cs = new WheeledVehicleControllerSettings;
     vs.mController = cs;
     cs->mEngine.mMaxTorque = c.tuning.engineMaxTorque;
     cs->mEngine.mMinRPM = c.engineMinRPM;
     cs->mEngine.mMaxRPM = c.engineMaxRPM;
-    cs->mEngine.mInertia = 0.6f;
+    cs->mEngine.mInertia = c.engineInertia;
+    cs->mEngine.mAngularDamping = c.engineAngularDamping;
+    cs->mEngine.mNormalizedTorque.Clear();
+    cs->mEngine.mNormalizedTorque.Reserve(uint(c.torqueCurve.size()));
+    for (const auto& [x, y] : c.torqueCurve) cs->mEngine.mNormalizedTorque.AddPoint(x, y);
     cs->mTransmission.mMode = ETransmissionMode::Auto;
-    cs->mTransmission.mGearRatios.assign(std::begin(c.gearRatios), std::end(c.gearRatios));
-    cs->mTransmission.mReverseGearRatios = {c.reverseRatio};
+    cs->mTransmission.mGearRatios.assign(c.gearRatios.begin(), c.gearRatios.end());
+    cs->mTransmission.mReverseGearRatios.assign(c.reverseRatios.begin(), c.reverseRatios.end());
     cs->mTransmission.mShiftUpRPM = c.shiftUpRPM;
     cs->mTransmission.mShiftDownRPM = c.shiftDownRPM;
-    cs->mTransmission.mSwitchTime = 0.35f;
-    cs->mTransmission.mClutchReleaseTime = 0.25f;
-    cs->mTransmission.mSwitchLatency = 0.5f;
+    cs->mTransmission.mSwitchTime = c.shiftTime;
+    cs->mTransmission.mClutchReleaseTime = c.clutchReleaseTime;
+    cs->mTransmission.mSwitchLatency = c.shiftLatency;
     cs->mTransmission.mClutchStrength = c.tuning.clutchStrength;
     cs->mDifferentials.resize(2);
     cs->mDifferentials[0].mLeftWheel = 0;
@@ -123,9 +152,10 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     cs->mDifferentials[1].mLeftWheel = 2;
     cs->mDifferentials[1].mRightWheel = 3;
     for (auto& d : cs->mDifferentials) {
-        d.mDifferentialRatio = c.differentialRatio;
+        d.mDifferentialRatio = c.tuning.finalDrive;
         d.mEngineTorqueRatio = 0.5f;
     }
+    m_transfer = TransferMode::TwoHigh;
 
     m_constraint = new VehicleConstraint(*m_body, vs);
     m_controller = static_cast<WheeledVehicleController*>(m_constraint->GetController());
@@ -145,8 +175,9 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
                 m_contactSurface[wheel] = id;
                 updateEllipseSlip(wheel, slip);
             }
-            ioLong *= s.longitudinalFriction;
-            ioLat *= s.lateralFriction;
+            const float tire = m_config.tuning.tireSurfaceGrip[std::size_t(id)];
+            ioLong *= s.longitudinalFriction * tire;
+            ioLat *= s.lateralFriction * tire;
         });
     // Max tire impulses = friction x suspension impulse (Jolt's default), then the friction ellipse.
     m_controller->SetTireMaxImpulseCallback([this](uint wheel, float& outLong, float& outLat, float suspensionImpulse,
@@ -249,22 +280,80 @@ void Vehicle::applyTuning(const VehicleTuning& t) {
     // We own the WheelSettings; Jolt keeps pointers to them and reads them every step.
     for (int i = 0; i < kWheelCount; ++i) {
         auto& w = m_wheelSettings[i];
-        const bool front = i < 2;
+        const AxleTuning& a = t.axles[i < 2 ? kFrontAxle : kRearAxle];
         w->mSuspensionSpring.mMode = JPH::ESpringMode::FrequencyAndDamping;
-        w->mSuspensionSpring.mFrequency = front ? t.frontSpringFrequency : t.rearSpringFrequency;
-        w->mSuspensionSpring.mDamping = front ? t.frontDamping : t.rearDamping;
-        w->mMaxBrakeTorque = t.maxBrakeTorque;
-        w->mMaxHandBrakeTorque = front ? 0.0f : t.maxHandBrakeTorque;
+        w->mSuspensionSpring.mFrequency = a.springFrequency;
+        w->mSuspensionSpring.mDamping = m_suspVelocity[i] > 0.0f ? a.reboundDamping : a.compressionDamping;
+        w->mMaxBrakeTorque = a.brakeTorque;
+        w->mMaxHandBrakeTorque = a.handBrakeTorque;
     }
     buildTireCurves(t);
 
     auto& bars = m_constraint->GetAntiRollBars();
-    bars[0].mStiffness = t.antiRollFront;
-    bars[1].mStiffness = t.antiRollRear;
+    bars[0].mStiffness = t.axles[kFrontAxle].antiRoll;
+    bars[1].mStiffness = t.axles[kRearAxle].antiRoll;
 
     m_controller->GetEngine().mMaxTorque = t.engineMaxTorque;
     m_controller->GetTransmission().mClutchStrength = t.clutchStrength;
     applyDifferentials();
+}
+
+bool Vehicle::needsRebuild(const VehicleConfig& a, const VehicleConfig& b) {
+    VehicleConfig x = a;
+    x.tuning = b.tuning;
+    return !(x == b);
+}
+
+// Jolt's spring has one damping coefficient. The compression or rebound ratio is chosen from the direction the
+// suspension moved during the previous step (a one-step lag), and within bumpStopRange of full compression the
+// spring frequency rises linearly toward springFrequency x bumpStopFrequencyScale.
+void Vehicle::applySuspensionPerTick() {
+    const VehicleTuning& t = m_config.tuning;
+    for (int i = 0; i < kWheelCount; ++i) {
+        const int axle = i < 2 ? kFrontAxle : kRearAxle;
+        const AxleTuning& a = t.axles[axle];
+        auto& spring = m_wheelSettings[i]->mSuspensionSpring;
+        spring.mDamping = m_suspVelocity[i] > 0.0f ? a.reboundDamping : a.compressionDamping;
+        float frequency = a.springFrequency;
+        if (a.bumpStopRange > 0.0f) {
+            const float into = m_config.axles[axle].suspensionMinLength + a.bumpStopRange - m_prevSuspLength[i];
+            const float x = std::clamp(into / a.bumpStopRange, 0.0f, 1.0f);
+            frequency *= 1.0f + (a.bumpStopFrequencyScale - 1.0f) * x;
+        }
+        spring.mFrequency = frequency;
+    }
+}
+
+// Ackermann steering: Jolt turns every steered wheel to steer x mMaxSteerAngle. With ackermann > 0 the outer front
+// wheel's maximum angle is lowered before the step so that its angle approaches the Ackermann angle for the inner
+// wheel's angle: cot(outer) = cot(inner) + track / wheelBase.
+void Vehicle::applyAckermann(float steer) {
+    const float maxAngle = m_config.axles[kFrontAxle].maxSteerAngleDeg * kDegToRad;
+    m_wheelSettings[0]->mMaxSteerAngle = maxAngle;
+    m_wheelSettings[1]->mMaxSteerAngle = maxAngle;
+    const float k = m_config.tuning.ackermann;
+    if (k <= 0.0f || std::abs(steer) < 1e-4f || maxAngle <= 0.0f) return;
+    const float inner = std::abs(steer) * maxAngle;
+    const float ackermannOuter =
+        std::atan(1.0f / (1.0f / std::tan(inner) + m_config.axles[kFrontAxle].track / m_config.wheelBase));
+    const float outer = inner + k * (ackermannOuter - inner);
+    // steer > 0 turns right (Jolt angle = -steer * max): the left wheel (0, +X) is outside.
+    const int outerWheel = steer > 0.0f ? 0 : 1;
+    m_wheelSettings[outerWheel]->mMaxSteerAngle = outer / std::abs(steer);
+}
+
+// Aerodynamic drag at the center of mass against the body velocity (no lift or downforce).
+void Vehicle::applyDrag() {
+    const VehicleTuning& t = m_config.tuning;
+    m_telemetry.dragForce = 0.0f;
+    if (t.dragArea <= 0.0f) return;
+    JPH::BodyInterface& bi = m_world.bodies();
+    const JPH::Vec3 v = bi.GetLinearVelocity(m_bodyId);
+    const float speed = v.Length();
+    if (speed < 1e-3f) return;
+    const float force = 0.5f * t.airDensity * t.dragArea * speed * speed;
+    bi.AddForce(m_bodyId, -v * (force / speed));
+    m_telemetry.dragForce = force;
 }
 
 DiffMode Vehicle::effectiveDiff(int which) const {
@@ -272,6 +361,8 @@ DiffMode Vehicle::effectiveDiff(int which) const {
     // Locker stages: 1 rear, 2 rear + center, 3 all.
     const int stageNeeded[3] = {3, 1, 2};
     if (m_controls.diffLocks >= stageNeeded[which]) return DiffMode::Locked;
+    if (which == 2 && m_config.layout == DriveLayout::PartTime && m_transfer != TransferMode::TwoHigh)
+        return DiffMode::Locked;
     return which == 0 ? t.frontDiff : which == 1 ? t.rearDiff : t.centerDiff;
 }
 
@@ -279,14 +370,39 @@ DiffMode Vehicle::effectiveDiff(int which) const {
 // side as the speed ratio approaches mLimitedSlipRatio, where all torque goes to the slower side. "Locked" uses
 // the same model with lockedSlipRatio (1.05): the faster side loses its drive torque at a 5 % speed difference. The
 // two sides are not coupled kinematically, so a locked axle neither scrubs in turns nor drags a lifted wheel along.
+//
+// Layouts: an undriven axle's differential gets wheel indices -1, so Jolt neither drives those wheels nor counts them
+// in the clutch speed (they roll freely and still brake). The torque ratios of the driven differentials sum to 1.
+// Part-time 4H / 4L force the center to Locked, i.e. the same torque bias as above, not a rigid transfer case:
+// there is no driveline wind-up between the axles in turns.
 void Vehicle::applyDifferentials() {
     const VehicleTuning& t = m_config.tuning;
     const float locked = std::max(t.lockedSlipRatio, 1.001f);
     auto ratio = [&](DiffMode m, float lsd) {
         return m == DiffMode::LimitedSlip ? std::max(lsd, 1.001f) : m == DiffMode::Locked ? locked : FLT_MAX;
     };
+    bool front = true, rear = true;
+    float frontShare = std::clamp(t.frontTorqueShare, 0.0f, 1.0f);
+    switch (m_config.layout) {
+    case DriveLayout::Rwd: front = false; break;
+    case DriveLayout::Fwd: rear = false; break;
+    case DriveLayout::PartTime:
+        front = m_transfer != TransferMode::TwoHigh;
+        frontShare = 0.5f;
+        break;
+    case DriveLayout::Awd:
+    case DriveLayout::OnDemand: break;
+    }
+    if (!front) frontShare = 0.0f;
+    if (!rear) frontShare = 1.0f;
     auto& diffs = m_controller->GetDifferentials();
-    const float finalDrive = m_config.differentialRatio * (m_lowRange ? m_config.lowRangeRatio : 1.0f);
+    const float finalDrive = m_config.tuning.finalDrive * (m_lowRange ? m_config.lowRangeRatio : 1.0f);
+    diffs[0].mLeftWheel = front ? 0 : -1;
+    diffs[0].mRightWheel = front ? 1 : -1;
+    diffs[1].mLeftWheel = rear ? 2 : -1;
+    diffs[1].mRightWheel = rear ? 3 : -1;
+    diffs[0].mEngineTorqueRatio = frontShare;
+    diffs[1].mEngineTorqueRatio = 1.0f - frontShare;
     diffs[0].mLimitedSlipRatio = ratio(effectiveDiff(0), t.limitedSlipRatio);
     diffs[1].mLimitedSlipRatio = ratio(effectiveDiff(1), t.limitedSlipRatio);
     for (auto& d : diffs) d.mDifferentialRatio = finalDrive;
@@ -294,6 +410,11 @@ void Vehicle::applyDifferentials() {
     m_telemetry.frontDiff = effectiveDiff(0);
     m_telemetry.rearDiff = effectiveDiff(1);
     m_telemetry.centerDiff = effectiveDiff(2);
+    m_telemetry.frontDriven = front;
+    m_telemetry.rearDriven = rear;
+    m_telemetry.frontTorqueShare = frontShare;
+    m_telemetry.layout = m_config.layout;
+    m_telemetry.transfer = m_transfer;
 }
 
 void Vehicle::setAidControls(const AidControls& controls) {
@@ -311,8 +432,29 @@ bool Vehicle::toggleDirection() {
 }
 
 bool Vehicle::toggleLowRange() {
+    if (m_config.layout == DriveLayout::PartTime)
+        return setTransfer(m_transfer == TransferMode::FourLow ? TransferMode::FourHigh : TransferMode::FourLow);
     if (std::abs(m_telemetry.forwardSpeed) > kShiftSpeedLimit) return false;
     m_lowRange = !m_lowRange;
+    applyDifferentials();
+    m_telemetry.lowRange = m_lowRange;
+    return true;
+}
+
+bool Vehicle::cycleTransfer() {
+    if (m_config.layout != DriveLayout::PartTime) return false;
+    const TransferMode next = m_transfer == TransferMode::TwoHigh    ? TransferMode::FourHigh
+                              : m_transfer == TransferMode::FourHigh ? TransferMode::FourLow
+                                                                     : TransferMode::TwoHigh;
+    return setTransfer(next);
+}
+
+bool Vehicle::setTransfer(TransferMode mode) {
+    if (m_config.layout != DriveLayout::PartTime) return false;
+    const bool low = mode == TransferMode::FourLow;
+    if (low != m_lowRange && std::abs(m_telemetry.forwardSpeed) > kShiftSpeedLimit) return false;
+    m_transfer = mode;
+    m_lowRange = low;
     applyDifferentials();
     m_telemetry.lowRange = m_lowRange;
     return true;
@@ -341,10 +483,11 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     for (int i = 0; i < kWheelCount; ++i) {
         const WheelTelemetry& w = m_telemetry.wheels[i];
         in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed};
+        in.maxBrakeTorque[i] = m_config.tuning.axles[i < 2 ? kFrontAxle : kRearAxle].brakeTorque;
+        in.driven[i] = i < 2 ? m_telemetry.frontDriven : m_telemetry.rearDriven;
     }
     in.throttle = cmd.throttle;
     in.brake = cmd.brake;
-    in.maxBrakeTorque = m_config.tuning.maxBrakeTorque;
     in.driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
     in.dt = dt;
     m_aidOut = m_aids.update(m_config.tuning.aids, m_controls, in);
@@ -352,7 +495,22 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     for (int i = 0; i < kWheelCount; ++i) maxTorque = std::max(maxTorque, m_aidOut.brakeTorque[i]);
     for (int i = 0; i < kWheelCount; ++i) m_wheelSettings[i]->mMaxBrakeTorque = m_aidOut.brakeTorque[i];
 
+    // Rev limiter (only below Jolt's own clamp at the maximum rpm): throttle cut with 150 rpm hysteresis.
+    const VehicleTuning& vt = m_config.tuning;
+    const float rpm = m_controller->GetEngine().GetCurrentRPM();
+    if (vt.revLimitRPM < m_config.engineMaxRPM) {
+        if (rpm >= vt.revLimitRPM) m_revCut = true;
+        else if (rpm < vt.revLimitRPM - 150.0f) m_revCut = false;
+    } else {
+        m_revCut = false;
+    }
+    if (m_revCut) m_aidOut.throttle = 0.0f;
+    m_telemetry.revLimited = m_revCut;
+
     tr.mClutchStrength = clutchStrength(m_aidOut.throttle);
+    applySuspensionPerTick();
+    applyAckermann(cmd.steer);
+    applyDrag();
     // Jolt automatic: the sign of the forward input selects forward or reverse.
     const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * m_aidOut.throttle;
     m_controller->SetDriverInput(forward, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);
@@ -407,6 +565,8 @@ void Vehicle::postPhysics(float dt) {
         wt.contact = w->HasContact();
         wt.bumpStop = w->HasHitHardPoint();
         wt.suspensionLength = w->GetSuspensionLength();
+        m_suspVelocity[i] = dt > 0.0f ? (wt.suspensionLength - m_prevSuspLength[i]) / dt : 0.0f;
+        m_prevSuspLength[i] = wt.suspensionLength;
         wt.compression = s->mSuspensionMaxLength - wt.suspensionLength;
         const float travel = s->mSuspensionMaxLength - s->mSuspensionMinLength;
         wt.compressionRatio = travel > 0.0f ? wt.compression / travel : 0.0f;

@@ -41,11 +41,12 @@ wait 1.0
 expect menu_cursor == 0
 tap Up
 wait 0.1
-expect menu_cursor == 2        # wraps to Quit
+expect menu_cursor == 3        # wraps to Quit
+tap Down
 tap Down
 tap Down
 wait 0.1
-expect menu_cursor == 1
+expect menu_cursor == 2        # Start, Garage, Settings
 tap Return
 wait 0.1
 expect menu_page == 2
@@ -113,7 +114,8 @@ wait 0.2
 expect d_ticks == 0
 expect d_z == 0
 
-# Settings from the pause menu, then back and resume
+# Settings from the pause menu, then back and resume (Resume, Reset vehicle, Garage, Settings)
+tap Down
 tap Down
 tap Down
 wait 0.1

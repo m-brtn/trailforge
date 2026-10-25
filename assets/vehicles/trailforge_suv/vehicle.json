@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "id": "trailforge_suv",
+  "name": "TrailForge SUV",
+  "description": "Body-on-frame off-roader: long-travel coil suspension, all-terrain tires, automatic gearbox, low range.",
+  "visualModel": "trailforge_suv",
+  "audioProfile": "trailforge_suv",
+  "body": {
+    "mass": 2000,
+    "inertiaScale": 1.0,
+    "inertia": null,
+    "centerOfMass": {"frontWeightFraction": 0.5178571428571429, "height": -0.10},
+    "friction": 0.5,
+    "angularDamping": 0.02
+  },
+  "geometry": {"wheelBase": 2.80, "attachHeight": 0.05},
+  "axles": {
+    "front": {
+      "track": 1.80,
+      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2},
+      "suspension": {
+        "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,
+        "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
+        "bumpStop": {"range": 0.0, "frequencyScale": 1.0}
+      },
+      "brakeTorque": 3000,
+      "handBrakeTorque": 0
+    },
+    "rear": {
+      "track": 1.80,
+      "wheel": {"radius": 0.40, "width": 0.30, "mass": 35, "inertia": 0, "angularDamping": 0.2},
+      "suspension": {
+        "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,
+        "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
+        "bumpStop": {"range": 0.0, "frequencyScale": 1.0}
+      },
+      "brakeTorque": 3000,
+      "handBrakeTorque": 3500
+    }
+  },
+  "tires": {
+    "longitudinal": {"peakSlip": 0.10, "peakFriction": 1.00, "slideFriction": 0.80},
+    "lateral": {"peakSlipAngleDeg": 6.0, "peakFriction": 1.00, "slideFriction": 0.78},
+    "staticGrip": true,
+    "slipSpeedFloor": 1.0,
+    "frictionEllipse": true,
+    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 1, "grass": 1, "sand": 1}
+  },
+  "steering": {"maxAngleDeg": 35, "rate": 2.2, "returnRate": 3.5, "ackermann": 0.0},
+  "engine": {
+    "type": "combustion",
+    "maxTorque": 520,
+    "torqueCurve": [[0.0, 0.8], [0.66, 1.0], [1.0, 0.8]],
+    "idleRPM": 800,
+    "maxRPM": 4800,
+    "revLimitRPM": 4800,
+    "inertia": 0.6,
+    "angularDamping": 0.2
+  },
+  "gearbox": {
+    "mode": "auto",
+    "ratios": [4.20, 2.55, 1.60, 1.15, 0.85],
+    "reverseRatios": [-4.00],
+    "finalDrive": 3.90,
+    "lowRange": 2.72,
+    "shiftUpRPM": 3800,
+    "shiftDownRPM": 1500,
+    "shiftTime": 0.35,
+    "clutchReleaseTime": 0.25,
+    "shiftLatency": 0.5,
+    "clutchStrength": 10,
+    "launchClutchLimit": true,
+    "creepTorque": 40
+  },
+  "drivetrain": {
+    "layout": "awd",
+    "frontTorqueShare": 0.5,
+    "frontDiff": "open",
+    "rearDiff": "lsd",
+    "centerDiff": "lsd",
+    "limitedSlipRatio": 1.4,
+    "centerLimitedSlipRatio": 1.4,
+    "lockedSlipRatio": 1.05
+  },
+  "aero": {"dragArea": 0.0, "airDensity": 1.225},
+  "aids": {
+    "absEnabled": false,
+    "traction": "off",
+    "absReleaseSlip": 0.18,
+    "absApplySlip": 0.08,
+    "absReleaseRate": 40,
+    "absApplyRate": 8,
+    "absMinPressure": 0.0,
+    "absMinSpeed": 1.5,
+    "tcSlipThreshold": 0.20,
+    "tcOffRoadSlipThreshold": 0.35,
+    "tcMinSpeed": 2.0,
+    "tcSlipFilterTime": 0.05,
+    "tcBrakeGain": 3000,
+    "tcMaxBrakeTorque": 1500,
+    "tcBrakeRate": 8000,
+    "tcCutRate": 1.5,
+    "tcRecoverRate": 0.6,
+    "tcMinThrottle": 0.05,
+    "tcOffRoadMinThrottle": 0.10,
+    "tcSpinSpeed": 0.3,
+    "tcRollbackSpeed": 0.3
+  },
+  "garage": {"ranges": {}},
+  "kits": []
+}

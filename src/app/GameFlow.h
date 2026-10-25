@@ -10,22 +10,26 @@ namespace tf {
 
 // Top-level state of the game. Pure C++ (no SDL, no ImGui): the Application feeds it menu input and acts on the
 // returned commands; the menu renderer only reads it.
-enum class Screen { Intro, MainMenu, Playing, Paused };
+// Garage: opened from the start or the pause menu; the simulation runs (the vehicle can be rebuilt in place) and
+// closing it returns to the menu it came from.
+enum class Screen { Intro, MainMenu, Playing, Paused, Garage };
 
 // Menu pages. Start enters the game directly for now; level and vehicle selection pages will go between Main and
 // the StartGame command (push them from MenuItem::Start).
 enum class MenuPage { Main, Pause, Settings, Controls };
 
 enum class MenuItem {
-    Start, Settings, Quit,                       // main
-    Resume, Restart, QuitToMenu, QuitGame,       // pause (+ Settings)
+    Start, Garage, Settings, Quit,               // main
+    Resume, Restart, QuitToMenu, QuitGame,       // pause (+ Garage, Settings)
     Quality, RenderScale, VSync,                 // settings: graphics
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
     Controls, Back,
 };
 
-enum class MenuCommand { None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed };
+enum class MenuCommand {
+    None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed, OpenGarage, CloseGarage
+};
 enum class MenuSound { None, Move, Confirm, Back, Adjust, Open, Close };
 
 // One frame of menu input (keyboard, mouse and gamepad already merged).
@@ -64,7 +68,8 @@ public:
 
     // A menu (or the intro) owns the input; gameplay controls are ignored.
     bool menuActive() const { return m_screen != Screen::Playing; }
-    // The pause menu freezes the simulation: no ticks, the fixed-step accumulator keeps its value.
+    // The pause menu freezes the simulation: no ticks, the fixed-step accumulator keeps its value. The garage runs it,
+    // also when opened from the pause menu.
     bool simulationRuns() const { return m_screen != Screen::Paused; }
     // Physics ticks for this frame: 0 (accumulator untouched) unless the simulation runs.
     int stepsForFrame(FixedStepClock& clock, double frameTime) const {
@@ -86,6 +91,9 @@ public:
     void resume();
     void toMainMenu();
     void openSettings();
+    void openGarage();  // from the start or the pause menu
+    void closeGarage(); // back to that menu, cursor on GARAGE
+    Screen garageReturn() const { return m_garageReturn; }
     bool back(); // pops a page; false at a root page
     bool select(MenuItem item); // moves the cursor to the item on the current page
 
@@ -103,6 +111,7 @@ private:
     double m_screenTime = 0.0;
     double m_introTime = 0.0;
     double m_menuFadeLength = 0.0; // > 0 while the start menu fades in after the intro
+    Screen m_garageReturn = Screen::MainMenu;
 };
 
 const char* menuLabel(MenuItem item);

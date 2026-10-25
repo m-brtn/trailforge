@@ -69,6 +69,12 @@ struct VehicleTelemetry {
     bool shifting = false;
     DriveDirection direction = DriveDirection::Forward;
     bool lowRange = false;
+    DriveLayout layout = DriveLayout::Awd;
+    TransferMode transfer = TransferMode::FourHigh; // part-time layouts only
+    bool frontDriven = true, rearDriven = true;     // axles connected to the engine on the last tick
+    float frontTorqueShare = 0.5f;                  // base engine torque share of the front axle (before the center LSD)
+    bool revLimited = false;                        // rev limiter cut the throttle on the last tick
+    float dragForce = 0.0f;                         // N, aerodynamic drag of the last tick
     DriverCommand command;      // commands applied on the last tick (driver pedals, before the aids)
     AidControls controls;       // ABS / TC / locker switches
     bool absActive = false;     // ABS modulated at least one wheel on the last tick
@@ -81,7 +87,8 @@ struct VehicleTelemetry {
     std::array<WheelTelemetry, kWheelCount> wheels;
 };
 
-// Off-road vehicle based on Jolt VehicleConstraint + WheeledVehicleController (four-wheel drive).
+// Four-wheeled vehicle based on Jolt VehicleConstraint + WheeledVehicleController; the drive layout comes from the
+// configuration (VehicleConfig::layout).
 // Moves only via simulation forces/torques; position/velocity are never set directly
 // (except when spawning at the start position).
 class Vehicle {
@@ -100,8 +107,12 @@ public:
 
     // Forward/reverse only near a stop. Returns true if switched.
     bool toggleDirection();
-    // Low range only near a stop.
+    // Low range only near a stop. On a part-time layout this switches 4H <-> 4L (2H -> 4L engages the front axle).
     bool toggleLowRange();
+    // Part-time layouts: 2H -> 4H -> 4L -> 2H. 2H <-> 4H also while moving (shift on the fly), 4L only near a stop.
+    // Returns false (and changes nothing) for other layouts or when the speed is too high.
+    bool cycleTransfer();
+    bool setTransfer(TransferMode mode);
     static constexpr float kShiftSpeedLimit = 1.0f; // m/s
 
     // Driver aid switches (ABS, TC, lockers); take effect on the next tick.
@@ -110,6 +121,9 @@ public:
 
     // Apply settings that do not require recreation. Call between steps.
     void applyTuning(const VehicleTuning& tuning);
+    // True if switching from config a to b needs a new Jolt body / constraint (geometry, wheels, engine, gearbox,
+    // layout, mass); false if b differs only in VehicleTuning.
+    static bool needsRebuild(const VehicleConfig& a, const VehicleConfig& b);
 
     const VehicleConfig& config() const { return m_config; }
     const VehicleTelemetry& telemetry() const { return m_telemetry; }
@@ -131,6 +145,9 @@ private:
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
     float clutchStrength(float throttle) const;
     void applyDifferentials();
+    void applySuspensionPerTick(); // compression / rebound damping, bump stops
+    void applyAckermann(float steer);
+    void applyDrag();
 
     PhysicsWorld& m_world;
     const SurfaceTable& m_surfaces;
@@ -152,6 +169,10 @@ private:
 
     DriveDirection m_direction = DriveDirection::Forward;
     bool m_lowRange = false;
+    TransferMode m_transfer = TransferMode::TwoHigh;
+    bool m_revCut = false;
+    std::array<float, kWheelCount> m_prevSuspLength{};
+    std::array<float, kWheelCount> m_suspVelocity{}; // m/s, + = extending (rebound)
     DriverCommand m_command;
     AidControls m_controls;
     DrivingAids m_aids;

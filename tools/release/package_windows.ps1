@@ -7,7 +7,7 @@
 # Run from an "x64 Native Tools" developer prompt (MSVC cl, Ninja and CMake on PATH; CI uses
 # ilammy/msvc-dev-cmd). Steps: clean Release configure in build/package with TRAILFORGE_PACKAGED=ON (assets are read
 # only from next to the executable), build, ctest, assemble dist/TrailForge-<version>-windows-x64/ (trailforge.exe,
-# assets/{audio,music,fonts,images}, README.txt), check that the executable has no source-tree references, zip it, then smoke test a
+# assets/{audio,music,fonts,images,vehicles}, README.txt), check that the executable has no source-tree references, zip it, then smoke test a
 # fresh extraction from another working directory (--version, --paths: the asset directory must be the one inside
 # the package). The version comes from project(TrailForge VERSION x.y.z) in CMakeLists.txt.
 param([switch]$SmokeWindow)
@@ -55,7 +55,7 @@ if (Test-Path $Pkg) { Remove-Item -Recurse -Force $Pkg }
 if (Test-Path $Zip) { Remove-Item -Force $Zip }
 New-Item -ItemType Directory -Force (Join-Path $Pkg 'assets') | Out-Null
 Copy-Item $Exe $Pkg
-foreach ($sub in 'audio', 'music', 'fonts', 'images') {
+foreach ($sub in 'audio', 'music', 'fonts', 'images', 'vehicles') {
     Copy-Item -Recurse (Join-Path $Root "assets\$sub") (Join-Path $Pkg "assets\$sub")
 }
 # The logo is copied from external_assets/images into the build tree at configure time.
@@ -71,7 +71,8 @@ Run:  trailforge.exe            (needs a Direct3D 12 or Vulkan capable GPU and d
 Keep the assets folder next to the executable. The executable is not code-signed, so Windows SmartScreen
 may warn on first start ("More info" -> "Run anyway").
 "@ | Set-Content -Encoding ascii (Join-Path $Pkg 'README.txt')
-foreach ($f in 'audio\manifest.json', 'music\intro.mp3', 'fonts\Rajdhani-SemiBold.ttf', 'fonts\OFL.txt', 'images\logo.png') {
+foreach ($f in 'audio\manifest.json', 'music\intro.mp3', 'fonts\Rajdhani-SemiBold.ttf', 'fonts\OFL.txt', 'images\logo.png',
+            'vehicles\trailforge_suv\vehicle.json') {
     if (-not (Test-Path (Join-Path $Pkg "assets\$f"))) { Fail "assets\$f missing in the package" }
 }
 if (Select-String -Path (Join-Path $Pkg 'trailforge.exe') -SimpleMatch -Quiet -Pattern (Join-Path $Root 'assets')) {

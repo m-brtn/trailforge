@@ -40,9 +40,8 @@ struct AutoReverseSettings {
 
 // Pedal and steering smoothing. Updated on every physics tick with a fixed dt,
 // so it does not depend on FPS.
+// The steering rates belong to the vehicle (VehicleTuning::steerRate / steerReturnRate).
 struct InputSmoothing {
-    float steerRate = 2.2f;       // 1/s, steering rate toward the target (keyboard)
-    float steerReturnRate = 3.5f; // 1/s, return-to-center rate
     float pedalRise = 3.0f;       // 1/s
     float pedalFall = 6.0f;       // 1/s
 };
@@ -94,6 +93,12 @@ public:
     void requestReset() { m_pendingReset = true; }
     void requestRebuild(const VehicleConfig& config) { m_pendingRebuild = config; }
     void requestTuning(const VehicleTuning& tuning) { m_pendingTuning = tuning; }
+    // Garage: a complete configuration. Applied live when only VehicleTuning differs, otherwise the vehicle is
+    // recreated where it stands (same x/z and heading, wheels just above the ground), keeping the driver switches.
+    void requestVehicleConfig(const VehicleConfig& config) { m_pendingConfig = config; }
+    // Part-time transfer case: 2H -> 4H -> 4L (T key cycles traction control; this is the V key).
+    void requestCycleTransfer() { m_pendingTransferCycle = true; }
+    void requestTransfer(TransferMode mode) { m_pendingTransfer = mode; }
     void requestTeleport(int featureIndex) { m_pendingTeleport = featureIndex; }
     // Driver aid switches: B (ABS on/off), T (TC Off -> On -> Off-road), X (lockers none -> rear -> rear + center ->
     // all), or a direct setting (UI, scenarios). ABS and TC survive a reset/rebuild; the lockers reset like low range.
@@ -126,7 +131,7 @@ public:
     const TireMarks& tireMarks() const { return m_tireMarks; }
     // New contacts of the vehicle body during the last tick (observation only, for impact sounds).
     const std::vector<BodyImpact>& bodyImpacts() const { return m_impactListener.impacts(); }
-    // Incremented whenever the vehicle is (re)created: start, R reset, teleport, rebuild.
+    // Incremented whenever the vehicle is (re)created: start, R reset, teleport, rebuild, garage respawn.
     unsigned spawnCount() const { return m_spawnCount; }
     const RenderSnapshot& previousSnapshot() const { return m_prev; }
     const RenderSnapshot& currentSnapshot() const { return m_curr; }
@@ -143,6 +148,7 @@ public:
 private:
     // config by value: the old vehicle (and its config) is destroyed inside.
     void spawnVehicle(VehicleConfig config, const TrackFeature& at);
+    void respawnInPlace(VehicleConfig config);
     RenderSnapshot captureSnapshot() const;
     void processCommands();
     void setMessage(const char* text);
@@ -171,6 +177,9 @@ private:
     bool m_pendingReset = false;
     std::optional<VehicleConfig> m_pendingRebuild;
     std::optional<VehicleTuning> m_pendingTuning;
+    std::optional<VehicleConfig> m_pendingConfig;
+    bool m_pendingTransferCycle = false;
+    std::optional<TransferMode> m_pendingTransfer;
     std::optional<int> m_pendingTeleport;
     bool m_pendingAbsToggle = false;
     bool m_pendingTractionCycle = false;

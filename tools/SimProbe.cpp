@@ -9,10 +9,14 @@
 //   trailforge_probe tc               - hill starts on the ramps with traction control off / on / off-road
 //   trailforge_probe tcmud            - 15 degree mud hill start sweep (60/120/240 Hz x 3 creep points) per TC mode
 //   trailforge_probe diff             - differential modes with a wheel in the air (pit, diagonal twister)
+//   trailforge_probe layouts          - drivetrain layouts / transfer modes: launches, climbs, the pit slope
+// Every mode drives the vehicle of TRAILFORGE_VEHICLE (path to a vehicle.json), by default
+// assets/vehicles/trailforge_suv/vehicle.json; TRAILFORGE_VEHICLE=builtin uses the C++ defaults of VehicleConfig.
 
 #include "audio/AudioMixer.h"
 #include "audio/VehicleAudioFeed.h"
 #include "sim/Simulation.h"
+#include "vehicle/VehicleDefinition.h"
 
 #include <algorithm>
 #include <chrono>
@@ -25,6 +29,29 @@
 using namespace tf;
 
 namespace {
+
+// Settings with the probe vehicle (see the header comment).
+SimulationSettings probeSettings() {
+    static const VehicleConfig vehicle = [] {
+        const char* env = std::getenv("TRAILFORGE_VEHICLE");
+        std::string path = env ? env : TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json";
+        if (path == "builtin") {
+            std::fprintf(stderr, "probe vehicle: C++ defaults\n");
+            return VehicleConfig{};
+        }
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        if (!loadVehicleDefinition(path, def, errors)) {
+            for (const auto& e : errors) std::fprintf(stderr, "%s\n", e.c_str());
+            std::exit(2);
+        }
+        std::fprintf(stderr, "probe vehicle: %s (%s)\n", def.id.c_str(), path.c_str());
+        return def.config;
+    }();
+    SimulationSettings s;
+    s.vehicle = vehicle;
+    return s;
+}
 
 void printRow(Simulation& sim, double time) {
     const auto& t = sim.vehicle().telemetry();
@@ -39,7 +66,7 @@ void printRow(Simulation& sim, double time) {
 }
 
 void brake() {
-    SimulationSettings s;
+    SimulationSettings s = probeSettings();
     s.layout = TrackLayout::Flat;
     Simulation sim(s);
     double time = 0.0;
@@ -58,7 +85,7 @@ void brake() {
 }
 
 void course(double hz) {
-    SimulationSettings s;
+    SimulationSettings s = probeSettings();
     s.fixedStep = 1.0 / hz;
     Simulation sim(s);
     double time = 0.0;
@@ -76,7 +103,7 @@ void course(double hz) {
 // Vertical balance: sum(F_i . y) - m*g = m * a_y, where F_i is the total force of wheel i
 // (normal + longitudinal + lateral; all Jolt lambdas are impulses per step, F = lambda / dt).
 void corner(TrackLayout layout, float steer, double holdSeconds, int collisionSteps) {
-    SimulationSettings s;
+    SimulationSettings s = probeSettings();
     s.layout = layout;
     s.collisionSteps = collisionSteps;
     Simulation sim(s);
@@ -135,7 +162,7 @@ void corner(TrackLayout layout, float steer, double holdSeconds, int collisionSt
 
 // Same input as --demo (throttle 0.35, steering -0.45 after 3 s) on the proving ground: 1 s windows.
 void demoLoads() {
-    Simulation sim;
+    Simulation sim(probeSettings());
     const double dt = sim.fixedStep();
     const JPH::BodyID id = sim.vehicle().bodyId();
     auto& bi = sim.world().bodies();
@@ -182,7 +209,7 @@ void demoLoads() {
 
 // 12 degree climb in low range from a standstill; on the plateau the throttle is released and full brake applied (as in the scenario).
 void hillBrake() {
-    Simulation sim;
+    Simulation sim(probeSettings());
     sim.requestTeleport(4);
     for (int i = 0; i < 120; ++i) sim.tick();
     sim.requestToggleLowRange();
@@ -208,7 +235,7 @@ void hillBrake() {
 
 // Suspension articulation trace: teleport to a feature, drive slowly, print per-wheel travel.
 void susp(int feature, float throttle, bool low, double secs, float steer) {
-    Simulation sim;
+    Simulation sim(probeSettings());
     sim.requestTeleport(feature);
     for (int i = 0; i < 240; ++i) sim.tick();
     if (low) { sim.requestToggleLowRange(); sim.tick(); }
@@ -256,7 +283,7 @@ void susp(int feature, float throttle, bool low, double secs, float steer) {
 
 void bench() {
     for (double hz : {60.0, 120.0, 240.0}) {
-        SimulationSettings s;
+        SimulationSettings s = probeSettings();
         s.fixedStep = 1.0 / hz;
         Simulation sim(s);
         const int n = int(20.0 * hz);
@@ -293,7 +320,7 @@ struct SkidRig {
     explicit SkidRig(int lane) : lane(lane) {}
     int lane; // -1 = flat concrete pad
     Simulation sim{[this] {
-        SimulationSettings s;
+        SimulationSettings s = probeSettings();
         s.layout = lane < 0 ? TrackLayout::Flat : TrackLayout::SurfaceLanes;
         if (const char* hz = std::getenv("PROBE_HZ")) s.fixedStep = 1.0 / std::atof(hz);
         return s;
@@ -469,7 +496,7 @@ void launchTrace(int lane, float throttle) {
 // Drives around the mud & puddles showcase (real proving ground surfaces) with wheelspin and turns, and reports
 // every stretch where the skid layer is audible with the surfaces under the wheels.
 void showcase() {
-    Simulation sim;
+    Simulation sim(probeSettings());
     SoundBank bank;
     AudioMixer mixer{bank};
     VehicleAudioFeed feed;
@@ -526,7 +553,7 @@ void surfaces() {
     std::printf("effective peak mu (tire curve x surface): long %.2f, lat %.2f x multipliers\n",
                 VehicleTuning{}.tirePeakLongFriction, VehicleTuning{}.tirePeakLatFriction);
     {
-        SimulationSettings flat;
+        SimulationSettings flat = probeSettings();
         flat.layout = TrackLayout::Flat;
         Simulation sim(flat); // the surface table needs the Jolt runtime
         const SurfaceTable& table = sim.surfaces();
@@ -563,7 +590,7 @@ void surfaces() {
     };
     for (int lane = 0; lane < 6; ++lane) {
         for (int low = 0; low < 2; ++low) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = TrackLayout::SurfaceLanes;
             Simulation sim(s);
             sim.requestTeleport(lane);
@@ -576,7 +603,7 @@ void surfaces() {
         }
     }
     for (int lane = 0; lane < 6; ++lane) {
-        SimulationSettings s;
+        SimulationSettings s = probeSettings();
         s.layout = TrackLayout::SurfaceLanes;
         Simulation sim(s);
         sim.requestTeleport(lane);
@@ -600,7 +627,7 @@ void surfaces() {
     const char* rampNames[] = {"concrete", "dirt", "rock", "grass", "mud", "lowgrip"};
     for (int k = 0; k < 12; ++k) {
         for (int mode = 0; mode < 2; ++mode) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = TrackLayout::SurfaceRamps;
             Simulation sim(s);
             sim.requestTeleport(k);
@@ -655,9 +682,85 @@ void surfaces() {
     }
 }
 
+// Drivetrain layouts and transfer modes with the probe vehicle: launches on concrete, mud and low grip, rolling
+// climbs on the 20 degree dirt and the 15 degree mud ramps (all in high range except 4L).
+void layoutsProbe() {
+    struct Variant {
+        const char* name;
+        DriveLayout layout;
+        TransferMode transfer;
+    };
+    const Variant variants[] = {{"RWD", DriveLayout::Rwd, TransferMode::TwoHigh},
+                                {"FWD", DriveLayout::Fwd, TransferMode::TwoHigh},
+                                {"AWD", DriveLayout::Awd, TransferMode::TwoHigh},
+                                {"on-demand", DriveLayout::OnDemand, TransferMode::TwoHigh},
+                                {"part-time 2H", DriveLayout::PartTime, TransferMode::TwoHigh},
+                                {"part-time 4H", DriveLayout::PartTime, TransferMode::FourHigh},
+                                {"part-time 4L", DriveLayout::PartTime, TransferMode::FourLow}};
+    auto make = [](const Variant& v, TrackLayout track) {
+        SimulationSettings s = probeSettings();
+        s.layout = track;
+        s.vehicle.layout = v.layout;
+        return s;
+    };
+    auto engage = [](Simulation& sim, const Variant& v) {
+        if (v.layout == DriveLayout::PartTime && v.transfer != TransferMode::TwoHigh) {
+            sim.requestTransfer(v.transfer);
+            sim.tick();
+        }
+    };
+    const char* lanes[] = {"concrete", "mud", "lowgrip"};
+    const int laneIndex[] = {0, 2, 5};
+    for (const Variant& v : variants) {
+        std::printf("%-13s", v.name);
+        for (int l = 0; l < 3; ++l) {
+            Simulation sim(make(v, TrackLayout::SurfaceLanes));
+            sim.requestTeleport(laneIndex[l]);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            engage(sim, v);
+            double t = 0, t30 = -1, spin = 0, v2 = 0;
+            for (int i = 0; t < 5.0; ++i) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                float slip = 0;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                if (slip > 1.0f) spin += sim.fixedStep();
+                const float kmh = sim.vehicle().telemetry().speed * 3.6f;
+                if (std::abs(t - 2.0) < 0.5 * sim.fixedStep()) v2 = sim.vehicle().telemetry().speed;
+                if (t30 < 0 && kmh >= 30.0f) t30 = t;
+            }
+            std::printf(" | %-8s v(2s) %5.2f m/s, 0-30 %5.2f s, spin %4.2f s", lanes[l], v2, t30, spin);
+        }
+        std::printf("\n%-13s", "");
+        for (int k : {3, 8}) {
+            Simulation sim(make(v, TrackLayout::SurfaceRamps));
+            sim.requestTeleport(k);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            engage(sim, v);
+            const float z0 = sim.currentSnapshot().body.position.GetZ();
+            float zMax = z0;
+            double t = 0, top = -1;
+            while (t < 12.0 && top < 0) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                const float z = sim.currentSnapshot().body.position.GetZ();
+                zMax = std::max(zMax, z);
+                if (z > 24.0f) top = t;
+            }
+            std::printf(" | climb %s: %s", k == 3 ? "dirt 20 deg" : "mud 15 deg ", top >= 0 ? "top" : "no ");
+            if (top >= 0) std::printf(" in %5.2f s", top);
+            else std::printf(", max progress %5.2f m", zMax - z0);
+        }
+        std::printf("\n");
+    }
+}
+
 // Rolling low-range climb on one ramp lane of TrackLayout::SurfaceRamps: force balance every 0.25 s.
 void climbTrace(int lane) {
-    SimulationSettings s;
+    SimulationSettings s = probeSettings();
     s.layout = TrackLayout::SurfaceRamps;
     Simulation sim(s);
     sim.requestTeleport(lane);
@@ -705,7 +808,7 @@ void absProbe(int ellipse) {
     for (int lane : {0, 4, 1, 6, 3, 2}) {
         for (int steer = 0; steer < 2; ++steer) {
             for (int abs = 0; abs < 2; ++abs) {
-                SimulationSettings s;
+                SimulationSettings s = probeSettings();
                 s.layout = TrackLayout::SurfaceLanes;
                 if (ellipse >= 0) s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
                 Simulation sim(s);
@@ -775,7 +878,7 @@ void tcProbe() {
     const char* laneNames[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
     for (int lane : {0, 1, 3, 2}) {
         for (TractionMode tc : {TractionMode::Off, TractionMode::On, TractionMode::OffRoad}) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = TrackLayout::SurfaceLanes;
             Simulation sim(s);
             sim.requestTeleport(lane);
@@ -804,7 +907,7 @@ void tcProbe() {
     const char* rampNames[] = {"concrete", "dirt", "rock", "grass", "mud", "lowgrip"};
     for (int k : {8, 9, 7, 6, 2}) {
         for (TractionMode tc : {TractionMode::Off, TractionMode::On, TractionMode::OffRoad}) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = TrackLayout::SurfaceRamps;
             Simulation sim(s);
             sim.requestTeleport(k);
@@ -865,7 +968,7 @@ void tcMudSweep() {
         std::printf("tcmud TC %-8s:", tcName(tc));
         for (double hz : {60.0, 120.0, 240.0}) {
             for (float creepZ : {7.0f, 8.0f, 9.0f}) {
-                SimulationSettings s;
+                SimulationSettings s = probeSettings();
                 s.layout = TrackLayout::SurfaceRamps;
                 s.fixedStep = 1.0 / hz;
                 Simulation sim(s);
@@ -933,7 +1036,7 @@ void diffProbe() {
     };
     for (int track = 0; track < 2; ++track) {
         for (const Setup& su : setups) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = track == 0 ? TrackLayout::SlopeWithWheelPit : TrackLayout::ProvingGround;
             s.vehicle.tuning.frontDiff = su.f;
             s.vehicle.tuning.rearDiff = su.r;
@@ -978,7 +1081,7 @@ void ellipseProbe() {
     for (int ellipse = 0; ellipse < 2; ++ellipse) {
         for (const Mu& mu : mus) {
             for (float steer : {0.3f, 0.6f, 1.0f}) {
-                SimulationSettings s;
+                SimulationSettings s = probeSettings();
                 s.layout = TrackLayout::Flat;
                 s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
                 Simulation sim(s);
@@ -1019,7 +1122,7 @@ void ellipseProbe() {
         }
         const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand"};
         for (int lane : {0, 1, 6, 3, 2}) {
-            SimulationSettings s;
+            SimulationSettings s = probeSettings();
             s.layout = TrackLayout::SurfaceLanes;
             s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
             Simulation sim(s);
@@ -1069,6 +1172,7 @@ int main(int argc, char** argv) {
     else if (mode == "tc") tcProbe();
     else if (mode == "tcmud") tcMudSweep();
     else if (mode == "diff") diffProbe();
+    else if (mode == "layouts") layoutsProbe();
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

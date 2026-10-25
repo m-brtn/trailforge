@@ -1,6 +1,7 @@
 #include "ui/MenuUI.h"
 
 #include "render/Renderer.h"
+#include "vehicle/Vehicle.h"
 
 #include <SDL3/SDL_surface.h>
 #include <imgui.h>
@@ -77,6 +78,7 @@ constexpr ControlRow kControls[] = {
     {"HANDBRAKE", "SPACE", "A"},
     {"FORWARD / REVERSE", "Q", "X"},
     {"LOW RANGE", "L", "Y"},
+    {"TRANSFER CASE 2H / 4H / 4L", "V", "D-PAD LEFT"},
     {"ABS / TRACTION / DIFF LOCKS", "B / T / X", "D-PAD UP / RIGHT / DOWN"},
     {"CAMERA", "C, RIGHT MOUSE, WHEEL", "RB"},
     {"HEADLIGHTS", "H", "-"},
@@ -160,7 +162,8 @@ void MenuUI::drawLogo(float cx, float cy, float width, float alpha) {
 
 void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const MenuView& view) {
     m_rows.clear();
-    if (!flow.menuActive()) {
+    if (flow.screen() != Screen::Garage) m_garageRows.clear();
+    if (!flow.menuActive() || flow.screen() == Screen::Garage) {
         m_lastPage = -1;
         return;
     }
@@ -399,6 +402,262 @@ int MenuUI::hitTest(float x, float y, int* dir) const {
 bool MenuUI::itemRect(MenuItem item, float& x0, float& y0, float& x1, float& y1) const {
     for (const Row& r : m_rows) {
         if (r.item != item) continue;
+        x0 = r.x0;
+        y0 = r.y0;
+        x1 = r.x1;
+        y1 = r.y1;
+        return true;
+    }
+    return false;
+}
+
+
+void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuView& view) {
+    m_garageRows.clear();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float W = ds.x, H = ds.y;
+    const float x0 = std::max(0.045f * W, 36.0f);
+    const float panelW = std::max(0.44f * W, 560.0f);
+    const float dt = ImGui::GetIO().DeltaTime;
+
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(x0 + panelW * 1.35f, H), col(kDark, 0.78f), 0, 0, col(kDark, 0.78f));
+    dl->AddRectFilledMultiColor(ImVec2(0, H * 0.86f), ImVec2(W, H), 0, 0, col(kDark, 0.55f), col(kDark, 0.55f));
+
+    // Title.
+    float y = 0.045f * H;
+    const float ts = 0.046f * H;
+    text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, 1.0f), "GARAGE", 0.22f);
+    const float tw = textWidth(m_heading, ts, "GARAGE", 0.22f);
+    const std::string sub = g.vehicle().name;
+    text(dl, m_body, 0.022f * H, ImVec2(x0 + tw + 0.02f * W, y + ts - 0.03f * H), col(kOrange, 1.0f), sub.c_str(), 0.12f);
+    y += ts + 0.012f * H;
+    dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + panelW, y + 1.0f), col(kWhite, 0.35f));
+
+    // List geometry: rows and section headings, then a scroll offset that keeps the cursor in view.
+    const float listTop = y + 0.012f * H, listBottom = 0.80f * H;
+    const float textSize = 0.0235f * H, rowH = 0.034f * H, headH = 0.032f * H;
+    const auto& rows = g.rows();
+    std::vector<float> rowY(rows.size());
+    float cy = 0.0f;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (g.groupTitle(int(i))) cy += headH;
+        rowY[i] = cy;
+        cy += rowH;
+    }
+    const float contentH = cy, viewH = listBottom - listTop;
+    const float cursorY = rowY[std::size_t(g.cursor())];
+    // Scroll only when the cursor nears an edge: a row under the mouse is visible already, so hovering never scrolls
+    // the list away from the pointer.
+    const float margin = 2.5f * rowH;
+    float& target = m_garageScrollTarget;
+    if (cursorY - margin < target) target = cursorY - margin;
+    if (cursorY + rowH + margin > target + viewH) target = cursorY + rowH + margin - viewH;
+    target = std::clamp(target, 0.0f, std::max(0.0f, contentH - viewH));
+    m_garageScroll += (target - m_garageScroll) * std::min(1.0f, dt * 12.0f);
+    m_garageSelectAnim += (cursorY - m_garageSelectAnim) * std::min(1.0f, dt * 18.0f);
+
+    const float labelX = x0 + 0.006f * W;
+    const float barX0 = x0 + panelW * 0.50f, barX1 = x0 + panelW * 0.74f;
+    const float valueX = x0 + panelW * 0.77f;          // number values (left aligned after the bar)
+    const float choiceX = x0 + panelW * 0.66f;         // centre of choice values
+    const float arrowDx = panelW * 0.20f;
+    dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
+    {
+        const float by = listTop + m_garageSelectAnim - m_garageScroll;
+        const ImVec2 a(x0 - 0.008f * W, by), b(x0 + panelW, by + rowH * 0.92f);
+        dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f), col(kWhite, 0.02f), col(kWhite, 0.02f), col(kWhite, 0.16f));
+        dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, 1.0f));
+    }
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const float ry = listTop + rowY[i] - m_garageScroll;
+        if (ry + rowH < listTop - headH || ry > listBottom) continue;
+        const GarageRow& r = rows[i];
+        const bool sel = int(i) == g.cursor();
+        if (const char* section = g.groupTitle(int(i))) {
+            const float ss = 0.017f * H;
+            const float sy = ry - headH + 0.008f * H;
+            text(dl, m_heading, ss, ImVec2(x0, sy), col(kOrange, 1.0f), section, 0.3f);
+            const float sw = textWidth(m_heading, ss, section, 0.3f);
+            dl->AddRectFilled(ImVec2(x0 + sw + 0.01f * W, sy + ss * 0.55f), ImVec2(x0 + panelW, sy + ss * 0.55f + 1.0f),
+                              col(kWhite, 0.18f));
+        }
+        const float ty = ry + (rowH * 0.92f - textSize) * 0.5f;
+        const float alpha = sel ? 1.0f : 0.68f;
+        std::string label;
+        switch (r.kind) {
+        case GarageRowKind::Vehicle: label = "VEHICLE"; break;
+        case GarageRowKind::Setup: label = "SETUP"; break;
+        case GarageRowKind::Kit: label = "KIT"; break;
+        case GarageRowKind::Param: label = r.param->label; break;
+        case GarageRowKind::Action: label = Garage::actionLabel(r.action); break;
+        }
+        if (r.kind == GarageRowKind::Param)
+            for (char& c : label) c = char(std::toupper(static_cast<unsigned char>(c)));
+        // Long labels shrink to fit before the slider (the RESPAWN tag of rebuild parameters included).
+        const bool rebuildTag = r.kind == GarageRowKind::Param && r.param->rebuild;
+        const float tagW = rebuildTag ? textWidth(m_body, textSize * 0.6f, "RESPAWN", 0.1f) + 8.0f : 0.0f;
+        const float room = barX0 - labelX - 14.0f - tagW;
+        const float lw = textWidth(m_body, textSize, label.c_str(), 0.05f);
+        const float ls = lw > room ? textSize * room / lw : textSize;
+        text(dl, m_body, ls, ImVec2(labelX, ty + (textSize - ls) * 0.6f), col(kWhite, alpha), label.c_str(), 0.05f);
+        if (rebuildTag)
+            text(dl, m_body, textSize * 0.6f, ImVec2(labelX + std::min(lw, room) + 8.0f, ty + textSize * 0.3f),
+                 col(kOrange, 0.85f * alpha), "RESPAWN", 0.1f);
+        GarageHit hit{int(i), x0 - 0.008f * W, ry, x0 + panelW, ry + rowH * 0.92f};
+        const bool number = r.kind == GarageRowKind::Param && r.param->kind == SetupParamKind::Number;
+        if (number) {
+            const float f = g.fraction(*r.param);
+            const float bh = 4.0f, byc = ty + textSize * 0.55f;
+            dl->AddRectFilled(ImVec2(barX0, byc - bh * 0.5f), ImVec2(barX1, byc + bh * 0.5f), col(kWhite, 0.18f), 2.0f);
+            dl->AddRectFilled(ImVec2(barX0, byc - bh * 0.5f), ImVec2(barX0 + (barX1 - barX0) * f, byc + bh * 0.5f),
+                              col(sel ? kOrange : kWhite, sel ? 1.0f : 0.5f), 2.0f);
+            // Base value tick: where the definition (and kit) puts it.
+            const ParamRange rg = g.range(*r.param);
+            if (rg.max > rg.min) {
+                const float bv = r.param->get(g.kitBase(), g.kitBase());
+                const float bx = barX0 + (barX1 - barX0) * std::clamp((bv - rg.min) / (rg.max - rg.min), 0.0f, 1.0f);
+                dl->AddRectFilled(ImVec2(bx - 1.0f, byc - 6.0f), ImVec2(bx + 1.0f, byc + 6.0f), col(kWhite, 0.55f));
+            }
+            dl->AddCircleFilled(ImVec2(barX0 + (barX1 - barX0) * f, byc), sel ? 6.0f : 4.5f, col(kWhite, alpha));
+            const std::string v = g.valueText(r);
+            text(dl, m_body, textSize, ImVec2(valueX, ty), col(kWhite, alpha), v.c_str(), 0.04f);
+            hit.bar0 = barX0 - 8.0f;
+            hit.bar1 = barX1 + 8.0f;
+        } else if (r.kind != GarageRowKind::Action) {
+            std::string v = g.valueText(r);
+            if (r.kind == GarageRowKind::Setup && g.renaming()) {
+                v = g.renameText();
+                if (std::fmod(ImGui::GetTime(), 1.0) < 0.6) v += "_";
+            }
+            const float vw = textWidth(m_body, textSize, v.c_str(), 0.04f);
+            const bool editing = r.kind == GarageRowKind::Setup && g.renaming();
+            if (editing)
+                dl->AddRect(ImVec2(choiceX - arrowDx + textSize, ry + 1.0f), ImVec2(choiceX + arrowDx - textSize, ry + rowH * 0.9f),
+                            col(kOrange, 1.0f), 3.0f, 0, 1.5f);
+            text(dl, m_body, textSize, ImVec2(choiceX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.8f)), v.c_str(), 0.04f);
+            if (!editing) {
+                const float ah = textSize * 0.30f, acy = ty + textSize * 0.55f;
+                const ImU32 ac = sel ? col(kOrange, 1.0f) : col(kWhite, 0.25f);
+                const float lx = choiceX - arrowDx, rx = choiceX + arrowDx;
+                dl->AddTriangleFilled(ImVec2(lx - ah * 0.6f, acy), ImVec2(lx + ah * 0.6f, acy - ah), ImVec2(lx + ah * 0.6f, acy + ah), ac);
+                dl->AddTriangleFilled(ImVec2(rx + ah * 0.6f, acy), ImVec2(rx - ah * 0.6f, acy - ah), ImVec2(rx - ah * 0.6f, acy + ah), ac);
+                hit.arrowL0 = lx - textSize;
+                hit.arrowL1 = lx + textSize;
+                hit.arrowR0 = rx - textSize;
+                hit.arrowR1 = rx + textSize;
+            }
+        }
+        // Only the visible part of a row can be hit.
+        hit.y0 = std::max(hit.y0, listTop);
+        hit.y1 = std::min(hit.y1, listBottom);
+        if (hit.y1 > hit.y0) m_garageRows.push_back(hit);
+    }
+    dl->PopClipRect();
+    // Scroll indicators.
+    if (m_garageScroll > 1.0f)
+        dl->AddRectFilledMultiColor(ImVec2(x0, listTop), ImVec2(x0 + panelW, listTop + 10.0f), col(kOrange, 0.5f),
+                                    col(kOrange, 0.5f), 0, 0);
+    if (m_garageScroll < contentH - viewH - 1.0f)
+        dl->AddRectFilledMultiColor(ImVec2(x0, listBottom - 10.0f), ImVec2(x0 + panelW, listBottom), 0, 0,
+                                    col(kOrange, 0.5f), col(kOrange, 0.5f));
+
+    // Description of the selected row: range and how it is applied.
+    {
+        const GarageRow& r = rows[std::size_t(g.cursor())];
+        std::string d;
+        if (r.kind == GarageRowKind::Param) {
+            const std::string range = g.rangeText(*r.param);
+            if (!range.empty()) d = "RANGE " + range + (r.param->unit[0] ? std::string(" ") + r.param->unit : "") + "   ";
+            d += r.param->rebuild ? "APPLIED BY REBUILDING THE VEHICLE IN PLACE" : "APPLIED LIVE";
+        } else if (r.kind == GarageRowKind::Kit) {
+            d = g.vehicle().kits.empty() ? "KITS: DATA STRUCTURE READY, NO KIT CONTENT FOR THIS VEHICLE YET" : "KIT: BASE -> KIT -> FINE TUNE";
+        } else if (r.kind == GarageRowKind::Setup) {
+            d = g.dirty() ? "UNSAVED CHANGES (*)" : "SETUPS ARE SAVED PER VEHICLE";
+        }
+        if (!d.empty()) text(dl, m_body, 0.018f * H, ImVec2(x0, listBottom + 0.012f * H), col(kWhite, 0.6f), d.c_str(), 0.08f);
+    }
+    // Last message (save, rename, refusals) for a few seconds.
+    if (g.messageSerial() != m_garageMsgSerial) {
+        m_garageMsgSerial = g.messageSerial();
+        m_garageMsgTime = ImGui::GetTime();
+    }
+    if (!g.message().empty() && ImGui::GetTime() - m_garageMsgTime < 4.0) {
+        const float a = float(std::clamp(4.0 - (ImGui::GetTime() - m_garageMsgTime), 0.0, 1.0));
+        text(dl, m_body, 0.021f * H, ImVec2(x0, listBottom + 0.042f * H), col(kOrange, a), g.message().c_str(), 0.06f);
+    }
+
+    // Live numbers, bottom right: configuration and what the running vehicle does.
+    {
+        const VehicleConfig& c = g.config();
+        const float bs = 0.019f * H;
+        const float bx = W - std::max(0.05f * W, 40.0f) - 0.25f * W;
+        const float boxH = bs * 1.5f + 6.0f * bs * 1.3f;
+        float by = 0.83f * H - boxH;
+        dl->AddRectFilled(ImVec2(bx - 0.012f * W, by - 0.012f * H),
+                          ImVec2(W - std::max(0.05f * W, 40.0f) + 0.012f * W, by + boxH + 0.006f * H), col(kDark, 0.55f), 4.0f);
+        text(dl, m_heading, bs * 0.95f, ImVec2(bx, by), col(kOrange, 1.0f), "LIVE", 0.3f);
+        by += bs * 1.5f;
+        char line[160];
+        auto row = [&](const char* k, const char* v) {
+            text(dl, m_body, bs, ImVec2(bx, by), col(kWhite, 0.6f), k, 0.06f);
+            text(dl, m_body, bs, ImVec2(bx + 0.11f * W, by), col(kWhite, 0.95f), v, 0.04f);
+            by += bs * 1.3f;
+        };
+        const float front = 0.5f + c.comForward / c.wheelBase;
+        std::snprintf(line, sizeof(line), "%.0f kg, %.0f %% front", double(c.mass), double(100.0f * front));
+        row("MASS", line);
+        std::snprintf(line, sizeof(line), "%s%s%s", driveLayoutName(c.layout), c.layout == DriveLayout::PartTime ? "  " : "",
+                      c.layout == DriveLayout::PartTime ? transferModeName(t.transfer) : "");
+        row("DRIVETRAIN", line);
+        std::snprintf(line, sizeof(line), "%.0f N*m, final %.2f", double(c.tuning.engineMaxTorque), double(c.tuning.finalDrive));
+        row("ENGINE", line);
+        std::snprintf(line, sizeof(line), "%.0f / %.0f N*m per wheel", double(c.tuning.axles[0].brakeTorque),
+                      double(c.tuning.axles[1].brakeTorque));
+        row("BRAKES F / R", line);
+        std::snprintf(line, sizeof(line), "FL %.0f  FR %.0f  RL %.0f  RR %.0f %%", double(100.0f * t.wheels[0].compressionRatio),
+                      double(100.0f * t.wheels[1].compressionRatio), double(100.0f * t.wheels[2].compressionRatio),
+                      double(100.0f * t.wheels[3].compressionRatio));
+        row("COMPRESSION", line);
+        std::snprintf(line, sizeof(line), "%.0f rpm, %.1f km/h", double(t.engineRPM), double(std::abs(t.forwardSpeed) * 3.6f));
+        row("ENGINE NOW", line);
+    }
+
+    // Hints.
+    const float fs = 0.018f * H;
+    const char* hint = g.renaming() ? (view.gamepad ? "TYPE A NAME   A CONFIRM   B CANCEL" : "TYPE A NAME   ENTER CONFIRM   ESC CANCEL")
+                       : view.gamepad ? "D-PAD CHANGE   A SELECT   B BACK"
+                                      : "ARROWS / W S A D CHANGE   ENTER SELECT   MOUSE CLICK / DRAG   ESC BACK";
+    text(dl, m_body, fs, ImVec2(W - std::max(0.05f * W, 40.0f) - textWidth(m_body, fs, hint, 0.15f), H - 0.055f * H),
+         col(kWhite, 0.75f), hint, 0.15f);
+    char version[64];
+    std::snprintf(version, sizeof(version), "TRAILFORGE %s", view.version);
+    text(dl, m_body, fs, ImVec2(x0, H - 0.05f * H), col(kWhite, 0.4f), version, 0.2f);
+}
+
+int MenuUI::garageHitTest(float x, float y, int* dir, float* fraction) const {
+    if (dir) *dir = 0;
+    if (fraction) *fraction = -1.0f;
+    for (const GarageHit& r : m_garageRows) {
+        if (y < r.y0 || y >= r.y1) continue;
+        if (r.bar1 > r.bar0 && x >= r.bar0 && x < r.bar1) {
+            if (fraction) *fraction = std::clamp((x - (r.bar0 + 8.0f)) / (r.bar1 - r.bar0 - 16.0f), 0.0f, 1.0f);
+            return r.row;
+        }
+        const bool onLeft = r.arrowL1 > r.arrowL0 && x >= r.arrowL0 && x < r.arrowL1;
+        const bool onRight = r.arrowR1 > r.arrowR0 && x >= r.arrowR0 && x < r.arrowR1;
+        if (onLeft || onRight) {
+            if (dir) *dir = onLeft ? -1 : 1;
+            return r.row;
+        }
+        if (x >= r.x0 && x < r.x1) return r.row;
+    }
+    return -1;
+}
+
+bool MenuUI::garageRowRect(int row, float& x0, float& y0, float& x1, float& y1) const {
+    for (const GarageHit& r : m_garageRows) {
+        if (r.row != row) continue;
         x0 = r.x0;
         y0 = r.y0;
         x1 = r.x1;

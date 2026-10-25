@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "sim/Simulation.h"
 
 #include <SDL3/SDL_events.h>
@@ -23,6 +25,7 @@ enum class Action {
     ToggleAbs,        // B / gamepad D-pad up
     CycleTraction,    // T / gamepad D-pad right
     CycleDiffLock,    // X / gamepad D-pad down
+    CycleTransfer,    // V / gamepad D-pad left: part-time transfer case 2H -> 4H -> 4L
     TogglePause,     // P: debug freeze without the menu (Escape / gamepad Start open the pause menu, see MenuKeys)
     StepOnce,        // N (while frozen: a single physics step)
     Quit,
@@ -36,6 +39,9 @@ struct MenuKeys {
     bool back = false;    // Escape, Backspace, gamepad B
     bool pause = false;   // Escape, gamepad Start
     bool any = false;     // any key, mouse button or gamepad button
+    bool backspace = false; // Backspace alone (also sets back; text fields use it to delete)
+    std::string text;       // SDL text input of this frame (only while text input is started)
+    bool mouseDown = false; // left button held (slider drags)
     bool mouseMoved = false;
     bool click = false;   // left mouse button pressed (not over an ImGui window)
     float mouseX = 0.0f, mouseY = 0.0f; // window coordinates (the same as ImGui's)
@@ -80,6 +86,7 @@ private:
     glm::vec3 m_freeMove{0.0f};
     bool m_fast = false;
     bool m_rmb = false;
+    bool m_mouseDown = false;
     SDL_Gamepad* m_gamepad = nullptr;
     MenuKeys m_menu;
     float m_mouseX = 0.0f, m_mouseY = 0.0f;

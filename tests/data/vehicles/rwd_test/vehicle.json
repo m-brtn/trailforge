@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "id": "rwd_test",
+  "name": "RWD test pickup",
+  "description": "Test-only definition: lighter rear-wheel-drive pickup with different geometry, a rev limiter, Ackermann, progressive bump stops, separate compression / rebound damping, drag and one kit.",
+  "visualModel": "trailforge_suv",
+  "audioProfile": "trailforge_suv",
+  "body": {
+    "mass": 1650,
+    "inertiaScale": 0.9,
+    "inertia": null,
+    "centerOfMass": {"frontWeightFraction": 0.56, "height": -0.05},
+    "friction": 0.5,
+    "angularDamping": 0.02
+  },
+  "geometry": {"wheelBase": 2.60, "attachHeight": 0.08},
+  "axles": {
+    "front": {
+      "track": 1.62,
+      "wheel": {"radius": 0.36, "width": 0.25, "mass": 25, "inertia": 0, "angularDamping": 0.2},
+      "suspension": {
+        "frequency": 1.6, "compressionDamping": 0.35, "reboundDamping": 0.6,
+        "preload": 0.01, "minLength": 0.15, "maxLength": 0.45, "antiRoll": 15000,
+        "bumpStop": {"range": 0.05, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 2600,
+      "handBrakeTorque": 0
+    },
+    "rear": {
+      "track": 1.64,
+      "wheel": {"radius": 0.36, "width": 0.25, "mass": 25, "inertia": 0.8, "angularDamping": 0.2},
+      "suspension": {
+        "frequency": 1.8, "compressionDamping": 0.35, "reboundDamping": 0.6,
+        "preload": 0.0, "minLength": 0.15, "maxLength": 0.45, "antiRoll": 5000,
+        "bumpStop": {"range": 0.05, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 1800,
+      "handBrakeTorque": 3000
+    }
+  },
+  "tires": {
+    "longitudinal": {"peakSlip": 0.12, "peakFriction": 1.05, "slideFriction": 0.85},
+    "lateral": {"peakSlipAngleDeg": 7.0, "peakFriction": 1.00, "slideFriction": 0.80},
+    "staticGrip": true,
+    "slipSpeedFloor": 1.0,
+    "frictionEllipse": true,
+    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 0.9, "grass": 1, "sand": 1}
+  },
+  "steering": {"maxAngleDeg": 38, "rate": 2.5, "returnRate": 4.0, "ackermann": 0.8},
+  "engine": {
+    "type": "combustion",
+    "maxTorque": 420,
+    "torqueCurve": [[0.0, 0.7], [0.5, 1.0], [0.85, 0.95], [1.0, 0.75]],
+    "idleRPM": 750,
+    "maxRPM": 6000,
+    "revLimitRPM": 5500,
+    "inertia": 0.4,
+    "angularDamping": 0.2
+  },
+  "gearbox": {
+    "mode": "auto",
+    "ratios": [3.80, 2.20, 1.45, 1.00, 0.78, 0.62],
+    "reverseRatios": [-3.50],
+    "finalDrive": 3.73,
+    "lowRange": 1.0,
+    "shiftUpRPM": 5000,
+    "shiftDownRPM": 1600,
+    "shiftTime": 0.3,
+    "clutchReleaseTime": 0.2,
+    "shiftLatency": 0.4,
+    "clutchStrength": 8,
+    "launchClutchLimit": true,
+    "creepTorque": 35
+  },
+  "drivetrain": {
+    "layout": "rwd",
+    "frontTorqueShare": 0.0,
+    "frontDiff": "open",
+    "rearDiff": "lsd",
+    "centerDiff": "open",
+    "limitedSlipRatio": 1.6,
+    "centerLimitedSlipRatio": 1.4,
+    "lockedSlipRatio": 1.05
+  },
+  "aero": {"dragArea": 0.95, "airDensity": 1.225},
+  "aids": {
+    "absEnabled": true,
+    "traction": "on",
+    "absReleaseSlip": 0.18,
+    "absApplySlip": 0.08,
+    "absReleaseRate": 40,
+    "absApplyRate": 8,
+    "absMinPressure": 0.0,
+    "absMinSpeed": 1.5,
+    "tcSlipThreshold": 0.20,
+    "tcOffRoadSlipThreshold": 0.35,
+    "tcMinSpeed": 2.0,
+    "tcSlipFilterTime": 0.05,
+    "tcBrakeGain": 3000,
+    "tcMaxBrakeTorque": 1500,
+    "tcBrakeRate": 8000,
+    "tcCutRate": 1.5,
+    "tcRecoverRate": 0.6,
+    "tcMinThrottle": 0.05,
+    "tcOffRoadMinThrottle": 0.10,
+    "tcSpinSpeed": 0.3,
+    "tcRollbackSpeed": 0.3
+  },
+  "garage": {"ranges": {"suspension.front.frequency": [1.2, 2.2], "engine.torqueScale": [0.8, 1.2]}},
+  "kits": [
+    {
+      "id": "test_lift",
+      "name": "Test lift kit",
+      "description": "Test-only: attachment points 50 mm lower (higher ride), 50 mm more droop, softer front springs, 60 kg.",
+      "massDelta": 60,
+      "overrides": {
+        "geometry": {"attachHeight": 0.03},
+        "axles": {"front": {"suspension": {"frequency": 1.4, "maxLength": 0.5}}, "rear": {"suspension": {"maxLength": 0.5}}}
+      },
+      "ranges": {"suspension.rideHeight": [-0.02, 0.12]},
+      "visualParts": ["lift_spacers"]
+    }
+  ]
+}

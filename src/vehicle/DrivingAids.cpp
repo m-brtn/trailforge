@@ -62,8 +62,8 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
         spinning[i] = slip > 0.0f && std::abs(w.rollingSpeed) > t.tcSpinSpeed;
         m_slip[i] += (slip - m_slip[i]) * k;
         out.driveSlip[i] = m_slip[i];
+        if (w.contact && in.driven[i]) minSlip = std::min(minSlip, m_slip[i]);
         if (w.contact) {
-            minSlip = std::min(minSlip, m_slip[i]);
             groundSum += w.groundSpeed;
             ++inContact;
         }
@@ -72,7 +72,7 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
     // roll back faster, so the throttle cut recovers instead.
     const bool rollingBack = inContact > 0 && in.driveSign * groundSum / float(inContact) < -t.tcRollbackSpeed;
     if (minSlip > 1e8f) minSlip = 0.0f; // all wheels in the air
-    // Brake a wheel that spins faster than the slowest wheel in contact: through the open differentials the brake
+    // Brake a wheel that spins faster than the slowest driven wheel in contact: through the open differentials the brake
     // reaction drives the other wheels. Uniform spin of all wheels is the throttle's job.
     for (int i = 0; i < kAidWheels; ++i) {
         const float excess = std::min(m_slip[i] - threshold, m_slip[i] - minSlip - threshold);
@@ -102,7 +102,7 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
     for (int i = 0; i < kAidWheels; ++i) {
         out.absPressure[i] = m_pressure[i];
         out.tcBrake[i] = m_tcBrake[i];
-        out.brakeTorque[i] = in.brake * in.maxBrakeTorque * m_pressure[i] + m_tcBrake[i];
+        out.brakeTorque[i] = in.brake * in.maxBrakeTorque[i] * m_pressure[i] + m_tcBrake[i];
     }
     return out;
 }

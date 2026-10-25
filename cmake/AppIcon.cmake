@@ -5,7 +5,7 @@
 #      at startup SDL_SetWindowIcon sets it, which on Cocoa is the Dock icon of the running process;
 #   2) Icon.png -> TrailForge.icns (iconset 16..1024 px) -> build/<preset>/TrailForge.app, a self-contained bundle:
 #      a copy of the `trailforge` executable, Info.plist (version from project()), the icns and the runtime assets
-#      (assets/ -> Contents/Resources/assets: audio, music, fonts, images, plus the logo from the build tree; found at runtime through SDL_GetBasePath()).
+#      (assets/ -> Contents/Resources/assets: audio, music, fonts, images, vehicles, plus the logo from the build tree; found at runtime through SDL_GetBasePath()).
 # Elsewhere no icon is embedded and the window keeps the default icon.
 
 set(TRAILFORGE_ICON_SOURCES "")

@@ -38,7 +38,7 @@ void bar(const char* label, float v, float lo, float hi, const char* fmt) {
 
 } // namespace
 
-DebugUI::DebugUI(const VehicleConfig& initial) : m_tuning(initial.tuning), m_config(initial) {}
+DebugUI::DebugUI(const VehicleConfig& initial) : m_tuning(initial.tuning), m_config(initial), m_seen(initial) {}
 
 void DebugUI::remember(const char* key, bool window) {
     UiItemRect& r = m_items[key];
@@ -87,7 +87,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "FROZEN (P to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("W gas / S brake (stopped: release, press again for reverse)  A/D steer  Space handbrake");
-        ImGui::TextDisabled("Q fwd/rev  L low range  B ABS  T traction control  X diff locks  R reset");
+        ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
         ImGui::TextDisabled("C camera  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
@@ -166,8 +166,18 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::BeginGroup();
-    if (t.lowRange) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "LOW");
-    else ImGui::TextDisabled("HIGH");
+    if (t.layout == DriveLayout::PartTime) {
+        // Transfer case: 2H dim, 4H green, 4L amber.
+        const char* mode = transferModeName(t.transfer);
+        if (t.transfer == TransferMode::FourLow) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "%s", mode);
+        else if (t.transfer == TransferMode::FourHigh) ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), "%s", mode);
+        else ImGui::TextDisabled("%s", mode);
+    } else {
+        ImGui::TextDisabled("%s", driveLayoutName(t.layout));
+        ImGui::SameLine();
+        if (t.lowRange) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "LOW");
+        else ImGui::TextDisabled("HIGH");
+    }
     ImGui::TextDisabled("%4.0f rpm", t.engineRPM);
     ImGui::EndGroup();
     ImGui::SameLine();
@@ -488,15 +498,27 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
     ImGui::Begin("Tuning");
     remember("tuning", true);
 
+    // The garage (or a respawn with another configuration) changed the vehicle: edit its values from now on.
+    if (!(sim.vehicleConfig() == m_seen)) {
+        m_seen = sim.vehicleConfig();
+        m_config = m_seen;
+        m_tuning = m_seen.tuning;
+    }
     bool changed = false;
+    AxleTuning& fa = m_tuning.axles[kFrontAxle];
+    AxleTuning& ra = m_tuning.axles[kRearAxle];
     if (ImGui::CollapsingHeader("Suspension (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
-        changed |= ImGui::SliderFloat("Front spring [Hz]", &m_tuning.frontSpringFrequency, 0.5f, 3.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Front spring [Hz]", &fa.springFrequency, 0.5f, 3.0f, "%.2f");
         remember("front_spring");
-        changed |= ImGui::SliderFloat("Rear spring [Hz]", &m_tuning.rearSpringFrequency, 0.5f, 3.0f, "%.2f");
-        changed |= ImGui::SliderFloat("Front damping [-]", &m_tuning.frontDamping, 0.05f, 1.5f, "%.2f");
-        changed |= ImGui::SliderFloat("Rear damping [-]", &m_tuning.rearDamping, 0.05f, 1.5f, "%.2f");
-        changed |= ImGui::SliderFloat("Anti-roll front [N/m]", &m_tuning.antiRollFront, 0.0f, 20000.0f, "%.0f");
-        changed |= ImGui::SliderFloat("Anti-roll rear [N/m]", &m_tuning.antiRollRear, 0.0f, 20000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Rear spring [Hz]", &ra.springFrequency, 0.5f, 3.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Front compression [-]", &fa.compressionDamping, 0.05f, 1.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Front rebound [-]", &fa.reboundDamping, 0.05f, 1.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Rear compression [-]", &ra.compressionDamping, 0.05f, 1.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Rear rebound [-]", &ra.reboundDamping, 0.05f, 1.5f, "%.2f");
+        changed |= ImGui::SliderFloat("Anti-roll front [N/m]", &fa.antiRoll, 0.0f, 40000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Anti-roll rear [N/m]", &ra.antiRoll, 0.0f, 40000.0f, "%.0f");
+        ImGui::TextDisabled("Damping ratio per direction: Jolt has one coefficient, set before\n"
+                            "each step from the direction of the previous step.");
     }
     if (ImGui::CollapsingHeader("Tires (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         changed |= ImGui::SliderFloat("Long. peak mu", &m_tuning.tirePeakLongFriction, 0.2f, 2.0f, "%.2f");
@@ -539,8 +561,14 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
             ImGui::SetTooltip("Near min rpm the clutch passes at most the engine torque at this throttle.\n"
                               "Off: the slipping clutch delivers ~840 N*m at any throttle.");
         changed |= ImGui::SliderFloat("Creep torque [N*m]", &m_tuning.creepTorque, 0.0f, 150.0f, "%.0f");
-        changed |= ImGui::SliderFloat("Brake torque [N*m/wheel]", &m_tuning.maxBrakeTorque, 500.0f, 8000.0f, "%.0f");
-        changed |= ImGui::SliderFloat("Handbrake torque [N*m]", &m_tuning.maxHandBrakeTorque, 0.0f, 8000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Final drive", &m_tuning.finalDrive, 2.0f, 7.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Rev limit [rpm]", &m_tuning.revLimitRPM, 1000.0f, 12000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Front brake [N*m/wheel]", &fa.brakeTorque, 0.0f, 8000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Rear brake [N*m/wheel]", &ra.brakeTorque, 0.0f, 8000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Handbrake torque [N*m]", &ra.handBrakeTorque, 0.0f, 8000.0f, "%.0f");
+        changed |= ImGui::SliderFloat("Front torque share", &m_tuning.frontTorqueShare, 0.05f, 0.95f, "%.2f");
+        changed |= ImGui::SliderFloat("Drag area Cd*A [m^2]", &m_tuning.dragArea, 0.0f, 2.0f, "%.2f");
+        changed |= ImGui::SliderFloat("Ackermann", &m_tuning.ackermann, 0.0f, 1.0f, "%.2f");
         const char* modes[] = {"Open", "Limited slip", "Locked"};
         int f = int(m_tuning.frontDiff), r = int(m_tuning.rearDiff), c = int(m_tuning.centerDiff);
         if (ImGui::Combo("Front diff", &f, modes, 3)) { m_tuning.frontDiff = DiffMode(f); changed = true; }
@@ -593,14 +621,22 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         ImGui::SliderFloat("Inertia scale", &m_config.inertiaScale, 0.3f, 3.0f, "%.2f");
         ImGui::SliderFloat("COM height [m, body]", &m_config.comHeight, -0.5f, 0.8f, "%.2f");
         ImGui::SliderFloat("COM forward [m]", &m_config.comForward, -0.8f, 0.8f, "%.2f");
-        ImGui::SliderFloat("Susp. min length [m]", &m_config.suspensionMinLength, 0.05f, 0.5f, "%.2f");
-        ImGui::SliderFloat("Susp. max length [m]", &m_config.suspensionMaxLength, 0.2f, 0.9f, "%.2f");
-        ImGui::SliderFloat("Wheel radius [m]", &m_config.wheelRadius, 0.3f, 0.6f, "%.2f");
-        ImGui::SliderFloat("Max steer [deg]", &m_config.maxSteerAngleDeg, 15.0f, 45.0f, "%.0f");
-        ImGui::SliderFloat("Final drive", &m_config.differentialRatio, 2.5f, 6.0f, "%.2f");
-        ImGui::SliderFloat("Low range ratio", &m_config.lowRangeRatio, 1.5f, 4.5f, "%.2f");
-        if (m_config.suspensionMaxLength <= m_config.suspensionMinLength + 0.02f)
-            m_config.suspensionMaxLength = m_config.suspensionMinLength + 0.02f;
+        for (AxleConfig& a : m_config.axles) {
+            ImGui::PushID(&a);
+            ImGui::SeparatorText(&a == &m_config.axles[0] ? "Front axle" : "Rear axle");
+            ImGui::SliderFloat("Susp. min length [m]", &a.suspensionMinLength, 0.05f, 0.5f, "%.2f");
+            ImGui::SliderFloat("Susp. max length [m]", &a.suspensionMaxLength, 0.2f, 0.9f, "%.2f");
+            ImGui::SliderFloat("Wheel radius [m]", &a.wheelRadius, 0.3f, 0.6f, "%.2f");
+            if (a.suspensionMaxLength <= a.suspensionMinLength + 0.02f)
+                a.suspensionMaxLength = a.suspensionMinLength + 0.02f;
+            ImGui::PopID();
+        }
+        ImGui::SliderFloat("Max steer [deg]", &m_config.axles[0].maxSteerAngleDeg, 15.0f, 45.0f, "%.0f");
+        ImGui::SliderFloat("Low range ratio", &m_config.lowRangeRatio, 1.0f, 4.5f, "%.2f");
+        int layout = int(m_config.layout);
+        const char* layouts[] = {"RWD", "FWD", "AWD", "Part-time 4WD", "On-demand AWD"};
+        ImGui::Combo("Layout", &layout, layouts, 5);
+        m_config.layout = DriveLayout(layout);
         const bool rebuild = ImGui::Button("Rebuild vehicle (at current spawn)");
         remember("rebuild");
         if (rebuild) {
@@ -609,10 +645,9 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
             sim.requestRebuild(c);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Defaults")) {
-            m_config = VehicleConfig{};
+        if (ImGui::Button("Undo edits")) {
+            m_config = sim.vehicleConfig();
             m_tuning = m_config.tuning;
-            sim.requestTuning(m_tuning);
         }
     }
     if (ImGui::CollapsingHeader("Simulation")) {
@@ -622,8 +657,9 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         int cs = sim.collisionSteps();
         if (ImGui::SliderInt("Collision steps", &cs, 1, 4)) sim.setCollisionSteps(cs);
         InputSmoothing& sm = sim.smoothing();
-        ImGui::SliderFloat("Steer rate [1/s]", &sm.steerRate, 0.5f, 10.0f, "%.1f");
-        ImGui::SliderFloat("Steer return [1/s]", &sm.steerReturnRate, 0.5f, 10.0f, "%.1f");
+        if (ImGui::SliderFloat("Steer rate [1/s]", &m_tuning.steerRate, 0.5f, 10.0f, "%.1f")) sim.requestTuning(m_tuning);
+        if (ImGui::SliderFloat("Steer return [1/s]", &m_tuning.steerReturnRate, 0.5f, 10.0f, "%.1f"))
+            sim.requestTuning(m_tuning);
         ImGui::SliderFloat("Pedal rise [1/s]", &sm.pedalRise, 0.5f, 20.0f, "%.1f");
         ImGui::SliderFloat("Pedal fall [1/s]", &sm.pedalFall, 0.5f, 20.0f, "%.1f");
         ImGui::Checkbox("Auto reverse (S/W at a standstill)", &autoReverse);

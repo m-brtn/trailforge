@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/GameFlow.h"
+#include "app/Garage.h"
 #include "app/GameSettings.h"
 
 #include <array>
@@ -13,6 +14,7 @@ struct SDL_GPUTexture;
 namespace tf {
 
 class Renderer;
+struct VehicleTelemetry;
 
 // What the menus show besides the flow state.
 struct MenuView {
@@ -36,6 +38,11 @@ public:
     void release();
 
     void draw(const GameFlow& flow, const GameSettings& settings, const MenuView& view);
+    // Garage screen: setup panel on the left (scrolls with the cursor), live numbers bottom right.
+    void drawGarage(const Garage& garage, const VehicleTelemetry& telemetry, const MenuView& view);
+    // Garage row under a point; dir: -1 / +1 on a value arrow; fraction: 0..1 on a slider bar, else -1.
+    int garageHitTest(float x, float y, int* dir, float* fraction) const;
+    bool garageRowRect(int row, float& x0, float& y0, float& x1, float& y1) const;
 
     // Row under a point (ImGui coordinates) of the menu drawn last; dir: -1 / +1 on a value arrow, else 0.
     int hitTest(float x, float y, int* dir) const;
@@ -62,6 +69,18 @@ private:
     float m_logoAspect = 3.0f;          // content width / height
     std::array<float, 4> m_logoUv{0, 0, 1, 1}; // content box in the image (transparent margins cut away)
     std::vector<Row> m_rows;
+    struct GarageHit {
+        int row;
+        float x0, y0, x1, y1;
+        float arrowL0 = 0, arrowL1 = 0, arrowR0 = 0, arrowR1 = 0;
+        float bar0 = 0, bar1 = 0; // slider bar x range (0 = none)
+    };
+    std::vector<GarageHit> m_garageRows;
+    float m_garageScroll = 0.0f;      // eased list offset (px)
+    float m_garageScrollTarget = 0.0f;
+    float m_garageSelectAnim = 0.0f;  // eased highlight position (px)
+    int m_garageMsgSerial = 0;
+    double m_garageMsgTime = -100.0;  // ImGui time when the shown message appeared
     float m_selectAnim = 0.0f;          // highlight bar position (row index, eased)
     int m_lastPage = -1;
 };

@@ -28,7 +28,8 @@ struct AidInput {
     std::array<AidWheelInput, kAidWheels> wheels;
     float throttle = 0.0f; // 0..1, smoothed pedal
     float brake = 0.0f;    // 0..1, smoothed pedal
-    float maxBrakeTorque = 0.0f; // N*m per wheel at full pedal
+    std::array<float, kAidWheels> maxBrakeTorque{}; // N*m per wheel at full pedal
+    std::array<bool, kAidWheels> driven{true, true, true, true}; // wheel connected to the engine (TC throttle cut)
     float driveSign = 1.0f;      // +1 forward selected, -1 reverse
     float dt = 0.0f;
 };

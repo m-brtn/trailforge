@@ -25,11 +25,14 @@ include(cmake/Dependencies.cmake)
 # ------------------------------------------------------------------ simulation
 # Physics, vehicle, proving ground. Does not depend on SDL/rendering, runs headless.
 add_library(trailforge_sim STATIC
+    src/core/Json.cpp
     src/physics/PhysicsWorld.cpp
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
     src/vehicle/Vehicle.cpp
     src/vehicle/DrivingAids.cpp
+    src/vehicle/VehicleDefinition.cpp
+    src/vehicle/VehicleSetup.cpp
     src/sim/Simulation.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
@@ -44,7 +47,6 @@ endif()
 # ------------------------------------------------------------------ audio model
 # Manifest, parameter mapping, mixer and the per-tick vehicle feed. No device and no miniaudio: runs headless.
 add_library(trailforge_audio STATIC
-    src/audio/Json.cpp
     src/audio/AudioManifest.cpp
     src/audio/AudioMapping.cpp
     src/audio/AudioMixer.cpp
@@ -59,14 +61,17 @@ endif()
 # Menu / screen state machine and the settings file. Plain C++ (no SDL), tested headless.
 add_library(trailforge_flow STATIC
     src/app/GameFlow.cpp
-    src/app/GameSettings.cpp)
+    src/app/GameSettings.cpp
+    src/app/Garage.cpp)
 target_include_directories(trailforge_flow PUBLIC src)
+target_link_libraries(trailforge_flow PUBLIC trailforge_sim)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_flow PRIVATE -Wall -Wextra)
 endif()
 
 add_executable(trailforge_probe tools/SimProbe.cpp)
 target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
+target_compile_definitions(trailforge_probe PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ------------------------------------------------------------------ application
 if(TRAILFORGE_BUILD_APP)
@@ -142,6 +147,20 @@ if(TRAILFORGE_BUILD_TESTS)
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Vehicle definitions (every assets/vehicles/*/vehicle.json and tests/data/vehicles), layouts, garage setups.
+    add_executable(trailforge_vehicle_tests tests/VehicleTests.cpp)
+    target_link_libraries(trailforge_vehicle_tests PRIVATE trailforge_sim)
+    target_compile_definitions(trailforge_vehicle_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name
+            vehicle_catalog_sweep
+            vehicle_definition_validation
+            drivetrain_layouts
+            garage_setups
+            suv_definition_matches_builtin)
+        add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
+    endforeach()
+
     # Audio parameter mapping and the offline mixer (no audio device).
     add_executable(trailforge_audio_tests tests/AudioTests.cpp)
     target_link_libraries(trailforge_audio_tests PRIVATE trailforge_audio)
@@ -160,7 +179,8 @@ if(TRAILFORGE_BUILD_TESTS)
     # Game flow: settings file, menu navigation, pause.
     add_executable(trailforge_app_tests tests/AppTests.cpp)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
-    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks)
+    target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

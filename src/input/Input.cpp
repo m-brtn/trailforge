@@ -29,6 +29,7 @@ const char* Input::gamepadName() const {
 void Input::beginFrame() {
     m_pressed.fill(false);
     m_menu = MenuKeys{};
+    m_menu.mouseDown = m_mouseDown;
     m_menu.mouseX = m_mouseX;
     m_menu.mouseY = m_mouseY;
     m_mouseDelta = glm::vec2(0.0f);
@@ -58,7 +59,10 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
             case SDLK_LEFT: case SDLK_A: m_menu.left = true; break;
             case SDLK_RIGHT: case SDLK_D: m_menu.right = true; break;
             case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: if (!e.key.repeat) m_menu.accept = true; break;
-            case SDLK_BACKSPACE: if (!e.key.repeat) m_menu.back = true; break;
+            case SDLK_BACKSPACE:
+                m_menu.backspace = true;
+                if (!e.key.repeat) m_menu.back = true;
+                break;
             default: break;
             }
             if (!e.key.repeat) m_menu.any = true;
@@ -80,6 +84,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDLK_B: press(Action::ToggleAbs); break;
         case SDLK_T: press(Action::CycleTraction); break;
         case SDLK_X: press(Action::CycleDiffLock); break;
+        case SDLK_V: press(Action::CycleTransfer); break;
         default: break;
         }
         break;
@@ -89,6 +94,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
             m_menu.any = true;
             if (e.button.button == SDL_BUTTON_LEFT) {
                 m_menu.click = true;
+                m_menu.mouseDown = m_mouseDown = true;
                 m_menu.mouseX = m_mouseX = e.button.x;
                 m_menu.mouseY = m_mouseY = e.button.y;
             }
@@ -96,12 +102,16 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button == SDL_BUTTON_RIGHT) m_rmb = false;
+        if (e.button.button == SDL_BUTTON_LEFT) m_menu.mouseDown = m_mouseDown = false;
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (m_rmb && !uiWantsMouse) m_mouseDelta += glm::vec2(e.motion.xrel, e.motion.yrel);
         m_menu.mouseX = m_mouseX = e.motion.x;
         m_menu.mouseY = m_mouseY = e.motion.y;
         m_menu.mouseMoved = !uiWantsMouse;
+        break;
+    case SDL_EVENT_TEXT_INPUT:
+        if (e.text.text) m_menu.text += e.text.text;
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         if (!uiWantsMouse) m_wheel += e.wheel.y;
@@ -132,6 +142,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDL_GAMEPAD_BUTTON_DPAD_UP: press(Action::ToggleAbs); break;
         case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: press(Action::CycleTraction); break;
         case SDL_GAMEPAD_BUTTON_DPAD_DOWN: press(Action::CycleDiffLock); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: press(Action::CycleTransfer); break;
         default: break;
         }
         break;

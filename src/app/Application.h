@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/GameFlow.h"
+#include "app/Garage.h"
 #include "app/GameSettings.h"
 #include "app/Scenario.h"
 #include "audio/AudioSystem.h"
@@ -15,6 +16,7 @@
 #include "sim/WheelSpray.h"
 #include "ui/DebugUI.h"
 #include "ui/MenuUI.h"
+#include "vehicle/VehicleDefinition.h"
 
 #include <SDL3/SDL_video.h>
 
@@ -85,6 +87,11 @@ private:
     void applySettings(bool force);
     void saveSettings();
     void updateMenuCamera(float dt);
+    void updateGarageCamera(float dt);
+    void handleGarage();
+    void openGarage();
+    void closeGarage();
+    void applyGarageConfig();
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
@@ -104,6 +111,7 @@ private:
     Window m_window;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<ImGuiContextGuard> m_imgui;
+    std::vector<VehicleDefinition> m_vehicles; // assets/vehicles/*/vehicle.json (before m_sim: it spawns the first)
     Simulation m_sim;
     WheelSpray m_spray; // cosmetic particles thrown by the wheels (render-only)
     BodyMud m_bodyMud;  // cosmetic spray mud on the body per region (render-only)
@@ -113,6 +121,9 @@ private:
     DebugUI m_ui;
     MenuUI m_menu;        // releases its logo texture explicitly before the renderer (see ~Application)
     GameFlow m_flow;
+    std::unique_ptr<Garage> m_garage; // vehicle setups; null when no vehicle definition loaded
+    bool m_garageFollowCamera = false; // camera mode to restore when the garage closes
+    double m_garageCamTime = 0.0;
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)
@@ -134,9 +145,9 @@ private:
     void endPerf();
     void fillTireMarks();
 
-    GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_bodyMesh, m_wheelMesh;
+    GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_bodyMesh, m_wheelMesh, m_rearWheelMesh; // wheels: front, rear axle
     GpuMesh m_springMesh, m_armMesh, m_halfShaftMesh, m_shockBodyMesh, m_shockShaftMesh;
-    float m_wheelMeshRadius = 0.0f, m_wheelMeshWidth = 0.0f;
+    std::array<float, 2> m_wheelMeshRadius{}, m_wheelMeshWidth{};
     std::vector<DrawItem> m_draws;
     GraphicsState m_gfx;
     double m_cpuMs = 0.0;            // last frame: CPU work without the swapchain wait

@@ -117,6 +117,7 @@ private:
 
     VehicleTuning m_tuning;
     VehicleConfig m_config; // editable copy; applied with the "Rebuild vehicle" button
+    VehicleConfig m_seen;   // the simulation's configuration when the copies were last taken
     bool m_vsync = true;
     int m_rateIndex = 1;
     double m_absLastActive = -1.0e9, m_tcLastActive = -1.0e9; // simulated time the aid last acted (indicator blink)

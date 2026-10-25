@@ -17,6 +17,7 @@
 #include <imgui_impl_sdlgpu3.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -101,7 +102,7 @@ struct NamedItem {
 constexpr NamedItem kItemNames[] = {
     {"start", MenuItem::Start},         {"settings", MenuItem::Settings},     {"quit", MenuItem::Quit},
     {"resume", MenuItem::Resume},       {"restart", MenuItem::Restart},       {"quit_to_menu", MenuItem::QuitToMenu},
-    {"quit_game", MenuItem::QuitGame},  {"quality", MenuItem::Quality},       {"render_scale", MenuItem::RenderScale},
+    {"garage", MenuItem::Garage},       {"quit_game", MenuItem::QuitGame},  {"quality", MenuItem::Quality},       {"render_scale", MenuItem::RenderScale},
     {"vsync", MenuItem::VSync},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
     {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
     {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
@@ -114,12 +115,35 @@ std::optional<MenuItem> itemByName(const std::string& n) {
     return std::nullopt;
 }
 
+// The vehicle catalog from the first asset directory that has one; the game falls back to the built-in
+// configuration (identical to trailforge_suv) when no definition loads.
+std::vector<VehicleDefinition> loadVehicles() {
+    for (const std::string& dir : assetDirs("vehicles")) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec)) continue;
+        std::vector<std::string> errors;
+        std::vector<VehicleDefinition> defs = loadVehicleCatalog(dir, errors);
+        for (const std::string& e : errors) std::printf("Vehicles: %s\n", e.c_str());
+        std::printf("Vehicles: %zu definition(s) from %s\n", defs.size(), dir.c_str());
+        if (!defs.empty()) return defs;
+    }
+    std::printf("Vehicles: no definition loaded, using the built-in vehicle\n");
+    return {};
+}
+
+SimulationSettings simulationSettings(const std::vector<VehicleDefinition>& vehicles) {
+    SimulationSettings s;
+    if (!vehicles.empty()) s.vehicle = vehicles.front().config;
+    return s;
+}
+
 } // namespace
 
 Application::Application(const AppOptions& options)
     : m_options(options),
       m_window("TrailForge " TRAILFORGE_VERSION, 1440, 900),
-      m_sim(SimulationSettings{}),
+      m_vehicles(loadVehicles()),
+      m_sim(simulationSettings(m_vehicles)),
       m_ui(m_sim.vehicleConfig()),
       m_flow(initialScreen(options)),
       m_clock(m_sim.fixedStep()) {
@@ -172,6 +196,23 @@ Application::Application(const AppOptions& options)
             std::printf("Settings: defaults (%s)\n", m_settingsPath.empty() ? "no user data directory" : "no settings file yet");
     }
 
+    // Garage setups: <user data>/setups/<vehicle id>.json; scenario runs use a scratch directory that starts empty.
+    if (!m_vehicles.empty()) {
+        std::string setupDir;
+        if (m_scenario) {
+            setupDir = (std::filesystem::temp_directory_path() / "trailforge_scenario_setups").string();
+            std::error_code ec;
+            std::filesystem::remove_all(setupDir, ec);
+        } else if (const std::string dir = userDataDir(); !dir.empty()) {
+            setupDir = dir + "setups";
+        }
+        m_garage = std::make_unique<Garage>(m_vehicles, setupDir);
+        std::printf("Garage: setups in %s, active '%s'\n", setupDir.empty() ? "(memory only)" : setupDir.c_str(),
+                    m_garage->factoryActive() ? "factory" : m_garage->activeName().c_str());
+        if (!(m_garage->config() == m_sim.vehicleConfig())) m_sim.requestRebuild(m_garage->config());
+        m_garage->markApplied();
+    }
+
     AudioOptions audio;
     audio.device = options.audio;
     audio.capturePath = options.audioCapturePath;
@@ -189,7 +230,7 @@ Application::~Application() {
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
     m_menu.release();
-    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_springMesh,
+    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_rearWheelMesh, &m_springMesh,
                        &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
         m->release();
     m_imgui.reset();
@@ -216,7 +257,8 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
     if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
     if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
-    handleMenu();
+    if (m_flow.screen() == Screen::Garage) handleGarage();
+    else handleMenu();
     if (m_flow.menuActive()) {
         // Menus own the input: no gameplay actions, no pedals.
         m_sim.setIntent(DriverIntent{});
@@ -232,6 +274,7 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleAbs)) m_sim.requestToggleAbs();
     if (m_input.pressed(Action::CycleTraction)) m_sim.requestCycleTraction();
     if (m_input.pressed(Action::CycleDiffLock)) m_sim.requestCycleDiffLock();
+    if (m_input.pressed(Action::CycleTransfer)) m_sim.requestCycleTransfer();
 
     DriverIntent intent = m_input.driverIntent();
     intent.autoReverse = m_ui.autoReverse;
@@ -288,8 +331,78 @@ void Application::onMenuCommand(MenuCommand c) {
         break;
     case MenuCommand::SettingsChanged: applySettings(false); break;
     case MenuCommand::SettingsClosed: saveSettings(); break;
+    case MenuCommand::OpenGarage: openGarage(); break;
     default: break;
     }
+}
+
+void Application::openGarage() {
+    if (m_flow.screen() != Screen::Garage) m_flow.openGarage();
+    if (m_flow.screen() != Screen::Garage) return;
+    if (!m_garage) {
+        m_flow.closeGarage();
+        return;
+    }
+    m_garageFollowCamera = m_camera.mode() == Camera::Mode::Follow;
+    m_garageCamTime = 0.0;
+}
+
+void Application::closeGarage() {
+    SDL_StopTextInput(m_window.get());
+    m_flow.closeGarage();
+    if (m_garageFollowCamera && m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+    if (m_flow.screen() == Screen::MainMenu) m_menuCamTime = 0.0;
+}
+
+// Live values go into the running vehicle between ticks; geometry, wheels and layout rebuild it in place
+// (Simulation::requestVehicleConfig decides).
+void Application::applyGarageConfig() {
+    if (!m_garage || !m_garage->needsApply()) return;
+    m_sim.requestVehicleConfig(m_garage->config());
+    m_garage->markApplied();
+}
+
+void Application::handleGarage() {
+    const MenuKeys& k = m_input.menuKeys();
+    GarageInput in;
+    in.up = k.up;
+    in.down = k.down;
+    in.left = k.left;
+    in.right = k.right;
+    in.accept = k.accept;
+    in.back = k.back;
+    in.text = k.text;
+    in.backspace = k.backspace;
+    if (!m_garage->renaming()) {
+        int dir = 0;
+        float fraction = -1.0f;
+        if (k.mouseMoved && !k.mouseDown) in.hover = m_menu.garageHitTest(k.mouseX, k.mouseY, &dir, &fraction);
+        if (k.click || (k.mouseDown && k.mouseMoved)) {
+            const int row = m_menu.garageHitTest(k.mouseX, k.mouseY, &dir, &fraction);
+            // Dragging only moves sliders; a plain move with the button held does not activate rows.
+            if (k.click || (fraction >= 0.0f && row == m_garage->cursor())) {
+                in.click = row;
+                in.clickDir = dir;
+                in.clickFraction = fraction;
+            }
+        }
+    }
+    const bool wasRenaming = m_garage->renaming();
+    const GarageResult r = m_garage->handle(in);
+    if (m_garage->renaming() != wasRenaming) {
+        if (m_garage->renaming()) SDL_StartTextInput(m_window.get());
+        else SDL_StopTextInput(m_window.get());
+    }
+    switch (r.sound) {
+    case GarageSound::Move: m_audio->playUi(UiSound::Hover); break;
+    case GarageSound::Confirm: m_audio->playUi(UiSound::Confirm); break;
+    case GarageSound::Back: m_audio->playUi(UiSound::Back); break;
+    case GarageSound::Adjust: m_audio->playUi(UiSound::SliderTick); break;
+    case GarageSound::Error: m_audio->playUi(UiSound::Back); break;
+    case GarageSound::None: break;
+    }
+    applyGarageConfig();
+    if (r.close) closeGarage();
 }
 
 // Start: a fresh run at the start of the current proving ground with the current vehicle (level and vehicle
@@ -383,6 +496,27 @@ void Application::updateMenuCamera(float dt) {
     m_camera.setFreePose(pos, target);
 }
 
+// Garage camera: a slow orbit around the vehicle, which sits right of the panel.
+void Application::updateGarageCamera(float dt) {
+    m_garageCamTime += dt;
+    const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+    const glm::quat rot = toGlm(m_sim.currentSnapshot().body.rotation);
+    const glm::vec3 fwd3 = rot * glm::vec3(0, 0, 1);
+    const float heading = std::atan2(fwd3.x, fwd3.z);
+    // Front three-quarter view to start, then a slow full turn.
+    const float yaw = heading + 0.75f + float(m_garageCamTime) * 6.2831853f / 90.0f;
+    const float radius = 6.2f;
+    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, 1.5f, std::cos(yaw) * radius);
+    const JPH::Vec3 above(pos.x, pos.y + 20.0f, pos.z), below(pos.x, pos.y - 20.0f, pos.z);
+    if (auto hit = m_sim.castRayIgnoringVehicle(above, below)) {
+        const float ground = above.GetY() + (below.GetY() - above.GetY()) * *hit;
+        pos.y = std::max(pos.y, ground + 0.8f);
+    }
+    const glm::vec3 look = glm::normalize(glm::vec3(car.x - pos.x, 0.0f, car.z - pos.z));
+    const glm::vec3 right = glm::normalize(glm::cross(look, glm::vec3(0, 1, 0)));
+    m_camera.setFreePose(pos, car + glm::vec3(0.0f, 0.45f, 0.0f) - right * 2.2f);
+}
+
 void Application::publishAudio() {
     AudioFrame f = m_audioFeed.frame();
     const glm::mat4 v = m_camera.view();
@@ -454,6 +588,7 @@ void Application::renderFrame(float frameTime) {
         ci.fast = m_input.fastModifier();
     }
     if (m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) updateMenuCamera(frameTime);
+    if (m_flow.screen() == Screen::Garage) updateGarageCamera(frameTime);
     m_camera.update(frameTime, ci, glm::vec3(bodyM[3]), glm::vec3(bodyM[2]),
                     [this](const glm::vec3& from, const glm::vec3& to) {
                         return m_sim.castRayIgnoringVehicle(JPH::Vec3(from.x, from.y, from.z), JPH::Vec3(to.x, to.y, to.z));
@@ -522,6 +657,7 @@ void Application::renderFrame(float frameTime) {
     view.gamepad = m_input.gamepadConnected();
     view.version = TRAILFORGE_VERSION;
     m_menu.draw(m_flow, m_settings, view);
+    if (m_flow.screen() == Screen::Garage && m_garage) m_menu.drawGarage(*m_garage, m_sim.vehicle().telemetry(), view);
     ImGui::Render();
     if (req.togglePause) setPaused(!m_paused);
     if (!m_audio->capturing()) publishAudio();
@@ -563,8 +699,9 @@ void Application::renderFrame(float frameTime) {
     m_debugDraw.clear();
     if (m_ui.drawPhysicsDebug) {
         const VehicleConfig& vc = m_sim.vehicleConfig();
-        drawVehicleDebug(m_debugDraw, m_sim.vehicle().telemetry(), vc.suspensionMinLength, vc.suspensionMaxLength,
-                         m_ui.debug);
+        drawVehicleDebug(m_debugDraw, m_sim.vehicle().telemetry(),
+                         {vc.axles[0].suspensionMinLength, vc.axles[1].suspensionMinLength},
+                         {vc.axles[0].suspensionMaxLength, vc.axles[1].suspensionMaxLength}, m_ui.debug);
         if (m_ui.debug.bodyAxes) m_debugDraw.axes(bodyM, 1.5f);
     }
 
@@ -677,11 +814,14 @@ void Application::fillTireMarks() {
 
 void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
     const VehicleConfig& vc = m_sim.vehicleConfig();
-    if (vc.wheelRadius != m_wheelMeshRadius || vc.wheelWidth != m_wheelMeshWidth) {
+    for (int a = 0; a < 2; ++a) {
+        const AxleConfig& ax = vc.axles[std::size_t(a)];
+        if (ax.wheelRadius == m_wheelMeshRadius[std::size_t(a)] && ax.wheelWidth == m_wheelMeshWidth[std::size_t(a)])
+            continue;
         SDL_WaitForGPUIdle(m_renderer->device());
-        m_wheelMesh = m_renderer->upload(buildWheelMesh(vc.wheelRadius, vc.wheelWidth));
-        m_wheelMeshRadius = vc.wheelRadius;
-        m_wheelMeshWidth = vc.wheelWidth;
+        (a == 0 ? m_wheelMesh : m_rearWheelMesh) = m_renderer->upload(buildWheelMesh(ax.wheelRadius, ax.wheelWidth));
+        m_wheelMeshRadius[std::size_t(a)] = ax.wheelRadius;
+        m_wheelMeshWidth[std::size_t(a)] = ax.wheelWidth;
     }
 
     m_draws.clear();
@@ -696,7 +836,7 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
     add(m_trackMesh, glm::mat4(1.0f));
     add(m_sceneryMesh, glm::mat4(1.0f));
     add(m_bodyMesh, bodyM);
-    add(m_wheelMesh, bodyM * spareWheelMatrix(vc.wheelRadius, vc.wheelWidth));
+    add(m_rearWheelMesh, bodyM * spareWheelMatrix(vc.axles[kRearAxle].wheelRadius, vc.axles[kRearAxle].wheelWidth));
     m_draws.back().mud = 0.25f; // the spare on the roof stays mostly clean
     m_draws.back().wheelMud = true;
 
@@ -708,7 +848,8 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         const float side = hub.x >= 0.0f ? 1.0f : -1.0f;
         // The wheel mesh has its outer face at +X; Jolt uses one wheel-right axis for both sides.
         const bool flip = glm::dot(glm::vec3(wheelBody[0]), glm::vec3(side, 0, 0)) < 0.0f;
-        add(m_wheelMesh, flip ? wheelM[i] * glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(0, 1, 0))
+        const std::size_t axle = std::size_t(i / 2);
+        add(axle == 0 ? m_wheelMesh : m_rearWheelMesh, flip ? wheelM[i] * glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(0, 1, 0))
                               : wheelM[i]);
         m_draws.back().wheelMud = true;
         const TreadSoil& soil = m_sim.tireMarks().soil(std::size_t(i));
@@ -716,7 +857,7 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         m_draws.back().soilWetness = soil.wetness;
         m_draws.back().soilFlecks = soil.flecks;
         m_draws.back().soilStick = soil.stick;
-        m_draws.back().wheelRadius = vc.wheelRadius;
+        m_draws.back().wheelRadius = vc.axles[axle].wheelRadius;
 
         const SuspensionPose p = suspensionPose(hub, hub.z);
         const glm::vec3 dir = glm::normalize(p.shockTop - p.shockLow);
@@ -741,9 +882,10 @@ void Application::updateCosmetics(float dt) {
     const VehicleTelemetry& t = m_sim.vehicle().telemetry();
     const WaterInfo water = TestTrack::water();
     float gain = 0.0f;
-    for (const auto& w : t.wheels) {
+    for (std::size_t i = 0; i < kWheelCount; ++i) {
+        const WheelTelemetry& w = t.wheels[i];
         if (!w.contact) continue;
-        const float roll = std::min(std::abs(w.angularVelocity) * m_sim.vehicleConfig().wheelRadius, 8.0f);
+        const float roll = std::min(std::abs(w.angularVelocity) * m_sim.vehicleConfig().axles[i / 2].wheelRadius, 8.0f);
         const bool wet = w.contactPosition.GetY() < water.level - 0.02f && w.contactPosition.GetX() > water.x0 &&
                          w.contactPosition.GetX() < water.x1 && w.contactPosition.GetZ() > water.z0 &&
                          w.contactPosition.GetZ() < water.z1;
@@ -902,6 +1044,13 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             if (before != Screen::Paused) return Exec::Failed;
             m_flow.resume();
             m_audio->playUi(UiSound::MenuClose);
+        } else if (arg == "garage") {
+            if (before != Screen::MainMenu && before != Screen::Paused) return Exec::Failed;
+            openGarage();
+            if (m_flow.screen() != Screen::Garage) return Exec::Failed;
+        } else if (arg == "garage_close") {
+            if (before != Screen::Garage) return Exec::Failed;
+            closeGarage();
         } else if (arg == "settings") {
             m_flow.openSettings();
             if (m_flow.page() != MenuPage::Settings) return Exec::Failed;
@@ -917,6 +1066,107 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         } else {
             return Exec::Failed;
         }
+        return Exec::Done;
+    }
+    if (c.op == "garage") {
+        // garage set KEY V | step KEY DIR | row KEY | save | save_new | rename NAME | delete | select NAME|factory |
+        // reset | kit ID|none | vehicle ID: the garage model directly (keys and `click garage:...` use the input path).
+        if (!m_garage) return Exec::Failed;
+        const std::string a1 = c.args.size() > 1 ? c.args[1] : std::string();
+        const std::string a2 = c.args.size() > 2 ? c.args[2] : std::string();
+        bool ok = true;
+        const int serial = m_garage->messageSerial();
+        if (arg == "set") {
+            ok = findSetupParam(a1) != nullptr && !a2.empty();
+            if (ok) m_garage->setValue(a1, std::stof(a2));
+        }
+        else if (arg == "step") ok = m_garage->stepValue(a1, a2.empty() ? 1 : std::stoi(a2));
+        else if (arg == "row") ok = a1 == "vehicle" ? m_garage->selectRow(GarageRowKind::Vehicle)
+                                    : a1 == "setup" ? m_garage->selectRow(GarageRowKind::Setup)
+                                    : a1 == "kit"   ? m_garage->selectRow(GarageRowKind::Kit)
+                                                    : m_garage->selectRow(GarageRowKind::Param, a1);
+        else if (arg == "save") ok = m_garage->save();
+        else if (arg == "save_new") ok = m_garage->saveAsNew();
+        else if (arg == "rename") {
+            std::string name;
+            for (std::size_t i = 1; i < c.args.size(); ++i) name += (i > 1 ? " " : "") + c.args[i];
+            ok = m_garage->rename(name);
+        } else if (arg == "delete") ok = m_garage->deleteActive();
+        else if (arg == "select") {
+            std::string name;
+            for (std::size_t i = 1; i < c.args.size(); ++i) name += (i > 1 ? " " : "") + c.args[i];
+            ok = m_garage->selectSetup(name == "factory" ? std::string() : name);
+        }
+        else if (arg == "reset") m_garage->resetToFactory();
+        else if (arg == "kit") ok = m_garage->setKit(a1 == "none" ? std::string() : a1);
+        else if (arg == "vehicle") ok = m_garage->selectVehicle(a1);
+        else return Exec::Failed;
+        if (m_garage->messageSerial() != serial) std::printf("SCENARIO garage: %s\n", m_garage->message().c_str());
+        applyGarageConfig();
+        return ok ? Exec::Done : Exec::Failed;
+    }
+    if (c.op == "transfer") {
+        if (arg == "2h") m_sim.requestTransfer(TransferMode::TwoHigh);
+        else if (arg == "4h") m_sim.requestTransfer(TransferMode::FourHigh);
+        else if (arg == "4l") m_sim.requestTransfer(TransferMode::FourLow);
+        else return Exec::Failed;
+        return Exec::Done;
+    }
+    if (c.op == "click" && arg.rfind("garage:", 0) == 0) {
+        // click garage:ROW[:FRACTION] - ROW: a parameter key, vehicle, setup, kit or an action (save, save_new,
+        // rename, delete, reset, back); FRACTION 0..1 clicks a slider bar at that position.
+        if (!m_garage || m_flow.screen() != Screen::Garage) return Exec::Failed;
+        std::string rowName = arg.substr(7);
+        float fraction = -1.0f;
+        if (const auto colon = rowName.find(':'); colon != std::string::npos) {
+            fraction = std::stof(rowName.substr(colon + 1));
+            rowName = rowName.substr(0, colon);
+        }
+        static const std::pair<const char*, GarageAction> kActions[] = {
+            {"save", GarageAction::Save},   {"save_new", GarageAction::SaveAsNew}, {"rename", GarageAction::Rename},
+            {"delete", GarageAction::Delete}, {"reset", GarageAction::ResetFactory}, {"back", GarageAction::Back}};
+        int row = -1;
+        const auto& rows = m_garage->rows();
+        for (std::size_t i = 0; i < rows.size() && row < 0; ++i) {
+            const GarageRow& r = rows[i];
+            if ((r.kind == GarageRowKind::Vehicle && rowName == "vehicle") || (r.kind == GarageRowKind::Setup && rowName == "setup") ||
+                (r.kind == GarageRowKind::Kit && rowName == "kit") || (r.kind == GarageRowKind::Param && rowName == r.param->key))
+                row = int(i);
+            for (const auto& [name, action] : kActions)
+                if (r.kind == GarageRowKind::Action && r.action == action && rowName == name) row = int(i);
+        }
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (row < 0) {
+            std::printf("SCENARIO: garage row '%s' does not exist\n", rowName.c_str());
+            return Exec::Failed;
+        }
+        if (!m_menu.garageRowRect(row, x0, y0, x1, y1)) {
+            // Off screen: move the cursor there first (the list scrolls), then retry next frame.
+            m_garage->setCursor(row);
+            if (++m_scrollFrames > 120) {
+                m_scrollFrames = 0;
+                return Exec::Failed;
+            }
+            return Exec::Busy;
+        }
+        m_scrollFrames = 0;
+        float x = x0 + 0.12f * (x1 - x0);
+        if (fraction >= 0.0f) {
+            // Find the bar by probing along the row (the hit test reports the fraction under the point).
+            float best = -1.0f, bestX = x;
+            for (float px = x0; px < x1; px += 1.0f) {
+                int dir = 0;
+                float f = -1.0f;
+                if (m_menu.garageHitTest(px, 0.5f * (y0 + y1), &dir, &f) == row && f >= 0.0f &&
+                    (best < 0.0f || std::abs(f - fraction) < std::abs(best - fraction))) {
+                    best = f;
+                    bestX = px;
+                }
+            }
+            if (best < 0.0f) return Exec::Failed;
+            x = bestX;
+        }
+        queueClick(x, 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
     if (c.op == "click" && arg.rfind("menu:", 0) == 0) {
@@ -1258,7 +1508,29 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "cam_clearance") return m_camClearance;
     if (n == "min_cam_clearance") return m_minCamClearance;
     if (n == "max_air") return m_maxAirWheels;
-    if (n == "front_spring") return m_sim.vehicleConfig().tuning.frontSpringFrequency;
+    if (n == "garage_open") return m_flow.screen() == Screen::Garage ? 1.0 : 0.0;
+    if (m_garage) {
+        if (n == "garage_cursor") return m_garage->cursor();
+        if (n == "garage_dirty") return m_garage->dirty() ? 1.0 : 0.0;
+        if (n == "garage_setups") return double(m_garage->setups().setups.size());
+        if (n == "garage_factory") return m_garage->factoryActive() ? 1.0 : 0.0;
+        if (n == "garage_renaming") return m_garage->renaming() ? 1.0 : 0.0;
+        if (n == "garage_pending") return m_garage->needsApply() ? 1.0 : 0.0;
+        // garage:KEY = the garage's value, cfg:KEY = the same parameter read from the running vehicle (stored units).
+        if (n.rfind("garage:", 0) == 0 || n.rfind("cfg:", 0) == 0) {
+            const bool garage = n[0] == 'g';
+            const SetupParamInfo* sp = findSetupParam(n.substr(garage ? 7 : 4));
+            if (!sp) return std::nullopt;
+            return garage ? m_garage->value(*sp) : setupValue(*sp, m_sim.vehicleConfig(), m_garage->kitBase());
+        }
+    }
+    if (n == "text_input") return SDL_TextInputActive(m_window.get()) ? 1.0 : 0.0;
+    if (n == "layout") return double(int(t.layout));
+    if (n == "transfer") return double(int(t.transfer));
+    if (n == "front_driven") return t.frontDriven ? 1.0 : 0.0;
+    if (n == "rear_driven") return t.rearDriven ? 1.0 : 0.0;
+    if (n == "wheel_radius_r") return m_sim.vehicleConfig().axles[kRearAxle].wheelRadius;
+    if (n == "front_spring") return m_sim.vehicleConfig().tuning.axles[kFrontAxle].springFrequency;
     if (n == "mass") return m_sim.vehicleConfig().mass;
     if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;
     if (n == "friction_ellipse") return m_sim.vehicleConfig().tuning.tireFrictionEllipse ? 1.0 : 0.0;

@@ -143,7 +143,7 @@ void brakeHoldsInLowRange() {
         }
         // A wheel the engine drives against the brake spins faster than rolling.
         for (const auto& w : t.wheels)
-            worstOverspin = std::fmax(worstOverspin, w.angularVelocity * sim.vehicleConfig().wheelRadius - t.forwardSpeed);
+            worstOverspin = std::fmax(worstOverspin, w.angularVelocity * sim.vehicleConfig().axles[0].wheelRadius - t.forwardSpeed);
         if (stopTime < 0.0 && std::abs(t.forwardSpeed) < 0.05f) stopTime = (i + 1) * sim.fixedStep();
     }
     const auto& t = sim.vehicle().telemetry();
@@ -1039,7 +1039,7 @@ void drivingAidsLogic() {
         DrivingAids aids;
         AidInput in = wheels(10.0f, {0.0f, 10.0f, 10.0f, 10.0f});
         in.brake = 1.0f;
-        in.maxBrakeTorque = 3000.0f;
+        in.maxBrakeTorque.fill(3000.0f);
         in.dt = dt;
         const AidOutput off = aids.update(t, {false, TractionMode::Off, 0}, in);
         CHECK(off.brakeTorque[0] == 3000.0f && !off.absActive, "ABS off: torque %.0f", off.brakeTorque[0]);

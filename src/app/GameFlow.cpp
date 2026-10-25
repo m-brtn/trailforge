@@ -35,8 +35,9 @@ GameFlow::GameFlow(Screen start) : m_screen(start) {
 
 const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
     using M = MenuItem;
-    static const std::vector<MenuItem> kMain = {M::Start, M::Settings, M::Quit};
-    static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Settings, M::QuitToMenu, M::QuitGame};
+    static const std::vector<MenuItem> kMain = {M::Start, M::Garage, M::Settings, M::Quit};
+    static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
+                                                 M::QuitGame};
     static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::VSync,     M::MasterVolume,
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
@@ -98,6 +99,18 @@ void GameFlow::openSettings() {
     m_stack.push_back({MenuPage::Settings, 0});
 }
 
+void GameFlow::openGarage() {
+    if (m_screen != Screen::MainMenu && m_screen != Screen::Paused) return;
+    m_garageReturn = m_screen;
+    setScreen(Screen::Garage, MenuPage::Main);
+}
+
+void GameFlow::closeGarage() {
+    if (m_screen != Screen::Garage) return;
+    setScreen(m_garageReturn, m_garageReturn == Screen::Paused ? MenuPage::Pause : MenuPage::Main);
+    select(MenuItem::Garage);
+}
+
 bool GameFlow::back() {
     if (m_stack.size() <= 1) return false;
     m_stack.pop_back();
@@ -133,6 +146,9 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
     case M::Settings:
         m_stack.push_back({MenuPage::Settings, 0});
         return {MenuCommand::None, MenuSound::Confirm};
+    case M::Garage:
+        openGarage();
+        return {MenuCommand::OpenGarage, MenuSound::Confirm};
     case M::Controls:
         m_stack.push_back({MenuPage::Controls, 0});
         return {MenuCommand::None, MenuSound::Confirm};
@@ -163,6 +179,7 @@ MenuResult GameFlow::handle(const MenuInput& in, GameSettings& settings) {
         if (in.any) skipIntro();
         return {};
     }
+    if (m_screen == Screen::Garage) return {}; // the Garage model owns the input
     if (m_screen == Screen::Playing) {
         if (in.pause) {
             pause();
@@ -201,6 +218,7 @@ const char* menuLabel(MenuItem item) {
     using M = MenuItem;
     switch (item) {
     case M::Start: return "START";
+    case M::Garage: return "GARAGE";
     case M::Settings: return "SETTINGS";
     case M::Quit: return "QUIT";
     case M::Resume: return "RESUME";

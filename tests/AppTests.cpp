@@ -1,7 +1,9 @@
-// Headless checks of the game flow: settings file, menu navigation, and the pause freezing the simulation.
+// Headless checks of the game flow: settings file, menu navigation, the pause freezing the simulation, and the
+// garage model (setups, ranges, persistence, applying to a running simulation).
 // Usage: trailforge_app_tests <test_name>
 
 #include "app/GameFlow.h"
+#include "app/Garage.h"
 #include "app/GameSettings.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
@@ -108,11 +110,21 @@ void menuNavigation() {
     skipped.handle(key(&MenuInput::any), settings);
     CHECK(skipped.screen() == Screen::MainMenu && skipped.menuFade() == 0.0f, "any key skips the intro");
 
-    // Main menu: Start, Settings, Quit; Up from the top wraps to Quit.
+    // Main menu: Start, Garage, Settings, Quit; Up from the top wraps to Quit.
     CHECK(flow.current() == MenuItem::Start, "cursor starts on Start");
     MenuResult r = flow.handle(key(&MenuInput::up), settings);
     CHECK(flow.current() == MenuItem::Quit && r.sound == MenuSound::Move, "up wraps to Quit");
     flow.handle(key(&MenuInput::down), settings);
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::Garage, "down moves to Garage");
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::OpenGarage && flow.screen() == Screen::Garage && flow.menuActive() &&
+              flow.simulationRuns(),
+          "accept opens the garage (menu active, simulation running)");
+    r = flow.handle(key(&MenuInput::back), settings);
+    CHECK(flow.screen() == Screen::Garage && r.command == MenuCommand::None, "GameFlow leaves garage input alone");
+    flow.closeGarage();
+    CHECK(flow.screen() == Screen::MainMenu && flow.current() == MenuItem::Garage, "garage closes to the start menu");
     flow.handle(key(&MenuInput::down), settings);
     CHECK(flow.current() == MenuItem::Settings, "down moves to Settings");
     r = flow.handle(key(&MenuInput::accept), settings);
@@ -177,6 +189,13 @@ void menuNavigation() {
     flow.openSettings();
     r = flow.handle(esc, settings);
     CHECK(flow.screen() == Screen::Paused && flow.page() == MenuPage::Pause, "Esc in the pause settings goes back");
+    flow.select(MenuItem::Garage);
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::OpenGarage && flow.screen() == Screen::Garage && flow.simulationRuns(),
+          "garage from the pause menu runs the simulation");
+    flow.closeGarage();
+    CHECK(flow.screen() == Screen::Paused && flow.current() == MenuItem::Garage && !flow.simulationRuns(),
+          "garage closes back to the (frozen) pause menu");
     flow.select(MenuItem::QuitToMenu);
     r = flow.handle(key(&MenuInput::accept), settings);
     CHECK(r.command == MenuCommand::QuitToMenu && flow.screen() == Screen::MainMenu && flow.menuFade() == 1.0f,
@@ -222,6 +241,124 @@ void pauseFreezesTicks() {
     CHECK((p2 - p1).Length() > 0.5f, "the vehicle did not move after resume");
 }
 
+GarageInput gkey(bool GarageInput::*field) {
+    GarageInput in;
+    in.*field = true;
+    return in;
+}
+
+// Garage: factory -> change values -> save -> rename -> reload from disk -> delete; ranges and clamping; kits;
+// live values and in-place rebuilds reach a running simulation.
+void garageModel() {
+    std::vector<std::string> errors;
+    std::vector<VehicleDefinition> catalog = loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors);
+    VehicleDefinition rwd;
+    CHECK(loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/tests/data/vehicles/rwd_test/vehicle.json", rwd, errors),
+          "rwd_test did not load");
+    catalog.push_back(rwd);
+    for (const std::string& e : errors) std::printf("    %s\n", e.c_str());
+    CHECK(catalog.size() >= 2 && errors.empty(), "catalog: %zu definitions, %zu errors", catalog.size(), errors.size());
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_garage_tests";
+    std::filesystem::remove_all(dir);
+
+    Garage g(catalog, dir.string());
+    CHECK(g.vehicle().id == "trailforge_suv" && g.factoryActive() && !g.dirty(), "starts on the SUV factory setup");
+    CHECK(g.config() == catalog[0].config, "factory config == definition");
+
+    // Keyboard: cursor to the front spring, right steps it; the range clamps.
+    CHECK(g.selectRow(GarageRowKind::Param, "suspension.front.frequency"), "front spring row");
+    const SetupParamInfo& spring = *findSetupParam("suspension.front.frequency");
+    const float base = g.value(spring);
+    GarageResult r = g.handle(gkey(&GarageInput::right));
+    std::printf("    front spring %.2f -> %.2f Hz (range %s)\n", double(base), double(g.value(spring)),
+                g.rangeText(spring).c_str());
+    CHECK(std::abs(g.value(spring) - (base + spring.step)) < 1e-4f && r.configChanged && g.dirty(), "right steps up");
+    for (int i = 0; i < 200; ++i) g.handle(gkey(&GarageInput::right));
+    CHECK(std::abs(g.value(spring) - g.range(spring).max) < 1e-4f, "clamped at the range max %.3f", double(g.value(spring)));
+    g.setValue("suspension.front.frequency", 1.6f);
+    CHECK(std::abs(g.config().tuning.axles[kFrontAxle].springFrequency - 1.6f) < 1e-6f, "config follows the value");
+
+    // Mouse: a click on the slider bar at 0 sets the minimum.
+    GarageInput click;
+    click.click = g.cursor();
+    click.clickFraction = 0.0f;
+    g.handle(click);
+    CHECK(std::abs(g.value(spring) - g.range(spring).min) < 1e-4f, "bar click at 0 -> min (%.3f)", double(g.value(spring)));
+    g.setValue("suspension.front.frequency", 1.6f);
+
+    // Save from factory creates "Setup 1"; rename; a second setup; reload from disk.
+    CHECK(g.save() && g.activeName() == "Setup 1" && !g.dirty(), "save from factory -> Setup 1");
+    CHECK(std::filesystem::exists(dir / "trailforge_suv.json"), "setup file written");
+    CHECK(!g.rename("Factory") && !g.rename("  "), "reserved / empty names refused");
+    CHECK(g.rename("Rock crawl") && g.activeName() == "Rock crawl", "rename");
+    g.setValue("drivetrain.layout", float(int(DriveLayout::Rwd)));
+    CHECK(g.config().layout == DriveLayout::Rwd && g.dirty(), "layout choice");
+    CHECK(g.saveAsNew() && g.activeName() == "Setup 1" && g.setups().setups.size() == 2, "save as new");
+    CHECK(!g.rename("Rock crawl"), "duplicate name refused");
+    {
+        Garage reloaded(catalog, dir.string());
+        CHECK(reloaded.activeName() == "Setup 1" && reloaded.config().layout == DriveLayout::Rwd &&
+                  std::abs(reloaded.config().tuning.axles[kFrontAxle].springFrequency - 1.6f) < 1e-6f,
+              "reloaded from disk: active '%s'", reloaded.activeName().c_str());
+        CHECK(reloaded.selectSetup("Rock crawl") && reloaded.config().layout == catalog[0].config.layout,
+              "the other setup keeps the base layout");
+    }
+    // Rename typed through the input path.
+    g.selectRow(GarageRowKind::Action, "RENAME");
+    g.handle(gkey(&GarageInput::accept));
+    CHECK(g.renaming(), "rename mode");
+    for (int i = 0; i < 8; ++i) g.handle(gkey(&GarageInput::backspace));
+    GarageInput typed;
+    typed.text = "Mud";
+    g.handle(typed);
+    g.handle(gkey(&GarageInput::accept));
+    CHECK(!g.renaming() && g.activeName() == "Mud", "typed rename -> '%s'", g.activeName().c_str());
+    CHECK(g.deleteActive() && g.factoryActive() && g.setups().setups.size() == 1, "delete -> factory");
+    CHECK(g.config() == catalog[0].config, "factory config after delete");
+    // Selection on the Setup row: right cycles Factory -> Rock crawl.
+    g.selectRow(GarageRowKind::Setup);
+    g.handle(gkey(&GarageInput::right));
+    CHECK(g.activeName() == "Rock crawl", "setup row cycles to '%s'", g.activeName().c_str());
+    g.resetToFactory();
+    CHECK(g.config() == catalog[0].config && g.dirty(), "reset to factory (unsaved)");
+
+    // Kit on the test vehicle: overrides apply, its ranges replace the base ones, values clamp into them.
+    CHECK(g.selectVehicle("rwd_test") && g.factoryActive(), "test vehicle");
+    const float massBase = g.config().mass;
+    CHECK(g.setKit("test_lift") && g.config().mass > massBase, "kit adds mass %.0f -> %.0f", double(massBase),
+          double(g.config().mass));
+    const ParamRange ride = g.range(*findSetupParam("suspension.rideHeight"));
+    CHECK(std::abs(ride.min + 0.02f) < 1e-6f && std::abs(ride.max - 0.12f) < 1e-6f, "kit ride height range %.3f..%.3f",
+          double(ride.min), double(ride.max));
+    g.setValue("suspension.rideHeight", 0.5f);
+    CHECK(std::abs(g.value(*findSetupParam("suspension.rideHeight")) - 0.12f) < 1e-6f, "ride height clamped to the kit");
+    CHECK(!g.setKit("no_such_kit"), "unknown kit refused");
+
+    // A running simulation: live values change the vehicle between ticks, rebuild values respawn it in place.
+    g.selectVehicle("trailforge_suv");
+    Simulation sim{[&] {
+        SimulationSettings s;
+        s.vehicle = g.config();
+        return s;
+    }()};
+    for (int i = 0; i < 240; ++i) sim.tick();
+    g.setValue("suspension.front.frequency", 1.7f);
+    sim.requestVehicleConfig(g.config());
+    sim.tick();
+    CHECK(std::abs(sim.vehicleConfig().tuning.axles[kFrontAxle].springFrequency - 1.7f) < 1e-6f, "live value applied");
+    const JPH::Vec3 before = sim.currentSnapshot().body.position;
+    g.setValue("suspension.rideHeight", 0.05f);
+    sim.requestVehicleConfig(g.config());
+    sim.tick();
+    for (int i = 0; i < 240; ++i) sim.tick();
+    const JPH::Vec3 after = sim.currentSnapshot().body.position;
+    std::printf("    ride height +50 mm: body y %.3f -> %.3f, horizontal move %.3f m\n", double(before.GetY()),
+                double(after.GetY()), double(std::hypot(after.GetX() - before.GetX(), after.GetZ() - before.GetZ())));
+    CHECK(after.GetY() > before.GetY() + 0.03f, "body higher after +50 mm ride height");
+    CHECK(std::hypot(after.GetX() - before.GetX(), after.GetZ() - before.GetZ()) < 0.05f, "rebuilt in place");
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -229,6 +366,7 @@ int main(int argc, char** argv) {
         {"settings_roundtrip", settingsRoundtrip},
         {"menu_navigation", menuNavigation},
         {"pause_freezes_ticks", pauseFreezesTicks},
+        {"garage_model", garageModel},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

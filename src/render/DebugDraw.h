@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "render/Mesh.h"
 
 #include <glm/glm.hpp>
@@ -32,7 +34,8 @@ struct VehicleDebugOptions {
     float forceScale = 0.0002f; // m per N
 };
 
-void drawVehicleDebug(DebugDraw& dd, const VehicleTelemetry& t, float suspensionMin, float suspensionMax,
-                      const VehicleDebugOptions& opt);
+// Suspension limits per axle (index 0 front, 1 rear).
+void drawVehicleDebug(DebugDraw& dd, const VehicleTelemetry& t, const std::array<float, 2>& suspensionMin,
+                      const std::array<float, 2>& suspensionMax, const VehicleDebugOptions& opt);
 
 } // namespace tf

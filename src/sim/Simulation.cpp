@@ -32,10 +32,18 @@ Simulation::~Simulation() {
     m_world.reset();
 }
 
+namespace {
+// Body origin height above the ground with the wheels at full droop slightly above it.
+float spawnHeight(const VehicleConfig& config) {
+    float reach = 0.0f;
+    for (const AxleConfig& a : config.axles) reach = std::max(reach, a.wheelRadius + a.suspensionMaxLength);
+    return reach - config.attachHeight + 0.05f;
+}
+} // namespace
+
 void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_vehicle.reset(); // delete the old body/constraint first
-    // Height: wheels at full droop slightly above the ground.
-    const float y = at.position.GetY() + config.wheelRadius + config.suspensionMaxLength - config.attachHeight + 0.05f;
+    const float y = at.position.GetY() + spawnHeight(config);
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);
@@ -56,6 +64,26 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_tireMarks.breakRibbons();
     m_curr = captureSnapshot();
     m_prev = m_curr;
+}
+
+void Simulation::respawnInPlace(VehicleConfig config) {
+    const JPH::RMat44 xf = m_vehicle->bodyTransform();
+    const JPH::Vec3 p(xf.GetTranslation());
+    const JPH::Vec3 fwd = xf.GetAxisZ();
+    const float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    const AidControls controls = m_vehicle->aidControls();
+    const VehicleTelemetry old = m_vehicle->telemetry();
+    // Ground below the body: a ray from 3 m above to 10 m below, ignoring the vehicle.
+    const JPH::Vec3 above = p + JPH::Vec3(0.0f, 3.0f, 0.0f), below = p - JPH::Vec3(0.0f, 10.0f, 0.0f);
+    float ground = p.GetY() - 1.0f;
+    if (auto hit = castRayIgnoringVehicle(above, below)) ground = above.GetY() + (below.GetY() - above.GetY()) * *hit;
+    TrackFeature at;
+    at.position = JPH::Vec3(p.GetX(), ground, p.GetZ());
+    at.yaw = yaw;
+    spawnVehicle(std::move(config), at);
+    m_vehicle->setAidControls(controls);
+    if (old.layout == DriveLayout::PartTime) m_vehicle->setTransfer(old.transfer);
+    else if (old.lowRange) m_vehicle->toggleLowRange();
 }
 
 RenderSnapshot Simulation::captureSnapshot() const {
@@ -90,9 +118,32 @@ void Simulation::processCommands() {
         m_pendingReset = false;
         setMessage("Vehicle reset to spawn point");
     }
+    if (m_pendingConfig) {
+        if (Vehicle::needsRebuild(m_vehicle->config(), *m_pendingConfig)) {
+            respawnInPlace(*m_pendingConfig);
+            setMessage("Vehicle rebuilt in place");
+        } else {
+            m_vehicle->applyTuning(m_pendingConfig->tuning);
+        }
+        m_pendingConfig.reset();
+    }
     if (m_pendingTuning) {
         m_vehicle->applyTuning(*m_pendingTuning);
         m_pendingTuning.reset();
+    }
+    if (m_pendingTransferCycle || m_pendingTransfer) {
+        const bool ok = m_pendingTransfer ? m_vehicle->setTransfer(*m_pendingTransfer) : m_vehicle->cycleTransfer();
+        m_pendingTransferCycle = false;
+        m_pendingTransfer.reset();
+        const VehicleTelemetry& t = m_vehicle->telemetry();
+        if (m_vehicle->config().layout != DriveLayout::PartTime)
+            setMessage("No transfer case switch on this drivetrain");
+        else if (!ok)
+            setMessage("4L in or out only near standstill (< 1 m/s)");
+        else
+            setMessage(t.transfer == TransferMode::TwoHigh ? "2H: rear-wheel drive"
+                       : t.transfer == TransferMode::FourHigh ? "4H: front axle engaged, center locked"
+                                                              : "4L: low range, center locked");
     }
     if (m_pendingToggleDirection) {
         m_pendingToggleDirection = false;
@@ -183,7 +234,8 @@ void Simulation::smoothInput(float dt) {
     const float target = std::clamp(in.steer, -1.0f, 1.0f);
     const bool returning = std::abs(target) < std::abs(m_smoothed.steer) || target * m_smoothed.steer < 0.0f;
     // The analog stick sets the angle directly, but with a steering rate limit (faster than the keyboard).
-    const float rate = (returning ? s.steerReturnRate : s.steerRate) * (in.analog ? 2.0f : 1.0f);
+    const VehicleTuning& vt = m_vehicle->config().tuning;
+    const float rate = (returning ? vt.steerReturnRate : vt.steerRate) * (in.analog ? 2.0f : 1.0f);
     m_smoothed.steer = approach(m_smoothed.steer, target, rate, dt);
 }
 
