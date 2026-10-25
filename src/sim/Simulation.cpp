@@ -155,8 +155,12 @@ void Simulation::processCommands() {
     }
     if (m_pendingToggleLowRange) {
         m_pendingToggleLowRange = false;
-        setMessage(m_vehicle->toggleLowRange() ? "Transfer case range changed"
-                                               : "Low range change only near standstill (< 1 m/s)");
+        const bool ok = m_vehicle->toggleLowRange();
+        if (ok && m_vehicle->config().layout == DriveLayout::PartTime)
+            setMessage(m_vehicle->telemetry().transfer == TransferMode::FourLow ? "4L: low range, center locked"
+                                                                                : "4H: front axle engaged, center locked");
+        else
+            setMessage(ok ? "Transfer case range changed" : "Low range change only near standstill (< 1 m/s)");
     }
     if (m_pendingAbsToggle || m_pendingTractionCycle || m_pendingDiffCycle || m_pendingAids) {
         AidControls c = m_pendingAids ? *m_pendingAids : m_vehicle->aidControls();

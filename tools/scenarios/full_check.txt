@@ -253,6 +253,61 @@ wait 0.2
 tap L
 wait 0.1
 expect low == 0
+expect transfer == 1            # part-time: L leaves 4L for 4H
+
+# ---------------------------------------------------------------- V transfer case (part-time 4WD): 2H -> 4H -> 4L -> 2H
+tap R
+wait 1.0
+expect layout == 3              # trailforge_suv: part-time 4WD
+expect transfer == 0            # reset / spawn: 2H
+expect front_driven == 0
+expect rear_driven == 1
+down W
+wait 1.5
+tap V                           # 4H engages while moving
+wait 0.1
+expect transfer == 1
+expect front_driven == 1
+expect center_diff == 2         # 4H: front and rear axle coupled (center locked)
+expect msg:4H == 1
+tap V                           # 4L is refused while moving
+wait 0.1
+expect transfer == 1
+expect low == 0
+expect msg:standstill == 1
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.2
+tap V
+wait 0.1
+expect transfer == 2
+expect low == 1
+expect msg:4L == 1
+capture /tmp/trailforge_04d_transfer_4l.png
+down W
+wait 1.5
+log transfer_4l
+expect fwd_kmh > 3
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+wait 0.2
+tap V                           # back to 2H (rear-wheel drive, high range)
+wait 0.1
+expect transfer == 0
+expect low == 0
+expect front_driven == 0
+expect msg:2H == 1
+tap L                           # L from 2H goes straight to 4L
+wait 0.1
+expect transfer == 2
+expect front_driven == 1
+transfer 2h
+wait 0.1
+expect transfer == 0
 
 # ---------------------------------------------------------------- R reset
 down W
@@ -455,7 +510,7 @@ expect dir == 1                 # held for 1 s on the slope, no reverse
 up S                            # pressed again: reverse engages, S backs up the slope
 down S
 until dir == -1 3
-expect tilt > 10                # on the descent; with dirt mu 0.70 the stop varies from its top to its foot
+expect tilt > 5                 # on the slope; the stop varies from the crest transition (4L: ~9 deg) to its foot
 wait 1.0
 expect fwd_kmh < -1
 log hill28_reverse
@@ -493,11 +548,15 @@ expect min_cam_clearance > 0.1  # the camera did not go underground on the slope
 log hills_cam min_cam_clearance checked
 set auto_reverse 0
 
-# ---------------------------------------------------------------- 18 degree side slope
+# ---------------------------------------------------------------- 18 degree side slope (2H is not enough here: 4H)
 teleport 5
 wait 1.0
 expect low == 0                 # teleport/reset recreates the vehicle: default range and direction
 expect dir == 1
+expect transfer == 0
+tap V
+wait 0.1
+expect transfer == 1
 reset_stats
 down W
 until z > -30 10

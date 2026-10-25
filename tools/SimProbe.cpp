@@ -731,7 +731,10 @@ void layoutsProbe() {
                 if (std::abs(t - 2.0) < 0.5 * sim.fixedStep()) v2 = sim.vehicle().telemetry().speed;
                 if (t30 < 0 && kmh >= 30.0f) t30 = t;
             }
-            std::printf(" | %-8s v(2s) %5.2f m/s, 0-30 %5.2f s, spin %4.2f s", lanes[l], v2, t30, spin);
+            char t30Text[16];
+            if (t30 >= 0) std::snprintf(t30Text, sizeof(t30Text), "%5.2f s", t30);
+            else std::snprintf(t30Text, sizeof(t30Text), "  > 5 s");
+            std::printf(" | %-8s v(2s) %5.2f m/s, 0-30 %s, spin %4.2f s", lanes[l], v2, t30Text, spin);
         }
         std::printf("\n%-13s", "");
         for (int k : {3, 8}) {

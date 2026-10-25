@@ -433,6 +433,10 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     ImGui::Text("Engine %.0f rpm   Gear %s%s   Clutch %.2f   Direction %s   Range %s", t.engineRPM,
                 gearName(t.gear, g, 8), t.shifting ? " (shifting)" : "", t.clutchFriction,
                 t.direction == DriveDirection::Forward ? "forward" : "reverse", t.lowRange ? "LOW" : "high");
+    ImGui::Text("Drivetrain %s%s%s   driven: %s%s   front share %.2f   drag %.0f N%s", driveLayoutName(t.layout),
+                t.layout == DriveLayout::PartTime ? " " : "",
+                t.layout == DriveLayout::PartTime ? transferModeName(t.transfer) : "", t.frontDriven ? "front " : "",
+                t.rearDriven ? "rear" : "", t.frontTorqueShare, t.dragForce, t.revLimited ? "   REV LIMIT" : "");
     ImGui::Text("Body tilt from vertical: %.1f deg", std::acos(std::fmin(1.0f, std::fmax(-1.0f, t.upDot))) * 57.2958f);
     bar("throttle [0..1]", t.command.throttle, 0, 1, "%.2f");
     bar("brake [0..1]", t.command.brake, 0, 1, "%.2f");
