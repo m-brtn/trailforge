@@ -58,6 +58,8 @@ Copy-Item $Exe $Pkg
 foreach ($sub in 'audio', 'music', 'fonts', 'images') {
     Copy-Item -Recurse (Join-Path $Root "assets\$sub") (Join-Path $Pkg "assets\$sub")
 }
+# The logo is copied from external_assets/images into the build tree at configure time.
+Copy-Item (Join-Path $Build 'assets\images\logo.png') (Join-Path $Pkg 'assets\images\logo.png')
 @"
 TrailForge $Version for Windows (x64)
 

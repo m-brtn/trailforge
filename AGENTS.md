@@ -127,7 +127,8 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
-              assets/images/ logo.png (each with CREDITS.md)
+              assets/images/ CREDITS.md (logo.png is copied from external_assets/images/Logo.png into build/<preset>/assets/images
+              at configure time); each with CREDITS.md
 external_assets/ images/ (Icon.png app icon source, Logo.png, Banner.png, Cars.png vehicle concept sheet),
  music/ (user-provided tracks, not wired in yet)
 devlog/       daily development log

@@ -5,7 +5,7 @@
 #      at startup SDL_SetWindowIcon sets it, which on Cocoa is the Dock icon of the running process;
 #   2) Icon.png -> TrailForge.icns (iconset 16..1024 px) -> build/<preset>/TrailForge.app, a self-contained bundle:
 #      a copy of the `trailforge` executable, Info.plist (version from project()), the icns and the runtime assets
-#      (assets/ -> Contents/Resources/assets: audio, music, fonts, images; found at runtime through SDL_GetBasePath()).
+#      (assets/ -> Contents/Resources/assets: audio, music, fonts, images, plus the logo from the build tree; found at runtime through SDL_GetBasePath()).
 # Elsewhere no icon is embedded and the window keeps the default icon.
 
 set(TRAILFORGE_ICON_SOURCES "")
@@ -77,7 +77,7 @@ function(trailforge_add_macos_bundle target)
         DEPENDS ${target} ${_icns} ${_icon_gen}/Info.plist
         COMMENT "Assembling TrailForge.app")
 
-    # Runtime assets: re-copied only when a file under assets/ changes.
+    # Runtime assets: re-copied only when a file under assets/ (or the logo copied into the build tree) changes.
     set(_assets ${CMAKE_SOURCE_DIR}/assets)
     file(GLOB_RECURSE _asset_files CONFIGURE_DEPENDS ${_assets}/*)
     set(_assets_stamp ${_icon_gen}/bundle_assets.stamp)
@@ -85,8 +85,10 @@ function(trailforge_add_macos_bundle target)
         OUTPUT ${_assets_stamp}
         COMMAND ${CMAKE_COMMAND} -E rm -rf ${_app}/Contents/Resources/assets
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${_assets} ${_app}/Contents/Resources/assets
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/assets/images/logo.png
+                ${_app}/Contents/Resources/assets/images/logo.png
         COMMAND ${CMAKE_COMMAND} -E touch ${_assets_stamp}
-        DEPENDS ${_asset_files}
+        DEPENDS ${_asset_files} ${CMAKE_BINARY_DIR}/assets/images/logo.png
         COMMENT "Copying assets/ into TrailForge.app")
     add_custom_target(trailforge_bundle ALL DEPENDS ${_app}/Contents/MacOS/trailforge ${_assets_stamp})
 endfunction()

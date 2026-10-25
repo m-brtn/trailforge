@@ -106,6 +106,10 @@ if(TRAILFORGE_BUILD_APP)
     else()
         target_compile_definitions(trailforge PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     endif()
+    # Images the menus load at runtime (assets/images/ next to the executable). The PNG sources stay in
+    # external_assets/images (PNGs elsewhere are git-ignored), so they are copied into the build tree here.
+    configure_file(${CMAKE_SOURCE_DIR}/external_assets/images/Logo.png ${CMAKE_BINARY_DIR}/assets/images/logo.png
+                   COPYONLY)
     trailforge_add_macos_bundle(trailforge)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)

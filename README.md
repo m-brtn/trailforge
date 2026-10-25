@@ -338,7 +338,7 @@ tools/        SimProbe — headless measurements; scenarios/ — scripts for --s
               shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
-              assets/images/ logo.png; each with a CREDITS.md
+              assets/images/ (CREDITS.md; logo.png is copied from external_assets/images/Logo.png into the build tree)
 ```
 
 The physics (`trailforge_sim`) does not depend on SDL or rendering; the sound model (`trailforge_audio`) depends only

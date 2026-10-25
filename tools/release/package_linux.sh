@@ -56,6 +56,7 @@ mkdir -p "$PKG/assets"
 cp "$BUILD/trailforge" "$PKG/"
 strip "$PKG/trailforge"
 cp -R "$ROOT/assets/audio" "$ROOT/assets/music" "$ROOT/assets/fonts" "$ROOT/assets/images" "$PKG/assets/"
+cp "$BUILD/assets/images/logo.png" "$PKG/assets/images/" # copied from external_assets/images at configure time
 cat >"$PKG/README.txt" <<EOF
 TrailForge $VERSION for Linux ($ARCH)
 
