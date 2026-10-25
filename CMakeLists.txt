@@ -26,6 +26,8 @@ include(cmake/Dependencies.cmake)
 # Physics, vehicle, proving ground. Does not depend on SDL/rendering, runs headless.
 add_library(trailforge_sim STATIC
     src/core/Json.cpp
+    src/core/Ktx2.cpp
+    src/core/TerrainTextureSet.cpp
     src/physics/PhysicsWorld.cpp
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
@@ -174,7 +176,8 @@ if(TRAILFORGE_BUILD_TESTS)
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
 
-    # Open-world level: bake, physics tiles and streaming, roads, water, both vehicles on Exploration Peaks.
+    # Open-world level: bake, physics tiles and streaming, roads, water, both vehicles on Exploration Peaks; terrain
+    # texture files (KTX2 reader, shipped BC7 maps).
     add_executable(trailforge_level_tests tests/LevelTests.cpp)
     target_link_libraries(trailforge_level_tests PRIVATE trailforge_sim)
     target_compile_definitions(trailforge_level_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -183,7 +186,9 @@ if(TRAILFORGE_BUILD_TESTS)
             level_tile_streaming
             level_road_carving
             level_surfaces_water
-            level_vehicles)
+            level_vehicles
+            terrain_textures_ktx2
+            terrain_textures_assets)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()

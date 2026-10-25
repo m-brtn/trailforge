@@ -1,6 +1,9 @@
 // Headless tests of the open-world level: the bake (height and material sampling, roads, rivers, water), the
-// physics tiles (heightfield == baked grid, streaming bookkeeping) and both vehicles on Exploration Peaks.
+// physics tiles (heightfield == baked grid, streaming bookkeeping), both vehicles on Exploration Peaks and the
+// terrain texture files (KTX2 container, shipped BC7 maps).
 
+#include "core/Ktx2.h"
+#include "core/TerrainTextureSet.h"
 #include "physics/PhysicsWorld.h"
 #include "sim/Simulation.h"
 #include "track/Level.h"
@@ -479,6 +482,100 @@ void levelVehicles() {
           "switch back");
 }
 
+// KTX2 container: write / read round trip of a full BC7 mip chain, skipping the largest levels, structural errors
+// and the Git LFS pointer check; the level skip used by the quality presets.
+void terrainTexturesKtx2() {
+    ktx2::Image img;
+    img.vkFormat = ktx2::kVkFormatBc7Srgb;
+    img.width = img.height = 64;
+    for (std::uint32_t s = 64; s >= 1; s /= 2) {
+        ktx2::Level l;
+        l.width = l.height = s;
+        l.data.resize(ktx2::bc7LevelBytes(s, s));
+        for (std::size_t i = 0; i < l.data.size(); ++i) l.data[i] = std::uint8_t(i * 7 + s);
+        img.levels.push_back(std::move(l));
+    }
+    CHECK(img.levels.size() == 7 && ktx2::bc7LevelBytes(2, 2) == 16 && ktx2::bc7LevelBytes(64, 64) == 4096,
+          "levels %zu", img.levels.size());
+    const std::vector<std::uint8_t> file = ktx2::write(img, "trailforge test");
+
+    ktx2::Image back;
+    std::string err;
+    CHECK(ktx2::read(file, back, err), "read: %s", err.c_str());
+    bool same = back.vkFormat == img.vkFormat && back.width == 64 && back.levels.size() == img.levels.size();
+    for (std::size_t i = 0; same && i < img.levels.size(); ++i)
+        same = back.levels[i].width == img.levels[i].width && back.levels[i].data == img.levels[i].data;
+    CHECK(same, "round trip differs");
+
+    ktx2::Image skipped;
+    CHECK(ktx2::read(file, skipped, err, 2), "read with skip: %s", err.c_str());
+    CHECK(skipped.width == 16 && skipped.levels.size() == 5 && skipped.levels[0].data == img.levels[2].data &&
+              skipped.levels.back().width == 1,
+          "skip 2: width %u, %zu levels", skipped.width, skipped.levels.size());
+
+    const std::string path = "/tmp/trailforge_test_texture.ktx2";
+    {
+        std::FILE* fp = std::fopen(path.c_str(), "wb");
+        CHECK(fp != nullptr, "cannot write %s", path.c_str());
+        if (fp) {
+            std::fwrite(file.data(), 1, file.size(), fp);
+            std::fclose(fp);
+        }
+    }
+    ktx2::Image fromFile;
+    CHECK(ktx2::readFile(path, fromFile, err, 1) && fromFile.width == 32 && fromFile.levels.size() == 6 &&
+              fromFile.levels[0].data == img.levels[1].data,
+          "readFile with skip: %s", err.c_str());
+    std::remove(path.c_str());
+
+    std::vector<std::uint8_t> cut(file.begin(), file.end() - 100);
+    CHECK(!ktx2::read(cut, back, err), "truncated file accepted");
+    std::vector<std::uint8_t> bad = file;
+    bad[5] ^= 0xff;
+    CHECK(!ktx2::read(bad, back, err), "bad identifier accepted");
+    const std::string ptr = "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 22370144\n";
+    CHECK(ktx2::isLfsPointer(std::vector<std::uint8_t>(ptr.begin(), ptr.end())) && !ktx2::isLfsPointer(file),
+          "LFS pointer detection");
+
+    CHECK(terrainTextureSkip(4096, 4096) == 0 && terrainTextureSkip(4096, 2048) == 1 &&
+              terrainTextureSkip(4096, 512) == 3 && terrainTextureSkip(2048, 4096) == 0 &&
+              terrainTextureSkip(2048, 1024) == 1 && terrainTextureSkip(16, 1) == 2,
+          "terrainTextureSkip");
+}
+
+// The shipped terrain textures (assets/textures/terrain): manifest in the shader's layer order, every map a
+// square BC7 texture of the manifest size with a full mip chain down to 1x1. Needs the LFS objects (`git lfs pull`).
+void terrainTexturesAssets() {
+    const std::string dir = std::string(TRAILFORGE_SOURCE_DIR) + "/assets/textures/terrain";
+    TerrainTextureSet set;
+    std::string err;
+    CHECK(loadTerrainTextureSet(dir, set, err), "%s", err.c_str());
+    if (set.layers.size() != std::size_t(TerrainTextureSet::kLayers)) return;
+    std::printf("  terrain textures: albedo %u, normal / roughness / AO %u texels\n", set.albedoSize, set.nraSize);
+    std::size_t total = 0;
+    for (const TerrainTextureSet::Layer& l : set.layers) {
+        for (int k = 0; k < 2; ++k) {
+            const bool albedo = k == 0;
+            const std::string& path = albedo ? l.albedoPath : l.nraPath;
+            const std::uint32_t size = albedo ? set.albedoSize : set.nraSize;
+            ktx2::Image img;
+            const bool ok = loadTerrainTextureMap(path, albedo, 0, img, err);
+            CHECK(ok, "%s", err.c_str());
+            if (!ok) continue;
+            std::uint32_t mips = 0;
+            for (std::uint32_t s = size; s >= 1; s /= 2) ++mips;
+            bool chain = img.width == size && img.levels.size() == mips;
+            for (std::size_t i = 0; chain && i < img.levels.size(); ++i)
+                chain = img.levels[i].width == std::max(size >> i, 1u) &&
+                        img.levels[i].data.size() == ktx2::bc7LevelBytes(img.levels[i].width, img.levels[i].height);
+            CHECK(chain, "%s: %u texels, %zu levels (want %u, %u)", path.c_str(), img.width, img.levels.size(), size,
+                  mips);
+            for (const ktx2::Level& lv : img.levels) total += lv.data.size();
+        }
+    }
+    std::printf("  terrain textures: %.1f MB of BC7 data in 12 maps\n", double(total) / (1024.0 * 1024.0));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -488,6 +585,8 @@ int main(int argc, char** argv) {
         {"level_road_carving", levelRoadCarving},
         {"level_surfaces_water", levelSurfacesAndWater},
         {"level_vehicles", levelVehicles},
+        {"terrain_textures_ktx2", terrainTexturesKtx2},
+        {"terrain_textures_assets", terrainTexturesAssets},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
