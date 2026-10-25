@@ -28,7 +28,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 46 tests, 43 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 54 tests, 51 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -52,7 +52,7 @@ Captures differ slightly between runs of the same binary (timing), so identity c
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
 `trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`; they drive the vehicle of
+`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -69,10 +69,13 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
 ./build/release/trailforge --script tools/scenarios/wheel_fit.txt # visual wheels / arches follow a tire size change
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
+./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
+./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
 python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
+# EV motor sound: tools/scenarios/ev_audio.txt with --audio-capture, same analysis (motor order vs motor_hz)
 ```
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
@@ -113,7 +116,8 @@ src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job sys
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
 src/core/     Json (reader, writer, merge)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
-              WheelContact (contact samples), DrivingAids (ABS / traction control logic, brake torque and throttle
+              WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
+ in Vehicle.cpp), DrivingAids (ABS / traction control logic, brake torque and throttle
               factor only), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
               parameters, setup files)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),

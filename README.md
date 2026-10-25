@@ -144,6 +144,8 @@ Command-line options:
 - `--quit-after N` — quit automatically after N seconds (smoke test);
 - `--capture file.bmp|file.png [--capture-at N]` — save one rendered frame;
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
+- `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
+  choice on the vehicle page (not in scenario mode);
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
 - `--paths` — print the asset lookup directories (`assets:` sounds, `music:`, `fonts:`, `images:`) and the user data
@@ -157,6 +159,8 @@ Command-line options:
 - `hillbrake` — holding on climbs with the brake;
 - `susp [feature throttle low secs steer]` — per-wheel suspension length, compression and hub height in body space
   over a track feature (default 2, the diagonal twister), body-terrain contact ticks;
+- `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,
+  climbs on dirt 20° and mud 15° per drive mode, the twister, steady-speed energy (electric only);
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
@@ -220,6 +224,8 @@ One command per line, `#` starts a comment:
 | `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
 | `pedal throttle\|brake V` | hold an analog pedal at V (0..1) like a gamepad trigger (not ramped; max with the keys) until set to 0 |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
+| `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
+| `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
@@ -252,14 +258,19 @@ spray and wheel close-ups; `/tmp/trailforge_spray2_*.png`),
 `tools/scenarios/skid_profile.txt` (a 65 km/h locked-wheel stop on the skid strip, top-down
 `/tmp/trailforge_skid_profile*.png`),
 `tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, short for a
-brake tap, audible for lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
+brake tap, audible for lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`),
+`tools/scenarios/ev_check.txt` (electric vehicle: vehicle page with keys, mouse wheel and card clicks, launch, lift-off
+regen, blended braking, SoC and energy counters, drive modes, the low range message, reverse, an empty battery, the
+mud bath in OFF-ROAD; `/tmp/trailforge_ev_*.png`), `tools/scenarios/ev_audio.txt` (EV launch, regen and stop for an
+`--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/car2_views.txt` (EV model views
+for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
-1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
+1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls, 4 vehicle page), `menu_depth`,
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
-`abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`), `settings_roundtrip` (1 if the settings file format
+`abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`, `vehicle` (catalog index of the remembered choice)), `settings_roundtrip` (1 if the settings file format
 keeps every current value), controls: `drive_keys` (applied to the input: 0 W A S D, 1 arrows), `kb_style` (0 Mac,
 1 PC), `pad_glyphs` (resolved: 0 Xbox, 1 PlayStation), `controls_callouts` / `controls_overlaps` (callouts on the
 Controls page and overlapping pairs of callouts, key caps and controller outline, measured with the real font), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
@@ -268,7 +279,11 @@ Controls page and overlapping pairs of callouts, key caps and controller outline
 shown next to the spring frequency), `garage:<key>` (the garage's value of a setup parameter),
 `cfg:<key>` (the same parameter read from the running vehicle), `text_input` (SDL text input active), drivetrain:
 `layout` (0 RWD, 1 FWD, 2 AWD, 3 part-time, 4 on-demand), `transfer` (0 2H, 1 4H, 2 4L), `front_driven`,
-`rear_driven`,
+`rear_driven`, vehicles: `vehicle_index` (catalog index of the running vehicle, 0 = default), `vehicle_choice` (the
+vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (0 drive, 1 reverse), electric drive:
+`soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
+`motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
+`energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
@@ -285,12 +300,13 @@ speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu
 wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference over both axles, m),
 `msg:<substring>` (1 if the latest UI message contains the substring),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
-`audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (gain of the
+`audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
+`audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
 gameplay sounds, 0 while paused), `audio_music` (music bus gain 0..1), `audio_music_t` (seconds of music played), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
 received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 suspension thump, 4 body impact, 5 splash, 6 creak,
 7 UI), and more. Full list: `Application::scenarioValue`.
 Driver aid `set` keys: `abs 0/1`, `tc 0/1/2`, `diff_locks 0..3`.
-Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_pitch`, `audio_whine`,
+Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_pitch`, `audio_whine`, `audio_motor`,
 `audio_play_ui N` (play UI sound N: 0 click, 1 hover, 2 confirm, 3 back, 4 slider tick, 5 menu open, 6 menu close).
 
 ## Controls
@@ -301,8 +317,8 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Steering | A / D (or ← / →) | left stick |
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
-| Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L) | L | Y (North) |
-| Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s) | V | D-pad left |
+| Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L; electric: none, a message says so) | L | Y (North) |
+| Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s); electric: drive mode NORMAL ↔ OFF-ROAD | V | D-pad left |
 | Reset to the last start point | R | Back / View |
 
 Keyboard pedals are a driver-input model (`src/input/KeyboardPedals.h`, the constants are in `KeyboardPedalSettings`),
@@ -358,6 +374,16 @@ in the user data directory (`trailforge --paths`) when a Settings page is closed
 loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
 the settings for the session; they are hidden while a menu is open.
 
+**Vehicle page.** With more than one vehicle in the catalog, Start opens SELECT VEHICLE: a strip of cards (name and
+GASOLINE / ELECTRIC), the description and a spec list (mass, peak power, torque, drivetrain, battery, tires), with
+the live vehicle as the preview under the garage orbit camera. Left / Right (A / D, D-pad, stick), the mouse wheel
+(one vehicle per notch) or a click on a card change the vehicle (it respawns in place); Enter on VEHICLE or DRIVE, or
+a click on the selected card, starts the game; Esc goes back. The choice is saved as `vehicle = <id>` in
+`settings.cfg` and used on the next start; `--vehicle ID` selects a vehicle at startup and is remembered the same way
+(not in scenario mode). The garage edits the running
+vehicle and also switches it (its VEHICLE row), which updates the saved choice. The gamepad path is the same menu
+input as the keys and is untested with a real pad.
+
 **Reverse.** W is the forward pedal and S the backward pedal (RT / LT on a gamepad). While moving forward, S brakes,
 and an S press that started while moving keeps braking through the stop and holds the vehicle for as long as it is
 held, also on a slope (CTest `auto_reverse`: 0.8 mm of creep in 6 s on the 12° hill). Reverse engages only after S is
@@ -387,6 +413,7 @@ src/track/    SurfaceProperties (materials and grip), TestTrack (procedural prov
 src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
+              ElectricDrive (motor envelope, torque split, regen blend, battery; used by the electric controller in Vehicle.cpp),
               VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
@@ -479,6 +506,56 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 - No hidden downforce, no direct setting of velocity or position.
   The only teleports are the R reset and the teleport buttons in the UI.
 
+### Electric SUV (`trailforge_ev`)
+
+`assets/vehicles/trailforge_ev/vehicle.json`: a dual-motor electric off-roader on the same wheelbase and track as the
+SUV. The numbers are estimates for the current class of large electric off-road SUVs, not a copy of one vehicle.
+Class reference (manufacturer figures as commonly published, not re-checked for this build): Mercedes G 580 EQ about
+3.1 t with a 116 kWh pack, Rivian R1S about 2.7–3.2 t with 92–149 kWh packs, both with 0–100 km/h around 4–5 s.
+TrailForge EV sits at the light end of that range.
+
+- Mass 2650 kg (+650 kg over the SUV: pack and motors minus engine, gearbox and transfer case), front weight 0.50
+  (SUV 0.518), center of mass 0.15 m below the frame center (SUV 0.10: the pack is in the floor). Inertia
+  [3490, 3670, 925] kg·m² (pitch, yaw, roll), radii of gyration 1.15 / 1.18 / 0.59 m.
+- Motors, one per axle, each with a fixed 12.0:1 reduction (no gearbox, no clutch): front 400 N·m / 180 kW, rear
+  450 N·m / 220 kW, both 15000 rpm max. Envelope: constant torque to the base speed (maxPower / maxTorque: front
+  4297 rpm, rear 4669 rpm, about 56 / 61 km/h), then constant power, fading to 0 over the last 2 % below the max
+  rpm (computed rpm-limited top speed about 196 km/h, not driven). At the wheels: 4800 + 5400 N·m. Rotor inertia 0.05 kg·m²
+  per motor, reflected into the wheels as 0.5 × 0.05 × 12² = 3.6 kg·m² per wheel.
+- Split: NORMAL 0.40 front / 0.60 rear, OFF-ROAD 0.50 / 0.50 (V). What one axle cannot take (motor limit, traction
+  control) goes to the other. Each axle has an open differential (torque split by Jolt's differential ratio).
+- Regen: lift-off target 1.2 m/s² (both pedals released), then the brake pedal's friction torque request per axle up
+  to the motor regen limit (300 N·m shaft per motor, same power envelope), faded out below 2 m/s, reduced on wheel
+  slip or ABS action, limited to 150 kW battery charge power and off at a full battery (SoC ≥ 99.5 %). The friction
+  brakes get the rest of the pedal request.
+- Battery: 120 kWh usable, starts at 80 %, drive efficiency 0.90 (battery → shaft), regen 0.85 (shaft → battery),
+  0.8 kW auxiliary load. Below 2 % SoC the drive torque fades to zero.
+- Tires 285/70R17 all-terrain (17 in rim 431.8 mm + 2 × 0.70 × 285 mm = 830.8 mm, `radius` 0.4155 m), 40 kg,
+  4.0 kg·m².
+- Retuned for the mass: springs 1.45 Hz (SUV 1.35), damping 0.50 compression / 0.55 rebound (SUV 0.45 / 0.45),
+  anti-roll bars 400 / 200 N/m (label units; Jolt's bar acts much stiffer than the label, see the roll angles in the
+  table below), bump stops over the last 4 cm (×3), travel 0.15–0.53 m (SUV 0.55); brakes 3800 N·m front / 3200 N·m
+  rear per wheel (SUV 3000 / 3000).
+- Driver aids as on the SUV (B, T, X); X locks the per-axle differentials (there is no center differential).
+
+Measured against the SUV with `trailforge_probe compare` (`TRAILFORGE_VEHICLE` selects the vehicle; 120 Hz, TC and
+ABS off unless stated):
+
+| | SUV (2000 kg) | EV (2650 kg) |
+|---|---|---|
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.30 / 2.46 / 4.30 s (peak 401 kW, 0.419 kWh) |
+| 50–0 km/h ABS off / on | 13.70 / 13.49 m | 14.95 / 13.88 m (regen 12 / 16 % of the kinetic energy) |
+| 100–0 km/h ABS off / on | 47.57 / 46.42 m | 52.32 / 46.37 m (regen 5 / 9 %) |
+| lift-off at 80 km/h | 0.63 m/s² (drag, engine braking) | 1.36 m/s² (regen and drag) |
+| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.33 m/s², roll 2.17 / 2.58° |
+| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.88 s (NORMAL), 3.89 s (OFF-ROAD) |
+| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.10 s (NORMAL and OFF-ROAD) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.308 / 0.259 / 0.401 / 0.400 m, 6.07 wheel-s in the air | 0.285 / 0.217 / 0.381 / 0.359 m, 5.17 wheel-s |
+| steady 50 / 90 km/h energy | — | 14.2 / 28.9 kWh/100 km (drag, wheel damping, aux; no rolling resistance) |
+
+The full-pedal launch with TC off spins the front wheels: the front axle's 4800 N·m exceeds its grip once the weight
+moves back (slip speed up to 18 m/s, about 2.5 s). Traction control (T) limits it per axle.
+
 ### Vehicle rendering and the style kit
 
 All vehicle geometry is procedural and visual only (collision stays the three boxes of `vehicle/VehicleShape.h`).
@@ -537,6 +614,18 @@ All vehicle geometry is procedural and visual only (collision stays the three bo
     is 5 cm below the collision top; the windshield rakes back from z 0.92 to 0.40 while the box ends at z 0.80;
   - the rear (z -1.50 to -2.20 above the belt) has no collision, the rear spare and bumpers reach 0.25 m behind
     the -2.30 collision end, the front bumper and winch up to 0.16 m ahead of it.
+- **trailforge_ev** (Cars.png car #2, ~15.9k triangles, 38 parts): the same fitted lower body, greenhouse and hood
+  as trailforge_suv (same wheelbase and track) with livery `arcticElectric` (white / light grey paint, blue accents,
+  black cladding and flares), a closed piano-black front panel with a full-width LED bar, headlights with LED rings,
+  wrapped black bumpers with blue LED lamps, blue recovery points and blue tow hooks, a full-width tail light, a dark
+  quarter window with a slanted blue graphic, blue fender-top and door stripes, a flat dark hood panel, low roof
+  rails with a light bar (blue end pods, blue LED strips on the rails) and one flat case, rock sliders with blue
+  caps, the spare on a tailgate carrier, and under the body the floor battery pack and one motor with its reduction
+  and inverter per axle. No antenna, no snorkel (no engine air intake), no mud flaps. The concept's roof spare is
+  left out for the same reason as on the SUV. Six-spoke dark wheels with the all-terrain tread.
+  Headlight beam origins are per model (`VehicleVisual::headlightLens`). Model tests run every catalog vehicle
+  (parts, no antennas or mud flaps, bumpers covering the end faces, wheel size, wheel clearance with its own and
+  bigger / smaller tires).
 - Body mud and tread soil are the same cosmetic layers as before: the mud mask is computed in the shader from the
   body-space position and the per-vertex receptivity of each material.
 
@@ -553,16 +642,17 @@ documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` 
 
 | Section | Keys |
 |---|---|
-| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`, `sporty`; also selects the tire sound preset) |
-| `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch) |
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev` |
+| `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping` |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
 | `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
 | `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`} |
 | `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
-| `engine` | `type` (`combustion`; `electric` is reserved and rejected for now), `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
+| `engine` | `type` (`combustion` or `electric`); combustion: `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
+| `engine` (electric) | `motors` {`front`, `rear`: `maxTorque` (N·m at the shaft), `maxPowerKW`, `maxRPM`, `reduction` (motor / axle speed), `rotorInertia` (kg·m² at the shaft), `regenTorque` (≤ maxTorque)}, `battery` {`capacityKWh` (usable), `initialSoC`, `auxPowerKW`, `maxChargePowerKW` (regen limit)}, `efficiency` {`drive`, `regen`}, `regen` {`liftOffDecel` (m/s²), `fadeSpeed` (m/s)}. The base speed maxPower / maxTorque must be below `maxRPM`; an electric vehicle has no `gearbox` section and needs `drivetrain.layout` `dual_motor` |
 | `gearbox` | `mode` (`auto`), `ratios`, `reverseRatios`, `finalDrive`, `lowRange`, `shiftUpRPM`, `shiftDownRPM`, `shiftTime`, `clutchReleaseTime`, `shiftLatency`, `clutchStrength`, `launchClutchLimit`, `creepTorque` |
-| `drivetrain` | `layout` (`rwd`, `fwd`, `awd`, `part_time`, `on_demand`), `frontTorqueShare`, `frontDiff` / `rearDiff` / `centerDiff` (`open`, `lsd`, `locked`), `limitedSlipRatio`, `centerLimitedSlipRatio`, `lockedSlipRatio` |
+| `drivetrain` | `layout` (`rwd`, `fwd`, `awd`, `part_time`, `on_demand`, `dual_motor`), `frontTorqueShare` (dual motor: NORMAL split, strictly between 0 and 1), `offRoadFrontTorqueShare` (dual motor, OFF-ROAD), `frontDiff` / `rearDiff` / `centerDiff` (`open`, `lsd`, `locked`), `limitedSlipRatio`, `centerLimitedSlipRatio`, `lockedSlipRatio` |
 | `aero` | `dragArea` (Cd·A, m²), `airDensity` |
 | `aids` | `absEnabled`, `traction` (`off`, `on`, `off_road`) and the ABS / TC thresholds and rates |
 | `garage` | `ranges` {setup parameter key: [min, max]} — slider ranges for this vehicle |
@@ -591,13 +681,21 @@ for the clutch speed; it still brakes.
 | AWD (full-time) | driven | driven | `centerDiff` (open / LSD / locked), static split `frontTorqueShare` | the v0.7 SUV |
 | Part-time 4WD | 2H free, 4H / 4L driven | driven | 4H / 4L: locked, split 0.5 | V: 2H → 4H → 4L → 2H; L: 2H / 4H → 4L, 4L → 4H |
 | On-demand AWD | driven | driven | LSD with `frontTorqueShare` (e.g. 0.1) | simplification, see below |
+| Dual motor (electric) | own motor | own motor | none: electronic split `frontTorqueShare` / `offRoadFrontTorqueShare` | V: NORMAL ↔ OFF-ROAD; no low range |
 
 Headless launch on low grip (`drivetrain_layouts`, speed after 1.5 s): RWD 2.41, FWD 2.21, AWD 4.56, on-demand
 (front share 0.1) 4.54, part-time 2H 2.40, 4H 4.56, 4L 3.66 m/s; undriven wheels slip 0.00. `trailforge_probe
 layouts` prints launches on concrete, mud and low grip and climbs on the 20° dirt and 15° mud ramps for every
 layout with the probe vehicle; with the SUV, 2H stalls on the 15° mud ramp (13 m of 30 m) where 4H tops it in 6.1 s.
-The diff-lock key X still works on top (rear, rear + center, all). Electric motors are not implemented; the engine
-`type` field and the per-axle structure are there for a dual-motor layout later.
+The diff-lock key X still works on top (rear, rear + center, all).
+
+**Dual motor in Jolt.** Jolt's `WheeledVehicleController` has one engine, one clutch and one transmission shared by
+all differentials, so two independent motors cannot be set up with its settings. `ElectricVehicleController`
+subclasses it and overrides `PostCollide`: for each axle the motor torque (from `ElectricDrive`: envelope, split,
+traction control, regen) times the reduction is split by the axle differential's torque ratio and integrated into the
+wheel angular velocities, the same way Jolt applies its drivetrain torque; the tires then pass it to the ground
+through Jolt's normal tire constraints. Friction brakes are applied as in Jolt. Nothing pushes the body. The motor
+speed is the reduction times the average wheel speed of its axle; the battery integrates the shaft power each substep.
 
 ## Garage
 
@@ -613,6 +711,10 @@ definition / kit (or the defaults of `VehicleSetup.cpp`, always containing the b
 - Engine and gearbox: torque scale, rev limit, final drive. Brakes: torque scale, front share.
 - Drivetrain: layout, front torque share, front / rear / center differential, LSD ratio.
 - Driving aids: ABS release slip, TC slip thresholds (the on / off switches stay in Settings and the B / T keys).
+- Electric only (group MOTORS AND REGEN): motor torque scale, regen torque scale, lift-off regen deceleration,
+  OFF-ROAD front share. Rows that do not apply to the vehicle are hidden (combustion only: engine torque scale, rev
+  limit, final drive, layout, center differential); a setup file with such keys loads with the message "does not
+  apply to this vehicle, ignored". Setups are per vehicle id, so each vehicle keeps its own list.
 
 Live values change the running vehicle between physics ticks; layout, preload and ride height mark "RESPAWN" and
 rebuild the vehicle in place (same position and heading, lowered onto the ground by a raycast, aid switches and the
@@ -1035,6 +1137,14 @@ parameter set, and the offline capture must run the exact same code without a de
   into a 12 dB spread (panel: "Level spread"). Starter recording on start and on every reset, crossfaded into the
   loops after it catches (or at once when the throttle opens); gear clunks when a gear engages; a quiet
   synthesized transmission whine at the propeller-shaft mesh frequency.
+- **Electric drive (synthesized, `ev` profile).** No recordings: per motor six sine oscillators placed at its axle
+  (±1.35 m along the body, 0.25 m low) on the engine bus. Electrical order 8 × shaft rpm / 60 (4 pole pairs) and its
+  2nd harmonic, slot order 48, reduction gear mesh (21 teeth on the motor shaft, second stage 17 teeth at 1 / 3.6 of
+  the speed) and the inverter carrier at 3.2 kHz with a sideband at carrier + 2 × the electrical frequency, faded out
+  by 12 m/s. Level follows |motor torque| / max torque to the 0.7 power with a 0.12 floor; under regen the weight
+  moves toward the slot order; tones above 5 kHz are rolled off. No starter, idle or gear sounds for the EV.
+  Road hum (only with `tireSound.roadGain` > 0, hard surfaces only): per wheel band-limited noise 70–450 Hz,
+  amplitude-modulated at the tread block rate, on the tire bus.
 - **Tires.** From the per-wheel contact samples (surface, load, slip ratio, slip speed, rolling speed): squeal on
   concrete / low grip / rock, proportional to `squealSlip` — the longitudinal and lateral slip ratios combined on an
   ellipse (onset 0.55 longitudinal / 0.40 lateral, full at 1.7× that) times the sliding speed (2.5..9 m/s), gated by
@@ -1098,7 +1208,10 @@ bundle or next to the binary, and in development builds also from the source tre
   wheel laid out as seen from above ("air" without contact, red on the bump stop), controls; bottom center — a
   driving read-out with the selector (D / R, N while the gearbox is in neutral), speed in km/h, gear, range
   (HIGH / LOW) and rpm, the ABS / TC lamps and the differential modes, plus a 2.5 s hint above it after a discrete
-  command ("Reverse engaged", "Stop to change direction", "Transfer case range changed", "ABS on", …).
+  command ("Reverse engaged", "Stop to change direction", "Transfer case range changed", "ABS on", …). Electric
+  vehicles show the drive mode (NORMAL / OFF-ROAD), a SoC bar, the motor power in kW (negative and blue = regen) and
+  the front / rear motor torque instead of gear, range and rpm; the Telemetry window adds per-motor rpm, torque and
+  power, battery power with the auxiliary load and the energy used / recovered.
 - **Telemetry:**
   - FPS and frame time; ticks per frame, physics step time (last and average), dropped time;
   - speed, rpm, gear, clutch, range, body tilt, throttle/brake/handbrake/steering bars;
@@ -1198,6 +1311,12 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   wind-up or tire scrub in tight turns on high-grip ground as with a real locked part-time system. On-demand AWD is a
   center LSD with a rear-biased static split: it reacts to wheel speed differences at once, with no clutch pack
   engagement delay or heat. Undriven wheels roll freely with their own inertia; there is no hub-lock model.
+- Electric drive: the motor is a torque / power envelope with one constant drive efficiency and one regen
+  efficiency (no efficiency map, no temperature, no current or voltage, no inverter limits); the battery is an energy
+  counter (no internal resistance, voltage sag, temperature or degradation). The motor is not a body of its own: its
+  rotor inertia is added to the wheel inertia through the reduction, so the two wheels of an axle are not coupled
+  through a shared shaft speed; the open differential is the torque split only. Traction control and regen blending
+  are control logic that acts through the motor torque and the friction brake torque.
 - Body collision is a compound of three boxes.
 - Time of day, moonlight and headlights are lighting only: they do not change grip, temperature or anything else in
   the simulation.
@@ -1208,7 +1327,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   triggered by contact data on rigid ground, not by any fluid or vegetation simulation. Body impact strength is an
   estimate: Jolt's contact listener runs before the solver and reports no impulse, so the sound uses
   `J = v_approach / (1/m + (r×n)·I⁻¹(r×n))` (N·s) from the approach speed at the contact point. The engine sound is
-  a recorded petrol inline-4 pitched down, not a synthesized model of the simulated engine.
+  a recorded petrol inline-4 pitched down, not a synthesized model of the simulated engine. The electric drive
+  sound is synthesized from the motor speed and torque (no recordings); its tone choices (pole pairs, slot count,
+  gear teeth, carrier) are plausible values, not measurements of a real motor.
 
 ## Verification results
 
@@ -1218,10 +1339,11 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 36 of 36 tests pass in Debug, Release and headless (30 before v0.8.0; new: `vehicle_catalog_sweep`,
+- **CTest.** 54 of 54 tests pass in Debug and Release, 51 of 51 in headless (no model tests) as of v0.11.0 (new in
+  v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,
+  `ev_simulation`, `audio_electric`, `vehicle_page`; 30 before v0.8.0, then `vehicle_catalog_sweep`,
   `vehicle_definition_validation`, `drivetrain_layouts`, `garage_setups`, `suv_definition_matches_builtin`,
-  `garage_model`) (numbers below are from the latest run where they
-  changed):
+  `garage_model` and later ones) (numbers below are from the latest run where they changed):
 
 | Test | Result |
 |---|---|
