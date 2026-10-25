@@ -11,11 +11,13 @@
 //   trailforge_probe diff             - differential modes with a wheel in the air (pit, diagonal twister)
 //   trailforge_probe layouts          - drivetrain layouts / transfer modes: launches, climbs, the pit slope
 //   trailforge_probe squeal           - squeal peak, length and release tail: launches, brakes, slides per surface
+//   trailforge_probe keyboard         - keyboard W / S as instant keys vs. the progressive KeyboardPedals
 // Every mode drives the vehicle of TRAILFORGE_VEHICLE (path to a vehicle.json), by default
 // assets/vehicles/trailforge_suv/vehicle.json; TRAILFORGE_VEHICLE=builtin uses the C++ defaults of VehicleConfig.
 
 #include "audio/AudioMixer.h"
 #include "audio/VehicleAudioFeed.h"
+#include "input/KeyboardPedals.h"
 #include "sim/Simulation.h"
 #include "vehicle/VehicleDefinition.h"
 
@@ -594,6 +596,65 @@ void squealCases() {
                     peak, peakDb, kAudibleDb, audible, lastAudible,
                     lastAudible < 0 || lastSlide < 0 ? 0.0 : lastAudible - lastSlide,
                     r.mixer.stats().skidChirps - chirps0);
+    }
+}
+
+// Keyboard driving with instant keys (W / S = pedal 1.0, the behavior before KeyboardPedals) and with the progressive
+// keyboard pedals: a held W from a standstill, S taps of 0.15 / 0.25 / 0.4 s and a held S at 50 km/h. Reports the
+// wheelspin / lock-up (max slip, time with a wheel sliding > 1 m/s), rubber marks, squeal and the acceleration or stop.
+void keyboardPedals() {
+    struct Result {
+        float maxSlip = 0.0f, mark = 0.0f, skid = 0.0f, maxPedal = 0.0f;
+        double slideTime = 0.0, t30 = -1.0, stop = -1.0, dist = 0.0;
+    };
+    auto drive = [](int lane, bool ramp, bool brake, float cruiseKmh, double hold, double seconds) {
+        SkidRig r(lane);
+        r.spawn();
+        if (cruiseKmh > 0.0f) r.cruise(8.0, cruiseKmh, 0.0f, false);
+        KeyboardPedals pedals;
+        Result res;
+        const float dt = float(r.sim.fixedStep());
+        for (int i = 0; i < int(seconds * 120.0); ++i) {
+            const double t = i / 120.0;
+            const bool key = t < hold;
+            pedals.update(key && !brake, key && brake, dt);
+            const float pedal = ramp ? (brake ? pedals.brake() : pedals.throttle()) : (key ? 1.0f : 0.0f);
+            res.maxPedal = std::max(res.maxPedal, pedal);
+            r.tick(brake ? DriverIntent{.brake = pedal} : DriverIntent{.throttle = pedal}, true);
+            const auto& tel = r.sim.vehicle().telemetry();
+            bool sliding = false;
+            for (int k = 0; k < kWheelCount; ++k) {
+                const WheelContactSample& c = r.sim.vehicle().contacts()[std::size_t(k)];
+                if (!c.contact) continue;
+                res.maxSlip = std::max(res.maxSlip, c.slipSpeed());
+                sliding = sliding || c.slipSpeed() > 1.0f;
+                res.mark = std::max(res.mark, markIntensity(c, r.sim.tireMarks().settings().referenceLoad,
+                                                            r.sim.tireMarks().soil(std::size_t(k))).slip);
+            }
+            if (sliding) res.slideTime += 1.0 / 120.0;
+            res.skid = std::max(res.skid, r.mixer.stats().skid);
+            if (res.t30 < 0.0 && tel.speed * 3.6f >= 30.0f) res.t30 = t;
+            if (res.stop < 0.0 && cruiseKmh > 0.0f && tel.speed < 0.5f) res.stop = t;
+            if (res.stop < 0.0) res.dist += std::abs(tel.speed) / 120.0;
+        }
+        return res;
+    };
+    auto print = [](const char* lane, const char* what, bool ramp, const Result& r, bool brake) {
+        std::printf("%-8s %-22s %-8s pedal max %4.2f | max slip %5.2f m/s, sliding > 1 m/s %4.2f s, mark %4.2f, "
+                    "skid %4.2f | ",
+                    lane, what, ramp ? "ramp" : "instant", r.maxPedal, r.maxSlip, r.slideTime, r.mark, r.skid);
+        if (brake) std::printf("stop %4.2f s / %5.1f m\n", r.stop, r.stop >= 0.0 ? r.dist : -1.0);
+        else std::printf("0-30 km/h %4.2f s\n", r.t30);
+    };
+    for (int lane : {0, -1}) {
+        const char* name = lane < 0 ? "pad" : "concrete";
+        for (bool ramp : {false, true}) print(name, "hold W 5 s", ramp, drive(lane, ramp, false, 0.0f, 5.0, 5.0), false);
+        for (double tap : {0.15, 0.25, 0.4}) {
+            char what[32];
+            std::snprintf(what, sizeof(what), "tap S %.2f s at 50", tap);
+            for (bool ramp : {false, true}) print(name, what, ramp, drive(lane, ramp, true, 50.0f, tap, 2.0), true);
+        }
+        for (bool ramp : {false, true}) print(name, "hold S at 50", ramp, drive(lane, ramp, true, 50.0f, 6.0, 6.0), true);
     }
 }
 
@@ -1273,6 +1334,7 @@ int main(int argc, char** argv) {
                                          argc > 3 ? std::atoi(argv[3]) : 1);
     else if (mode == "skid") skid();
     else if (mode == "squeal") squealCases();
+    else if (mode == "keyboard") keyboardPedals();
     else if (mode == "showcase") showcase();
     else if (mode == "surfaces") surfaces();
     else if (mode == "abs") absProbe(argc > 2 ? std::atoi(argv[2]) : -1);
