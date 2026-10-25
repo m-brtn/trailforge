@@ -111,9 +111,13 @@ Command-line options:
 - `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
   flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
   headless only); `climb [lane]` — the force balance of one ramp climb;
-- `abs` — 50 km/h full stops per surface lane, straight and with 40 % steer, ABS off / on: distance, heading change,
-  locked wheel-seconds, ABS cycle rate;
+- `abs [0|1]` — 50 and 100 km/h full stops on the concrete, rock, dirt, sand, grass and mud lanes, straight and with
+  40 % steer, ABS off / on: distance, heading after 1 s, locked wheel-seconds, ABS cycle rate (steered runs are cut
+  when the vehicle leaves its lane); the argument sets the friction ellipse off / on;
+- `ellipse` — friction ellipse off / on: steady cornering at 30 / 60 / 100 % steer on concrete, dirt and mud
+  friction, full-throttle launches on five lanes;
 - `tc` — flat high-range launches and ramp hill starts with TC off / on / off-road (`TF_TC_TRACE=1` prints a trace);
+  `tcmud` — the 15° mud hill start at 60 / 120 / 240 Hz from three creep points per TC mode;
 - `diff` — differential configurations on `TrackLayout::SlopeWithWheelPit` (headless only) and the diagonal twister
   (`TF_DIFF_TRACE=1` prints a trace).
 
@@ -307,13 +311,15 @@ specific production unit.
 
 - **ABS** (per wheel, brake pressed, wheel ground speed above 1.5 m/s): brake slip = (v − ωr) / v. Above 0.18 the pressure is dumped at 40 /s, below 0.08 it is re-applied at 8 /s, in between it is
   held. Pressure goes down to 0, because a Jolt wheel at ω = 0 stays locked under any brake torque. Measured cycle
-  11–15 Hz per wheel on straight stops (`trailforge_probe abs`, 120 Hz). At 60 Hz the controller also runs at 60 Hz
+  9–15 Hz per wheel on straight stops (`trailforge_probe abs`, 120 Hz). At 60 Hz the controller also runs at 60 Hz
   and is coarser: a few short locks, and on dirt the straight stop is up to ~7 % longer than with locked wheels.
-- **Traction control** (On / Off-road): drive slip = (ωr − v) / max(|v|, 2 m/s), low-pass filtered (50 ms).
-  A wheel that spins more than the slowest wheel in contact by the threshold (0.20 On, 0.35 Off-road) gets a brake
-  torque (gain 3000 N·m per unit slip, max 1500 N·m) — that is how an open differential's torque gets back to the
-  wheel with grip. When even the slowest wheel spins above the threshold, an integrating controller cuts the engine
-  throttle (down to 0.05 On, 0.10 Off-road; cut 1.5 /s, recovery 0.6 /s).
+- **Traction control** (On / Off-road): drive slip = (ωr − v) / max(|v|, 2 m/s), low-pass filtered (50 ms, at least
+  6 ticks). A wheel that spins more than the slowest wheel in contact by the threshold (0.20 On, 0.35 Off-road) gets
+  a brake torque (gain 3000 N·m per unit slip, max 1500 N·m) — that is how an open differential's torque gets back to
+  the wheel with grip; the TC brake is released at once when the wheel stops spinning ahead of the ground (otherwise
+  Jolt would hold it locked). When even the slowest wheel spins above the threshold, an integrating controller cuts
+  the engine throttle (down to 0.05 On, 0.10 Off-road; cut 1.5 /s, recovery 0.6 /s); while the vehicle rolls back
+  against the selected direction faster than 0.3 m/s the throttle recovers instead of being cut.
 - **Differentials.** Jolt's differentials split torque; they have no kinematic link between the two sides. Open =
   fixed 50/50 split. LSD = Jolt's limited-slip ratio (max/min side speed, 1.4 by default; above it the torque shifts
   to the slower side). **Locked** is the same Jolt LSD with ratio 1.05: almost all torque goes to the slower side as
@@ -323,31 +329,51 @@ specific production unit.
 
 Measured (headless, 120 Hz, Release):
 
-- `trailforge_probe abs`, full brake from 50 km/h (straight; then with 40 % right steer):
+- `trailforge_probe abs`, full brake on the flat surface lanes (friction ellipse on, ABS off → on). Distance =
+  path length to the stop, lock = wheel-seconds with a wheel turning below 20 % of its ground speed, cycle = pressure
+  releases per wheel per second of ABS activity:
 
-  | Surface (peak μ) | Straight, ABS off → on | Locked wheel-s off → on | Steered: heading change off → on |
-  |---|---|---|---|
-  | Concrete (0.95) | 13.66 → 13.17 m | 4.71 → 0.14 | −23° → −45° |
-  | Rock (0.75) | 17.34 → 15.56 m | 7.17 → 0.11 | −16° → −52° |
-  | Packed dirt (0.70) | 18.48 → 16.41 m | 7.82 → 0.06 | −14° → −54° |
-  | Grass (0.50) | 25.43 → 22.12 m | 11.45 → 0.00 | −10° → −60° |
-  | Mud (0.35) | 36.15 → 31.35 m | 16.80 → 0.00 | −6° → −92° |
+  | Surface (peak μ) | 50 → 0 km/h | 100 → 0 km/h | Locked wheel-s at 50 / 100 | ABS cycle 50 / 100 |
+  |---|---|---|---|---|
+  | Concrete (0.95) | 14.23 → 13.77 m | 52.48 → 46.59 m | 4.74 → 0.15 / 11.62 → 0.16 | 10.7 / 9.5 Hz |
+  | Rock (0.75) | 18.21 → 16.21 m | 67.30 → 58.53 m | 7.41 → 0.12 / 16.35 → 0.13 | 13.4 / 10.7 Hz |
+  | Packed dirt (0.70) | 19.36 → 17.30 m | 71.97 → 61.85 m | 8.03 → 0.10 / 17.65 → 0.08 | 13.1 / 11.1 Hz |
+  | Sand (0.55) | 24.40 → 21.47 m | 91.06 → 78.18 m | 10.60 → 0.02 / 22.95 → 0.00 | 14.0 / 10.9 Hz |
+  | Grass (0.50) | 27.05 → 23.74 m | 99.88 → 86.13 m | 11.88 → 0.00 / 25.35 → 0.00 | 14.1 / 11.2 Hz |
+  | Mud (0.35) | 39.59 → 34.38 m | 141.83 → 117.97 m | 17.67 → 0.00 / 36.68 → 0.00 | 14.6 / 11.7 Hz |
 
-  With locked wheels the vehicle slides nearly straight (the combined-slip model below leaves a locked tire almost no
-  lateral grip); with ABS it turns. Steered stops on grass and mud leave the 10 m lane (8–12 m sideways).
-- `trailforge_probe tc`, 15° mud hill start (creep 8 m up, foot brake to a stop, hold, full throttle, low range):
-  TC off 14.1 s to the plateau (wheelspin 14.1 s), On 11.8 s (6.1 s), Off-road 10.9 s (10.0 s). 20° grass:
-  off 9.9 s, Off-road 8.6 s, but **On fails** (the low road threshold cuts the throttle too far and the vehicle slides
-  back and sideways; use Off-road there). 15° dirt: 3.7 s off, 4.3 s On, 3.9 s Off-road. 20° mud is beyond the
-  sliding limit (μ 0.35 < tan 20°) in every mode. Flat high-range launches: TC cuts the peak slip on mud
-  9.4 → 4.6 m/s and grass 7.3 → 3.9 m/s, but v(2 s) is lower (mud 5.2 → 4.5 m/s, grass 7.4 → 5.7 m/s): with this
-  tire curve (sliding μ = 0.8 × peak) the slip control costs more than it gains on the flat.
+  ABS stops are 3–17 % shorter because the locked tire is on the sliding part of the curve (0.8 × peak); the surfaces
+  are rigid, so there is no gravel or snow wedge that makes a locked wheel stop shorter on real loose ground.
+  Steering under full braking with 40 % steer, heading change after 1 s (50 km/h; ABS off → on): concrete
+  −19° → −27°, rock −15° → −25°, dirt −13° → −24°, sand −11° → −21°, grass −10° → −19°, mud −6° → −14°. Without ABS
+  the vehicle stays in its 12 m lane; with ABS it follows the steering out of the lane (where the run is cut) on
+  every surface except concrete. At 100 km/h: concrete −23° → −29°, mud −8° → −15°.
+- Friction ellipse (`trailforge_probe abs 0` / `ellipse`, ellipse off → on): straight stops are the same to
+  ±0.2 m (e.g. dirt 50 km/h 19.37 / 19.36 m, mud 100 km/h 141.88 / 141.83 m); full-throttle launches are the same
+  (concrete v(1 s) 5.13 / 5.13 m/s, max slip 0.27 / 0.27 m/s; dirt 2.28 / 2.29 m/s; mud 9.37 / 9.38 m/s; sand and grass
+  equal to 0.01 m/s). Steady cornering at ~40 km/h (dirt and mud: the pad's friction set to the surface values, mud at
+  ~26 km/h): 30 % steer unchanged (concrete 0.85 g, dirt 0.64 g, mud 0.31 g), 60 % steer −1…−3 %, full lock
+  concrete 0.72 → 0.65 g, dirt 0.55 → 0.49 g, mud 0.27 → 0.24 g (front tires at ~30° slip angle, three times the
+  peak, share their grip with the drive slip). Locked wheels with 40 % steer from 50 km/h, heading after 1 s:
+  concrete −32° → −19°, dirt −22° → −13°, mud −13° → −6°; without the ellipse the locked vehicle turns as much as
+  with ABS and leaves the lane on dirt, sand, grass and mud.
+- `trailforge_probe tcmud`, 15° mud hill start (creep up the ramp, foot brake to a stop, full throttle, low range,
+  15 s), nine runs per mode (60 / 120 / 240 Hz × creep to 7 / 8 / 9 m). TC off: 5 / 9 reach the plateau (14.0–15.0 s;
+  the others stall 11.5–12.6 m up, spinning). TC On: 6 / 9 — every 120 Hz run (10.6–11.9 s) and 240 Hz run
+  (8.8–9.2 s); at 60 Hz it slides back 3–7 m. Off-road: 6 / 9 (11.4–12.3 s at 120 / 240 Hz; at 60 Hz it stalls or
+  slides back up to 3.4 m). At 60 Hz Jolt's wheel speeds alternate from tick to tick near the grip limit, and the
+  TC reads that as wheelspin.
+- `trailforge_probe tc` (120 Hz): 20° grass off 9.9 s, Off-road 8.7 s, but **On fails** (the low road threshold cuts
+  the throttle too far and the vehicle slides back; use Off-road there). 15° dirt: 3.7 s off, 4.4 s On, 3.9 s
+  Off-road. 20° mud is beyond the sliding limit (μ 0.35 < tan 20°) in every mode. Flat high-range launches: TC
+  cuts the peak slip on mud 9.4 → 4.7 m/s and grass 7.3 → 3.2 m/s, but v(2 s) is lower (mud 5.2 → 4.5 m/s, grass
+  7.4 → 6.3 m/s): with this tire curve (sliding μ = 0.8 × peak) the slip control costs more than it gains on the flat.
 - `trailforge_probe diff`, `TrackLayout::SlopeWithWheelPit` (15° concrete slope, a bottomless pit under the
   front-left wheel, low range, full throttle, 8 s): all open — stays (the hanging wheel spins up to ~14 m/s);
-  default (rear + center LSD) — out in ~3.5 s; all open + X rear lock — stays; + rear + center — 2.4 m, then stuck;
-  all locked — out in ~3.2 s; all open + TC On / Off-road — out in ~2.6 / ~2.7 s (the TC brake on the hanging
-  wheel acts like a locker). The diagonal twister is climbed by every configuration (all open 6.2 s, all locked
-  4.6 s).
+  default (rear + center LSD) — out in 3.5 s; all open + X rear lock — stays (the open center sends the torque to
+  the front axle with the hanging wheel); + rear + center — out in 4.5 s; all locked — out in 3.1 s; all open +
+  TC On / Off-road — out in 2.7 / 2.7 s (the TC brake on the hanging wheel acts like a locker). The diagonal twister
+  is climbed by every configuration (all open 6.2 s, all locked 5.0 s).
 
 ## Proving ground (~100×100 m)
 
@@ -623,7 +649,7 @@ bundle or next to the binary, and in development builds also from the source tre
     and differentials are applied between physics steps;
   - toggles for the two tire/drivetrain fixes, also applied between steps: Tires → "Static grip" (`tireStaticGrip`)
     and Drivetrain → "Launch clutch limit" (`launchClutchLimit`) with the creep torque; Tires → "Slip speed floor"
-    and "Combined slip";
+    and "Friction ellipse (combined slip)";
   - Drivetrain: Open / Limited slip / Locked per differential, axle and center LSD ratios, the locked ratio;
   - Driver aids: ABS / TC / diff lock switches (same as B / T / X) and every ABS / TC parameter;
   - mass, inertia, center of mass, suspension travel, wheel radius, steering angle and gear ratios are applied
@@ -669,11 +695,15 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - Slip speed floor: Jolt's slip ratio is |ωr − v| / max(|v|, 0.001), so at a standstill any wheel rotation reads as
   full slip and the tire falls to the sliding μ before it moves. The friction curve is evaluated with
   |ωr − v| / max(|v|, 1 m/s) instead (`tireSlipSpeedFloor`, 0 = Jolt's ratio). With it a full-throttle 15° mud hill
-  start climbs (14.1 s, wheels spinning) where it used to stay at the foot.
-- Combined slip: Jolt's longitudinal and lateral limits are independent, so a locked wheel kept steering. With
-  `tireCombinedSlip` (on by default) both limits are scaled down when the normalized slips add up to more than one
-  (each axis keeps its share of the friction budget; blended in between 1 and 3 m/s of ground speed). This is a
-  friction-circle approximation, not a tire model.
+  start without TC gets 11.5–12.6 m up the 16 m to the plateau or reaches it in 14–15 s (`trailforge_probe tcmud`)
+  where it used to stay at the foot.
+- Friction ellipse (combined slip): Jolt's longitudinal and lateral limits are independent (a friction rectangle), so a
+  locked wheel kept steering. With `tireFrictionEllipse` (on by default, Tuning → Tires) the max tire impulses from
+  `WheeledVehicleController::SetTireMaxImpulseCallback` are scaled once the normalized slips (slip ratio / peak, slip
+  angle / peak) add up to more than one: each axis keeps its share of the friction budget, so the force lies on an
+  ellipse with the longitudinal and lateral limits as semi-axes (blended in between 1 and 3 m/s of contact-patch
+  speed). Below the peak nothing changes. This is an approximation on top of two μ(slip) curves, not a combined-slip
+  tire model; measurements with and without it are under "Driver aids".
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven). Soil in the tread and its
@@ -706,7 +736,7 @@ Everything below was actually run on macOS 27 / M-series.
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
   The Metal shader is compiled to a metallib at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
-- **CTest.** 19 of 19 tests pass in Debug, Release and headless (numbers below are from the latest run where they
+- **CTest.** 24 of 24 tests pass in Debug, Release and headless (numbers below are from the latest run where they
   changed):
 
 | Test | Result |
@@ -721,9 +751,11 @@ Everything below was actually run on macOS 27 / M-series.
 | Brake in low range | 11.7 m/s → stop in 1.59 s, speed never increases, final 0 m/s |
 | Tire marks per surface | Rolling 30 km/h on concrete: 0 segments; full brake: 82 segments, slip 1.00; rolling on dirt/mud/grass: 480 segments each, imprint 0.85/1.00/0.90; low-range power turn: 95/66/85 segments, slip 0.35/0.95/0.76; cap 256 holds; with fade 3 s none are left after 3.5 s parked |
 | Auto reverse | At 60/120/240 Hz S held from 13.8 m/s stops the vehicle in 1.86–1.90 s and keeps holding it (no switch for 4.25 s, 0.000 m/s); released and pressed again, reverse engages after 0.250–0.254 s (hold 0.25 s), −12.9…−13.1 m/s after 3 s; W the same way back to drive (+14.2 m/s); low range reverse −4.8 m/s after 3 s; reverse again right after R; W+S never switches; classic mapping holds; on the 12° hill S held from the climb holds the vehicle (0.8 mm in 6 s), pressed again it engages reverse and the vehicle backs down 6.9 m in 2 s |
-| ABS prevents lock | 50 km/h full stops on dirt and grass at 60/120/240 Hz: without ABS 7.8–11.5 locked wheel-s and −10…−13° heading with 40 % steer; with ABS 0–0.11 wheel-s at 120/240 Hz (0.70 / 0.13 at 60 Hz) and −54…−76°; straight stop dirt 18.5 → 16.5 / 15.9 m at 120 / 240 Hz (19.9 m at 60 Hz), grass 25.4 → 22.1 / 21.7 m |
-| Diff locks climb | 15° slope, FL over a pit, all diffs open: −0.22 m in 8 s, hanging wheel up to 14 m/s; all locked (X × 3): 38–54 m (60/120/240 Hz) |
-| Traction control on mud | Flat mud launch, 3 s: max slip 9.3–9.5 m/s and 2.8 s of spin with TC off; On 2.7–4.8 m/s, 1.4–1.5 s, v(3 s) 7.6–7.8 vs 8.0–8.1 m/s; Off-road 4.4–6.6 m/s |
+| ABS prevents lock | 50 km/h full stops on dirt and grass at 60/120/240 Hz: without ABS 7.8–11.5 locked wheel-s and −9.5…−13° heading with 40 % steer; with ABS 0–0.13 wheel-s at 120/240 Hz (0.72 / 0.13 at 60 Hz) and −54…−76°; straight stop dirt 18.5 → 16.5 / 16.0 m at 120 / 240 Hz (19.9 m at 60 Hz), grass 25.4 → 22.1 / 21.6 m |
+| Diff locks climb | 15° slope, FL over a pit, all diffs open: −0.22 m in 8 s, hanging wheel up to 12.5–14.5 m/s; all locked (X × 3): 30–55 m (60/120/240 Hz) |
+| Traction control on mud | Flat mud launch, 3 s: max slip 9.3–9.5 m/s and 2.8 s of spin with TC off; On 2.7–6.9 m/s (the 60 Hz peak is a single tick), 1.4 s, v(3 s) 7.2–7.8 vs 8.0–8.1 m/s; Off-road 4.4–5.5 m/s |
+| Driving aids logic | Synthetic wheel states, no Jolt: a locked wheel under full pedal is dumped to 0 N·m in 0.025 s while the rolling wheels keep 3000 N·m, full pressure 0.125 s after it rolls again; one spinning wheel gets 1500 N·m of TC brake and no throttle cut; all four spinning cut the throttle factor to 0.05 in 1 s; rolling back it recovers 0.05 → 0.35 in 0.5 s; TC off passes the pedal through |
+| Friction ellipse | Full brake with 40 % steer from 50 km/h on concrete without ABS, after 1 s (ellipse off → on): heading −32.4° → −20.2°, sideways 2.19 → 0.64 m; straight stop 13.63 → 13.63 m; 30 % steer circle at 40 km/h 8.29 → 8.29 m/s² |
 | Audio: engine layers | Equal-power band weights (Σw² = 1 within 2.4e-7), crossfade midpoints 0.7071, playback rates follow rpm × pitch / rpm_recorded |
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |

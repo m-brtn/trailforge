@@ -25,7 +25,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 19 tests; no window, no audio device)
+# headless physics and audio tests (CTest, 24 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -35,7 +35,7 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `tc`, `diff`).
+`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
 check failed:
