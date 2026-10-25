@@ -12,6 +12,7 @@
 //   trailforge_probe layouts          - drivetrain layouts / transfer modes: launches, climbs, the pit slope
 //   trailforge_probe squeal           - squeal peak, length and release tail: launches, brakes, slides per surface
 //   trailforge_probe keyboard         - keyboard W / S as instant keys vs. the progressive KeyboardPedals
+//   trailforge_probe compare          - launches, stops, lift-off, cornering, climbs, articulation (+ EV energy)
 // Every mode drives the vehicle of TRAILFORGE_VEHICLE (path to a vehicle.json), by default
 // assets/vehicles/trailforge_suv/vehicle.json; TRAILFORGE_VEHICLE=builtin uses the C++ defaults of VehicleConfig.
 
@@ -27,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 
 using namespace tf;
@@ -1417,6 +1419,202 @@ void ellipseProbe() {
 
 } // namespace
 
+// Vehicle comparison (run once per TRAILFORGE_VEHICLE): launches, stops, cornering, climbs, articulation, energy.
+// The combustion SUV runs its default 2H for the flat tests and 4H / 4L on the ramps; an electric vehicle runs the
+// NORMAL drive mode on the flat and NORMAL / OFF-ROAD on the ramps.
+void compareProbe() {
+    const bool electric = probeSettings().vehicle.isElectric();
+    auto prep = [&](TrackLayout track, int feature) {
+        SimulationSettings s = probeSettings();
+        s.layout = track;
+        auto sim = std::make_unique<Simulation>(s);
+        if (feature >= 0) sim->requestTeleport(feature);
+        for (int i = 0; i < 120; ++i) sim->tick();
+        return sim;
+    };
+    std::printf("compare vehicle %s, %s, %.0f kg\n", probeSettings().vehicle.id.c_str(),
+                driveLayoutName(probeSettings().vehicle.layout), probeSettings().vehicle.mass);
+    // Launch on the concrete lane, full pedal.
+    {
+        auto sim = prep(TrackLayout::SurfaceLanes, 0);
+        double t = 0, t30 = -1, t60 = -1, t100 = -1;
+        float peakKW = 0.0f;
+        const double e0 = sim->vehicle().telemetry().ev.energyOutKWh;
+        while (t < 30.0 && t100 < 0) {
+            sim->setIntent({.throttle = 1.0f});
+            sim->tick();
+            t += sim->fixedStep();
+            const float kmh = sim->vehicle().telemetry().forwardSpeed * 3.6f;
+            peakKW = std::max(peakKW, sim->vehicle().telemetry().ev.motorPowerKW);
+            if (t30 < 0 && kmh >= 30.0f) t30 = t;
+            if (t60 < 0 && kmh >= 60.0f) t60 = t;
+            if (t100 < 0 && kmh >= 100.0f) t100 = t;
+        }
+        std::printf("compare launch concrete: 0-30 %.2f s, 0-60 %.2f s, 0-100 %.2f s", t30, t60, t100);
+        if (electric)
+            std::printf(", peak motor power %.0f kW, battery energy %.3f kWh, SoC %.4f",
+                        peakKW, sim->vehicle().telemetry().ev.energyOutKWh - e0, sim->vehicle().telemetry().ev.soc);
+        std::printf("\n");
+    }
+    // Stops from 50 and 100 km/h on concrete, ABS off / on.
+    for (float kmh : {50.0f, 100.0f}) {
+        for (int abs = 0; abs < 2; ++abs) {
+            auto sim = prep(TrackLayout::SurfaceLanes, 0);
+            setAids(*sim, abs != 0, TractionMode::Off, 0);
+            for (int i = 0; i < 6000 && sim->vehicle().telemetry().forwardSpeed * 3.6f < kmh; ++i) {
+                sim->setIntent({.throttle = 1.0f});
+                sim->tick();
+            }
+            const float v0 = sim->vehicle().telemetry().forwardSpeed;
+            const float z0 = sim->currentSnapshot().body.position.GetZ();
+            const double in0 = sim->vehicle().telemetry().ev.energyInKWh;
+            double t = 0, lock = 0, regenJ = 0;
+            while (sim->vehicle().telemetry().speed > 0.05f && t < 20.0) {
+                sim->setIntent({.brake = 1.0f});
+                sim->tick();
+                t += sim->fixedStep();
+                const auto& tel = sim->vehicle().telemetry();
+                for (const auto& w : tel.wheels)
+                    if (w.contact && std::abs(w.groundSpeed) > 2.0f && std::abs(w.rollingSpeed) < 0.2f * std::abs(w.groundSpeed))
+                        lock += sim->fixedStep();
+                regenJ += -std::min(tel.ev.motorPowerKW, 0.0f) * 1000.0 * sim->fixedStep();
+            }
+            // Distance scaled to exactly the nominal speed (d ~ v^2) so both vehicles compare at the same speed.
+            const float d = sim->currentSnapshot().body.position.GetZ() - z0;
+            const float scale = (kmh / 3.6f) * (kmh / 3.6f) / (v0 * v0);
+            std::printf("compare brake %3.0f-0 ABS %s: %.2f m (raw %.2f m from %.1f km/h) in %.2f s, lock %.2f wheel-s",
+                        kmh, abs ? "on " : "off", d * scale, d, v0 * 3.6f, t, lock);
+            if (electric)
+                std::printf(", regen shaft energy %.0f kJ (%.0f %% of the kinetic energy), battery +%.4f kWh", regenJ * 1e-3,
+                            100.0 * regenJ / (0.5 * sim->vehicleConfig().mass * v0 * v0),
+                            sim->vehicle().telemetry().ev.energyInKWh - in0);
+            std::printf("\n");
+        }
+    }
+    // Lift-off from 80 km/h with both pedals released (after the 0.17 s pedal release ramp).
+    {
+        auto sim = prep(TrackLayout::SurfaceLanes, 0);
+        for (int i = 0; i < 6000 && sim->vehicle().telemetry().forwardSpeed * 3.6f < 80.0f; ++i) {
+            sim->setIntent({.throttle = 1.0f});
+            sim->tick();
+        }
+        float v0 = 0.0f;
+        for (int i = 0; i < int(3.0 / sim->fixedStep()); ++i) {
+            sim->setIntent({});
+            sim->tick();
+            if (i == int(0.5 / sim->fixedStep())) v0 = sim->vehicle().telemetry().forwardSpeed;
+        }
+        const float v1 = sim->vehicle().telemetry().forwardSpeed;
+        std::printf("compare lift-off 80 km/h: mean decel %.2f m/s^2 from 0.5 to 3 s after the release (%.1f -> %.1f "
+                    "km/h)\n", (v0 - v1) / 2.5f, v0 * 3.6f, v1 * 3.6f);
+    }
+    // Steady cornering on the flat pad: speed held at 40 km/h, steer 0.45 right; lateral acceleration and body roll.
+    for (float steer : {0.25f, 0.45f}) {
+        SimulationSettings s = probeSettings();
+        s.layout = TrackLayout::Flat;
+        Simulation sim(s);
+        const double dt = sim.fixedStep();
+        double t = 0, sumAy = 0, sumRoll = 0;
+        int n = 0;
+        while (t < 10.0) {
+            const auto& tel = sim.vehicle().telemetry();
+            const float err = 40.0f / 3.6f - tel.speed;
+            sim.setIntent({.throttle = std::clamp(0.3f + 0.4f * err, 0.0f, 1.0f), .steer = t > 2.5 ? steer : 0.0f});
+            sim.tick();
+            t += dt;
+            if (t < 7.0) continue;
+            const JPH::Vec3 w = sim.world().bodies().GetAngularVelocity(sim.vehicle().bodyId());
+            sumAy += std::abs(w.GetY()) * sim.vehicle().telemetry().speed;
+            const JPH::Vec3 left = sim.currentSnapshot().body.rotation.RotateAxisX();
+            sumRoll += std::abs(std::asin(left.GetY())) * 57.2958;
+            ++n;
+        }
+        std::printf("compare corner 40 km/h steer %.2f: lateral accel %.2f m/s^2, roll %.2f deg, speed %.1f km/h\n", steer,
+                    sumAy / n, sumRoll / n, sim.vehicle().telemetry().speed * 3.6f);
+    }
+    // Climbs from 6 m before the ramp, full pedal and half pedal, TC off / off-road.
+    struct Ramp {
+        const char* name;
+        int feature;
+    };
+    for (Ramp r : {Ramp{"dirt 20 deg", 3}, Ramp{"mud 15 deg", 8}}) {
+        for (int mode = 0; mode < 2; ++mode) {
+            for (float pedal : {1.0f, 0.5f}) {
+                for (TractionMode tc : {TractionMode::Off, TractionMode::OffRoad}) {
+                    auto sim = prep(TrackLayout::SurfaceRamps, r.feature);
+                    if (electric) {
+                        if (mode == 1) sim->requestCycleTransfer();
+                    } else {
+                        sim->requestTransfer(mode == 0 ? TransferMode::FourHigh : TransferMode::FourLow);
+                    }
+                    setAids(*sim, false, tc, 0);
+                    const float z0 = sim->currentSnapshot().body.position.GetZ();
+                    float zMax = z0;
+                    double t = 0, top = -1;
+                    while (t < 15.0 && top < 0) {
+                        sim->setIntent({.throttle = pedal});
+                        sim->tick();
+                        t += sim->fixedStep();
+                        const float z = sim->currentSnapshot().body.position.GetZ();
+                        zMax = std::max(zMax, z);
+                        if (z > 24.0f) top = t;
+                    }
+                    const char* modeName = electric ? (mode == 0 ? "NORMAL  " : "OFF-ROAD") : (mode == 0 ? "4H      " : "4L      ");
+                    std::printf("compare climb %-11s %s pedal %.1f TC %-8s: ", r.name, modeName, pedal, tcName(tc));
+                    if (top >= 0) std::printf("top in %.2f s\n", top);
+                    else std::printf("no, max progress %.2f m\n", zMax - z0);
+                }
+            }
+        }
+    }
+    // Articulation: the diagonal twister of the proving ground at a crawl.
+    {
+        Simulation sim(probeSettings());
+        sim.requestTeleport(2);
+        for (int i = 0; i < 240; ++i) sim.tick();
+        float minL[4] = {9, 9, 9, 9}, maxL[4] = {0, 0, 0, 0};
+        double airborne = 0, t = 0;
+        while (t < 8.0) {
+            sim.setIntent({.throttle = 0.4f});
+            sim.tick();
+            t += sim.fixedStep();
+            const auto& tel = sim.vehicle().telemetry();
+            for (int w = 0; w < 4; ++w) {
+                minL[w] = std::min(minL[w], tel.wheels[w].suspensionLength);
+                maxL[w] = std::max(maxL[w], tel.wheels[w].suspensionLength);
+                if (!tel.wheels[w].contact) airborne += sim.fixedStep();
+            }
+        }
+        std::printf("compare susp '%s': travel used FL %.3f FR %.3f RL %.3f RR %.3f m, wheel-s off the ground %.2f\n",
+                    sim.track().features()[2].name.c_str(), maxL[0] - minL[0], maxL[1] - minL[1], maxL[2] - minL[2],
+                    maxL[3] - minL[3], airborne);
+    }
+    // Energy at a steady 50 and 90 km/h on the concrete lane (electric only).
+    if (electric) {
+        for (float kmh : {50.0f, 90.0f}) {
+            auto sim = prep(TrackLayout::SurfaceLanes, 0);
+            double t = 0, e0 = 0, d0 = 0, d = 0;
+            bool measuring = false;
+            while (t < 40.0) {
+                const auto& tel = sim->vehicle().telemetry();
+                const float err = kmh / 3.6f - tel.forwardSpeed;
+                sim->setIntent({.throttle = std::clamp(0.2f + 0.3f * err, 0.0f, 1.0f)});
+                sim->tick();
+                t += sim->fixedStep();
+                d += tel.forwardSpeed * sim->fixedStep();
+                if (!measuring && t > 20.0) {
+                    measuring = true;
+                    e0 = sim->vehicle().telemetry().ev.energyOutKWh - sim->vehicle().telemetry().ev.energyInKWh;
+                    d0 = d;
+                }
+            }
+            const double e = sim->vehicle().telemetry().ev.energyOutKWh - sim->vehicle().telemetry().ev.energyInKWh - e0;
+            std::printf("compare energy steady %.0f km/h: %.1f kWh/100 km (drag, wheel angular damping, aux)\n", kmh,
+                        e / ((d - d0) / 1000.0) * 100.0);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
     if (mode == "brake") brake();
@@ -1440,6 +1638,7 @@ int main(int argc, char** argv) {
     else if (mode == "tcmud") tcMudSweep();
     else if (mode == "diff") diffProbe();
     else if (mode == "layouts") layoutsProbe();
+    else if (mode == "compare") compareProbe();
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

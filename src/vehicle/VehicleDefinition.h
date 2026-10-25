@@ -49,7 +49,10 @@ bool parseVehicleDefinition(const std::string& text, const std::string& source, 
                             std::vector<std::string>& errors);
 bool loadVehicleDefinition(const std::string& path, VehicleDefinition& out, std::vector<std::string>& errors);
 
-// Every <dir>/<id>/vehicle.json, sorted by id. Broken definitions are skipped and reported in errors; the folder
+// Vehicle the game starts with when nothing else is chosen (identical to the built-in configuration).
+inline constexpr const char* kDefaultVehicleId = "trailforge_suv";
+
+// Every <dir>/<id>/vehicle.json: kDefaultVehicleId first, the others sorted by id. Broken definitions are skipped and reported in errors; the folder
 // name must equal the id.
 std::vector<VehicleDefinition> loadVehicleCatalog(const std::string& dir, std::vector<std::string>& errors);
 

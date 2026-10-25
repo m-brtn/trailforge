@@ -29,15 +29,48 @@ enum class TractionMode { Off, On, OffRoad };
 //  Rwd / Fwd: one driven axle. Awd: full-time, both axles through the center differential (frontTorqueShare, center
 //  diff mode). PartTime: transfer case 2H (rear only) / 4H (center locked) / 4L (center locked + low range).
 //  OnDemand: both axles through a center LSD with a rear-biased base split (a simplification of a clutch coupling).
-// A dual-motor electric layout (one motor per axle) would be a further value with a power unit per axle.
-enum class DriveLayout { Rwd, Fwd, Awd, PartTime, OnDemand };
+//  DualMotor: electric, one motor per axle with a fixed reduction and no center differential; the split between the
+//  axles is electronic (ElectricDrive.h), the axle differentials are the same Jolt models as above.
+enum class DriveLayout { Rwd, Fwd, Awd, PartTime, OnDemand, DualMotor };
 
 // Transfer case position of a part-time layout (runtime state, like the low range of the other layouts).
 enum class TransferMode { TwoHigh, FourHigh, FourLow };
 
-// Power unit type. Only Combustion is simulated; Electric is reserved in the data format (torque / power curve,
-// regenerative braking) and rejected by the loader until it exists.
+// Power unit type. Combustion: Jolt's engine, clutch and automatic gearbox. Electric: two motors (DualMotor layout).
 enum class EngineType { Combustion, Electric };
+
+// Drive mode of a dual-motor vehicle (runtime state, the V key): the front share of the drive torque at part
+// throttle. Normal uses VehicleTuning::frontTorqueShare, OffRoad ElectricConfig::offRoadFrontShare.
+enum class EvDriveMode { Normal, OffRoad };
+
+// One traction motor geared to an axle differential through a fixed single-speed reduction (no gearbox, no clutch).
+// Torque / speed envelope: constant torque up to the base speed (maxPower / maxTorque), then constant power, zero at
+// maxRPM. Regeneration uses the same envelope with regenTorque as the torque limit.
+struct MotorConfig {
+    float maxTorque = 400.0f;     // N*m at the motor shaft
+    float maxPower = 180000.0f;   // W at the motor shaft
+    float maxRPM = 15000.0f;      // rpm, drive torque fades to 0 over the last 2 %
+    float reduction = 12.0f;      // motor revolutions per axle (differential carrier) revolution
+    float rotorInertia = 0.05f;   // kg*m^2, rotor + reduction gears at the motor shaft
+    float regenTorque = 300.0f;   // N*m, maximum braking torque at the motor shaft
+
+    bool operator==(const MotorConfig&) const = default;
+};
+
+struct ElectricConfig {
+    std::array<MotorConfig, 2> motors{}; // front, rear
+    float batteryCapacityKWh = 120.0f;   // usable energy
+    float initialSoC = 0.9f;             // 0..1 at spawn / R reset
+    float driveEfficiency = 0.90f;       // battery -> shaft (inverter + motor), constant
+    float regenEfficiency = 0.85f;       // shaft -> battery, constant
+    float auxPowerKW = 0.6f;             // constant auxiliary load (cooling, electronics)
+    float regenMaxPowerKW = 150.0f;      // battery charge power limit of both motors together
+    float liftOffDecel = 1.0f;           // m/s^2, regen target with both pedals released ("coast regen")
+    float regenFadeSpeed = 2.0f;         // m/s, regen fades out linearly below this speed (friction takes over)
+    float offRoadFrontShare = 0.5f;      // front drive torque share in the OffRoad drive mode
+
+    bool operator==(const ElectricConfig&) const = default;
+};
 
 // Driver aids: simplified control logic that only acts on the throttle pedal and on per-wheel brake torques
 // (Jolt WheelSettingsWV::mMaxBrakeTorque, set before every step). Not a model of a specific ABS/TC unit.
@@ -227,12 +260,17 @@ struct VehicleConfig {
 
     DriveLayout layout = DriveLayout::Awd;
 
+    // Electric powertrain (engineType Electric, layout DualMotor); the engine and gearbox fields above are unused.
+    ElectricConfig electric;
+    bool isElectric() const { return engineType == EngineType::Electric; }
+
     VehicleTuning tuning;
 
     bool operator==(const VehicleConfig&) const = default;
 };
 
-const char* driveLayoutName(DriveLayout l);   // "RWD", "FWD", "AWD", "PART-TIME 4WD", "ON-DEMAND AWD"
+const char* driveLayoutName(DriveLayout l);   // "RWD", "FWD", "AWD", "PART-TIME 4WD", "ON-DEMAND AWD", "DUAL-MOTOR AWD"
 const char* transferModeName(TransferMode m); // "2H", "4H", "4L"
+const char* evDriveModeName(EvDriveMode m);   // "NORMAL", "OFF-ROAD"
 
 } // namespace tf

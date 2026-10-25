@@ -108,7 +108,8 @@ AudioSystem::AudioSystem(const AudioOptions& options) {
         cap->csv = std::fopen(csvPath.c_str(), "w");
         if (cap->csv)
             std::fprintf(cap->csv, "t,rpm,rpm_src,load,off0,off1,off2,on0,on1,on2,rate0,rate1,rate2,skid,gravel,dirt,mud,"
-                                   "grass,wind,day,night,whine_hz,gameplay,voices,peak_db,limiter_db\n");
+                                   "grass,wind,day,night,whine_hz,gameplay,voices,peak_db,limiter_db,motor_hz,motor_level,"
+                                   "inverter_level,road,scrub\n");
         m_capture = std::move(cap);
         m_status = "capture -> " + options.capturePath;
         std::printf("Audio: offline capture to %s (48 kHz stereo float, driven by physics ticks; parameters in %s)\n",
@@ -279,12 +280,12 @@ void AudioSystem::captureAdvance(double seconds) {
         const AudioStats& s = m_mixer->stats();
         std::fprintf(c.csv,
                      "%.4f,%.1f,%.1f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-                     "%.4f,%.1f,%.3f,%d,%.1f,%.2f\n",
+                     "%.4f,%.1f,%.3f,%d,%.1f,%.2f,%.1f,%.5f,%.5f,%.4f,%.4f\n",
                      double(c.frames) / double(m_mixer->sampleRate()), s.rpm, s.sourceRpm, s.load, s.offWeights[0],
                      s.offWeights[1], s.offWeights[2], s.onWeights[0], s.onWeights[1], s.onWeights[2],
                      s.exhaustRates[0], s.exhaustRates[1], s.exhaustRates[2], s.skid, s.gravel, s.dirt, s.mud,
                      s.grass, s.wind, s.day, s.night, s.whineHz, s.gameplayGain, s.activeVoices, s.peakDb,
-                     s.limiterDb);
+                     s.limiterDb, s.motorHz, s.motorLevel, s.inverterLevel, s.road, s.scrub);
     }
 }
 

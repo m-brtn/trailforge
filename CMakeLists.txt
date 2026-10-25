@@ -31,6 +31,7 @@ add_library(trailforge_sim STATIC
     src/track/TestTrack.cpp
     src/vehicle/Vehicle.cpp
     src/vehicle/DrivingAids.cpp
+    src/vehicle/ElectricDrive.cpp
     src/vehicle/VehicleDefinition.cpp
     src/vehicle/VehicleSetup.cpp
     src/sim/Simulation.cpp
@@ -159,7 +160,13 @@ if(TRAILFORGE_BUILD_TESTS)
             vehicle_definition_validation
             drivetrain_layouts
             garage_setups
-            suv_definition_matches_builtin)
+            suv_definition_matches_builtin
+            electric_definition_validation
+            ev_motor_curve
+            ev_torque_split
+            ev_regen_blend
+            ev_battery
+            ev_simulation)
         add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
@@ -176,6 +183,7 @@ if(TRAILFORGE_BUILD_TESTS)
             audio_skid_gating
             audio_squeal_release
             audio_tire_profiles
+            audio_electric
             audio_music)
         add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
@@ -185,7 +193,7 @@ if(TRAILFORGE_BUILD_TESTS)
     add_executable(trailforge_app_tests tests/AppTests.cpp)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model controls_layout pad_glyph_detect
+    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model vehicle_page controls_layout pad_glyph_detect
                          callout_spread)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
@@ -197,6 +205,7 @@ if(TRAILFORGE_BUILD_TESTS)
                                               src/render/VehicleModel.cpp)
         target_include_directories(trailforge_model_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(trailforge_model_tests PRIVATE trailforge_sim glm_headers)
+        target_compile_definitions(trailforge_model_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
         foreach(test_name model_parts model_wheel_size model_wheel_clearance)
             add_test(NAME ${test_name} COMMAND trailforge_model_tests ${test_name})
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)

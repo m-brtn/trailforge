@@ -34,6 +34,14 @@ struct AudioSettings {
     float enginePitch = 0.80f;   // source rpm = engine rpm x this (the recordings are a petrol inline-4)
     float levelSpreadDb = 12.0f; // engine: spread of the recorded loop levels after compression
     float whine = 1.0f;          // synthesized transmission whine (0 = off)
+    float motor = 1.0f;          // synthesized electric motor, inverter and reduction gear sound (0 = off)
+};
+
+// One electric motor as the audio side sees it (EvTelemetry of the latest tick).
+struct MotorAudio {
+    float rpm = 0.0f;        // shaft rpm, signed
+    float torque = 0.0f;     // N*m at the shaft, + drive, - regeneration
+    float maxTorque = 1.0f;  // N*m, rated
 };
 
 // One wheel as the audio side sees it (from WheelContactSample of the latest physics tick).
@@ -70,6 +78,9 @@ struct AudioFrame {
     float referenceLoad = 4905.0f; // N, static load of one wheel
     std::array<WheelAudio, kAudioWheels> wheels;
     TireSoundProfile tireSound;  // the vehicle's tire sound (VehicleConfig::tireSound); default = "sporty"
+    // Electric drive: the engine loops, starter and gear shift sounds stay silent; the motors are synthesized.
+    bool electric = false;
+    std::array<MotorAudio, 2> motors{}; // front, rear
     float dayAmount = 1.0f;    // 0 = night, 1 = day (from the sun elevation)
     bool paused = false;
     bool menuAmbience = false; // menu drone loop (loaded, not used by the menus: they keep the world sound)
@@ -116,6 +127,10 @@ struct AudioStats {
     float wind = 0.0f;
     float day = 0.0f, night = 0.0f; // ambience weights
     float whineHz = 0.0f;
+    float motorHz = 0.0f;          // electric: main electromagnetic order of the faster motor (smoothed)
+    float motorLevel = 0.0f;       // electric: RMS of all synthesized motor / gear / inverter tone gains
+    float inverterLevel = 0.0f;    // electric: inverter tone gain (both motors)
+    float road = 0.0f;             // rolling road hum level (RMS over the wheels)
     float gameplayGain = 1.0f;     // 0 while paused (gameplay sounds are paused)
     float musicGain = 0.0f;        // current music level (before the volume settings)
     double musicSeconds = 0.0;     // music played since the last restart (s, counts across loops)

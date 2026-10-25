@@ -1,0 +1,34 @@
+# Electric vehicle sound capture (no audio device needed):
+#   ./build/release/trailforge --script tools/scenarios/ev_audio.txt --audio-capture /tmp/trailforge_ev_audio.wav
+#   python3 tools/audio/analyze_capture.py /tmp/trailforge_ev_audio.wav --png-prefix /tmp/trailforge_ev_audio
+# Skid strip: standstill, full-pedal launch for 4 s, 2.5 s lift-off regen, light braking (regen first) to a stop, 2 s
+# standing. The analyzer tracks the motor order line against the mixer's motor frequency (CSV column motor_hz).
+set auto_reverse 0
+set ui 0
+vehicle trailforge_ev
+wait 0.3
+expect electric == 1
+teleport 9
+wait 1.5
+pedal brake 1
+until speed_kmh < 0.1 5
+wait 1.0
+pedal brake 0
+wait 1.0
+log ev_launch
+pedal throttle 1
+wait 4.0
+expect motor_kw > 150
+log ev_liftoff
+pedal throttle 0
+wait 2.5
+expect regen == 1
+log ev_brake
+pedal brake 0.3
+wait 0.5
+expect regen == 1
+until speed_kmh < 0.5 12
+log ev_stop
+wait 2.0
+pedal brake 0
+quit

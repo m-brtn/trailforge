@@ -212,12 +212,14 @@ void vehicleDefinitionValidation() {
     expect("wrong type", [](V& d) { d.object["tires"].object["staticGrip"] = V::makeString("yes"); },
            "tires.staticGrip: must be true or false");
     expect("bad layout", [](V& d) { d.object["drivetrain"].object["layout"] = V::makeString("4x4"); },
-           "drivetrain.layout: must be one of: rwd, fwd, awd, part_time, on_demand");
+           "drivetrain.layout: must be one of: rwd, fwd, awd, part_time, on_demand, dual_motor");
     expect("travel inverted",
            [](V& d) { d.object["axles"].object["rear"].object["suspension"].object["maxLength"] = V::makeNumber(0.1); },
            "axles.rear.suspension.maxLength: must exceed minLength");
-    expect("electric motor", [](V& d) { d.object["engine"].object["type"] = V::makeString("electric"); },
-           "engine.type: electric motors are reserved");
+    expect("electric with a gearbox", [](V& d) { d.object["engine"].object["type"] = V::makeString("electric"); },
+           "gearbox: an electric drivetrain has no gearbox");
+    expect("dual motor on combustion", [](V& d) { d.object["drivetrain"].object["layout"] = V::makeString("dual_motor"); },
+           "drivetrain.layout: \"dual_motor\" needs engine.type \"electric\"");
     expect("falling gears", [](V& d) { d.object["gearbox"].object["ratios"].array[2] = V::makeNumber(5.0); },
            "gearbox.ratios: must be 1-10 falling ratios");
     expect("torque curve", [](V& d) { d.object["engine"].object["torqueCurve"].array.pop_back(); },
@@ -509,6 +511,307 @@ void suvDefinitionMatchesBuiltin() {
     CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires and final drive");
 }
 
+
+// Electric definition: the new fields are validated with their paths.
+void electricDefinitionValidation() {
+    std::ifstream in(kAssets + "/trailforge_ev/vehicle.json");
+    const std::string good((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    json::Value doc;
+    CHECK(json::parse(good, doc), "EV document does not parse");
+    {
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        CHECK(parseVehicleDefinition(good, "ev.json", def, errors), "shipped EV rejected");
+        const ElectricConfig& e = def.config.electric;
+        CHECK(def.config.isElectric() && def.config.layout == DriveLayout::DualMotor, "not a dual-motor EV");
+        CHECK(std::abs(e.motors[0].maxPower - 180000.0f) < 1.0f && std::abs(e.motors[1].maxTorque - 450.0f) < 1e-3f,
+              "motor values not read: %.0f W, %.0f N*m", e.motors[0].maxPower, e.motors[1].maxTorque);
+        CHECK(std::abs(e.offRoadFrontShare - 0.5f) < 1e-6f && std::abs(def.config.tuning.frontTorqueShare - 0.4f) < 1e-6f,
+              "torque shares not read");
+    }
+    auto expect = [&](const char* what, auto mutate, const char* needle) {
+        json::Value d = doc;
+        mutate(d);
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        const bool ok = parseVehicleDefinition(json::write(d), "ev.json", def, errors);
+        bool found = false;
+        for (const std::string& e : errors) found = found || e.find(needle) != std::string::npos;
+        std::printf("    %-28s -> %s\n", what, errors.empty() ? "(accepted)" : errors.front().c_str());
+        CHECK(!ok && found, "%s: expected an error containing '%s'", what, needle);
+    };
+    using V = json::Value;
+    auto motor = [](V& d, const char* axle) -> V& { return d.object["engine"].object["motors"].object[axle]; };
+    expect("missing rear motor", [](V& d) { d.object["engine"].object["motors"].object.erase("rear"); },
+           "engine.motors.rear: missing");
+    expect("motor power range", [&](V& d) { motor(d, "front").object["maxPowerKW"] = V::makeNumber(5000); },
+           "engine.motors.front.maxPowerKW: = 5000 is out of range");
+    expect("regen above drive", [&](V& d) { motor(d, "rear").object["regenTorque"] = V::makeNumber(900); },
+           "engine.motors.rear.regenTorque: must not exceed maxTorque");
+    expect("base speed past max",
+           [&](V& d) {
+               motor(d, "front").object["maxTorque"] = V::makeNumber(50);
+               motor(d, "front").object["regenTorque"] = V::makeNumber(50);
+           },
+           "engine.motors.front.maxPowerKW: base speed maxPower / maxTorque must be below maxRPM");
+    expect("battery capacity", [](V& d) { d.object["engine"].object["battery"].object["capacityKWh"] = V::makeNumber(0); },
+           "engine.battery.capacityKWh: = 0 is out of range");
+    expect("SoC above 1", [](V& d) { d.object["engine"].object["battery"].object["initialSoC"] = V::makeNumber(1.5); },
+           "engine.battery.initialSoC: = 1.5 is out of range");
+    expect("efficiency", [](V& d) { d.object["engine"].object["efficiency"].object["drive"] = V::makeNumber(1.2); },
+           "engine.efficiency.drive: = 1.2 is out of range");
+    expect("combustion key on EV", [](V& d) { d.object["engine"].object["idleRPM"] = V::makeNumber(800); },
+           "engine.idleRPM: unknown key");
+    expect("gearbox on EV", [](V& d) { d.object["gearbox"] = V::makeObject(); },
+           "gearbox: an electric drivetrain has no gearbox");
+    expect("center diff on EV", [](V& d) { d.object["drivetrain"].object["centerDiff"] = V::makeString("open"); },
+           "drivetrain.centerDiff: unknown key");
+    expect("EV not dual motor", [](V& d) { d.object["drivetrain"].object["layout"] = V::makeString("awd"); },
+           "drivetrain.layout: an electric vehicle needs \"dual_motor\"");
+    expect("EV split at 1", [](V& d) { d.object["drivetrain"].object["frontTorqueShare"] = V::makeNumber(1.0); },
+           "drivetrain.frontTorqueShare: must be strictly between 0 and 1 for dual_motor");
+}
+
+// Motor envelope: constant torque to the base speed, constant power above, zero at the maximum speed.
+void evMotorCurve() {
+    MotorConfig m;
+    m.maxTorque = 450.0f;
+    m.maxPower = 220000.0f;
+    m.maxRPM = 15000.0f;
+    m.regenTorque = 300.0f;
+    const float base = motorBaseRPM(m);
+    std::printf("    base speed %.0f rpm\n", base);
+    CHECK(std::abs(base - 220000.0f / 450.0f / kRpmToRadPerSec) < 0.5f, "base speed %.1f", base);
+    CHECK(std::abs(motorDriveLimit(m, 0.0f) - 450.0f) < 1e-3f, "stall torque %.1f", motorDriveLimit(m, 0.0f));
+    CHECK(std::abs(motorDriveLimit(m, 0.5f * base * kRpmToRadPerSec) - 450.0f) < 1e-3f, "constant torque range");
+    for (float rpm : {6000.0f, 9000.0f, 12000.0f, 14000.0f}) {
+        const float w = rpm * kRpmToRadPerSec, t = motorDriveLimit(m, w);
+        std::printf("    %5.0f rpm: %.1f N*m, %.1f kW\n", rpm, t, t * w * 1e-3f);
+        CHECK(std::abs(t * w - 220000.0f) < 50.0f, "constant power at %.0f rpm: %.0f W", rpm, t * w);
+    }
+    CHECK(motorDriveLimit(m, 15000.0f * kRpmToRadPerSec) == 0.0f, "torque at max rpm");
+    CHECK(motorDriveLimit(m, -0.5f * base * kRpmToRadPerSec) == 450.0f, "envelope symmetric in the rotation sign");
+    const float half = motorDriveLimit(m, 0.99f * 15000.0f * kRpmToRadPerSec);
+    CHECK(half > 0.0f && half < 220000.0f / (0.99f * 15000.0f * kRpmToRadPerSec), "fade over the last 2 %%");
+    CHECK(motorRegenLimit(m, 0.0f) == 300.0f && std::abs(motorRegenLimit(m, 1000.0f) - 220.0f) < 1e-3f,
+          "regen limit %.1f / %.1f", motorRegenLimit(m, 0.0f), motorRegenLimit(m, 1000.0f));
+}
+
+ElectricConfig evConfig() {
+    VehicleDefinition d = loadOne(kAssets, "trailforge_ev");
+    return d.config.electric;
+}
+
+EvInput evInput(float speed) {
+    EvInput in;
+    in.speed = speed;
+    in.mass = 2650.0f;
+    in.soc = 0.8f;
+    in.frontShare = 0.4f;
+    in.dt = 1.0f / 120.0f;
+    for (int a = 0; a < 2; ++a) {
+        in.axles[std::size_t(a)].wheelRadius = 0.4155f;
+        in.axles[std::size_t(a)].frictionBrakeTorque = a == 0 ? 3800.0f : 3200.0f;
+        in.axles[std::size_t(a)].motorOmega = speed / 0.4155f * 12.0f;
+    }
+    return in;
+}
+
+// Electronic split: part throttle follows the drive mode share, full throttle uses both motors fully, an axle cut
+// by traction control hands its torque to the other.
+void evTorqueSplit() {
+    const ElectricConfig c = evConfig();
+    const DrivingAidTuning aids;
+    {
+        ElectricDrive d;
+        EvInput in = evInput(0.0f);
+        in.throttle = 0.5f;
+        const EvOutput o = d.update(c, aids, in);
+        const float f = o.driveTorque[0] * 12.0f, r = o.driveTorque[1] * 12.0f;
+        std::printf("    half pedal at rest: front %.0f, rear %.0f N*m at the wheels (share %.3f)\n", f, r, f / (f + r));
+        CHECK(std::abs(f / (f + r) - 0.4f) < 1e-3f, "part-throttle share %.3f", f / (f + r));
+        CHECK(std::abs(f + r - 0.5f * (400.0f + 450.0f) * 12.0f) < 1.0f, "half of both motors: %.0f", f + r);
+        in.frontShare = 0.5f;
+        const EvOutput o2 = d.update(c, aids, in);
+        CHECK(std::abs(o2.driveTorque[0] - o2.driveTorque[1]) < 1e-3f, "OFF-ROAD 50 / 50 split");
+    }
+    {
+        ElectricDrive d;
+        EvInput in = evInput(5.0f);
+        in.throttle = 1.0f;
+        const EvOutput o = d.update(c, aids, in);
+        CHECK(std::abs(o.driveTorque[0] - 400.0f) < 1e-2f && std::abs(o.driveTorque[1] - 450.0f) < 1e-2f,
+              "full pedal: both motors at their limit (%.1f / %.1f)", o.driveTorque[0], o.driveTorque[1]);
+        // At 120 km/h both motors are in their constant-power range.
+        EvInput fast = evInput(120.0f / 3.6f);
+        fast.throttle = 1.0f;
+        const EvOutput of = d.update(c, aids, fast);
+        const float w = fast.axles[0].motorOmega;
+        std::printf("    full pedal at 120 km/h: %.1f + %.1f N*m, %.0f kW\n", of.driveTorque[0], of.driveTorque[1],
+                    (of.driveTorque[0] + of.driveTorque[1]) * w * 1e-3f);
+        CHECK(std::abs((of.driveTorque[0] + of.driveTorque[1]) * w - 400000.0f) < 100.0f, "400 kW at 120 km/h");
+    }
+    {
+        ElectricDrive d;
+        EvInput in = evInput(3.0f);
+        in.throttle = 0.4f; // 4080 N*m: the rear motor (5400 at the wheels) can take the front's share
+        in.traction = true;
+        in.tcSlipThreshold = aids.tcSlipThreshold;
+        in.tcMinFactor = aids.tcMinThrottle;
+        in.axles[0].driveSlip = 1.0f; // front axle spinning
+        EvOutput o;
+        for (int i = 0; i < 120; ++i) o = d.update(c, aids, in);
+        const float f = o.driveTorque[0] * 12.0f, r = o.driveTorque[1] * 12.0f;
+        std::printf("    front spinning, TC: factors %.2f / %.2f, front %.0f, rear %.0f N*m\n", o.tcFactor[0], o.tcFactor[1], f, r);
+        CHECK(o.tcFactor[0] < 0.5f && o.tcFactor[1] == 1.0f && o.tcActive, "front factor not cut");
+        CHECK(r > 0.6f * 0.4f * (400.0f + 450.0f) * 12.0f + 500.0f, "rear did not take over the front's torque (%.0f)", r);
+        CHECK(std::abs(f + r - 0.4f * (400.0f + 450.0f) * 12.0f) < 1.0f, "request not kept: %.0f", f + r);
+        in.soc = 0.0f;
+        CHECK(d.update(c, aids, in).driveTorque[1] == 0.0f, "an empty battery still drives");
+    }
+}
+
+// Regen blend: lift-off target, the pedal taken by regen first, the friction brakes for the rest; fade-out at low
+// speed, cut on wheel slip and with a full battery.
+void evRegenBlend() {
+    const ElectricConfig c = evConfig();
+    const DrivingAidTuning aids;
+    ElectricDrive d;
+    EvInput in = evInput(15.0f);
+    EvOutput o = d.update(c, aids, in);
+    const float liftOff = (o.regenTorque[0] + o.regenTorque[1]) * 12.0f / 0.4155f;
+    std::printf("    lift-off at 15 m/s: %.0f N = %.2f m/s^2\n", liftOff, liftOff / 2650.0f);
+    CHECK(std::abs(liftOff / 2650.0f - c.liftOffDecel) < 1e-3f, "lift-off decel %.3f", liftOff / 2650.0f);
+    CHECK(o.frictionScale[0] == 1.0f && o.frictionScale[1] == 1.0f, "friction untouched without the pedal");
+
+    in.brake = 0.1f; // 760 + 640 N*m per axle requested
+    o = d.update(c, aids, in);
+    std::printf("    pedal 0.1: regen %.0f / %.0f N*m at the shaft, friction scale %.2f / %.2f\n", o.regenTorque[0],
+                o.regenTorque[1], o.frictionScale[0], o.frictionScale[1]);
+    CHECK(o.frictionScale[0] < 0.01f && o.frictionScale[1] < 0.01f, "light pedal not fully regenerative");
+    in.brake = 1.0f;
+    o = d.update(c, aids, in);
+    const float regenWheel = (o.regenTorque[0] + o.regenTorque[1]) * 12.0f;
+    std::printf("    full pedal: regen %.0f N*m at the wheels, friction scale %.2f / %.2f\n", regenWheel, o.frictionScale[0],
+                o.frictionScale[1]);
+    CHECK(o.frictionScale[0] > 0.3f && o.frictionScale[0] < 1.0f, "full pedal: friction share %.2f", o.frictionScale[0]);
+    const float power = (o.regenTorque[0] + o.regenTorque[1]) * in.axles[0].motorOmega;
+    CHECK(power <= c.regenMaxPowerKW * 1000.0f + 1.0f, "charge power limit exceeded: %.0f W", power);
+
+    EvInput slow = evInput(0.5f * c.regenFadeSpeed);
+    slow.brake = 0.5f;
+    const EvOutput os = d.update(c, aids, slow);
+    EvInput stop = evInput(0.0f);
+    stop.brake = 0.5f;
+    const EvOutput o0 = d.update(c, aids, stop);
+    CHECK(os.frictionScale[0] > 0.0f && os.frictionScale[0] < 1.0f, "half fade: friction %.2f", os.frictionScale[0]);
+    CHECK(o0.regenTorque[0] == 0.0f && o0.frictionScale[0] == 1.0f && o0.frictionScale[1] == 1.0f,
+          "standstill: friction only");
+
+    EvInput full = evInput(15.0f);
+    full.soc = 1.0f;
+    full.brake = 0.5f;
+    const EvOutput of = d.update(c, aids, full);
+    CHECK(of.regenTorque[0] == 0.0f && of.frictionScale[0] == 1.0f, "a full battery still regenerates");
+
+    ElectricDrive ds;
+    EvInput slip = evInput(15.0f);
+    slip.brake = 0.3f;
+    slip.axles[1].brakeSlip = 0.5f;
+    EvOutput sl;
+    for (int i = 0; i < 6; ++i) sl = ds.update(c, aids, slip);
+    std::printf("    rear slipping: regen factor %.2f / %.2f, friction scale rear %.2f\n", sl.regenFactor[0],
+                sl.regenFactor[1], sl.frictionScale[1]);
+    CHECK(sl.regenFactor[1] == 0.0f && sl.regenFactor[0] == 1.0f && sl.frictionScale[1] == 1.0f,
+          "slipping axle keeps its regen");
+}
+
+// Battery: drive energy / efficiency + auxiliary load out, regen x efficiency in.
+void evBattery() {
+    ElectricConfig c;
+    c.batteryCapacityKWh = 100.0f;
+    c.initialSoC = 0.5f;
+    c.driveEfficiency = 0.9f;
+    c.regenEfficiency = 0.8f;
+    c.auxPowerKW = 1.0f;
+    Battery b;
+    b.init(c);
+    CHECK(std::abs(b.soc() - 0.5f) < 1e-6f, "initial SoC %.4f", b.soc());
+    float p = 0.0f;
+    for (int i = 0; i < 3600; ++i) p = b.step(c, 90000.0f, 1.0f); // 90 kW at the shaft for one hour
+    std::printf("    1 h at 90 kW shaft: battery %.1f kW, SoC %.4f\n", p * 1e-3f, b.soc());
+    CHECK(std::abs(p - 101000.0f) < 1.0f, "battery power %.0f W", p);
+    CHECK(b.soc() == 0.0f, "101 kWh out of 50 kWh left: SoC %.4f", b.soc());
+    b.init(c);
+    for (int i = 0; i < 120 * 60; ++i) b.step(c, -50000.0f, 1.0f / 120.0f); // one minute of 50 kW regen
+    const double expected = 50.0 + (50000.0 * 0.8 - 1000.0) * 60.0 / 3.6e6;
+    std::printf("    1 min at 50 kW regen: %.4f kWh (expected %.4f)\n", b.energyJ / 3.6e6, expected);
+    CHECK(std::abs(b.energyJ / 3.6e6 - expected) < 1e-4, "regen bookkeeping");
+}
+
+// The EV in the simulation: launch, regen stop, SoC, drive modes, no low range, mass and center of mass.
+void evSimulation() {
+    const VehicleDefinition def = loadOne(kAssets, "trailforge_ev");
+    const VehicleDefinition suv = loadOne(kAssets, "trailforge_suv");
+    const float dm = def.config.mass - suv.config.mass;
+    std::printf("    mass %.0f kg (SUV %.0f, +%.0f), COM height %.2f (SUV %.2f)\n", def.config.mass, suv.config.mass, dm,
+                def.config.comHeight, suv.config.comHeight);
+    CHECK(dm >= 400.0f && dm <= 700.0f, "EV must be 400-700 kg heavier than the SUV: %+.0f", dm);
+    CHECK(def.config.comHeight < suv.config.comHeight - 0.02f, "battery in the floor must lower the COM");
+
+    Simulation sim(settings(def.config, TrackLayout::Flat));
+    for (int i = 0; i < 120; ++i) sim.tick();
+    const float soc0 = sim.vehicle().telemetry().ev.soc;
+    CHECK(std::abs(soc0 - def.config.electric.initialSoC) < 1e-3f, "spawn SoC %.4f", soc0);
+    sim.requestToggleLowRange();
+    sim.tick();
+    CHECK(!sim.vehicle().telemetry().lowRange, "an EV has no low range");
+    CHECK(std::string(sim.lastMessage()).find("No low range") != std::string::npos, "message '%s'", sim.lastMessage());
+    float maxF = 0.0f, maxR = 0.0f, maxKW = 0.0f;
+    for (int i = 0; i < 360; ++i) {
+        sim.setIntent({.throttle = 1.0f});
+        sim.tick();
+        const EvTelemetry& e = sim.vehicle().telemetry().ev;
+        maxF = std::max(maxF, e.motorTorque[0]);
+        maxR = std::max(maxR, e.motorTorque[1]);
+        maxKW = std::max(maxKW, e.motorPowerKW);
+    }
+    const auto& t = sim.vehicle().telemetry();
+    std::printf("    3 s full pedal: %.1f km/h, motor torque max %.0f / %.0f N*m, %.0f kW, SoC %.4f -> %.4f\n",
+                t.forwardSpeed * 3.6f, maxF, maxR, maxKW, soc0, t.ev.soc);
+    CHECK(t.forwardSpeed * 3.6f > 60.0f, "slow launch: %.1f km/h", t.forwardSpeed * 3.6f);
+    CHECK(maxF > 390.0f && maxF <= 400.5f && maxR > 440.0f && maxR <= 450.5f, "motor torques %.0f / %.0f", maxF, maxR);
+    CHECK(maxKW > 380.0f && maxKW < 410.0f, "peak power %.0f kW", maxKW);
+    CHECK(t.ev.soc < soc0 && t.ev.energyOutKWh > 0.2, "SoC did not drop");
+    CHECK(t.engineRPM > 4000.0f && t.gear == 1, "motor speed / direction telemetry");
+
+    const double in0 = t.ev.energyInKWh;
+    const float soc1 = t.ev.soc;
+    bool regenSeen = false, negativePower = false;
+    for (int i = 0; i < 600 && sim.vehicle().telemetry().speed > 0.05f; ++i) {
+        sim.setIntent({.brake = 0.3f});
+        sim.tick();
+        regenSeen |= sim.vehicle().telemetry().ev.regenActive;
+        negativePower |= sim.vehicle().telemetry().ev.motorPowerKW < -20.0f;
+    }
+    const auto& b = sim.vehicle().telemetry();
+    std::printf("    stop at pedal 0.3: %.2f m/s left, recovered %.4f kWh, SoC %.5f -> %.5f\n", b.speed,
+                b.ev.energyInKWh - in0, soc1, b.ev.soc);
+    CHECK(regenSeen && negativePower, "no regen while braking");
+    CHECK(b.ev.energyInKWh - in0 > 0.01 && b.speed < 0.1f, "no energy recovered or not stopped");
+    CHECK(b.ev.soc > soc1, "SoC did not rise under regen (aux load included)");
+
+    sim.requestCycleTransfer();
+    sim.tick();
+    CHECK(sim.vehicle().evDriveMode() == EvDriveMode::OffRoad &&
+              std::abs(sim.vehicle().telemetry().ev.frontShare - def.config.electric.offRoadFrontShare) < 1e-6f,
+          "V did not switch to OFF-ROAD");
+    sim.requestReset();
+    sim.tick();
+    CHECK(std::abs(sim.vehicle().telemetry().ev.soc - def.config.electric.initialSoC) < 1e-3f, "reset keeps the SoC");
+    CHECK(!sim.hadPhysicsError(), "Jolt error");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -518,6 +821,12 @@ int main(int argc, char** argv) {
         {"drivetrain_layouts", drivetrainLayouts},
         {"garage_setups", garageSetups},
         {"suv_definition_matches_builtin", suvDefinitionMatchesBuiltin},
+        {"electric_definition_validation", electricDefinitionValidation},
+        {"ev_motor_curve", evMotorCurve},
+        {"ev_torque_split", evTorqueSplit},
+        {"ev_regen_blend", evRegenBlend},
+        {"ev_battery", evBattery},
+        {"ev_simulation", evSimulation},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

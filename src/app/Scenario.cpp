@@ -13,7 +13,8 @@ namespace {
 const std::set<std::string> kKnown = {"wait", "until", "expect", "down", "up", "tap", "text", "click", "inputclick",
                                       "scrollto", "teleport", "resize", "capture", "reset_stats", "log", "quit",
                                       "mark", "orbit", "wheel", "wheels", "quality", "set", "camera", "perf_begin",
-                                      "perf_end", "time", "menu", "garage", "transfer", "controls", "pedal"};
+                                      "perf_end", "time", "menu", "garage", "transfer", "controls", "pedal", "vehicle",
+                                      "soc"};
 
 } // namespace
 

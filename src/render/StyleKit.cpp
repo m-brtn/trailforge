@@ -52,6 +52,19 @@ Livery oliveExpedition() {
     return l;
 }
 
+Livery arcticElectric() {
+    Livery l = oliveExpedition();
+    l.body = paint(srgb(0.86f, 0.87f, 0.88f), 0.30f);
+    l.accent = paint(srgb(0.10f, 0.42f, 0.92f), 0.32f);
+    l.roof = paint(srgb(0.80f, 0.81f, 0.82f), 0.34f, 0.35f);
+    l.stripe = l.accent;
+    l.trim = plastic(lin(0.10f), 0.80f);
+    l.steel = {MatId::Generic, lin(0.12f), 0.50f, 0.30f, 1.0f};
+    l.gunmetal = {MatId::Generic, lin(0.20f), 0.36f, 0.8f, 0.8f};
+    l.hooks = {MatId::Generic, srgb(0.10f, 0.42f, 0.92f), 0.40f, 0.2f, 0.5f};
+    return l;
+}
+
 // ---------------------------------------------------------------- panels
 
 void face(MeshData& m, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,

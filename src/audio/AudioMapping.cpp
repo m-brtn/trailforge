@@ -198,4 +198,41 @@ StereoGain spatialize(AudioVec3 source, AudioVec3 listenerPos, AudioVec3 listene
     return {g * p[0] * kCenter, g * p[1] * kCenter};
 }
 
+EvTones evMotorTones(const MotorAudio& m, float vehicleSpeed, const EvSoundSettings& s) {
+    EvTones t;
+    const float rpm = std::abs(m.rpm), rps = rpm / 60.0f;
+    const float load = std::clamp(std::abs(m.torque) / std::max(m.maxTorque, 1.0f), 0.0f, 1.0f);
+    const float regen = m.torque * m.rpm < 0.0f ? load : 0.0f;
+    const float magnetic = 0.12f + 0.88f * std::pow(load, 0.7f);
+    const float mesh = 0.1f + 0.9f * load;
+    const float spin = std::clamp((rpm - 150.0f) / 750.0f, 0.0f, 1.0f);
+    const float spinS = spin * spin * (3.0f - 2.0f * spin);
+    const float order = 2.0f * s.polePairs;
+    t.hz = {order * rps, 2.0f * order * rps, s.slots * rps, s.stage1Teeth * rps, s.stage2Teeth * rps / s.stage1Ratio,
+            s.inverterHz};
+    t.gain = {s.level * spinS * magnetic * (1.0f - 0.3f * regen),
+              0.25f * s.level * spinS * magnetic,
+              0.35f * s.level * spinS * magnetic * (1.0f + 0.9f * regen),
+              0.5f * s.level * spinS * mesh,
+              0.45f * s.level * spinS * mesh,
+              0.0f};
+    // Current flows whenever there is torque (also creeping and holding on a slope at standstill).
+    const float fade = std::clamp(1.0f - (vehicleSpeed - 0.5f * s.inverterFadeSpeed) / (0.5f * s.inverterFadeSpeed), 0.0f, 1.0f);
+    t.gain[5] = 0.3f * s.level * std::pow(load, 0.8f) * fade * (1.0f + 0.3f * regen);
+    for (int i = 0; i < kEvTones; ++i) {
+        const float hz = t.hz[std::size_t(i)];
+        const float roll = 1.0f / (1.0f + (hz / 5000.0f) * (hz / 5000.0f));
+        t.gain[std::size_t(i)] *= hz > 16000.0f ? 0.0f : roll;
+    }
+    return t;
+}
+
+float roadHum(const WheelAudio& w, float referenceLoad) {
+    if (!w.contact) return 0.0f;
+    const float hard = squealSurface(SurfaceId(w.surface)) > 0.0f ? 1.0f : 0.0f;
+    const float v = std::clamp((w.rollSpeed - 2.0f) / 23.0f, 0.0f, 1.0f);
+    const float load = std::clamp(w.load / std::max(referenceLoad, 1.0f), 0.0f, 1.6f);
+    return hard * std::sqrt(v) * (0.5f + 0.5f * std::min(load, 1.4f));
+}
+
 } // namespace tf

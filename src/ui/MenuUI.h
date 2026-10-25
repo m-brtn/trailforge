@@ -18,6 +18,13 @@ namespace tf {
 class Renderer;
 struct VehicleTelemetry;
 
+// One vehicle of the vehicle page (catalog order).
+struct VehicleCard {
+    std::string id, name, description;
+    std::vector<VehicleSpec> specs;
+    bool electric = false;
+};
+
 // What the menus show besides the flow state.
 struct MenuView {
     bool gamepad = false;         // button hints for a gamepad instead of keys
@@ -27,6 +34,7 @@ struct MenuView {
     KeyboardStyle keyboard = KeyboardStyle::Pc; // key cap wording of the running platform
     PadType padType = PadType::None;            // connected gamepad
     PadGlyphs padGlyphs = PadGlyphs::Xbox;      // resolved from the setting and padType
+    const std::vector<VehicleCard>* vehicles = nullptr; // vehicle page
 };
 
 // Draws the intro, the start menu, the pause menu, Settings and Controls with ImGui's draw lists (behind every
@@ -71,6 +79,10 @@ public:
     int hitTest(float x, float y, int* dir) const;
     // Screen rectangle (ImGui coordinates) of a row drawn in the last frame; false if it is not on screen.
     bool itemRect(MenuItem item, float& x0, float& y0, float& x1, float& y1) const;
+    // Vehicle page: card under a point (catalog index) or -1; rectangle of a card drawn in the last frame.
+    int vehicleCardHit(float x, float y) const;
+    bool vehicleCardRect(int index, float& x0, float& y0, float& x1, float& y1) const;
+    int vehicleCardCount() const { return int(m_cards.size()); }
     // Mouse wheel / trackpad steps (+ = up) for the list drawn next (menu page or garage). Keyboard / gamepad cursor
     // moves still scroll the selected row into view; a cursor set by the pointer (notePointerCursor) does not.
     void scroll(float steps) { m_wheel += steps; }
@@ -100,6 +112,9 @@ private:
     void drawKeyboard(ImDrawList* dl, float x, float y, float u, const MenuView& view, float alpha);
     void drawGamepad(ImDrawList* dl, float cx, float y, float g, const MenuView& view, float alpha);
     float labelSize(float u) const;
+    // Vehicle page block under the VEHICLE row: one card per vehicle, then the selected vehicle's description and specs.
+    float vehicleBlockHeight(const MenuView& view) const;
+    void drawVehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha);
     void drawHints(const GameFlow& flow, const MenuView& view, float alpha);
     void updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
                       float viewH, bool follow);
@@ -133,6 +148,7 @@ private:
     float m_wheel = 0.0f;               // pending wheel steps
     bool m_pointerCursor = false;       // the cursor of this frame was set by the mouse
     std::vector<Box> m_callouts, m_obstacles;
+    std::vector<Box> m_cards; // vehicle page cards of the last frame (catalog order)
     int m_controlsCallouts = 0, m_controlsOverlaps = 0;
 };
 

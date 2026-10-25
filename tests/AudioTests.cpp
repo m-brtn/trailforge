@@ -323,6 +323,15 @@ VehicleConfig suvConfig() {
     return def.config;
 }
 
+VehicleConfig evConfig() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    const bool ok = loadVehicleDefinition(std::string(TRAILFORGE_SOURCE_DIR) + "/assets/vehicles/trailforge_ev/vehicle.json",
+                                          def, errors);
+    CHECK(ok, "EV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    return def.config;
+}
+
 struct Driver {
     explicit Driver(TrackLayout layout = TrackLayout::SurfaceLanes, double fixedStep = 1.0 / 120.0,
                     const VehicleConfig* vehicle = nullptr)
@@ -346,6 +355,8 @@ struct Driver {
     double outPower = 0.0;
     long long outFrames = 0;
     int shifts = 0, starts = 0;
+    float motorSetting = 1.0f;     // AudioSettings::motor
+    std::vector<float>* tap = nullptr; // receives the mono output when set
 
     void tick(const DriverIntent& in) {
         sim.setIntent(in);
@@ -358,6 +369,7 @@ struct Driver {
         f.listenerForward = f.vehicleForward;
         f.listenerRight = f.vehicleLeft * -1.0f;
         f.paused = paused;
+        f.settings.motor = motorSetting;
         mixer.setFrame(f);
         for (const AudioEvent& e : feed.events()) {
             shifts += e.type == AudioEventType::GearShift;
@@ -366,6 +378,9 @@ struct Driver {
         }
         feed.clearEvents();
         mixer.render(buf.data(), framesPerTick); // one physics tick at 48 kHz
+        if (tap)
+            for (int k = 0; k < framesPerTick; ++k)
+                tap->push_back(0.5f * (buf[std::size_t(2 * k)] + buf[std::size_t(2 * k + 1)]));
         for (float x : buf) {
             finite = finite && std::isfinite(x);
             maxAbs = std::max(maxAbs, std::abs(x));
@@ -824,6 +839,118 @@ void tireProfiles() {
     CHECK(a.tail < 0.2 && b.tail < 0.2 && d.tail < 0.2, "tails %.3f / %.3f / %.3f s", a.tail, b.tail, d.tail);
 }
 
+// Electric drive sound: the pure tone mapping, then the real EV simulation through the feed and the mixer (no engine
+// start, no gear events, motor order at 2 x pole pairs x shaft speed, regen keeps the motor audible, road hum on
+// concrete) and the spectrum of a steady cruise with the motor sound on and off.
+void electricSound() {
+    {
+        const EvSoundSettings es;
+        MotorAudio m;
+        m.maxTorque = 450.0f;
+        EvTones still = evMotorTones(m, 0.0f, es);
+        float sum = 0.0f;
+        for (float g : still.gain) sum += g;
+        CHECK(sum == 0.0f, "standstill without torque must be silent (%.5f)", double(sum));
+        m.torque = 300.0f;
+        still = evMotorTones(m, 0.0f, es);
+        CHECK(still.gain[5] > 0.0f && still.gain[0] == 0.0f, "standstill with torque: inverter only (%.5f / %.5f)",
+              double(still.gain[5]), double(still.gain[0]));
+        m.rpm = 6000.0f;
+        const EvTones full = evMotorTones(m, 5.0f, es);
+        m.torque = 0.0f;
+        const EvTones coast = evMotorTones(m, 5.0f, es);
+        m.torque = -300.0f;
+        const EvTones regen = evMotorTones(m, 5.0f, es);
+        std::printf("    6000 rpm: order %.0f Hz slot %.0f Hz gear %.0f / %.0f Hz; em gain full %.5f coast %.5f regen %.5f, "
+                    "slot full %.5f regen %.5f\n",
+                    double(full.hz[0]), double(full.hz[2]), double(full.hz[3]), double(full.hz[4]), double(full.gain[0]),
+                    double(coast.gain[0]), double(regen.gain[0]), double(full.gain[2]), double(regen.gain[2]));
+        CHECK(std::abs(full.hz[0] - 800.0f) < 0.1f && std::abs(full.hz[2] - 4800.0f) < 0.1f, "orders at 6000 rpm");
+        CHECK(full.gain[0] > 4.0f * coast.gain[0] && coast.gain[0] > 0.0f, "torque raises the whine");
+        CHECK(regen.gain[2] > full.gain[2] * 1.5f && regen.gain[0] < full.gain[0], "regen shifts to the slot order");
+        m.torque = 300.0f;
+        CHECK(evMotorTones(m, 20.0f, es).gain[5] == 0.0f, "inverter tone gone at 20 m/s");
+    }
+
+    const VehicleConfig ev = evConfig();
+    Driver d(TrackLayout::SurfaceLanes, 1.0 / 120.0, &ev);
+    d.run(1.0);
+    CHECK(d.starts == 0, "an electric vehicle has no engine start (%d)", d.starts);
+    float maxErr = 0.0f, launchLevel = 0.0f;
+    for (int i = 0; i < 3 * 120; ++i) {
+        d.tick(DriverIntent{.throttle = 1.0f});
+        const EvTelemetry& e = d.sim.vehicle().telemetry().ev;
+        const float rpm = std::max(std::abs(e.motorRPM[0]), std::abs(e.motorRPM[1]));
+        if (i > 120 && rpm > 1000.0f) maxErr = std::max(maxErr, std::abs(d.mixer.stats().motorHz / (8.0f * rpm / 60.0f) - 1.0f));
+        launchLevel = std::max(launchLevel, d.mixer.stats().motorLevel);
+    }
+    const float launchKmh = d.sim.vehicle().telemetry().speed * 3.6f;
+    float regenLevel = 0.0f, regenTorque = 0.0f;
+    for (int i = 0; i < 2 * 120; ++i) {
+        d.tick(DriverIntent{});
+        regenTorque = std::min(regenTorque, d.sim.vehicle().telemetry().ev.motorTorque[1]);
+        if (i > 60) regenLevel = std::max(regenLevel, d.mixer.stats().motorLevel);
+    }
+    std::printf("    EV launch to %.0f km/h: %d gear events, motor order error %.1f %%, level %.4f; lift-off regen %.0f N*m "
+                "level %.4f; engine stats rpm %.0f\n",
+                double(launchKmh), d.shifts, 100.0 * double(maxErr), double(launchLevel), double(regenTorque),
+                double(regenLevel), double(d.mixer.stats().rpm));
+    CHECK(d.shifts == 0, "gear events on an electric vehicle: %d", d.shifts);
+    CHECK(maxErr < 0.05f, "motor order does not follow the shaft speed (%.3f)", double(maxErr));
+    CHECK(regenTorque < -50.0f && regenLevel > 0.1f * launchLevel, "regen not audible: %.0f N*m, level %.4f",
+          double(regenTorque), double(regenLevel));
+
+    // Steady 40 km/h on concrete (5-7 N*m per motor: near the no-load floor). With the road hum off and the synthetic
+    // bank silenced (its test tones are sines too), the strongest spectral line is the motor order at the predicted
+    // frequency and stands > 15 dB above the same run with the motor sound off (same seed and physics). With the road
+    // hum on, the hum is louder than the light-load whine (reported, not a target).
+    auto cruise = [&](float motor, bool roadHum, double* peakHz, float* road, float* level) {
+        VehicleConfig cfg = ev;
+        if (!roadHum) cfg.tireSound.roadGain = 0.0f;
+        Driver c(TrackLayout::SurfaceLanes, 1.0 / 120.0, &cfg);
+        for (SoundData& snd : c.bank.sounds) std::fill(snd.pcm.begin(), snd.pcm.end(), 0.0f);
+        c.motorSetting = motor;
+        c.run(0.5);
+        c.cruise(6.0, 40.0f);
+        std::vector<float> mono;
+        c.tap = &mono;
+        c.cruise(1.0, 40.0f);
+        c.tap = nullptr;
+        *peakHz = c.mixer.stats().motorHz;
+        *road = c.mixer.stats().road;
+        *level = c.mixer.stats().motorLevel;
+        return powerSpectrum(mono);
+    };
+    double hzOn = 0.0, hzOff = 0.0, hzRoad = 0.0;
+    float roadOn = 0.0f, roadOff = 0.0f, roadHumLevel = 0.0f, levelOn = 0.0f, levelOff = 0.0f, levelRoad = 0.0f;
+    const std::vector<double> on = cruise(1.0f, false, &hzOn, &roadOn, &levelOn);
+    const std::vector<double> off = cruise(0.0f, false, &hzOff, &roadOff, &levelOff);
+    const std::vector<double> withRoad = cruise(1.0f, true, &hzRoad, &roadHumLevel, &levelRoad);
+    const std::size_t bin = std::size_t(std::lround(hzOn * 4096.0 / 48000.0));
+    double pOn = 0.0, pOff = 0.0, pRoad = 0.0, pRoadTotal = 0.0, pOnTotal = 0.0;
+    for (std::size_t k = bin - 2; k <= bin + 2; ++k) pOn += on[k], pOff += off[k], pRoad += withRoad[k];
+    for (std::size_t k = 1; k < on.size(); ++k) pOnTotal += on[k], pRoadTotal += withRoad[k];
+    std::size_t peak = 1;
+    for (std::size_t k = 1; k < on.size(); ++k)
+        if (on[k] > on[peak]) peak = k;
+    const double gainDb = 10.0 * std::log10(std::max(pOn, 1e-30) / std::max(pOff, 1e-30));
+    std::printf("    40 km/h cruise: motor order %.0f Hz (level %.4f), strongest line %.0f Hz, +%.1f dB with the motor "
+                "sound; with the road hum (%.2f) the order holds %.1f %% of the power\n",
+                hzOn, double(levelOn), double(peak) * 48000.0 / 4096.0, gainDb, double(roadHumLevel),
+                100.0 * pRoad / std::max(pRoadTotal, 1e-30));
+    CHECK(hzOn > 250.0 && hzOn < 600.0, "motor order at 40 km/h %.0f Hz", hzOn);
+    CHECK(peak + 2 >= bin && peak <= bin + 2, "strongest line %zu, motor order bin %zu", peak, bin);
+    CHECK(gainDb > 15.0, "motor order only %.1f dB above the mix without it", gainDb);
+    CHECK(roadHumLevel > 0.3f && roadOn == 0.0f, "road hum at 40 km/h on concrete %.2f (off: %.2f)",
+          double(roadHumLevel), double(roadOn));
+
+    Driver suv;
+    suv.run(1.0);
+    suv.cruise(4.0, 40.0f);
+    CHECK(suv.mixer.stats().motorLevel == 0.0f && suv.mixer.stats().road == 0.0f, "SUV plays motor %.4f / road %.2f",
+          double(suv.mixer.stats().motorLevel), double(suv.mixer.stats().road));
+}
+
 // Music bus with a synthetic streamed track: fades, volume, loop, restart, and no change while the game is paused.
 void music() {
     struct Sine : MusicSource {
@@ -908,6 +1035,7 @@ int main(int argc, char** argv) {
         {"audio_skid_gating", skidGating},
         {"audio_squeal_release", squealRelease},
         {"audio_tire_profiles", tireProfiles},
+        {"audio_electric", electricSound},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

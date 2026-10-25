@@ -209,6 +209,18 @@ Application::Application(const AppOptions& options)
             setupDir = dir + "setups";
         }
         m_garage = std::make_unique<Garage>(m_vehicles, setupDir);
+        std::vector<std::string> ids;
+        for (const VehicleDefinition& d : m_vehicles) ids.push_back(d.id);
+        m_flow.setVehicles(ids);
+        // --vehicle beats the remembered choice; an unknown id keeps the default vehicle.
+        if (!options.vehicleId.empty()) m_settings.vehicle = options.vehicleId;
+        if (!m_settings.vehicle.empty() && !m_garage->selectVehicle(m_settings.vehicle)) {
+            std::printf("Vehicles: no vehicle '%s', using '%s'\n", m_settings.vehicle.c_str(), m_garage->vehicle().id.c_str());
+            m_settings.vehicle.clear();
+        }
+        std::printf("Vehicles: active '%s'\n", m_garage->vehicle().id.c_str());
+        for (const VehicleDefinition& d : m_vehicles)
+            m_vehicleCards.push_back({d.id, d.name, d.description, vehicleSpecs(d.config), d.config.isElectric()});
         std::printf("Garage: setups in %s, active '%s'\n", setupDir.empty() ? "(memory only)" : setupDir.c_str(),
                     m_garage->factoryActive() ? "factory" : m_garage->activeName().c_str());
         if (!(m_garage->config() == m_sim.vehicleConfig())) m_sim.requestRebuild(m_garage->config());
@@ -314,8 +326,19 @@ void Application::handleMenu() {
             in.click = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
             in.clickDir = dir;
         }
+        if (m_flow.page() == MenuPage::Vehicle) {
+            if (k.click) in.pick = m_menu.vehicleCardHit(k.mouseX, k.mouseY);
+            if (in.pick >= 0) in.click = -1;
+            m_vehicleWheel += k.wheel;
+            if (std::abs(m_vehicleWheel) >= 1.0f) {
+                in.wheel = m_vehicleWheel > 0.0f ? 1 : -1; // one vehicle per notch (trackpads send fractions)
+                m_vehicleWheel = 0.0f;
+            }
+        } else {
+            m_vehicleWheel = 0.0f;
+        }
         if (in.hover >= 0 || in.click >= 0) m_menu.notePointerCursor();
-        if (k.wheel != 0.0f) m_menu.scroll(k.wheel);
+        if (k.wheel != 0.0f && m_flow.page() != MenuPage::Vehicle) m_menu.scroll(k.wheel);
     }
     const Screen before = m_flow.screen();
     const MenuResult r = m_flow.handle(in, m_settings);
@@ -336,6 +359,10 @@ void Application::onMenuCommand(MenuCommand c) {
     case MenuCommand::SettingsChanged: applySettings(false); break;
     case MenuCommand::SettingsClosed: saveSettings(); break;
     case MenuCommand::OpenGarage: openGarage(); break;
+    case MenuCommand::VehicleChanged:
+        selectVehicle(m_settings.vehicle);
+        saveSettings();
+        break;
     default: break;
     }
 }
@@ -357,6 +384,13 @@ void Application::closeGarage() {
     m_flow.closeGarage();
     if (m_garageFollowCamera && m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
     if (m_flow.screen() == Screen::MainMenu) m_menuCamTime = 0.0;
+}
+
+bool Application::selectVehicle(const std::string& id) {
+    if (!m_garage || !m_garage->selectVehicle(id)) return false;
+    m_settings.vehicle = m_garage->vehicle().id;
+    applyGarageConfig();
+    return true;
 }
 
 // Live values go into the running vehicle between ticks; geometry, wheels and layout rebuild it in place
@@ -414,6 +448,10 @@ void Application::handleGarage() {
     case GarageSound::None: break;
     }
     applyGarageConfig();
+    if (m_garage->vehicle().id != m_flow.vehicles()[std::size_t(m_flow.vehicleIndex(m_settings))]) {
+        m_settings.vehicle = m_garage->vehicle().id; // the vehicle row of the garage also sets the remembered choice
+        saveSettings();
+    }
     if (r.close) closeGarage();
 }
 
@@ -601,8 +639,11 @@ void Application::renderFrame(float frameTime) {
         ci.move = m_input.freeCameraMove();
         ci.fast = m_input.fastModifier();
     }
-    if (m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) updateMenuCamera(frameTime);
-    if (m_flow.screen() == Screen::Garage) updateGarageCamera(frameTime);
+    const bool vehiclePage = m_flow.screen() == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle;
+    if (vehiclePage && !m_vehiclePageCamera) m_garageCamTime = 0.0;
+    m_vehiclePageCamera = vehiclePage;
+    if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime);
+    if (m_flow.screen() == Screen::Garage || vehiclePage) updateGarageCamera(frameTime); // the preview: the live vehicle
     m_camera.update(frameTime, ci, glm::vec3(bodyM[3]), glm::vec3(bodyM[2]),
                     [this](const glm::vec3& from, const glm::vec3& to) {
                         return m_sim.castRayIgnoringVehicle(JPH::Vec3(from.x, from.y, from.z), JPH::Vec3(to.x, to.y, to.z));
@@ -674,6 +715,7 @@ void Application::renderFrame(float frameTime) {
     view.keyboard = keyboardStyle();
     view.padType = padType();
     view.padGlyphs = resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), view.padType);
+    view.vehicles = &m_vehicleCards;
     m_menu.draw(m_flow, m_settings, view);
     if (m_flow.screen() == Screen::Garage && m_garage) m_menu.drawGarage(*m_garage, m_sim.vehicle().telemetry(), view);
     ImGui::Render();
@@ -742,8 +784,8 @@ void Application::renderFrame(float frameTime) {
         frame.brakeLight = std::max(t.command.brake, t.command.handBrake) > 0.05f ? 1.0f : 0.0f;
         frame.reverseLight = t.direction == DriveDirection::Reverse ? 1.0f : 0.0f;
         frame.headlights = m_gfx.headlights ? 1.0f : 0.0f;
-        // Lamp lens centers in body space (see VehicleModel.cpp), beams pitched ~3 deg down.
-        const glm::vec3 lens(0.67f, 0.40f, 2.24f);
+        // Lamp lens centers in body space (per model), beams pitched ~3 deg down.
+        const glm::vec3 lens = m_vehicleVisual.headlightLens;
         frame.headlightPos[0] = glm::vec3(bodyM * glm::vec4(lens.x, lens.y, lens.z, 1.0f));
         frame.headlightPos[1] = glm::vec3(bodyM * glm::vec4(-lens.x, lens.y, lens.z, 1.0f));
         frame.headlightDir = glm::normalize(glm::vec3(bodyM * glm::vec4(0.0f, -0.05f, 1.0f, 0.0f)));
@@ -762,7 +804,8 @@ void Application::renderFrame(float frameTime) {
     {
         // Blur under the pause menu and under Settings / Controls opened from the start menu.
         const float target = m_flow.screen() == Screen::Paused ? 1.0f
-                             : m_flow.screen() == Screen::MainMenu && m_flow.depth() > 1 ? 0.75f
+                             : m_flow.screen() == Screen::MainMenu && m_flow.depth() > 1 &&
+                                       m_flow.page() != MenuPage::Vehicle ? 0.75f
                                                                                          : 0.0f;
         const float step = frameTime / 0.25f;
         m_menuBlur = m_menuBlur < target ? std::min(target, m_menuBlur + step) : std::max(target, m_menuBlur - step);
@@ -1055,7 +1098,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         // `click menu:ITEM` go through the real input path instead).
         const Screen before = m_flow.screen();
         if (arg == "intro") {
+            std::vector<std::string> ids = m_flow.vehicles();
             m_flow = GameFlow(Screen::Intro);
+            m_flow.setVehicles(std::move(ids));
             enterMenuWorld(true);
         } else if (arg == "main") {
             m_flow.toMainMenu();
@@ -1079,6 +1124,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         } else if (arg == "garage_close") {
             if (before != Screen::Garage) return Exec::Failed;
             closeGarage();
+        } else if (arg == "vehicles") {
+            m_flow.openVehiclePage();
+            if (m_flow.page() != MenuPage::Vehicle) return Exec::Failed;
         } else if (arg == "settings") {
             m_flow.openSettings();
             if (m_flow.page() != MenuPage::Settings) return Exec::Failed;
@@ -1236,6 +1284,29 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!m_menu.modalButtonRect(button, x0, y0, x1, y1)) {
             std::printf("SCENARIO: modal button '%s' is not on screen\n", arg.c_str());
+            return Exec::Failed;
+        }
+        queueClick(0.5f * (x0 + x1), 0.5f * (y0 + y1), false);
+        return Exec::Done;
+    }
+    if (c.op == "soc") {
+        // soc V: battery state of charge of an electric vehicle (0..1).
+        if (!m_sim.vehicleConfig().isElectric() || arg.empty()) return Exec::Failed;
+        m_sim.requestStateOfCharge(std::clamp(std::strtof(arg.c_str(), nullptr), 0.0f, 1.0f));
+        return Exec::Done;
+    }
+    if (c.op == "vehicle") {
+        // vehicle ID: the vehicle-page choice directly (also remembered); the vehicle respawns in place.
+        if (!selectVehicle(arg)) {
+            std::printf("SCENARIO: no vehicle '%s'\n", arg.c_str());
+            return Exec::Failed;
+        }
+        return Exec::Done;
+    }
+    if (c.op == "click" && arg.rfind("vehicle_card:", 0) == 0) {
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!m_menu.vehicleCardRect(std::atoi(arg.c_str() + 13), x0, y0, x1, y1)) {
+            std::printf("SCENARIO: vehicle card '%s' is not on screen\n", arg.c_str());
             return Exec::Failed;
         }
         queueClick(0.5f * (x0 + x1), 0.5f * (y0 + y1), false);
@@ -1424,6 +1495,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "audio_master") m_audioPanel.settings.master = v;
             else if (k == "audio_pitch") m_audioPanel.settings.enginePitch = v;
             else if (k == "audio_whine") m_audioPanel.settings.whine = v;
+            else if (k == "audio_motor") m_audioPanel.settings.motor = v;
             else if (k == "audio_play_ui") m_audio->playUi(UiSound(std::clamp(int(v), 0, int(UiSound::MenuClose))));
             else if (k == "marks_clear") m_sim.tireMarks().clear();
             else if (k == "spray") m_gfx.spray = v != 0.0f;
@@ -1590,7 +1662,25 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "paused") return simulationRuns() ? 0.0 : 1.0;
     if (n == "frozen") return m_paused ? 1.0 : 0.0;
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
-    if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls
+    if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls, 4 vehicle
+    if (n == "vehicle_index") return m_garage ? m_garage->vehicleIndex() : 0.0; // catalog order, 0 = default vehicle
+    if (n == "vehicle_choice") return m_flow.vehicleIndex(m_settings);         // the vehicle page's choice
+    if (n == "vehicle_cards") return double(m_menu.vehicleCardCount());
+    if (n == "electric") return m_sim.vehicleConfig().isElectric() ? 1.0 : 0.0;
+    if (n == "direction") return t.direction == DriveDirection::Reverse ? 1.0 : 0.0; // 0 drive, 1 reverse
+    if (n == "mass") return m_sim.vehicleConfig().mass;
+    if (n == "soc") return t.ev.soc;                       // 0..1 (electric)
+    if (n == "motor_kw") return t.ev.motorPowerKW;         // both motors, + drive, - regen
+    if (n == "battery_kw") return t.ev.batteryPowerKW;     // incl. the auxiliary load
+    if (n == "motor_nm_f") return t.ev.motorTorque[0];
+    if (n == "motor_nm_r") return t.ev.motorTorque[1];
+    if (n == "motor_rpm_f") return t.ev.motorRPM[0];
+    if (n == "motor_rpm_r") return t.ev.motorRPM[1];
+    if (n == "regen") return t.ev.regenActive ? 1.0 : 0.0;
+    if (n == "ev_mode") return double(int(t.ev.mode));    // 0 normal, 1 off-road
+    if (n == "ev_front_share") return t.ev.frontShare;
+    if (n == "energy_out_kwh") return t.ev.energyOutKWh;
+    if (n == "energy_in_kwh") return t.ev.energyInKWh;
     if (n == "menu_depth") return m_flow.depth();
     if (n == "menu_cursor") return m_flow.cursor();
     if (n == "menu_scroll") return m_menu.menuScroll();
@@ -1615,6 +1705,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (k == "auto_reverse") return g.autoReverse ? 1.0 : 0.0;
         if (k == "drive_keys") return g.driveKeys;
         if (k == "pad_glyphs") return g.padGlyphs;
+        if (k == "vehicle") return m_flow.vehicleIndex(g);
         return std::nullopt;
     }
     // The settings file format keeps every value of the current settings (parse(serialize(s)) == s).
@@ -1677,6 +1768,18 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     }
     if (n == "front_spring") return m_sim.vehicleConfig().tuning.axles[kFrontAxle].springFrequency;
     if (n == "mass") return m_sim.vehicleConfig().mass;
+    if (n == "soc") return t.ev.soc;                       // 0..1 (electric)
+    if (n == "motor_kw") return t.ev.motorPowerKW;         // both motors, + drive, - regen
+    if (n == "battery_kw") return t.ev.batteryPowerKW;     // incl. the auxiliary load
+    if (n == "motor_nm_f") return t.ev.motorTorque[0];
+    if (n == "motor_nm_r") return t.ev.motorTorque[1];
+    if (n == "motor_rpm_f") return t.ev.motorRPM[0];
+    if (n == "motor_rpm_r") return t.ev.motorRPM[1];
+    if (n == "regen") return t.ev.regenActive ? 1.0 : 0.0;
+    if (n == "ev_mode") return double(int(t.ev.mode));    // 0 normal, 1 off-road
+    if (n == "ev_front_share") return t.ev.frontShare;
+    if (n == "energy_out_kwh") return t.ev.energyOutKWh;
+    if (n == "energy_in_kwh") return t.ev.energyInKWh;
     if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;
     if (n == "friction_ellipse") return m_sim.vehicleConfig().tuning.tireFrictionEllipse ? 1.0 : 0.0;
     if (n == "clutch_limit") return m_sim.vehicleConfig().tuning.launchClutchLimit ? 1.0 : 0.0;
@@ -1757,6 +1860,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (n == "audio_peak_db") return a.peakDb;
         if (n == "audio_clipped") return double(a.clippedSamples);
         if (n == "audio_cpu") return a.cpuLoad;
+        if (n == "audio_motor_hz") return a.motorHz;
+        if (n == "audio_motor") return a.motorLevel;
+        if (n == "audio_inverter") return a.inverterLevel;
+        if (n == "audio_road") return a.road;
+        if (n == "audio_src_rpm_raw") return a.rpm;
         // audio_ev<N>: events of AudioEventType N received by the mixer (0 start, 1 gear, 2 bump stop, 3 thump,
         // 4 body impact, 5 splash, 6 creak, 7 UI).
         if (n.size() == 9 && n.rfind("audio_ev", 0) == 0 && n[8] >= '0' && n[8] <= '7')

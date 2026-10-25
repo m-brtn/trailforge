@@ -4,6 +4,7 @@
 
 #include "render/VehicleModel.h"
 #include "vehicle/VehicleConfig.h"
+#include "vehicle/VehicleDefinition.h"
 
 #include <cmath>
 #include <cstdio>
@@ -28,8 +29,19 @@ int g_failures = 0;
         }                                                                       \
     } while (0)
 
-void modelParts() {
-    const VehicleVisual v = buildVehicleVisual(VehicleConfig{});
+// Base configuration of every catalog vehicle (one per visual model at least).
+std::vector<VehicleConfig> catalogConfigs() {
+    std::vector<std::string> errors;
+    std::vector<VehicleConfig> out;
+    for (const VehicleDefinition& d : loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors))
+        out.push_back(d.config);
+    CHECK(errors.empty() && out.size() >= 2, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
+    return out;
+}
+
+void checkParts(const VehicleConfig& c) {
+    const VehicleVisual v = buildVehicleVisual(c);
+    const bool ev = c.visualModel == "trailforge_ev";
     CHECK(!v.parts.empty(), "no parts");
     std::set<std::string> names;
     std::size_t next = 0;
@@ -48,26 +60,63 @@ void modelParts() {
         const VehiclePart* p = v.find(n);
         CHECK(p && p->deformable && p->detachable, "'%s' should be deformable and detachable", n);
     }
-    for (const char* n : {"mirror_left", "headlight_right", "winch", "tow_hook_front_left", "jerry_can_left"}) {
+    for (const char* n : {"mirror_left", "headlight_right", "tow_hook_front_left", "taillight_left", "light_bar"}) {
         const VehiclePart* p = v.find(n);
         CHECK(p && p->detachable, "'%s' should be detachable", n);
     }
+    for (const char* n : ev ? std::vector<const char*>{"front_panel", "battery_pack", "motor_front", "motor_rear"}
+                            : std::vector<const char*>{"winch", "jerry_can_left", "grille", "snorkel"})
+        CHECK(v.find(n), "%s: missing part '%s'", c.visualModel.c_str(), n);
+    for (const char* n : ev ? std::vector<const char*>{"winch", "snorkel", "grille", "jerry_can_left"}
+                            : std::vector<const char*>{"battery_pack", "motor_front"})
+        CHECK(!v.find(n), "%s: unexpected part '%s'", c.visualModel.c_str(), n);
+    // The bumpers cover the middle of the end faces with outward-facing triangles, at least 8 cm proud of the
+    // 2.20 m faces.
+    for (const auto& [name, zs] : {std::pair{"bumper_front", 1.0f}, std::pair{"bumper_rear", -1.0f}}) {
+        const VehiclePart* p = v.find(name);
+        float reach = 0.0f;
+        for (std::size_t i = p ? p->firstVertex : 0; p && i + 2 < p->firstVertex + p->vertexCount; i += 3) {
+            const glm::vec3 &a = v.mesh.vertices[i].position, &b = v.mesh.vertices[i + 1].position,
+                            &d = v.mesh.vertices[i + 2].position;
+            // Triangles facing outward that span x = 0 at y = 0.12 (the bumper face on the center line).
+            const glm::vec3 n = glm::cross(b - a, d - a);
+            if (std::fmin(a.x, std::fmin(b.x, d.x)) > 0.0f || std::fmax(a.x, std::fmax(b.x, d.x)) < 0.0f) continue;
+            if (std::fmin(a.y, std::fmin(b.y, d.y)) > 0.12f || std::fmax(a.y, std::fmax(b.y, d.y)) < 0.12f) continue;
+            if (zs * n.z <= 0.0f) continue;
+            reach = std::fmax(reach, zs * (a.z + b.z + d.z) / 3.0f);
+        }
+        CHECK(reach > 2.28f, "%s: %s reaches only %.3f m at the center", c.visualModel.c_str(), name, reach);
+    }
+    // No antennas or mud flaps on any model (style rule).
+    for (const VehiclePart& p : v.parts)
+        CHECK(p.name.find("antenna") == std::string::npos && p.name.find("mud_flap") == std::string::npos,
+              "%s: part '%s' is not allowed", c.visualModel.c_str(), p.name.c_str());
     CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
     CHECK(v.spares.size() == 1, "%zu spare mounts", v.spares.size());
     for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
-    std::printf("  %zu parts, %zu triangles\n", v.parts.size(), v.mesh.vertices.size() / 3);
+    std::printf("  %s: %zu parts, %zu triangles\n", c.visualModel.c_str(), v.parts.size(), v.mesh.vertices.size() / 3);
 }
 
-// Tire size changes a tire kit could make (the body is rebuilt around them).
+void modelParts() {
+    checkParts(VehicleConfig{});
+    for (const VehicleConfig& c : catalogConfigs()) checkParts(c);
+}
+
+// Every catalog vehicle with its own wheels and with the tire sizes a tire kit could fit (the body is rebuilt
+// around them).
 std::vector<VehicleConfig> wheelVariants() {
-    std::vector<VehicleConfig> out(1);
-    for (const auto& [r, w] : {std::pair{0.436f, 0.315f}, std::pair{0.43f, 0.33f}, std::pair{0.45f, 0.30f}, std::pair{0.36f, 0.26f}}) {
-        VehicleConfig c;
-        for (AxleConfig& ax : c.axles) {
-            ax.wheelRadius = r;
-            ax.wheelWidth = w;
+    std::vector<VehicleConfig> out{VehicleConfig{}};
+    for (const VehicleConfig& base : catalogConfigs()) {
+        out.push_back(base);
+        for (const auto& [r, w] :
+             {std::pair{0.436f, 0.315f}, std::pair{0.43f, 0.33f}, std::pair{0.45f, 0.30f}, std::pair{0.36f, 0.26f}}) {
+            VehicleConfig c = base;
+            for (AxleConfig& ax : c.axles) {
+                ax.wheelRadius = r;
+                ax.wheelWidth = w;
+            }
+            out.push_back(c);
         }
-        out.push_back(c);
     }
     return out;
 }
@@ -78,6 +127,7 @@ void modelWheelSize() {
     const VehicleConfig base;
     const VehicleVisual v = buildVehicleVisual(base);
     for (VehicleConfig c : wheelVariants()) {
+        const VehicleVisual model = buildVehicleVisual(c);
         for (const char* tread : {"mud_terrain", "all_terrain"})
             for (float rim : {0.45f, 0.58f, 0.75f}) {
                 for (AxleConfig& ax : c.axles) {
@@ -86,7 +136,7 @@ void modelWheelSize() {
                 }
                 CHECK(c == base || !sameWheelFit(base, c), "a wheel change must rebuild the visual");
                 const AxleConfig& ax = c.axles[1];
-                const glm::vec2 size = wheelMeshSize(buildAxleWheelMesh(v, ax));
+                const glm::vec2 size = wheelMeshSize(buildAxleWheelMesh(model, ax));
                 CHECK(size.x <= ax.wheelRadius + 1e-4f && size.x >= ax.wheelRadius - 0.003f,
                       "r %.3f w %.3f %s rim %.2f: visual radius %.4f", ax.wheelRadius, ax.wheelWidth, tread, rim, size.x);
                 CHECK(std::abs(size.y - ax.wheelWidth) <= 1e-4f, "r %.3f w %.3f %s rim %.2f: visual width %.4f",
@@ -137,13 +187,13 @@ void modelWheelClearance() {
                     const char* part = "?";
                     for (const VehiclePart& vp : v.parts)
                         if (vi >= vp.firstVertex && vi < vp.firstVertex + vp.vertexCount) part = vp.name.c_str();
-                    std::printf("  r %.2f w %.2f: point (%.3f, %.3f, %.3f) of '%s' inside the sweep of wheel %d\n",
-                                ax.wheelRadius, ax.wheelWidth, p.x, p.y, p.z, part, w);
+                    std::printf("  %s r %.2f w %.2f: point (%.3f, %.3f, %.3f) of '%s' inside the sweep of wheel %d\n",
+                                c.visualModel.c_str(), ax.wheelRadius, ax.wheelWidth, p.x, p.y, p.z, part, w);
                 }
             }
         }
-        CHECK(hits == 0, "r %.2f w %.2f: %d body points inside the wheel sweep", c.axles[0].wheelRadius,
-              c.axles[0].wheelWidth, hits);
+        CHECK(hits == 0, "%s r %.2f w %.2f: %d body points inside the wheel sweep", c.visualModel.c_str(),
+              c.axles[0].wheelRadius, c.axles[0].wheelWidth, hits);
     }
 }
 

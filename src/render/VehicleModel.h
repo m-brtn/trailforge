@@ -40,10 +40,12 @@ struct VehicleVisual {
     std::vector<VehiclePart> parts;
     std::vector<SpareMount> spares;
     style::WheelStyle wheel;       // rim / tire materials and spokes; size and tread come from the axle
+    glm::vec3 headlightLens{0.67f, 0.40f, 2.24f}; // left low-beam lens center (body space; right is mirrored)
     const VehiclePart* find(const std::string& name) const;
 };
 
-// Builds `config.visualModel` (known: "trailforge_suv", gasoline expedition SUV, Cars.png car #1). Arches and
+// Builds `config.visualModel` (known: "trailforge_suv", gasoline expedition SUV, Cars.png car #1;
+// "trailforge_ev", dual-motor electric SUV, Cars.png car #2). Arches and
 // flares are fitted to the physics wheels (radius, width, track, travel, steering), so rebuild on a wheel change.
 VehicleVisual buildVehicleVisual(const VehicleConfig& config);
 // Wheel style of an axle: the model's materials with the axle's visual rim ratio and tread.

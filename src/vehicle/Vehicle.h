@@ -2,6 +2,7 @@
 
 #include "track/SurfaceProperties.h"
 #include "vehicle/DrivingAids.h"
+#include "vehicle/ElectricDrive.h"
 #include "vehicle/VehicleConfig.h"
 #include "vehicle/WheelContact.h"
 
@@ -60,6 +61,25 @@ struct WheelTelemetry {
     JPH::Vec3 suspensionDir = JPH::Vec3::sZero();    // world: travel direction (down)
 };
 
+// Dual-motor electric state of the last tick (electric = false for combustion vehicles).
+struct EvTelemetry {
+    bool electric = false;
+    EvDriveMode mode = EvDriveMode::Normal;
+    float frontShare = 0.5f;          // part-throttle front share of the active drive mode
+    float soc = 0.0f;                 // 0..1
+    float batteryPowerKW = 0.0f;      // + discharge, - charge (regen), incl. the auxiliary load
+    float motorPowerKW = 0.0f;        // shaft power of both motors, + drive, - regen
+    std::array<float, 2> motorRPM{};    // front, rear (+ = forward rotation)
+    std::array<float, 2> motorTorque{}; // N*m at the shaft, signed like the rotation it drives (regen opposes it)
+    std::array<float, 2> motorPowerAxleKW{};
+    std::array<float, 2> tcFactor{1.0f, 1.0f};
+    std::array<float, 2> regenFactor{1.0f, 1.0f};
+    std::array<float, 2> frictionScale{1.0f, 1.0f}; // pedal friction torque left after regen, per axle
+    bool regenActive = false;
+    double energyOutKWh = 0.0;        // battery energy drawn since spawn
+    double energyInKWh = 0.0;         // battery energy recovered since spawn
+};
+
 struct VehicleTelemetry {
     float speed = 0.0f;         // m/s, magnitude
     float forwardSpeed = 0.0f;  // m/s, projection onto the body +Z axis
@@ -85,7 +105,10 @@ struct VehicleTelemetry {
     float steerAngleDeg = 0.0f; // average front wheel angle, degrees
     float upDot = 1.0f;         // cosine of the angle between the body Y axis and vertical
     std::array<WheelTelemetry, kWheelCount> wheels;
+    EvTelemetry ev;
 };
+
+class ElectricVehicleController;
 
 // Four-wheeled vehicle based on Jolt VehicleConstraint + WheeledVehicleController; the drive layout comes from the
 // configuration (VehicleConfig::layout).
@@ -111,8 +134,13 @@ public:
     bool toggleLowRange();
     // Part-time layouts: 2H -> 4H -> 4L -> 2H. 2H <-> 4H also while moving (shift on the fly), 4L only near a stop.
     // Returns false (and changes nothing) for other layouts or when the speed is too high.
+    // Dual-motor layouts: V cycles the drive mode Normal <-> OffRoad (also while moving).
     bool cycleTransfer();
     bool setTransfer(TransferMode mode);
+    bool setEvDriveMode(EvDriveMode mode); // false for non-electric vehicles
+    EvDriveMode evDriveMode() const { return m_evMode; }
+    // Battery state of charge (electric only; R reset restores ElectricConfig::initialSoC).
+    void setStateOfCharge(float soc);
     static constexpr float kShiftSpeedLimit = 1.0f; // m/s
 
     // Driver aid switches (ABS, TC, lockers); take effect on the next tick.
@@ -148,6 +176,7 @@ private:
     void applySuspensionPerTick(); // compression / rebound damping, bump stops
     void applyAckermann(float steer);
     void applyDrag();
+    void prePhysicsElectric(const DriverCommand& cmd, float dt);
 
     PhysicsWorld& m_world;
     const SurfaceTable& m_surfaces;
@@ -156,6 +185,11 @@ private:
     JPH::Body* m_body = nullptr;
     JPH::Ref<JPH::VehicleConstraint> m_constraint;
     JPH::WheeledVehicleController* m_controller = nullptr;
+    ElectricVehicleController* m_electric = nullptr; // same object as m_controller for electric vehicles
+    ElectricDrive m_evDrive;
+    EvOutput m_evOut;
+    EvDriveMode m_evMode = EvDriveMode::Normal;
+    Battery m_battery;
     JPH::Ref<JPH::VehicleCollisionTester> m_tester;
     std::array<JPH::Ref<JPH::WheelSettingsWV>, kWheelCount> m_wheelSettings;
     // Written from CombineFriction (inside the physics step), read after the step.

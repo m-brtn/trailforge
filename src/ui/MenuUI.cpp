@@ -232,6 +232,7 @@ void MenuUI::drawLogo(float cx, float cy, float width, float alpha) {
 
 void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const MenuView& view) {
     m_rows.clear();
+    m_cards.clear();
     if (flow.screen() != Screen::Garage) {
         m_garageRows.clear();
         m_modalButtons.clear();
@@ -275,7 +276,8 @@ void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const Menu
         drawMenu(flow, settings, view, smooth(0.35f, 1.0f, flow.menuFade()));
         return;
     }
-    if (flow.page() != MenuPage::Controls) drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f); // diagrams need the room
+    // The Controls diagrams and the vehicle cards need the room.
+    if (flow.page() != MenuPage::Controls && flow.page() != MenuPage::Vehicle) drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f);
     drawMenu(flow, settings, view, 1.0f);
 }
 
@@ -298,7 +300,8 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     const float logoW = std::min(0.27f * W, 0.75f * H);
     const float logoBottom = 0.08f * H + logoW / m_logoAspect;
     const bool compact = page == MenuPage::Settings || controls;
-    float y = controls ? 0.05f * H : logoBottom + 0.05f * H;
+    const bool vehiclePage = page == MenuPage::Vehicle;
+    float y = controls || vehiclePage ? 0.05f * H : logoBottom + 0.05f * H;
 
     // Page title: thin rule, large spaced uppercase heading.
     if (const char* title = menuPageTitle(page); title[0]) {
@@ -346,6 +349,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         cy += rowH;
         if (controls && items[i] == MenuItem::DriveKeys) blockH[i] = kbBlock;
         if (controls && items[i] == MenuItem::PadGlyphs) blockH[i] = padBlock;
+        if (vehiclePage && items[i] == MenuItem::VehicleChoice) blockH[i] = vehicleBlockHeight(view);
         cy += blockH[i];
     }
     const float viewH = listBottom - listTop;
@@ -377,6 +381,10 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         m_controlsCallouts = int(m_callouts.size());
         m_controlsOverlaps = n;
     }
+    if (vehiclePage)
+        for (std::size_t i = 0; i < items.size(); ++i)
+            if (items[i] == MenuItem::VehicleChoice)
+                drawVehicleBlock(dl, x0 - 0.012f * W, rowY[i] + rowH, barW + 0.012f * W, flow.vehicleIndex(settings), view, alpha);
     // Highlight bar eased between rows: soft fill fading to the right, orange edge on the left.
     {
         const float f = std::clamp(m_selectAnim, 0.0f, float(items.size() - 1));
@@ -411,6 +419,11 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         Row row{item, x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
         if (menuAdjustable(item)) {
             std::string v = menuValue(item, settings);
+            if (item == MenuItem::VehicleChoice && view.vehicles && !view.vehicles->empty()) {
+                const int vi = std::clamp(flow.vehicleIndex(settings), 0, int(view.vehicles->size()) - 1);
+                v = (*view.vehicles)[std::size_t(vi)].name;
+                for (char& ch : v) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+            }
             if (item == MenuItem::PadGlyphs && settings.padGlyphs == int(PadGlyphSetting::Auto))
                 v += std::string(" (") + padGlyphsName(view.padGlyphs) + ")";
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.06f);
@@ -790,6 +803,67 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
     m_callouts.push_back({cx - edge - sw, oy + 0.1f * g, cx - edge, oy + 0.1f * g + lineH});
 }
 
+float MenuUI::vehicleBlockHeight(const MenuView& view) const {
+    const float H = ImGui::GetIO().DisplaySize.y;
+    const std::size_t specs = view.vehicles && !view.vehicles->empty() ? view.vehicles->front().specs.size() + 1 : 6;
+    return 0.012f * H + 0.075f * H + 0.02f * H + 0.075f * H + float(specs) * 0.032f * H + 0.02f * H;
+}
+
+void MenuUI::drawVehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha) {
+    if (!view.vehicles || view.vehicles->empty()) return;
+    const std::vector<VehicleCard>& cards = *view.vehicles;
+    const float H = ImGui::GetIO().DisplaySize.y;
+    selected = std::clamp(selected, 0, int(cards.size()) - 1);
+    // Card strip: name and drivetrain type; the selected card is lit with an orange edge.
+    y += 0.012f * H;
+    const float gap = 0.008f * H, cardH = 0.075f * H;
+    const float cardW = (w - gap * float(cards.size() - 1)) / float(cards.size());
+    for (std::size_t i = 0; i < cards.size(); ++i) {
+        const bool sel = int(i) == selected;
+        const ImVec2 a(x + float(i) * (cardW + gap), y), b(a.x + cardW, y + cardH);
+        dl->AddRectFilled(a, b, col(kDark, (sel ? 0.55f : 0.35f) * alpha), 4.0f);
+        dl->AddRect(a, b, col(kWhite, (sel ? 0.55f : 0.18f) * alpha), 4.0f, 0, 1.0f);
+        if (sel) dl->AddRectFilled(ImVec2(a.x, b.y - 3.0f), ImVec2(b.x, b.y), col(kOrange, alpha));
+        const float ns = 0.026f * H, ks = 0.017f * H;
+        std::string name = cards[i].name;
+        for (char& ch : name) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+        text(dl, m_heading, ns, ImVec2(a.x + 0.012f * H, a.y + 0.012f * H), col(kWhite, (sel ? 1.0f : 0.6f) * alpha),
+             name.c_str(), 0.06f);
+        const char* kind = cards[i].electric ? "ELECTRIC" : "GASOLINE";
+        text(dl, m_body, ks, ImVec2(a.x + 0.012f * H, a.y + 0.012f * H + ns * 1.1f),
+             col(cards[i].electric ? ImVec4(0.45f, 0.72f, 1.0f, 1.0f) : kOrange, (sel ? 0.95f : 0.55f) * alpha), kind, 0.25f);
+        m_cards.push_back({a.x, a.y, b.x, b.y});
+    }
+    y += cardH + 0.02f * H;
+    // Description and specs of the selected vehicle.
+    const VehicleCard& c = cards[std::size_t(selected)];
+    const float ds = 0.021f * H;
+    dl->AddText(orDefault(m_body), ds, ImVec2(x + 0.004f * H, y), col(kWhite, 0.78f * alpha), c.description.c_str(), nullptr,
+                w - 0.008f * H);
+    y += 0.075f * H;
+    const float ls = 0.019f * H, vs = 0.023f * H, rowH = 0.032f * H;
+    for (const VehicleSpec& sp : c.specs) {
+        text(dl, m_heading, ls, ImVec2(x + 0.004f * H, y + (vs - ls) * 0.6f), col(kOrange, 0.9f * alpha), sp.label.c_str(), 0.25f);
+        text(dl, m_body, vs, ImVec2(x + 0.17f * H, y), col(kWhite, 0.92f * alpha), sp.value.c_str(), 0.03f);
+        dl->AddRectFilled(ImVec2(x, y + rowH - 0.004f * H), ImVec2(x + w, y + rowH - 0.004f * H + 1.0f),
+                          col(kWhite, 0.08f * alpha));
+        y += rowH;
+    }
+}
+
+int MenuUI::vehicleCardHit(float x, float y) const {
+    for (std::size_t i = 0; i < m_cards.size(); ++i)
+        if (x >= m_cards[i].x0 && x < m_cards[i].x1 && y >= m_cards[i].y0 && y < m_cards[i].y1) return int(i);
+    return -1;
+}
+
+bool MenuUI::vehicleCardRect(int index, float& x0, float& y0, float& x1, float& y1) const {
+    if (index < 0 || index >= int(m_cards.size())) return false;
+    const Box& b = m_cards[std::size_t(index)];
+    x0 = b.x0, y0 = b.y0, x1 = b.x1, y1 = b.y1;
+    return true;
+}
+
 void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -1069,8 +1143,14 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         std::snprintf(line, sizeof(line), "%s%s%s", driveLayoutName(c.layout), c.layout == DriveLayout::PartTime ? "  " : "",
                       c.layout == DriveLayout::PartTime ? transferModeName(t.transfer) : "");
         row("DRIVETRAIN", line);
-        std::snprintf(line, sizeof(line), "%.0f N*m, final %.2f", double(c.tuning.engineMaxTorque), double(c.tuning.finalDrive));
-        row("ENGINE", line);
+        if (c.isElectric()) {
+            std::snprintf(line, sizeof(line), "%.0f / %.0f N*m, regen %.0f N*m", double(c.electric.motors[0].maxTorque),
+                          double(c.electric.motors[1].maxTorque), double(c.electric.motors[0].regenTorque));
+            row("MOTORS F / R", line);
+        } else {
+            std::snprintf(line, sizeof(line), "%.0f N*m, final %.2f", double(c.tuning.engineMaxTorque), double(c.tuning.finalDrive));
+            row("ENGINE", line);
+        }
         std::snprintf(line, sizeof(line), "%.0f / %.0f N*m per wheel", double(c.tuning.axles[0].brakeTorque),
                       double(c.tuning.axles[1].brakeTorque));
         row("BRAKES F / R", line);
@@ -1078,8 +1158,14 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
                       double(100.0f * t.wheels[1].compressionRatio), double(100.0f * t.wheels[2].compressionRatio),
                       double(100.0f * t.wheels[3].compressionRatio));
         row("COMPRESSION", line);
-        std::snprintf(line, sizeof(line), "%.0f rpm, %.1f km/h", double(t.engineRPM), double(std::abs(t.forwardSpeed) * 3.6f));
-        row("ENGINE NOW", line);
+        if (c.isElectric()) {
+            std::snprintf(line, sizeof(line), "%.0f rpm, %+.0f kW, SoC %.0f %%", double(std::max(t.ev.motorRPM[0], t.ev.motorRPM[1])),
+                          double(t.ev.motorPowerKW), double(100.0f * t.ev.soc));
+            row("MOTORS NOW", line);
+        } else {
+            std::snprintf(line, sizeof(line), "%.0f rpm, %.1f km/h", double(t.engineRPM), double(std::abs(t.forwardSpeed) * 3.6f));
+            row("ENGINE NOW", line);
+        }
     }
 
     // Hints.

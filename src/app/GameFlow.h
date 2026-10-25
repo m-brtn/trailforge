@@ -14,9 +14,9 @@ namespace tf {
 // closing it returns to the menu it came from.
 enum class Screen { Intro, MainMenu, Playing, Paused, Garage };
 
-// Menu pages. Start enters the game directly for now; level and vehicle selection pages will go between Main and
-// the StartGame command (push them from MenuItem::Start).
-enum class MenuPage { Main, Pause, Settings, Controls };
+// Menu pages. Start opens the vehicle page when the catalog has more than one vehicle (else it starts directly);
+// a level page would go between it and the StartGame command.
+enum class MenuPage { Main, Pause, Settings, Controls, Vehicle };
 
 enum class MenuItem {
     Start, Garage, Settings, Quit,               // main
@@ -26,10 +26,12 @@ enum class MenuItem {
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
     DriveKeys, PadGlyphs,                        // controls page
     Controls, Back,
+    VehicleChoice, Drive,                        // vehicle page
 };
 
 enum class MenuCommand {
-    None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed, OpenGarage, CloseGarage
+    None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed, OpenGarage, CloseGarage,
+    VehicleChanged // GameSettings::vehicle changed on the vehicle page
 };
 enum class MenuSound { None, Move, Confirm, Back, Adjust, Open, Close };
 
@@ -42,6 +44,8 @@ struct MenuInput {
     int hover = -1;      // row index under a moving mouse, -1 = none
     int click = -1;      // row index clicked
     int clickDir = 0;    // -1 / +1: a value arrow was clicked, 0: the row itself
+    int pick = -1;       // vehicle page: vehicle card clicked (catalog index)
+    int wheel = 0;       // vehicle page: mouse wheel steps (+ = previous vehicle, like scrolling up a list)
 };
 
 struct MenuResult {
@@ -85,6 +89,13 @@ public:
     void update(double dt);
     MenuResult handle(const MenuInput& in, GameSettings& settings);
 
+    // Vehicle catalog ids in display order (the vehicle page cycles through them).
+    void setVehicles(std::vector<std::string> ids) { m_vehicleIds = std::move(ids); }
+    const std::vector<std::string>& vehicles() const { return m_vehicleIds; }
+    // Catalog index of settings.vehicle; 0 (the default vehicle) when it is empty or unknown.
+    int vehicleIndex(const GameSettings& settings) const;
+    void openVehiclePage(); // from the start menu (scenario command; Start does it through the input)
+
     // Direct transitions (scenario commands and the application).
     void skipIntro();
     void startGame();
@@ -106,6 +117,7 @@ private:
     void setScreen(Screen s, MenuPage root);
     MenuResult activate(MenuItem item, GameSettings& settings, int dir);
     MenuResult goBack();
+    MenuResult pickVehicle(int index, GameSettings& settings);
 
     Screen m_screen;
     std::vector<PageState> m_stack;
@@ -113,6 +125,7 @@ private:
     double m_introTime = 0.0;
     double m_menuFadeLength = 0.0; // > 0 while the start menu fades in after the intro
     Screen m_garageReturn = Screen::MainMenu;
+    std::vector<std::string> m_vehicleIds;
 };
 
 const char* menuLabel(MenuItem item);

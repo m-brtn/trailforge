@@ -51,6 +51,7 @@ void settingsRoundtrip() {
     s.autoReverse = false;
     s.driveKeys = 1;
     s.padGlyphs = 2;
+    s.vehicle = "trailforge_ev";
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
     const std::string path = (dir / "settings.cfg").string();
@@ -78,16 +79,18 @@ void settingsRoundtrip() {
                                            "pad_glyphs = -3\n"
                                            "vsync = banana\n"
                                            "no equals sign\n"
-                                           "future_option = 1\n",
+                                           "future_option = 1\n"
+                                           "vehicle = ../../etc\n",
                                            &skipped);
     std::printf("    damaged file: quality %d music %.2f ui %.2f scale %.2f tc %d diff %d vsync %d, %d lines skipped\n",
                 odd.quality, double(odd.musicVolume), double(odd.uiVolume), double(odd.renderScale), odd.traction,
                 odd.diffLocks, odd.vsync, skipped);
     CHECK(odd.quality == 3 && odd.musicVolume == 1.0f && odd.uiVolume == 0.0f && odd.renderScale == 0.0f &&
               odd.traction == 2 && odd.diffLocks == 2 && odd.vsync == defaults.vsync && odd.driveKeys == 1 &&
-              odd.padGlyphs == 0,
+              odd.padGlyphs == 0 && odd.vehicle.empty(),
           "damaged values not clamped as expected");
-    CHECK(skipped == 3, "skipped lines %d (expected 3)", skipped);
+    CHECK(skipped == 4, "skipped lines %d (expected 4)", skipped);
+    CHECK(serializeSettings(defaults).find("vehicle") == std::string::npos, "no vehicle line without a choice");
     GameSettings untouched = s;
     CHECK(!loadSettingsFile((dir / "missing.ini").string(), untouched) && untouched == s,
           "a missing file must leave the settings alone");
@@ -228,6 +231,73 @@ void menuNavigation() {
     flow.select(MenuItem::Quit);
     r = flow.handle(key(&MenuInput::accept), settings);
     CHECK(r.command == MenuCommand::QuitGame, "quit");
+}
+
+// Vehicle page: Start opens it when there is more than one vehicle; left / right, the wheel and card clicks change
+// GameSettings::vehicle (VehicleChanged), accept / DRIVE / a click on the selected card start the game.
+void vehiclePage() {
+    GameSettings settings;
+    GameFlow flow(Screen::MainMenu);
+    flow.setVehicles({"trailforge_suv", "trailforge_ev"});
+    CHECK(flow.vehicleIndex(settings) == 0, "empty choice = the default (first) vehicle");
+    MenuResult r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(flow.page() == MenuPage::Vehicle && flow.current() == MenuItem::VehicleChoice && r.command == MenuCommand::None &&
+              flow.screen() == Screen::MainMenu,
+          "Start opens the vehicle page");
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::VehicleChanged && settings.vehicle == "trailforge_ev" && flow.vehicleIndex(settings) == 1,
+          "right selects the EV");
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::VehicleChanged && settings.vehicle == "trailforge_suv", "right wraps to the SUV");
+    MenuInput wheel;
+    wheel.wheel = -1;
+    r = flow.handle(wheel, settings);
+    CHECK(r.command == MenuCommand::VehicleChanged && settings.vehicle == "trailforge_ev", "wheel down: next vehicle");
+    MenuInput pick;
+    pick.pick = 0;
+    r = flow.handle(pick, settings);
+    CHECK(r.command == MenuCommand::VehicleChanged && settings.vehicle == "trailforge_suv" && flow.page() == MenuPage::Vehicle,
+          "a click on another card selects it");
+    r = flow.handle(key(&MenuInput::back), settings);
+    CHECK(flow.page() == MenuPage::Main && flow.current() == MenuItem::Start && settings.vehicle == "trailforge_suv",
+          "back keeps the choice");
+    flow.handle(key(&MenuInput::accept), settings);
+    r = flow.handle(pick, settings);
+    CHECK(r.command == MenuCommand::StartGame && flow.screen() == Screen::Playing, "a click on the selected card drives");
+    flow.toMainMenu();
+    flow.openVehiclePage();
+    flow.select(MenuItem::Drive);
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::StartGame && flow.screen() == Screen::Playing, "DRIVE starts the game");
+    flow.toMainMenu();
+    flow.openVehiclePage();
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::StartGame, "accept on the vehicle row starts the game");
+    GameFlow single(Screen::MainMenu);
+    single.setVehicles({"trailforge_suv"});
+    r = single.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::StartGame, "one vehicle: Start drives directly");
+    settings.vehicle = "gone_vehicle";
+    CHECK(flow.vehicleIndex(settings) == 0, "an unknown id falls back to the default vehicle");
+
+    // Card specs from the definitions.
+    std::vector<std::string> errors;
+    const std::vector<VehicleDefinition> catalog = loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors);
+    CHECK(catalog.size() >= 2 && catalog.front().id == kDefaultVehicleId, "catalog starts with the default vehicle");
+    for (const VehicleDefinition& d : catalog) {
+        std::printf("    %s:", d.id.c_str());
+        for (const VehicleSpec& sp : vehicleSpecs(d.config)) std::printf(" %s %s;", sp.label.c_str(), sp.value.c_str());
+        std::printf("\n");
+        if (d.config.isElectric()) {
+            CHECK(std::abs(peakPowerKW(d.config) - 0.001f * (d.config.electric.motors[0].maxPower +
+                                                             d.config.electric.motors[1].maxPower)) < 0.01f,
+                  "EV power = motor ratings");
+            CHECK(vehicleSpecs(d.config)[4].label == "BATTERY", "EV card shows the battery");
+        } else {
+            CHECK(peakPowerKW(d.config) > 100.0f && peakPowerKW(d.config) < 400.0f, "engine power %.0f kW",
+                  double(peakPowerKW(d.config)));
+        }
+    }
 }
 
 // The pause menu freezes the simulation: no ticks, the same body position and accumulator; resume continues.
@@ -411,6 +481,42 @@ void garageModel() {
     CHECK(std::abs(g.value(*findSetupParam("suspension.rideHeight")) - 0.12f) < 1e-6f, "ride height clamped to the kit");
     CHECK(!g.setKit("no_such_kit"), "unknown kit refused");
 
+    // Electric vehicle: no engine, gearbox, layout or center differential rows; motor and regen rows instead. A value
+    // of a parameter that does not apply (from a hand-edited file) is ignored with a warning.
+    {
+        const auto hasRow = [&](const char* key) {
+            for (const GarageRow& r : g.rows())
+                if (r.kind == GarageRowKind::Param && std::strcmp(r.param->key, key) == 0) return true;
+            return false;
+        };
+        CHECK(hasRow("engine.torqueScale") && !hasRow("motors.torqueScale"), "combustion rows on the test vehicle");
+        CHECK(g.selectRow(GarageRowKind::Param, "brakes.frontBias"), "cursor on a shared row");
+        CHECK(g.selectVehicle("trailforge_ev") && g.factoryActive(), "EV selected");
+        CHECK(g.rows()[std::size_t(g.cursor())].kind == GarageRowKind::Param &&
+                  std::strcmp(g.rows()[std::size_t(g.cursor())].param->key, "brakes.frontBias") == 0,
+              "cursor kept on the same row across vehicles");
+        for (const char* key : {"engine.torqueScale", "engine.revLimit", "gearbox.finalDrive", "drivetrain.layout",
+                                "drivetrain.centerDiff"})
+            CHECK(!hasRow(key), "EV shows %s", key);
+        for (const char* key : {"motors.torqueScale", "motors.regenScale", "regen.liftOffDecel",
+                                "drivetrain.offRoadFrontShare", "drivetrain.frontShare"})
+            CHECK(hasRow(key), "EV lacks %s", key);
+        const float rear = g.config().electric.motors[kRearAxle].maxTorque;
+        CHECK(g.setValue("motors.torqueScale", 0.8f) &&
+                  std::abs(g.config().electric.motors[kRearAxle].maxTorque - 0.8f * rear) < 1e-3f,
+              "motor torque scale");
+        CHECK(g.setValue("regen.liftOffDecel", 0.0f) && g.config().electric.liftOffDecel == 0.0f, "lift-off regen off");
+        CHECK(g.config().layout == DriveLayout::DualMotor, "layout stays dual motor");
+        VehicleSetup bad;
+        bad.name = "Hand edited";
+        bad.values["gearbox.finalDrive"] = 4.0f;
+        VehicleConfig out;
+        std::vector<std::string> warnings;
+        CHECK(buildSetupConfig(g.vehicle(), bad, out, warnings) && out == g.vehicle().config && warnings.size() == 1,
+              "inapplicable value ignored (%zu warnings)", warnings.size());
+        g.resetToFactory();
+    }
+
     // A running simulation: live values change the vehicle between ticks, rebuild values respawn it in place.
     g.selectVehicle("trailforge_suv");
     Simulation sim{[&] {
@@ -558,6 +664,7 @@ int main(int argc, char** argv) {
         {"menu_navigation", menuNavigation},
         {"pause_freezes_ticks", pauseFreezesTicks},
         {"garage_model", garageModel},
+        {"vehicle_page", vehiclePage},
         {"controls_layout", controlsLayout},
         {"pad_glyph_detect", padGlyphDetect},
         {"callout_spread", calloutSpread},

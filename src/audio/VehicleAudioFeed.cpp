@@ -38,6 +38,16 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     for (const auto& w : t.wheels) wheelOmega += 0.25f * w.angularVelocity;
     const float finalDrive = cfg.tuning.finalDrive * (t.lowRange ? cfg.lowRangeRatio : 1.0f);
     f.driveshaftHz = std::abs(wheelOmega) * finalDrive / 6.2831853f;
+    f.electric = cfg.isElectric();
+    if (f.electric) {
+        f.driveshaftHz = 0.0f; // no propeller shaft; the reduction gears are part of the motor tones
+        for (int m = 0; m < 2; ++m) {
+            MotorAudio& ma = f.motors[std::size_t(m)];
+            ma.rpm = t.ev.motorRPM[std::size_t(m)];
+            ma.torque = t.ev.motorTorque[std::size_t(m)];
+            ma.maxTorque = cfg.electric.motors[std::size_t(m)].maxTorque;
+        }
+    }
     f.vehicleValid = true;
 
     const WaterInfo water = TestTrack::water();
@@ -82,10 +92,12 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     if (newSpawn) {
         m_seen = true;
         m_spawnCount = sim.spawnCount();
-        AudioEvent e;
-        e.type = AudioEventType::EngineStart;
-        e.position = f.vehiclePos + f.vehicleForward * 1.6f;
-        m_events.push_back(e);
+        if (!f.electric) {
+            AudioEvent e;
+            e.type = AudioEventType::EngineStart;
+            e.position = f.vehiclePos + f.vehicleForward * 1.6f;
+            m_events.push_back(e);
+        }
         m_gear = t.gear;
         for (int i = 0; i < kAudioWheels; ++i) {
             m_prevLoad[std::size_t(i)] = f.wheels[std::size_t(i)].load;
@@ -95,8 +107,8 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         return;
     }
 
-    // Gear engaged (shifts into neutral while braking to a stop are silent).
-    if (t.gear != m_gear && t.gear != 0 && m_time - m_lastShift > 0.25) {
+    // Gear engaged (shifts into neutral while braking to a stop are silent; an electric drive has no gears).
+    if (!f.electric && t.gear != m_gear && t.gear != 0 && m_time - m_lastShift > 0.25) {
         AudioEvent e;
         e.type = AudioEventType::GearShift;
         e.intensity = m_gear == 0 ? 0.6f : 1.0f;

@@ -1,0 +1,144 @@
+# Electric vehicle check (vehicle page, driving, regen, state of charge, drive modes):
+#   ./build/release/trailforge --script tools/scenarios/ev_check.txt --no-audio
+# Captures /tmp/trailforge_ev_*.png. Exit code 1 on FAIL. The simulation lags the script clock for a moment after
+# a capture, so timed steps follow a short wait.
+
+# ---------------------------------------------------------------- vehicle page: keyboard, mouse wheel, card click
+menu main
+wait 0.5
+expect vehicle_index == 0
+menu select start
+tap Return
+wait 0.4
+expect menu_page == 4
+expect vehicle_cards == 2
+expect vehicle_choice == 0
+tap Right
+wait 1.0
+expect vehicle_choice == 1
+expect vehicle_index == 1               # the preview is the live vehicle
+expect electric == 1
+expect mass > 2600
+capture /tmp/trailforge_ev_01_vehicle_page.png
+wait 0.3
+wheel 1                                 # wheel up = previous vehicle
+wait 0.8
+expect vehicle_choice == 0
+expect electric == 0
+wheel -1
+wait 0.8
+expect vehicle_choice == 1
+expect electric == 1
+click vehicle_card:0
+wait 0.8
+expect vehicle_choice == 0
+click vehicle_card:1
+wait 0.8
+expect vehicle_choice == 1
+expect menu_page == 4
+click vehicle_card:1                    # clicking the selected card drives off
+wait 0.5
+expect menu_screen == 2
+expect electric == 1
+set auto_reverse 0                      # classic mapping (starting the game applies the settings)
+
+# ---------------------------------------------------------------- skid strip: launch, lift-off regen, blended braking
+teleport 9
+wait 1.5
+pedal brake 1
+until speed_kmh < 0.1 5
+wait 0.5
+pedal brake 0
+soc 0.80
+wait 0.2
+expect soc > 0.799
+expect ev_mode == 0
+expect ev_front_share < 0.45            # road split (0.40 front)
+mark soc
+mark energy_out_kwh
+log ev_launch
+pedal throttle 1
+wait 0.5
+expect motor_kw > 150                   # both motors pulling
+expect motor_nm_f > 100
+expect motor_nm_r > 100
+expect battery_kw > motor_kw            # drive losses: the pack supplies more than the motors deliver
+wait 1.5
+expect fwd_kmh > 45
+expect d_soc < 0
+expect d_energy_out_kwh > 0.05
+capture /tmp/trailforge_ev_02_launch.png
+wait 0.3
+pedal throttle 0
+wait 0.6
+log ev_liftoff
+expect regen == 1                       # lift-off regen
+expect motor_kw < -5
+expect motor_nm_r < 0
+mark energy_in_kwh
+pedal brake 0.3
+wait 0.6
+expect regen == 1                       # light pedal: regen before the friction brakes
+expect motor_kw < -40
+capture /tmp/trailforge_ev_03_regen.png
+wait 0.3
+until speed_kmh < 0.5 12
+pedal brake 0
+expect d_energy_in_kwh > 0.01
+expect soc < 0.80
+
+# ---------------------------------------------------------------- drive mode, low range message, direction
+tap V
+wait 0.3
+expect ev_mode == 1
+expect ev_front_share > 0.45            # off-road split (0.50 front)
+tap L                                   # no low range on the EV (message only)
+wait 0.3
+expect ev_mode == 1
+tap V
+wait 0.3
+expect ev_mode == 0
+tap Q
+wait 0.3
+expect direction == 1                   # reverse
+pedal throttle 0.4
+wait 1.5
+expect fwd_kmh < -3
+expect motor_nm_r < 0                   # reverse drive torque
+pedal throttle 0
+pedal brake 0.5
+until speed_kmh < 0.5 6
+pedal brake 0
+tap Q
+wait 0.3
+expect direction == 0
+
+# ---------------------------------------------------------------- empty battery: no drive torque
+soc 0.0
+wait 0.2
+pedal throttle 1
+wait 1.0
+expect motor_kw < 1
+expect fwd_kmh < 1
+pedal throttle 0
+soc 0.8
+wait 0.2
+
+# ---------------------------------------------------------------- off-road: mud bath with the off-road split
+teleport 12
+wait 1.5
+tap V
+wait 0.3
+expect ev_mode == 1
+down W
+wait 3.0
+expect fwd_kmh > 3
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+camera vehicle three_quarter 8 45
+wait 0.4
+capture /tmp/trailforge_ev_04_mud.png
+camera follow
+quit

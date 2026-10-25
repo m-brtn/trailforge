@@ -22,6 +22,9 @@ constexpr float kStarterGain = 0.65f;
 // wheels add in power), comparable to one squeal loop voice.
 constexpr float kScrubLevel = 0.6f;
 constexpr float kPinionTeeth = 10.0f; // whine = propeller shaft speed x pinion teeth
+// Road hum at roadGain 1 and full hum: band noise (70..450 Hz) of RMS ~0.03 per wheel.
+constexpr float kRoadLevel = 0.9f;
+constexpr float kRoadLowHz = 70.0f, kRoadHighHz = 450.0f;
 
 float smoothstep(float a, float b, float x) {
     const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
@@ -72,6 +75,9 @@ AudioMixer::AudioMixer(const SoundBank& bank, int sampleRate, std::uint32_t seed
     loopVoice(m_night, SoundId::AmbienceNightLoop, Bus::Ambience, false);
     loopVoice(m_menu, SoundId::UiMenuAmbienceLoop, Bus::Ui, false);
     m_day.positional = m_night.positional = m_menu.positional = false;
+    for (std::size_t i = 0; i < m_road.size(); ++i) m_road[i].noise = 0x85EBCA6Bu * std::uint32_t(i + 1);
+    m_roadHp = std::exp(-6.2831853f * kRoadLowHz / float(m_rate));
+    m_roadLp = 1.0f - std::exp(-6.2831853f * kRoadHighHz / float(m_rate));
 }
 
 float AudioMixer::rand01() {
@@ -223,6 +229,7 @@ void AudioMixer::controlUpdate(float dt) {
     if (f.vehicleValid && m_startElapsed < 1e8)
         fadeTarget = m_starterHandover ? 1.0f
                                        : smoothstep(kStarterFadeStart, kStarterFadeEnd, float(m_startElapsed) * m_pitch);
+    if (f.electric) fadeTarget = 0.0f;
     m_engineFade = approach(m_engineFade, fadeTarget, m_starterHandover ? 0.06f : 0.05f, dt);
     if (m_starter) m_starter->gain = kStarterGain * std::sqrt(std::max(0.0f, 1.0f - m_engineFade * m_engineFade));
     const AudioVec3 exhaust = f.vehiclePos - f.vehicleForward * 2.3f - f.vehicleUp * 0.35f - f.vehicleLeft * 0.45f;
@@ -256,6 +263,32 @@ void AudioMixer::controlUpdate(float dt) {
         m_whineTr = g.r * m_whineGain * bus;
     }
     m_stats.whineHz = m_whineHz;
+
+    // Electric drive: motor tones placed at each axle (front motor ahead of the body centre, rear behind).
+    m_evFade = approach(m_evFade, f.electric && f.vehicleValid ? 1.0f : 0.0f, 0.1f, dt);
+    {
+        const float bus = m_bus[std::size_t(Bus::Engine)] * m_master * m_gameplay;
+        float power = 0.0f, inverter = 0.0f, mainHz = 0.0f;
+        for (int m = 0; m < 2; ++m) {
+            const EvTones tones = evMotorTones(f.motors[std::size_t(m)], f.speed, m_evSound);
+            const AudioVec3 pos = f.vehiclePos + f.vehicleForward * (m == 0 ? 1.35f : -1.35f) - f.vehicleUp * 0.25f;
+            const StereoGain g = place(pos);
+            for (int k = 0; k < kEvTones; ++k) {
+                EvOsc& o = m_ev[std::size_t(m)][std::size_t(k)];
+                o.hz = o.hz <= 0.0f ? tones.hz[std::size_t(k)] : approach(o.hz, tones.hz[std::size_t(k)], 0.03f, dt);
+                if (k == kEvTones - 1) o.sideHz = o.hz + m_ev[std::size_t(m)][0].hz; // carrier + 2 x electrical frequency
+                const float gain = tones.gain[std::size_t(k)] * s.motor * m_evFade;
+                o.tl = g.l * gain * bus;
+                o.tr = g.r * gain * bus;
+                power += gain * gain;
+                if (k == kEvTones - 1) inverter += gain * gain;
+            }
+            mainHz = std::max(mainHz, m_ev[std::size_t(m)][0].hz);
+        }
+        m_stats.motorHz = f.electric ? mainHz : 0.0f;
+        m_stats.motorLevel = std::sqrt(power);
+        m_stats.inverterLevel = std::sqrt(inverter);
+    }
 
     // ---- Tires
     const TireLayerMix tm = tireLayerMix(f.wheels, f.referenceLoad);
@@ -343,6 +376,23 @@ void AudioMixer::controlUpdate(float dt) {
         scrubPower += scrub * scrub;
     }
     m_stats.scrub = std::sqrt(0.25f * scrubPower);
+    {
+        // Rolling road hum (quiet vehicles): follows each wheel's rolling speed on hard ground.
+        const float bus = m_bus[std::size_t(Bus::Tires)] * m_master * m_gameplay;
+        float roadPower = 0.0f;
+        for (int i = 0; i < kAudioWheels; ++i) {
+            RoadHum& h = m_road[std::size_t(i)];
+            const WheelAudio& wa = f.wheels[std::size_t(i)];
+            const float target = f.vehicleValid ? ts.roadGain * roadHum(wa, f.referenceLoad) : 0.0f;
+            h.gain = approach(h.gain, target, 0.08f, dt);
+            h.hz = std::min(wa.rollSpeed / std::max(ts.treadPitch, 0.01f), 600.0f);
+            const StereoGain pan = place(wa.position);
+            h.tl = pan.l * kRoadLevel * h.gain * bus;
+            h.tr = pan.r * kRoadLevel * h.gain * bus;
+            roadPower += h.gain * h.gain;
+        }
+        m_stats.road = std::sqrt(0.25f * roadPower);
+    }
     m_tireGain[std::size_t(TireLayer::Skid)] = std::sqrt(0.25f * skidPower);
     m_stats.skid = m_tireGain[0];
     m_stats.gravel = m_tireGain[1];
@@ -481,6 +531,69 @@ void AudioMixer::mixScrub(float* acc, int frames) {
     }
 }
 
+void AudioMixer::mixElectric(float* acc, int frames) {
+    const float invN = 1.0f / float(frames);
+    constexpr double kTwoPiD = 6.283185307179586;
+    for (auto& motor : m_ev) {
+        for (std::size_t k = 0; k < motor.size(); ++k) {
+            EvOsc& o = motor[k];
+            if (o.tl < 1e-7f && o.tr < 1e-7f && o.l < 1e-7f && o.r < 1e-7f) {
+                o.l = o.r = 0.0f;
+                continue;
+            }
+            const bool inverter = k == motor.size() - 1;
+            const double inc = double(o.hz) / double(m_rate) * kTwoPiD;
+            const double sideInc = double(o.sideHz) / double(m_rate) * kTwoPiD;
+            for (int i = 0; i < frames; ++i) {
+                const float t = float(i) * invN;
+                float x = float(std::sin(o.phase));
+                if (inverter) {
+                    x = 0.7f * x + 0.5f * float(std::sin(o.sidePhase));
+                    o.sidePhase += sideInc;
+                    if (o.sidePhase > kTwoPiD) o.sidePhase -= kTwoPiD;
+                }
+                acc[2 * i] += x * (o.l + (o.tl - o.l) * t);
+                acc[2 * i + 1] += x * (o.r + (o.tr - o.r) * t);
+                o.phase += inc;
+                if (o.phase > kTwoPiD) o.phase -= kTwoPiD;
+            }
+            o.l = o.tl;
+            o.r = o.tr;
+        }
+    }
+}
+
+void AudioMixer::mixRoad(float* acc, int frames) {
+    const float invN = 1.0f / float(frames);
+    for (RoadHum& h : m_road) {
+        if (h.tl < 1e-6f && h.tr < 1e-6f && h.l < 1e-6f && h.r < 1e-6f) {
+            h.l = h.r = 0.0f;
+            continue;
+        }
+        const float inc = 6.2831853f * h.hz / float(m_rate);
+        for (int i = 0; i < frames; ++i) {
+            h.noise ^= h.noise << 13;
+            h.noise ^= h.noise >> 17;
+            h.noise ^= h.noise << 5;
+            const float x = float(h.noise) * (2.0f / 4294967296.0f) - 1.0f;
+            h.hpOut = m_roadHp * (h.hpOut + x - h.hpIn);
+            h.hpIn = x;
+            h.lp1 += m_roadLp * (h.hpOut - h.lp1);
+            h.lp2 += m_roadLp * (h.lp1 - h.lp2);
+            // Tread blocks rolling through the patch: a shallow modulation (rolling, not sliding).
+            const float block = 0.75f + 0.25f * std::sin(h.phase);
+            h.phase += inc;
+            if (h.phase > 6.2831853f) h.phase -= 6.2831853f;
+            const float y = h.lp2 * block;
+            const float t = float(i) * invN;
+            acc[2 * i] += y * (h.l + (h.tl - h.l) * t);
+            acc[2 * i + 1] += y * (h.r + (h.tr - h.r) * t);
+        }
+        h.l = h.tl;
+        h.r = h.tr;
+    }
+}
+
 void AudioMixer::renderBlock(float* out, int frames) {
     const float dt = float(frames) / float(m_rate);
     controlUpdate(dt);
@@ -523,7 +636,11 @@ void AudioMixer::renderBlock(float* out, int frames) {
     }
     m_whineL = m_whineTl;
     m_whineR = m_whineTr;
-    if (!frozen) mixScrub(acc, frames);
+    if (!frozen) {
+        mixScrub(acc, frames);
+        mixElectric(acc, frames);
+        mixRoad(acc, frames);
+    }
 
     // Look-ahead limiter: the output is delayed by kLookahead frames; the gain follows the largest peak inside the
     // window, reaching ~99 % of the needed reduction before the peak leaves the delay line.

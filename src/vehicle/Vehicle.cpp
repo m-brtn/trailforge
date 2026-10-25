@@ -21,6 +21,108 @@ constexpr float kRadToDeg = 180.0f / 3.14159265358979f;
 
 } // namespace
 
+// Dual-motor electric drivetrain on Jolt's wheeled vehicle. Jolt's controller couples one engine through a clutch and
+// a gearbox to all differentials; here each axle differential instead has its own motor with a fixed reduction and
+// no clutch. PostCollide replaces only the engine / clutch part of Jolt's step: the motor shaft torque, times the
+// reduction, is split by the axle differential (Jolt's open / limited-slip torque ratio) and integrated into the
+// wheel angular velocities, exactly where Jolt adds the clutch torque. The tire contact solve, the suspension and
+// the friction brakes are Jolt's. The rotor inertia is reflected into the wheel inertia (reduction^2 x rotor,
+// half per wheel).
+class ElectricVehicleController final : public JPH::WheeledVehicleController {
+public:
+    ElectricVehicleController(const JPH::WheeledVehicleControllerSettings& s, JPH::VehicleConstraint& c)
+        : WheeledVehicleController(s, c) {}
+
+    // Set before the step (Vehicle::prePhysics).
+    const ElectricConfig* config = nullptr;
+    Battery* battery = nullptr;
+    std::array<float, 2> driveTorque{}; // N*m at the shaft, >= 0, toward driveSign
+    std::array<float, 2> regenTorque{}; // N*m at the shaft, >= 0, against the rotation
+    float driveSign = 1.0f;
+
+    // Results of the last substep.
+    std::array<float, 2> motorOmega{};  // rad/s
+    std::array<float, 2> motorTorque{}; // N*m applied at the shaft, signed (+ = forward rotation)
+    std::array<float, 2> shaftPower{};  // W, + drive, - regen
+    float batteryPower = 0.0f;          // W
+    double energyOutJ = 0.0, energyInJ = 0.0;
+
+protected:
+    void PostCollide(float dt, JPH::PhysicsSystem&) override {
+        using namespace JPH;
+        Wheels& wheels = mConstraint.GetWheels();
+        for (uint i = 0, n = uint(wheels.size()); i < n; ++i) static_cast<WheelWV*>(wheels[i])->Update(i, dt, mConstraint);
+
+        float totalPower = 0.0f;
+        for (int a = 0; a < 2 && a < int(mDifferentials.size()); ++a) {
+            const VehicleDifferentialSettings& d = mDifferentials[std::size_t(a)];
+            const float reduction = config->motors[std::size_t(a)].reduction;
+            if (d.mLeftWheel < 0 || d.mRightWheel < 0) continue;
+            auto* wl = static_cast<WheelWV*>(wheels[uint(d.mLeftWheel)]);
+            auto* wr = static_cast<WheelWV*>(wheels[uint(d.mRightWheel)]);
+            const float carrier = 0.5f * (wl->GetAngularVelocity() + wr->GetAngularVelocity());
+            motorOmega[std::size_t(a)] = carrier * reduction;
+            float shaft = driveTorque[std::size_t(a)] * driveSign;
+            const bool regen = shaft == 0.0f && regenTorque[std::size_t(a)] > 0.0f && std::abs(carrier) > 0.05f;
+            if (regen) shaft = -Sign(carrier) * regenTorque[std::size_t(a)];
+            float ratioL = 0.5f, ratioR = 0.5f;
+            d.CalculateTorqueRatio(wl->GetAngularVelocity(), wr->GetAngularVelocity(), ratioL, ratioR);
+            float power = 0.0f, applied = 0.0f;
+            WheelWV* sides[2] = {wl, wr};
+            const float ratios[2] = {ratioL, ratioR};
+            for (int k = 0; k < 2; ++k) {
+                WheelWV* w = sides[k];
+                const float before = w->GetAngularVelocity();
+                const float torque = shaft * reduction * ratios[k];
+                float after = before + torque * dt / w->GetSettings()->mInertia;
+                // Regen slows a wheel down to rest, never through zero.
+                if (regen && after * before < 0.0f) after = 0.0f;
+                w->SetAngularVelocity(after);
+                const float wheelTorque = (after - before) * w->GetSettings()->mInertia / dt;
+                power += wheelTorque * before;
+                applied += wheelTorque;
+            }
+            motorTorque[std::size_t(a)] = applied / reduction;
+            shaftPower[std::size_t(a)] = power;
+            totalPower += power;
+        }
+        batteryPower = battery->step(*config, totalPower, dt);
+        if (batteryPower > 0.0f) energyOutJ += double(batteryPower) * dt;
+        else energyInJ -= double(batteryPower) * dt;
+
+        // Friction brakes: as in WheeledVehicleController::PostCollide.
+        for (Wheel* base : wheels) {
+            auto* w = static_cast<WheelWV*>(base);
+            const WheelSettingsWV* s = w->GetSettings();
+            const float brake = mBrakeInput * s->mMaxBrakeTorque + mHandBrakeInput * s->mMaxHandBrakeTorque;
+            if (brake > 0.0f) {
+                const float toLock = std::abs(w->GetAngularVelocity()) * s->mInertia / dt;
+                if (brake > toLock) {
+                    w->SetAngularVelocity(0.0f);
+                    w->mBrakeImpulse = (brake - toLock) * dt / s->mRadius;
+                } else {
+                    w->ApplyTorque(-Sign(w->GetAngularVelocity()) * brake, dt);
+                    w->mBrakeImpulse = 0.0f;
+                }
+            } else {
+                w->mBrakeImpulse = 0.0f;
+            }
+        }
+        mPreviousDeltaTime = dt;
+    }
+};
+
+namespace {
+
+class ElectricControllerSettings final : public JPH::WheeledVehicleControllerSettings {
+public:
+    JPH::VehicleController* ConstructController(JPH::VehicleConstraint& c) const override {
+        return new ElectricVehicleController(*this, c);
+    }
+};
+
+} // namespace
+
 const char* driveLayoutName(DriveLayout l) {
     switch (l) {
     case DriveLayout::Rwd: return "RWD";
@@ -28,9 +130,12 @@ const char* driveLayoutName(DriveLayout l) {
     case DriveLayout::Awd: return "AWD";
     case DriveLayout::PartTime: return "PART-TIME 4WD";
     case DriveLayout::OnDemand: return "ON-DEMAND AWD";
+    case DriveLayout::DualMotor: return "DUAL-MOTOR AWD";
     }
     return "";
 }
+
+const char* evDriveModeName(EvDriveMode m) { return m == EvDriveMode::OffRoad ? "OFF-ROAD" : "NORMAL"; }
 
 const char* transferModeName(TransferMode m) {
     switch (m) {
@@ -126,8 +231,11 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
 
     // ---- Engine, gearbox, differentials. Both axle differentials always exist; applyDifferentials disconnects an
     // undriven axle (wheel indices -1) and sets the torque split of the layout.
-    if (c.engineType != EngineType::Combustion) throw std::runtime_error("Vehicle: only combustion engines are simulated");
-    auto* cs = new WheeledVehicleControllerSettings;
+    // Electric: the engine and gearbox settings below stay valid for Jolt but are not used (the controller's
+    // PostCollide drives the axles with the motors).
+    if (c.isElectric() != (c.layout == DriveLayout::DualMotor))
+        throw std::runtime_error("Vehicle: the dual-motor layout and an electric power unit go together");
+    auto* cs = c.isElectric() ? new ElectricControllerSettings : new WheeledVehicleControllerSettings;
     vs.mController = cs;
     cs->mEngine.mMaxTorque = c.tuning.engineMaxTorque;
     cs->mEngine.mMinRPM = c.engineMinRPM;
@@ -157,8 +265,26 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     }
     m_transfer = TransferMode::TwoHigh;
 
+    if (c.isElectric()) {
+        // Rotor inertia seen at the wheels through the reduction, shared by the two wheels of the axle. Jolt's wheel
+        // angular damping removes a fraction of the angular velocity per second, i.e. a torque proportional to the
+        // inertia; it is scaled down so the damping torque stays that of the wheel alone.
+        for (int i = 0; i < kWheelCount; ++i) {
+            const MotorConfig& m = c.electric.motors[i < 2 ? kFrontAxle : kRearAxle];
+            const float wheel = m_wheelSettings[i]->mInertia;
+            m_wheelSettings[i]->mInertia += 0.5f * m.rotorInertia * m.reduction * m.reduction;
+            m_wheelSettings[i]->mAngularDamping *= wheel / m_wheelSettings[i]->mInertia;
+        }
+    }
+
     m_constraint = new VehicleConstraint(*m_body, vs);
     m_controller = static_cast<WheeledVehicleController*>(m_constraint->GetController());
+    if (c.isElectric()) {
+        m_electric = static_cast<ElectricVehicleController*>(m_controller);
+        m_battery.init(c.electric);
+        m_electric->config = &m_config.electric;
+        m_electric->battery = &m_battery;
+    }
 
     // Cylinder shape cast for the wheel (available in Jolt 5.6).
     m_tester = new VehicleCollisionTesterCastCylinder(Layers::Moving, 0.1f);
@@ -392,6 +518,9 @@ void Vehicle::applyDifferentials() {
         break;
     case DriveLayout::Awd:
     case DriveLayout::OnDemand: break;
+    case DriveLayout::DualMotor:
+        frontShare = m_evMode == EvDriveMode::OffRoad ? m_config.electric.offRoadFrontShare : t.frontTorqueShare;
+        break;
     }
     if (!front) frontShare = 0.0f;
     if (!rear) frontShare = 1.0f;
@@ -415,6 +544,22 @@ void Vehicle::applyDifferentials() {
     m_telemetry.frontTorqueShare = frontShare;
     m_telemetry.layout = m_config.layout;
     m_telemetry.transfer = m_transfer;
+    m_telemetry.ev.electric = m_electric != nullptr;
+    m_telemetry.ev.mode = m_evMode;
+    m_telemetry.ev.frontShare = frontShare;
+}
+
+bool Vehicle::setEvDriveMode(EvDriveMode mode) {
+    if (m_electric == nullptr) return false;
+    m_evMode = mode;
+    applyDifferentials();
+    return true;
+}
+
+void Vehicle::setStateOfCharge(float soc) {
+    if (m_electric == nullptr) return;
+    m_battery.energyJ = m_battery.capacityJ * double(std::clamp(soc, 0.0f, 1.0f));
+    m_telemetry.ev.soc = m_battery.soc();
 }
 
 void Vehicle::setAidControls(const AidControls& controls) {
@@ -432,6 +577,7 @@ bool Vehicle::toggleDirection() {
 }
 
 bool Vehicle::toggleLowRange() {
+    if (m_electric != nullptr) return false; // single fixed reduction, no low range
     if (m_config.layout == DriveLayout::PartTime)
         return setTransfer(m_transfer == TransferMode::FourLow ? TransferMode::FourHigh : TransferMode::FourLow);
     if (std::abs(m_telemetry.forwardSpeed) > kShiftSpeedLimit) return false;
@@ -442,6 +588,8 @@ bool Vehicle::toggleLowRange() {
 }
 
 bool Vehicle::cycleTransfer() {
+    if (m_electric != nullptr)
+        return setEvDriveMode(m_evMode == EvDriveMode::Normal ? EvDriveMode::OffRoad : EvDriveMode::Normal);
     if (m_config.layout != DriveLayout::PartTime) return false;
     const TransferMode next = m_transfer == TransferMode::TwoHigh    ? TransferMode::FourHigh
                               : m_transfer == TransferMode::FourHigh ? TransferMode::FourLow
@@ -460,8 +608,90 @@ bool Vehicle::setTransfer(TransferMode mode) {
     return true;
 }
 
+// Electric: the motor commands (drive split, per-axle TC, regen blend) come from ElectricDrive; the friction brakes
+// keep ABS and the TC brake of DrivingAids, with the pedal torque reduced by what regen already brakes.
+void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
+    const VehicleTuning& vt = m_config.tuning;
+    const DrivingAidTuning& at = vt.aids;
+    const float driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
+    EvInput ev;
+    ev.throttle = cmd.throttle;
+    ev.brake = cmd.brake;
+    ev.driveSign = driveSign;
+    ev.speed = std::abs(m_telemetry.forwardSpeed);
+    ev.mass = m_config.mass;
+    ev.soc = m_battery.soc();
+    ev.frontShare = m_telemetry.ev.frontShare;
+    ev.traction = m_controls.traction != TractionMode::Off;
+    const bool offRoadTc = m_controls.traction == TractionMode::OffRoad;
+    ev.tcSlipThreshold = offRoadTc ? at.tcOffRoadSlipThreshold : at.tcSlipThreshold;
+    ev.tcMinFactor = offRoadTc ? at.tcOffRoadMinThrottle : at.tcMinThrottle;
+    float groundSum = 0.0f;
+    int inContact = 0;
+    for (int a = 0; a < 2; ++a) {
+        EvAxleState& s = ev.axles[std::size_t(a)];
+        s.motorOmega = m_electric->motorOmega[std::size_t(a)];
+        s.wheelRadius = m_config.axles[std::size_t(a)].wheelRadius;
+        s.frictionBrakeTorque = vt.axles[std::size_t(a)].brakeTorque;
+        float minSlip = 1e9f;
+        for (int k = 0; k < 2; ++k) {
+            const int i = 2 * a + k;
+            const WheelTelemetry& w = m_telemetry.wheels[std::size_t(i)];
+            if (w.contact) {
+                minSlip = std::min(minSlip, m_aidOut.driveSlip[std::size_t(i)]);
+                groundSum += w.groundSpeed;
+                ++inContact;
+            }
+            const float v = std::abs(w.groundSpeed);
+            if (w.contact && v > at.absMinSpeed) {
+                const float rolling = w.groundSpeed >= 0.0f ? w.rollingSpeed : -w.rollingSpeed;
+                s.brakeSlip = std::max(s.brakeSlip, (v - rolling) / v);
+            }
+            if (m_aidOut.absPressure[std::size_t(i)] < 0.999f) s.absModulating = true;
+        }
+        s.driveSlip = minSlip > 1e8f ? 0.0f : minSlip;
+    }
+    ev.rollingBack = inContact > 0 && driveSign * groundSum / float(inContact) < -at.tcRollbackSpeed;
+    ev.dt = dt;
+    m_evOut = m_evDrive.update(m_config.electric, at, ev);
+    m_electric->driveTorque = m_evOut.driveTorque;
+    m_electric->regenTorque = m_evOut.regenTorque;
+    m_electric->driveSign = driveSign;
+
+    AidInput in;
+    for (int i = 0; i < kWheelCount; ++i) {
+        const WheelTelemetry& w = m_telemetry.wheels[i];
+        const int axle = i < 2 ? kFrontAxle : kRearAxle;
+        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed};
+        in.maxBrakeTorque[i] = vt.axles[axle].brakeTorque * m_evOut.frictionScale[std::size_t(axle)];
+        in.driven[i] = true;
+    }
+    in.throttle = cmd.throttle;
+    in.brake = cmd.brake;
+    in.driveSign = driveSign;
+    in.dt = dt;
+    m_aidOut = m_aids.update(at, m_controls, in);
+    // The motors replace the single throttle: no global throttle cut, the per-axle factors act instead.
+    m_aidOut.throttle = cmd.throttle;
+    m_aidOut.throttleFactor = std::min(m_evOut.tcFactor[0], m_evOut.tcFactor[1]);
+    m_aidOut.tcActive = m_aidOut.tcActive || m_evOut.tcActive;
+    float maxTorque = 0.0f;
+    for (int i = 0; i < kWheelCount; ++i) maxTorque = std::max(maxTorque, m_aidOut.brakeTorque[i]);
+    for (int i = 0; i < kWheelCount; ++i) m_wheelSettings[i]->mMaxBrakeTorque = m_aidOut.brakeTorque[i];
+    m_telemetry.revLimited = false;
+
+    applySuspensionPerTick();
+    applyAckermann(cmd.steer);
+    applyDrag();
+    m_controller->SetDriverInput(driveSign * cmd.throttle, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);
+}
+
 void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     m_command = cmd;
+    if (m_electric != nullptr) {
+        prePhysicsElectric(cmd, dt);
+        return;
+    }
     // Jolt's automatic keeps the clutch engaged in any gear, and engine rpm never drops below
     // the minimum. At idle the engine drags the wheels through the clutch with torque clutchStrength*dw
     // (up to ~840 N*m at the engine shaft), which after the gear ratios exceeds the brake torque:
@@ -555,6 +785,31 @@ void Vehicle::postPhysics(float dt) {
     t.tcActive = m_aidOut.tcActive;
     t.throttleFactor = m_aidOut.throttleFactor;
     t.engineThrottle = m_aidOut.throttle;
+    if (m_electric != nullptr) {
+        EvTelemetry& e = t.ev;
+        e.soc = m_battery.soc();
+        e.batteryPowerKW = m_electric->batteryPower * 1e-3f;
+        e.motorPowerKW = 0.0f;
+        float maxRpm = 0.0f;
+        for (std::size_t a = 0; a < 2; ++a) {
+            e.motorRPM[a] = m_electric->motorOmega[a] / kRpmToRadPerSec;
+            e.motorTorque[a] = m_electric->motorTorque[a];
+            e.motorPowerAxleKW[a] = m_electric->shaftPower[a] * 1e-3f;
+            e.motorPowerKW += e.motorPowerAxleKW[a];
+            e.tcFactor[a] = m_evOut.tcFactor[a];
+            e.regenFactor[a] = m_evOut.regenFactor[a];
+            e.frictionScale[a] = m_evOut.frictionScale[a];
+            maxRpm = std::max(maxRpm, std::abs(e.motorRPM[a]));
+        }
+        e.regenActive = m_evOut.regenTorque[0] > 0.0f || m_evOut.regenTorque[1] > 0.0f;
+        e.energyOutKWh = m_electric->energyOutJ / 3.6e6;
+        e.energyInKWh = m_electric->energyInJ / 3.6e6;
+        // No gearbox: "rpm" is the faster motor, the gear is the selected direction.
+        t.engineRPM = maxRpm;
+        t.gear = m_direction == DriveDirection::Forward ? 1 : -1;
+        t.clutchFriction = 1.0f;
+        t.shifting = false;
+    }
 
     const RMat44 bodyXf = bi.GetWorldTransform(m_bodyId);
     float steerSum = 0.0f;

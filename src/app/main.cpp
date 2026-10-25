@@ -12,7 +12,7 @@ namespace {
 
 void printUsage() {
     std::printf("Usage: trailforge [--quit-after <seconds>] [--demo] [--no-ui] [--no-intro] [--capture <file.bmp>] [--capture-at <seconds>]\n"
-                "                  [--script <file>] [--no-audio] [--audio-capture <file.wav>] [--paths] [--version]\n"
+                "                  [--script <file>] [--vehicle <id>] [--no-audio] [--audio-capture <file.wav>] [--paths] [--version]\n"
                 "  --quit-after N  exit automatically after N seconds (smoke test)\n"
                 "  --demo          scripted throttle/steering without user input\n"
                 "  --no-ui         start with the F1 diagnostics hidden\n"
@@ -21,6 +21,8 @@ void printUsage() {
                 "  --capture-at N  time of the capture in seconds\n"
                 "  --script F      run a test scenario (input via SDL events), exit code 1 on failures; starts in\n"
                 "                  gameplay without the intro (`menu ...` commands open the menus)\n"
+                "  --vehicle ID    start with catalog vehicle ID (assets/vehicles/ID), e.g. trailforge_ev; remembered\n"
+                "                  like a choice on the vehicle page (not in scenario mode)\n"
                 "  --no-audio      do not open an audio device or load sounds\n"
                 "  --audio-capture F  render the mix offline to WAV file F (no device; one physics tick of\n"
                 "                  audio per tick) and the mix parameters to F.csv\n"
@@ -37,6 +39,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--capture") == 0 && i + 1 < argc) options.capturePath = argv[++i];
         else if (std::strcmp(argv[i], "--capture-at") == 0 && i + 1 < argc) options.captureAtSeconds = std::atof(argv[++i]);
         else if (std::strcmp(argv[i], "--script") == 0 && i + 1 < argc) options.scriptPath = argv[++i];
+        else if (std::strcmp(argv[i], "--vehicle") == 0 && i + 1 < argc) options.vehicleId = argv[++i];
         else if (std::strcmp(argv[i], "--demo") == 0) options.demoDrive = true;
         else if (std::strcmp(argv[i], "--no-ui") == 0) options.startWithUi = false;
         else if (std::strcmp(argv[i], "--no-intro") == 0) options.intro = false;

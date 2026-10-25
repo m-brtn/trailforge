@@ -209,9 +209,187 @@ bool readRanges(const json::Value* v, const std::string& path, const std::string
     return ok;
 }
 
+void readCombustion(Obj& e, VehicleConfig& c) {
+    VehicleTuning& t = c.tuning;
+    e.num("maxTorque", t.engineMaxTorque, 50.0, 3000.0, "N*m");
+    e.num("idleRPM", c.engineMinRPM, 400.0, 1500.0, "rpm");
+    e.num("maxRPM", c.engineMaxRPM, 2000.0, 12000.0, "rpm");
+    e.num("revLimitRPM", t.revLimitRPM, 1000.0, 12000.0, "rpm");
+    e.num("inertia", c.engineInertia, 0.05, 5.0, "kg*m^2");
+    e.num("angularDamping", c.engineAngularDamping, 0.0, 2.0, "");
+    if (c.engineMaxRPM < c.engineMinRPM + 1000.0f) e.error("engine.maxRPM", "must be at least idleRPM + 1000");
+    if (t.revLimitRPM <= c.engineMinRPM + 500.0f || t.revLimitRPM > c.engineMaxRPM)
+        e.error("engine.revLimitRPM", "must be in (idleRPM + 500, maxRPM]");
+    if (const json::Value* curve = e.member("torqueCurve")) {
+        bool ok = curve->isArray() && curve->array.size() >= 2;
+        std::vector<std::pair<float, float>> pts;
+        double lastX = -1.0;
+        if (ok) {
+            for (const json::Value& p : curve->array) {
+                if (!p.isArray() || p.array.size() != 2 || !p.array[0].isNumber() || !p.array[1].isNumber()) {
+                    ok = false;
+                    break;
+                }
+                const double x = p.array[0].number, y = p.array[1].number;
+                if (!(x > lastX) || x < 0.0 || x > 1.0 || y < 0.0 || y > 1.5) {
+                    ok = false;
+                    break;
+                }
+                lastX = x;
+                pts.emplace_back(float(x), float(y));
+            }
+        }
+        if (ok && (pts.front().first != 0.0f || pts.back().first != 1.0f)) ok = false;
+        if (!ok)
+            e.error("engine.torqueCurve", "must be >= 2 points [rpmFraction, torqueFraction] with rpmFraction rising "
+                                          "from 0 to 1 and torqueFraction in [0, 1.5]");
+        else
+            c.torqueCurve = std::move(pts);
+    }
+}
+
+void readMotor(Obj& motors, const char* key, MotorConfig& m, const std::string& source, std::vector<std::string>& errors) {
+    Obj o(motors.member(key), motors.child(key), source, errors);
+    if (!o.valid()) return;
+    o.num("maxTorque", m.maxTorque, 20.0, 2000.0, "N*m at the motor shaft");
+    float kw = m.maxPower * 1e-3f;
+    o.num("maxPowerKW", kw, 5.0, 1000.0, "kW at the motor shaft");
+    m.maxPower = kw * 1000.0f;
+    o.num("maxRPM", m.maxRPM, 3000.0, 30000.0, "rpm");
+    o.num("reduction", m.reduction, 3.0, 30.0, "(motor / axle speed)");
+    o.num("rotorInertia", m.rotorInertia, 0.0, 1.0, "kg*m^2 at the motor shaft");
+    o.num("regenTorque", m.regenTorque, 0.0, 2000.0, "N*m at the motor shaft");
+    if (m.regenTorque > m.maxTorque) o.error(o.child("regenTorque"), "must not exceed maxTorque");
+    // The constant-power range must start below the maximum speed.
+    if (m.maxPower / m.maxTorque >= m.maxRPM * 2.0f * 3.14159265f / 60.0f)
+        o.error(o.child("maxPowerKW"), "base speed maxPower / maxTorque must be below maxRPM");
+}
+
+void readElectric(Obj& e, ElectricConfig& c, const std::string& source, std::vector<std::string>& errors) {
+    {
+        Obj m(e.member("motors"), e.child("motors"), source, errors);
+        if (m.valid()) {
+            readMotor(m, "front", c.motors[kFrontAxle], source, errors);
+            readMotor(m, "rear", c.motors[kRearAxle], source, errors);
+        }
+    }
+    {
+        Obj b(e.member("battery"), e.child("battery"), source, errors);
+        b.num("capacityKWh", c.batteryCapacityKWh, 5.0, 300.0, "kWh (usable)");
+        b.num("initialSoC", c.initialSoC, 0.0, 1.0, "(0..1)");
+        b.num("auxPowerKW", c.auxPowerKW, 0.0, 20.0, "kW");
+        b.num("maxChargePowerKW", c.regenMaxPowerKW, 0.0, 1000.0, "kW (regen limit of both motors)");
+    }
+    {
+        Obj f(e.member("efficiency"), e.child("efficiency"), source, errors);
+        f.num("drive", c.driveEfficiency, 0.5, 1.0, "(battery -> shaft)");
+        f.num("regen", c.regenEfficiency, 0.0, 1.0, "(shaft -> battery)");
+    }
+    {
+        Obj r(e.member("regen"), e.child("regen"), source, errors);
+        r.num("liftOffDecel", c.liftOffDecel, 0.0, 4.0, "m/s^2 (both pedals released)");
+        r.num("fadeSpeed", c.regenFadeSpeed, 0.0, 10.0, "m/s");
+    }
+}
+
+void readGearbox(Obj& root, VehicleConfig& c, const std::string& source, std::vector<std::string>& errors) {
+    VehicleTuning& t = c.tuning;
+    Obj g(root.member("gearbox"), "gearbox", source, errors);
+    std::string mode;
+    g.str("mode", mode);
+    if (mode != "auto") g.error("gearbox.mode", "only \"auto\" is supported");
+    auto ratios = [&](const char* key, std::vector<float>& out, bool reverse) {
+        const json::Value* v = g.member(key);
+        if (v == nullptr) return;
+        std::vector<float> r;
+        bool ok = v->isArray() && !v->array.empty() && v->array.size() <= 10;
+        for (std::size_t i = 0; ok && i < v->array.size(); ++i) {
+            const double x = v->array[i].numberOr(0.0);
+            if (reverse ? !(x <= -0.3 && x >= -8.0) : !(x >= 0.3 && x <= 8.0)) ok = false;
+            else if (!reverse && i > 0 && !(x < r.back())) ok = false;
+            else r.push_back(float(x));
+        }
+        if (!ok)
+            g.error(g.child(key), reverse ? "must be 1-10 negative ratios in [-8, -0.3]"
+                                          : "must be 1-10 falling ratios in [0.3, 8]");
+        else
+            out = std::move(r);
+    };
+    ratios("ratios", c.gearRatios, false);
+    ratios("reverseRatios", c.reverseRatios, true);
+    g.num("finalDrive", t.finalDrive, 1.5, 8.0, "");
+    g.num("lowRange", c.lowRangeRatio, 1.0, 4.0, "(1 = no low range)");
+    g.num("shiftUpRPM", c.shiftUpRPM, 1000.0, 12000.0, "rpm");
+    g.num("shiftDownRPM", c.shiftDownRPM, 500.0, 12000.0, "rpm");
+    g.num("shiftTime", c.shiftTime, 0.0, 2.0, "s");
+    g.num("clutchReleaseTime", c.clutchReleaseTime, 0.0, 2.0, "s");
+    g.num("shiftLatency", c.shiftLatency, 0.0, 3.0, "s");
+    g.num("clutchStrength", t.clutchStrength, 1.0, 100.0, "kg*m^2/s");
+    g.boolean("launchClutchLimit", t.launchClutchLimit);
+    g.num("creepTorque", t.creepTorque, 0.0, 200.0, "N*m");
+    if (c.shiftUpRPM > c.engineMaxRPM || c.shiftUpRPM <= c.shiftDownRPM)
+        g.error("gearbox.shiftUpRPM", "must be in (shiftDownRPM, engine.maxRPM]");
+    if (c.shiftDownRPM < c.engineMinRPM) g.error("gearbox.shiftDownRPM", "must be at least engine.idleRPM");
+}
+
+void readDrivetrain(Obj& d, VehicleConfig& c) {
+    VehicleTuning& t = c.tuning;
+    d.choice("layout", c.layout,
+             {{"rwd", DriveLayout::Rwd}, {"fwd", DriveLayout::Fwd}, {"awd", DriveLayout::Awd},
+              {"part_time", DriveLayout::PartTime}, {"on_demand", DriveLayout::OnDemand},
+              {"dual_motor", DriveLayout::DualMotor}});
+    const bool electric = c.engineType == EngineType::Electric;
+    if (electric != (c.layout == DriveLayout::DualMotor))
+        d.error("drivetrain.layout", electric ? "an electric vehicle needs \"dual_motor\""
+                                              : "\"dual_motor\" needs engine.type \"electric\"");
+    d.num("frontTorqueShare", t.frontTorqueShare, 0.0, 1.0, "");
+    d.choice("frontDiff", t.frontDiff, kDiffNames);
+    d.choice("rearDiff", t.rearDiff, kDiffNames);
+    d.num("limitedSlipRatio", t.limitedSlipRatio, 1.01, 5.0, "");
+    d.num("lockedSlipRatio", t.lockedSlipRatio, 1.001, 1.5, "");
+    if (electric) {
+        // No center differential: the split between the motors is electronic.
+        d.num("offRoadFrontTorqueShare", c.electric.offRoadFrontShare, 0.0, 1.0, "(drive mode OFF-ROAD)");
+        if (t.frontTorqueShare <= 0.0f || t.frontTorqueShare >= 1.0f)
+            d.error("drivetrain.frontTorqueShare", "must be strictly between 0 and 1 for dual_motor");
+    } else {
+        d.choice("centerDiff", t.centerDiff, kDiffNames);
+        d.num("centerLimitedSlipRatio", t.centerLimitedSlipRatio, 1.01, 5.0, "");
+    }
+    if ((c.layout == DriveLayout::Awd || c.layout == DriveLayout::OnDemand) &&
+        (t.frontTorqueShare <= 0.0f || t.frontTorqueShare >= 1.0f))
+        d.error("drivetrain.frontTorqueShare", "must be strictly between 0 and 1 for awd / on_demand");
+}
+
+void readAids(Obj& a, DrivingAidTuning& g) {
+    a.boolean("absEnabled", g.absEnabled);
+    a.choice("traction", g.traction,
+             {{"off", TractionMode::Off}, {"on", TractionMode::On}, {"off_road", TractionMode::OffRoad}});
+    a.num("absReleaseSlip", g.absReleaseSlip, 0.02, 0.6, "");
+    a.num("absApplySlip", g.absApplySlip, 0.0, 0.5, "");
+    if (g.absApplySlip >= g.absReleaseSlip) a.error("aids.absApplySlip", "must be below absReleaseSlip");
+    a.num("absReleaseRate", g.absReleaseRate, 1.0, 200.0, "1/s");
+    a.num("absApplyRate", g.absApplyRate, 1.0, 200.0, "1/s");
+    a.num("absMinPressure", g.absMinPressure, 0.0, 1.0, "");
+    a.num("absMinSpeed", g.absMinSpeed, 0.0, 10.0, "m/s");
+    a.num("tcSlipThreshold", g.tcSlipThreshold, 0.02, 2.0, "");
+    a.num("tcOffRoadSlipThreshold", g.tcOffRoadSlipThreshold, 0.02, 2.0, "");
+    a.num("tcMinSpeed", g.tcMinSpeed, 0.1, 10.0, "m/s");
+    a.num("tcSlipFilterTime", g.tcSlipFilterTime, 0.0, 1.0, "s");
+    a.num("tcBrakeGain", g.tcBrakeGain, 0.0, 50000.0, "N*m");
+    a.num("tcMaxBrakeTorque", g.tcMaxBrakeTorque, 0.0, 20000.0, "N*m");
+    a.num("tcBrakeRate", g.tcBrakeRate, 1.0, 1.0e6, "N*m/s");
+    a.num("tcCutRate", g.tcCutRate, 0.0, 50.0, "1/s");
+    a.num("tcRecoverRate", g.tcRecoverRate, 0.0, 50.0, "1/s");
+    a.num("tcMinThrottle", g.tcMinThrottle, 0.0, 1.0, "");
+    a.num("tcOffRoadMinThrottle", g.tcOffRoadMinThrottle, 0.0, 1.0, "");
+    a.num("tcSpinSpeed", g.tcSpinSpeed, 0.0, 5.0, "m/s");
+    a.num("tcRollbackSpeed", g.tcRollbackSpeed, 0.0, 5.0, "m/s");
+}
+
 } // namespace
 
-bool knownVisualModel(const std::string& id) { return id == "trailforge_suv"; }
+bool knownVisualModel(const std::string& id) { return id == "trailforge_suv" || id == "trailforge_ev"; }
 bool knownAudioProfile(const std::string& id) {
     TireSoundProfile p;
     return tireSoundPreset(id, p);
@@ -242,9 +420,9 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         if (c.id.empty() || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
             root.error("id", "must be non-empty lowercase letters, digits and '_'");
         if (!c.visualModel.empty() && !knownVisualModel(c.visualModel))
-            root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv)");
+            root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv, trailforge_ev)");
         if (!c.audioProfile.empty() && !knownAudioProfile(c.audioProfile))
-            root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv, sporty)");
+            root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv, ev, sporty)");
         c.tireSound = tireSoundPreset(c.audioProfile);
         if (root.member("tireSound", false)) {
             TireSoundProfile& ts = c.tireSound;
@@ -257,6 +435,7 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             s.num("scrubLowHz", ts.scrubLowHz, 20.0, 2000.0, "Hz", false);
             s.num("scrubHighHz", ts.scrubHighHz, 100.0, 8000.0, "Hz", false);
             s.num("treadPitch", ts.treadPitch, 0.01, 0.3, "m", false);
+            s.num("roadGain", ts.roadGain, 0.0, 2.0, "", false);
             if (ts.lowpassMaxHz < ts.lowpassMinHz) s.error(s.child("lowpassMaxHz"), "must not be below lowpassMinHz");
             if (ts.scrubHighHz <= ts.scrubLowHz) s.error(s.child("scrubHighHz"), "must exceed scrubLowHz");
         }
@@ -338,97 +517,18 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         {
             Obj e(root.member("engine"), "engine", source, errors);
             e.choice("type", c.engineType, {{"combustion", EngineType::Combustion}, {"electric", EngineType::Electric}});
-            if (c.engineType == EngineType::Electric)
-                e.error("engine.type", "electric motors are reserved in the format but not simulated yet");
-            e.num("maxTorque", t.engineMaxTorque, 50.0, 3000.0, "N*m");
-            e.num("idleRPM", c.engineMinRPM, 400.0, 1500.0, "rpm");
-            e.num("maxRPM", c.engineMaxRPM, 2000.0, 12000.0, "rpm");
-            e.num("revLimitRPM", t.revLimitRPM, 1000.0, 12000.0, "rpm");
-            e.num("inertia", c.engineInertia, 0.05, 5.0, "kg*m^2");
-            e.num("angularDamping", c.engineAngularDamping, 0.0, 2.0, "");
-            if (c.engineMaxRPM < c.engineMinRPM + 1000.0f) e.error("engine.maxRPM", "must be at least idleRPM + 1000");
-            if (t.revLimitRPM <= c.engineMinRPM + 500.0f || t.revLimitRPM > c.engineMaxRPM)
-                e.error("engine.revLimitRPM", "must be in (idleRPM + 500, maxRPM]");
-            if (const json::Value* curve = e.member("torqueCurve")) {
-                bool ok = curve->isArray() && curve->array.size() >= 2;
-                std::vector<std::pair<float, float>> pts;
-                double lastX = -1.0;
-                if (ok) {
-                    for (const json::Value& p : curve->array) {
-                        if (!p.isArray() || p.array.size() != 2 || !p.array[0].isNumber() || !p.array[1].isNumber()) {
-                            ok = false;
-                            break;
-                        }
-                        const double x = p.array[0].number, y = p.array[1].number;
-                        if (!(x > lastX) || x < 0.0 || x > 1.0 || y < 0.0 || y > 1.5) {
-                            ok = false;
-                            break;
-                        }
-                        lastX = x;
-                        pts.emplace_back(float(x), float(y));
-                    }
-                }
-                if (ok && (pts.front().first != 0.0f || pts.back().first != 1.0f)) ok = false;
-                if (!ok)
-                    e.error("engine.torqueCurve", "must be >= 2 points [rpmFraction, torqueFraction] with rpmFraction rising "
-                                                  "from 0 to 1 and torqueFraction in [0, 1.5]");
-                else
-                    c.torqueCurve = std::move(pts);
-            }
+            if (c.engineType == EngineType::Electric) readElectric(e, c.electric, source, errors);
+            else readCombustion(e, c);
         }
-        {
-            Obj g(root.member("gearbox"), "gearbox", source, errors);
-            std::string mode;
-            g.str("mode", mode);
-            if (mode != "auto") g.error("gearbox.mode", "only \"auto\" is supported");
-            auto ratios = [&](const char* key, std::vector<float>& out, bool reverse) {
-                const json::Value* v = g.member(key);
-                if (v == nullptr) return;
-                std::vector<float> r;
-                bool ok = v->isArray() && !v->array.empty() && v->array.size() <= 10;
-                for (std::size_t i = 0; ok && i < v->array.size(); ++i) {
-                    const double x = v->array[i].numberOr(0.0);
-                    if (reverse ? !(x <= -0.3 && x >= -8.0) : !(x >= 0.3 && x <= 8.0)) ok = false;
-                    else if (!reverse && i > 0 && !(x < r.back())) ok = false;
-                    else r.push_back(float(x));
-                }
-                if (!ok)
-                    g.error(g.child(key), reverse ? "must be 1-10 negative ratios in [-8, -0.3]"
-                                                  : "must be 1-10 falling ratios in [0.3, 8]");
-                else
-                    out = std::move(r);
-            };
-            ratios("ratios", c.gearRatios, false);
-            ratios("reverseRatios", c.reverseRatios, true);
-            g.num("finalDrive", t.finalDrive, 1.5, 8.0, "");
-            g.num("lowRange", c.lowRangeRatio, 1.0, 4.0, "(1 = no low range)");
-            g.num("shiftUpRPM", c.shiftUpRPM, 1000.0, 12000.0, "rpm");
-            g.num("shiftDownRPM", c.shiftDownRPM, 500.0, 12000.0, "rpm");
-            g.num("shiftTime", c.shiftTime, 0.0, 2.0, "s");
-            g.num("clutchReleaseTime", c.clutchReleaseTime, 0.0, 2.0, "s");
-            g.num("shiftLatency", c.shiftLatency, 0.0, 3.0, "s");
-            g.num("clutchStrength", t.clutchStrength, 1.0, 100.0, "kg*m^2/s");
-            g.boolean("launchClutchLimit", t.launchClutchLimit);
-            g.num("creepTorque", t.creepTorque, 0.0, 200.0, "N*m");
-            if (c.shiftUpRPM > c.engineMaxRPM || c.shiftUpRPM <= c.shiftDownRPM)
-                g.error("gearbox.shiftUpRPM", "must be in (shiftDownRPM, engine.maxRPM]");
-            if (c.shiftDownRPM < c.engineMinRPM) g.error("gearbox.shiftDownRPM", "must be at least engine.idleRPM");
+        if (c.engineType == EngineType::Electric) {
+            if (root.member("gearbox", false))
+                root.error("gearbox", "an electric drivetrain has no gearbox (single fixed reduction per motor)");
+        } else {
+            readGearbox(root, c, source, errors);
         }
         {
             Obj d(root.member("drivetrain"), "drivetrain", source, errors);
-            d.choice("layout", c.layout,
-                     {{"rwd", DriveLayout::Rwd}, {"fwd", DriveLayout::Fwd}, {"awd", DriveLayout::Awd},
-                      {"part_time", DriveLayout::PartTime}, {"on_demand", DriveLayout::OnDemand}});
-            d.num("frontTorqueShare", t.frontTorqueShare, 0.0, 1.0, "");
-            d.choice("frontDiff", t.frontDiff, kDiffNames);
-            d.choice("rearDiff", t.rearDiff, kDiffNames);
-            d.choice("centerDiff", t.centerDiff, kDiffNames);
-            d.num("limitedSlipRatio", t.limitedSlipRatio, 1.01, 5.0, "");
-            d.num("centerLimitedSlipRatio", t.centerLimitedSlipRatio, 1.01, 5.0, "");
-            d.num("lockedSlipRatio", t.lockedSlipRatio, 1.001, 1.5, "");
-            if ((c.layout == DriveLayout::Awd || c.layout == DriveLayout::OnDemand) &&
-                (t.frontTorqueShare <= 0.0f || t.frontTorqueShare >= 1.0f))
-                d.error("drivetrain.frontTorqueShare", "must be strictly between 0 and 1 for awd / on_demand");
+            readDrivetrain(d, c);
         }
         {
             Obj a(root.member("aero"), "aero", source, errors);
@@ -437,30 +537,7 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         }
         {
             Obj a(root.member("aids"), "aids", source, errors);
-            DrivingAidTuning& g = t.aids;
-            a.boolean("absEnabled", g.absEnabled);
-            a.choice("traction", g.traction,
-                     {{"off", TractionMode::Off}, {"on", TractionMode::On}, {"off_road", TractionMode::OffRoad}});
-            a.num("absReleaseSlip", g.absReleaseSlip, 0.02, 0.6, "");
-            a.num("absApplySlip", g.absApplySlip, 0.0, 0.5, "");
-            if (g.absApplySlip >= g.absReleaseSlip) a.error("aids.absApplySlip", "must be below absReleaseSlip");
-            a.num("absReleaseRate", g.absReleaseRate, 1.0, 200.0, "1/s");
-            a.num("absApplyRate", g.absApplyRate, 1.0, 200.0, "1/s");
-            a.num("absMinPressure", g.absMinPressure, 0.0, 1.0, "");
-            a.num("absMinSpeed", g.absMinSpeed, 0.0, 10.0, "m/s");
-            a.num("tcSlipThreshold", g.tcSlipThreshold, 0.02, 2.0, "");
-            a.num("tcOffRoadSlipThreshold", g.tcOffRoadSlipThreshold, 0.02, 2.0, "");
-            a.num("tcMinSpeed", g.tcMinSpeed, 0.1, 10.0, "m/s");
-            a.num("tcSlipFilterTime", g.tcSlipFilterTime, 0.0, 1.0, "s");
-            a.num("tcBrakeGain", g.tcBrakeGain, 0.0, 50000.0, "N*m");
-            a.num("tcMaxBrakeTorque", g.tcMaxBrakeTorque, 0.0, 20000.0, "N*m");
-            a.num("tcBrakeRate", g.tcBrakeRate, 1.0, 1.0e6, "N*m/s");
-            a.num("tcCutRate", g.tcCutRate, 0.0, 50.0, "1/s");
-            a.num("tcRecoverRate", g.tcRecoverRate, 0.0, 50.0, "1/s");
-            a.num("tcMinThrottle", g.tcMinThrottle, 0.0, 1.0, "");
-            a.num("tcOffRoadMinThrottle", g.tcOffRoadMinThrottle, 0.0, 1.0, "");
-            a.num("tcSpinSpeed", g.tcSpinSpeed, 0.0, 5.0, "m/s");
-            a.num("tcRollbackSpeed", g.tcRollbackSpeed, 0.0, 5.0, "m/s");
+            readAids(a, t.aids);
         }
     }
     if (errors.size() != errorsBefore) return false;
@@ -590,6 +667,7 @@ std::vector<VehicleDefinition> loadVehicleCatalog(const std::string& dir, std::v
         }
         out.push_back(std::move(d));
     }
+    std::stable_partition(out.begin(), out.end(), [](const VehicleDefinition& d) { return d.id == kDefaultVehicleId; });
     return out;
 }
 

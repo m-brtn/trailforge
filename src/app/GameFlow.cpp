@@ -44,11 +44,13 @@ const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
                                                     M::Back};
     static const std::vector<MenuItem> kControls = {M::DriveKeys, M::PadGlyphs, M::Back};
+    static const std::vector<MenuItem> kVehicle = {M::VehicleChoice, M::Drive, M::Back};
     switch (p) {
     case MenuPage::Main: return kMain;
     case MenuPage::Pause: return kPause;
     case MenuPage::Settings: return kSettings;
     case MenuPage::Controls: return kControls;
+    case MenuPage::Vehicle: return kVehicle;
     }
     return kMain;
 }
@@ -112,6 +114,24 @@ void GameFlow::closeGarage() {
     select(MenuItem::Garage);
 }
 
+int GameFlow::vehicleIndex(const GameSettings& settings) const {
+    const auto it = std::find(m_vehicleIds.begin(), m_vehicleIds.end(), settings.vehicle);
+    return it == m_vehicleIds.end() ? 0 : int(it - m_vehicleIds.begin());
+}
+
+void GameFlow::openVehiclePage() {
+    if (m_screen != Screen::MainMenu || page() != MenuPage::Main) return;
+    m_stack.push_back({MenuPage::Vehicle, 0});
+}
+
+MenuResult GameFlow::pickVehicle(int index, GameSettings& settings) {
+    if (m_vehicleIds.empty()) return {};
+    const int i = wrap(index, int(m_vehicleIds.size()));
+    const bool same = i == vehicleIndex(settings);
+    settings.vehicle = m_vehicleIds[std::size_t(i)];
+    return same ? MenuResult{} : MenuResult{MenuCommand::VehicleChanged, MenuSound::Adjust};
+}
+
 bool GameFlow::back() {
     if (m_stack.size() <= 1) return false;
     m_stack.pop_back();
@@ -142,6 +162,16 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
     using M = MenuItem;
     switch (item) {
     case M::Start:
+        if (m_vehicleIds.size() > 1) {
+            m_stack.push_back({MenuPage::Vehicle, 0});
+            return {MenuCommand::None, MenuSound::Confirm};
+        }
+        startGame();
+        return {MenuCommand::StartGame, MenuSound::Confirm};
+    case M::VehicleChoice:
+        if (dir != 0) return pickVehicle(vehicleIndex(settings) + dir, settings);
+        [[fallthrough]];
+    case M::Drive:
         startGame();
         return {MenuCommand::StartGame, MenuSound::Confirm};
     case M::Settings:
@@ -199,6 +229,18 @@ MenuResult GameFlow::handle(const MenuInput& in, GameSettings& settings) {
         cur = wrap(cur + (in.down ? 1 : -1), n);
         r.sound = MenuSound::Move;
     }
+    if (page() == MenuPage::Vehicle) {
+        if (in.pick >= 0 && in.pick < int(m_vehicleIds.size())) {
+            cur = 0;
+            // A click on the selected card drives it; on another card it selects that vehicle.
+            if (in.pick == vehicleIndex(settings)) return activate(MenuItem::Drive, settings, 0);
+            return pickVehicle(in.pick, settings);
+        }
+        if (in.wheel != 0) {
+            const MenuResult p = pickVehicle(vehicleIndex(settings) - in.wheel, settings);
+            if (p.command != MenuCommand::None) return p;
+        }
+    }
     if (in.click >= 0 && in.click < n) {
         cur = in.click;
         const MenuItem item = items()[std::size_t(cur)];
@@ -241,6 +283,8 @@ const char* menuLabel(MenuItem item) {
     case M::PadGlyphs: return "GAMEPAD BUTTONS";
     case M::Controls: return "CONTROLS";
     case M::Back: return "BACK";
+    case M::VehicleChoice: return "VEHICLE";
+    case M::Drive: return "DRIVE";
     }
     return "";
 }
@@ -251,6 +295,7 @@ const char* menuPageTitle(MenuPage page) {
     case MenuPage::Pause: return "PAUSED";
     case MenuPage::Settings: return "SETTINGS";
     case MenuPage::Controls: return "CONTROLS";
+    case MenuPage::Vehicle: return "SELECT VEHICLE";
     }
     return "";
 }
@@ -264,7 +309,9 @@ const char* menuSection(MenuItem item) {
     }
 }
 
-bool menuAdjustable(MenuItem item) { return int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::PadGlyphs); }
+bool menuAdjustable(MenuItem item) {
+    return (int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::PadGlyphs)) || item == MenuItem::VehicleChoice;
+}
 
 std::string menuValue(MenuItem item, const GameSettings& s) {
     using M = MenuItem;

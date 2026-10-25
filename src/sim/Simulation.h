@@ -99,6 +99,8 @@ public:
     // Part-time transfer case: 2H -> 4H -> 4L (T key cycles traction control; this is the V key).
     void requestCycleTransfer() { m_pendingTransferCycle = true; }
     void requestTransfer(TransferMode mode) { m_pendingTransfer = mode; }
+    // Electric vehicles: battery state of charge 0..1 (scenario / test command; no effect on a combustion vehicle).
+    void requestStateOfCharge(float soc) { m_pendingSoC = soc; }
     void requestTeleport(int featureIndex) { m_pendingTeleport = featureIndex; }
     // Driver aid switches: B (ABS on/off), T (TC Off -> On -> Off-road), X (lockers none -> rear -> rear + center ->
     // all), or a direct setting (UI, scenarios). ABS and TC survive a reset/rebuild; the lockers reset like low range.
@@ -180,6 +182,7 @@ private:
     std::optional<VehicleConfig> m_pendingConfig;
     bool m_pendingTransferCycle = false;
     std::optional<TransferMode> m_pendingTransfer;
+    std::optional<float> m_pendingSoC;
     std::optional<int> m_pendingTeleport;
     bool m_pendingAbsToggle = false;
     bool m_pendingTractionCycle = false;

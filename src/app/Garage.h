@@ -44,6 +44,14 @@ struct GarageResult {
     GarageSound sound = GarageSound::None;
 };
 
+// Spec lines of a vehicle card (vehicle page): label and value, computed from the configuration (peak power from the
+// torque curve or the motor ratings, tire size from radius, width and rim ratio).
+struct VehicleSpec {
+    std::string label, value;
+};
+std::vector<VehicleSpec> vehicleSpecs(const VehicleConfig& c);
+float peakPowerKW(const VehicleConfig& c); // engine curve x rpm up to the rev limit, or the sum of the motor ratings
+
 class Garage {
 public:
     // setupDir: directory of <vehicle id>.json files; empty = setups are kept in memory only.

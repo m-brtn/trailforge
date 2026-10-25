@@ -40,7 +40,9 @@ public:
 //
 // Voices: 12 engine loops (3 rpm bands x off/full load x exhaust/engine-bay mic), 4 loose-ground tire loops, one
 // squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, a pool of
-// one-shots and a streamed music track (looped; not paused with the game). Gains ramp
+// one-shots and a streamed music track (looped; not paused with the game). An electric vehicle (AudioFrame::electric)
+// silences the engine loops and plays synthesized motor tones instead (evMotorTones); a tire profile with roadGain
+// adds a synthesized rolling road hum per wheel. Gains ramp
 // linearly over each 64-frame control block; a look-ahead peak limiter guards the master output.
 class AudioMixer {
 public:
@@ -145,6 +147,28 @@ private:
     std::uint32_t m_shotSerial = 0;
     float m_scrubHp = 0.0f, m_scrubLp = 0.0f; // scrub filter coefficients per sample
     void mixScrub(float* acc, int frames);
+
+    // Electric drive: one sine oscillator per motor and tone (the inverter tone carries its moving sideband); gains
+    // ramp across a block like the whine.
+    struct EvOsc {
+        double phase = 0.0, sidePhase = 0.0;
+        float hz = 0.0f, sideHz = 0.0f;
+        float l = 0.0f, r = 0.0f, tl = 0.0f, tr = 0.0f;
+    };
+    std::array<std::array<EvOsc, kEvTones>, 2> m_ev{};
+    float m_evFade = 0.0f;
+    EvSoundSettings m_evSound;
+    void mixElectric(float* acc, int frames);
+    // Rolling road hum per wheel (TireSoundProfile::roadGain): band noise, amplitude-modulated at the tread rate.
+    struct RoadHum {
+        std::uint32_t noise = 1;
+        float hpIn = 0.0f, hpOut = 0.0f, lp1 = 0.0f, lp2 = 0.0f;
+        float phase = 0.0f, hz = 0.0f, gain = 0.0f;
+        float l = 0.0f, r = 0.0f, tl = 0.0f, tr = 0.0f;
+    };
+    std::array<RoadHum, kAudioWheels> m_road{};
+    float m_roadHp = 0.0f, m_roadLp = 0.0f;
+    void mixRoad(float* acc, int frames);
 
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;

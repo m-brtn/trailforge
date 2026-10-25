@@ -30,7 +30,12 @@ struct SetupParamInfo {
     std::vector<const char*> choices; // Choice: names, stored value = index
     float (*get)(const VehicleConfig& c, const VehicleConfig& base);
     void (*set)(VehicleConfig& c, const VehicleConfig& base, float v);
+    // Whether the parameter exists for this vehicle (engine and gearbox rows only for a combustion drivetrain,
+    // motor rows only for an electric one); nullptr = every vehicle.
+    bool (*applies)(const VehicleConfig& base) = nullptr;
 };
+
+bool setupParamApplies(const SetupParamInfo& p, const VehicleConfig& base);
 
 const std::vector<SetupParamInfo>& setupParams();
 const SetupParamInfo* findSetupParam(const std::string& key);

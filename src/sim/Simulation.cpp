@@ -84,6 +84,11 @@ void Simulation::respawnInPlace(VehicleConfig config) {
     m_vehicle->setAidControls(controls);
     if (old.layout == DriveLayout::PartTime) m_vehicle->setTransfer(old.transfer);
     else if (old.lowRange) m_vehicle->toggleLowRange();
+    // A rebuild in place keeps the battery charge and the drive mode (the R reset restores the initial charge).
+    if (old.ev.electric) {
+        m_vehicle->setEvDriveMode(old.ev.mode);
+        m_vehicle->setStateOfCharge(old.ev.soc);
+    }
 }
 
 RenderSnapshot Simulation::captureSnapshot() const {
@@ -131,12 +136,19 @@ void Simulation::processCommands() {
         m_vehicle->applyTuning(*m_pendingTuning);
         m_pendingTuning.reset();
     }
+    if (m_pendingSoC) {
+        m_vehicle->setStateOfCharge(*m_pendingSoC);
+        m_pendingSoC.reset();
+    }
     if (m_pendingTransferCycle || m_pendingTransfer) {
         const bool ok = m_pendingTransfer ? m_vehicle->setTransfer(*m_pendingTransfer) : m_vehicle->cycleTransfer();
         m_pendingTransferCycle = false;
         m_pendingTransfer.reset();
         const VehicleTelemetry& t = m_vehicle->telemetry();
-        if (m_vehicle->config().layout != DriveLayout::PartTime)
+        if (m_vehicle->config().isElectric())
+            setMessage(m_vehicle->evDriveMode() == EvDriveMode::OffRoad ? "Drive mode OFF-ROAD (off-road torque split)"
+                                                                        : "Drive mode NORMAL (road torque split)");
+        else if (m_vehicle->config().layout != DriveLayout::PartTime)
             setMessage("No transfer case switch on this drivetrain");
         else if (!ok)
             setMessage("4L in or out only near standstill (< 1 m/s)");
@@ -156,7 +168,9 @@ void Simulation::processCommands() {
     if (m_pendingToggleLowRange) {
         m_pendingToggleLowRange = false;
         const bool ok = m_vehicle->toggleLowRange();
-        if (ok && m_vehicle->config().layout == DriveLayout::PartTime)
+        if (m_vehicle->config().isElectric())
+            setMessage("No low range: single fixed reduction per motor");
+        else if (ok && m_vehicle->config().layout == DriveLayout::PartTime)
             setMessage(m_vehicle->telemetry().transfer == TransferMode::FourLow ? "4L: low range, center locked"
                                                                                 : "4H: front axle engaged, center locked");
         else

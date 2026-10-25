@@ -18,11 +18,14 @@ struct TireSoundProfile {
     float scrubLowHz = 120.0f;     // scrub noise band (one-pole high-pass, two-pole low-pass)
     float scrubHighHz = 1400.0f;
     float treadPitch = 0.07f;      // m between tread blocks: scrub modulation rate = sliding speed / treadPitch
+    // Rolling road hum on hard ground (synthesized, 0 = off): low band noise modulated at the tread block rate of the
+    // rolling speed. Only the quiet electric profile uses it so far; with an engine it would be masked anyway.
+    float roadGain = 0.0f;
     bool operator==(const TireSoundProfile&) const = default;
 };
 
-// Profile ids: "sporty" (the recordings as they are, for a road tire) and "trailforge_suv" (mud-terrain tires: lower
-// and duller squeal plus scrub). Returns false for an unknown id (out unchanged).
+// Profile ids: "sporty" (the recordings as they are, for a road tire), "trailforge_suv" (mud-terrain tires: lower
+// and duller squeal plus scrub) and "ev" (all-terrain tires, below). Returns false for an unknown id (out unchanged).
 inline bool tireSoundPreset(const std::string& id, TireSoundProfile& out) {
     if (id == "sporty") {
         out = TireSoundProfile{};
@@ -38,6 +41,19 @@ inline bool tireSoundPreset(const std::string& id, TireSoundProfile& out) {
         out.scrubLowHz = 120.0f;
         out.scrubHighHz = 900.0f;
         out.treadPitch = 0.07f;
+        return true;
+    }
+    // Electric SUV on 285/70R17 all-terrain tires: like trailforge_suv, with a finer tread (shorter block pitch, a
+    // little brighter scrub), a slightly higher squeal and the rolling road hum (no engine masks it).
+    if (id == "ev") {
+        tireSoundPreset("trailforge_suv", out);
+        out.squealPitch = 0.84f;
+        out.squealGain = 0.75f;
+        out.lowpassMaxHz = 3800.0f;
+        out.scrubGain = 0.85f;
+        out.scrubHighHz = 1100.0f;
+        out.treadPitch = 0.055f;
+        out.roadGain = 1.0f;
         return true;
     }
     return false;

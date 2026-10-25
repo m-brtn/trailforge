@@ -39,6 +39,7 @@ struct AppOptions {
     std::string scriptPath;    // non-empty: run a verification scenario (see Scenario.h)
     bool audio = true;         // false: --no-audio (no device, no sound assets loaded)
     std::string audioCapturePath; // non-empty: offline audio render to this WAV instead of the device
+    std::string vehicleId;     // --vehicle ID: start with this catalog vehicle (remembered like a menu choice)
     bool intro = true;         // false: --no-intro (start at the main menu); scenarios and --demo start driving
 };
 
@@ -93,6 +94,8 @@ private:
     void openGarage();
     void closeGarage();
     void applyGarageConfig();
+    // Garage, simulation and the remembered choice to a catalog vehicle; false if the id is unknown.
+    bool selectVehicle(const std::string& id);
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
@@ -125,6 +128,9 @@ private:
     std::unique_ptr<Garage> m_garage; // vehicle setups; null when no vehicle definition loaded
     bool m_garageFollowCamera = false; // camera mode to restore when the garage closes
     double m_garageCamTime = 0.0;
+    std::vector<VehicleCard> m_vehicleCards; // vehicle page (catalog order)
+    float m_vehicleWheel = 0.0f;             // vehicle page: wheel steps not yet turned into a vehicle change
+    bool m_vehiclePageCamera = false;        // last frame showed the vehicle page (its camera restarts on entry)
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)

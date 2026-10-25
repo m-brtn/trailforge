@@ -28,6 +28,57 @@ std::string trim(const std::string& s) {
 
 } // namespace
 
+float peakPowerKW(const VehicleConfig& c) {
+    if (c.isElectric()) return 0.001f * (c.electric.motors[0].maxPower + c.electric.motors[1].maxPower);
+    float best = 0.0f;
+    const float maxRpm = std::min(c.engineMaxRPM, c.tuning.revLimitRPM);
+    for (int i = 0; i <= 200; ++i) {
+        const float f = float(i) / 200.0f;
+        const float rpm = c.engineMinRPM + f * (c.engineMaxRPM - c.engineMinRPM);
+        if (rpm > maxRpm) break;
+        float k = c.torqueCurve.empty() ? 1.0f : c.torqueCurve.front().second;
+        for (std::size_t j = 1; j < c.torqueCurve.size(); ++j) {
+            const auto& [x0, y0] = c.torqueCurve[j - 1];
+            const auto& [x1, y1] = c.torqueCurve[j];
+            if (f >= x0 && f <= x1) k = x1 > x0 ? y0 + (y1 - y0) * (f - x0) / (x1 - x0) : y1;
+            else if (f > x1) k = y1;
+        }
+        best = std::max(best, c.tuning.engineMaxTorque * k * rpm * 6.2831853f / 60.0f);
+    }
+    return 0.001f * best;
+}
+
+std::vector<VehicleSpec> vehicleSpecs(const VehicleConfig& c) {
+    char buf[96];
+    std::vector<VehicleSpec> out;
+    std::snprintf(buf, sizeof(buf), "%.0f kg", double(c.mass));
+    out.push_back({"MASS", buf});
+    const float kw = peakPowerKW(c);
+    std::snprintf(buf, sizeof(buf), "%.0f kW (%.0f hp)", double(kw), double(kw / 0.7457f));
+    out.push_back({"POWER", buf});
+    if (c.isElectric()) {
+        std::snprintf(buf, sizeof(buf), "%.0f + %.0f N*m (front + rear motor)", double(c.electric.motors[0].maxTorque),
+                      double(c.electric.motors[1].maxTorque));
+        out.push_back({"TORQUE", buf});
+        std::snprintf(buf, sizeof(buf), "%s, %.1f:1 reduction", driveLayoutName(c.layout), double(c.electric.motors[1].reduction));
+        out.push_back({"DRIVETRAIN", buf});
+        std::snprintf(buf, sizeof(buf), "%.0f kWh, regenerative braking", double(c.electric.batteryCapacityKWh));
+        out.push_back({"BATTERY", buf});
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.0f N*m", double(c.tuning.engineMaxTorque));
+        out.push_back({"TORQUE", buf});
+        std::snprintf(buf, sizeof(buf), "%s, %zu-speed automatic%s", driveLayoutName(c.layout), c.gearRatios.size(),
+                      c.lowRangeRatio > 1.0f ? ", low range" : "");
+        out.push_back({"DRIVETRAIN", buf});
+    }
+    const AxleConfig& a = c.axles[std::size_t(kFrontAxle)];
+    const float rimR = a.rimRatio * a.wheelRadius;
+    std::snprintf(buf, sizeof(buf), "%.0f/%.0f R%.0f", double(a.wheelWidth * 1000.0f),
+                  double(std::round((a.wheelRadius - rimR) / a.wheelWidth * 20.0f) * 5.0f), double(2.0f * rimR / 0.0254f));
+    out.push_back({"TIRES", buf});
+    return out;
+}
+
 Garage::Garage(const std::vector<VehicleDefinition>& catalog, std::string setupDir)
     : m_catalog(catalog), m_setupDir(std::move(setupDir)) {
     buildRows();
@@ -39,7 +90,8 @@ void Garage::buildRows() {
     m_rows.push_back({GarageRowKind::Vehicle});
     m_rows.push_back({GarageRowKind::Setup});
     m_rows.push_back({GarageRowKind::Kit});
-    for (const SetupParamInfo& p : setupParams()) m_rows.push_back({GarageRowKind::Param, &p});
+    for (const SetupParamInfo& p : setupParams())
+        if (m_catalog.empty() || setupParamApplies(p, vehicle().config)) m_rows.push_back({GarageRowKind::Param, &p});
     for (GarageAction a : {GarageAction::Save, GarageAction::SaveAsNew, GarageAction::Rename, GarageAction::Delete,
                            GarageAction::ResetFactory, GarageAction::Back})
         m_rows.push_back({GarageRowKind::Action, nullptr, a});
@@ -58,6 +110,12 @@ void Garage::say(std::string msg) {
 void Garage::selectVehicle(int index) {
     if (m_catalog.empty()) return;
     m_vehicle = std::clamp(index, 0, int(m_catalog.size()) - 1);
+    const GarageRow keep = m_rows.empty() ? GarageRow{GarageRowKind::Vehicle} : m_rows[std::size_t(m_cursor)];
+    buildRows();
+    m_cursor = 0;
+    for (std::size_t i = 0; i < m_rows.size(); ++i)
+        if (m_rows[i].kind == keep.kind && m_rows[i].param == keep.param && m_rows[i].action == keep.action)
+            m_cursor = int(i);
     m_file = SetupFile{};
     m_file.vehicleId = vehicle().id;
     const std::string path = filePath();

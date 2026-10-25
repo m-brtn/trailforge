@@ -76,6 +76,33 @@ struct TireLayerMix {
 };
 TireLayerMix tireLayerMix(const std::array<WheelAudio, kAudioWheels>& wheels, float referenceLoad);
 
+// Electric drive sound, synthesized per motor (no recordings): the electromagnetic order (2 x pole pairs) and its
+// second harmonic, the stator slot order, the two gear meshes of the reduction and the inverter switching tone.
+// Torque sets the level (magnetic forces and gear mesh forces grow with it; a small no-load share remains), the
+// shaft speed sets the pitch. Regeneration shifts weight from the electromagnetic order to the slot order (a thinner,
+// higher whine, as reported for many EVs) and gear meshes load their coast flanks with the same torque. The inverter
+// tone is a fixed carrier with a sideband at carrier + 2 x electrical frequency, loudest at low speed and fading out
+// above inverterFadeSpeed (variable carrier schemes move it out of the audible band). Tones roll off above ~5 kHz.
+struct EvSoundSettings {
+    float polePairs = 4.0f;
+    float slots = 48.0f;
+    float stage1Teeth = 21.0f;   // pinion on the motor shaft
+    float stage1Ratio = 3.6f;    // the second mesh runs on the intermediate shaft (motor speed / stage1Ratio)
+    float stage2Teeth = 17.0f;
+    float inverterHz = 3200.0f;
+    float inverterFadeSpeed = 12.0f; // m/s
+    float level = 0.022f;        // linear gain of the electromagnetic order at full torque
+};
+inline constexpr int kEvTones = 6; // em, em x2, slot, gear 1, gear 2, inverter (+ sideband in the mixer)
+struct EvTones {
+    std::array<float, kEvTones> hz{}, gain{};
+};
+EvTones evMotorTones(const MotorAudio& m, float vehicleSpeed, const EvSoundSettings& s = {});
+
+// Rolling road hum of one wheel, 0..~1.2: hard surfaces only (squealSurface > 0), rises with the rolling speed
+// (from 2 m/s, full at 25 m/s) and the load.
+float roadHum(const WheelAudio& w, float referenceLoad);
+
 // Ambience: equal-power day/night weights from dayAmount 0..1.
 std::array<float, 2> dayNightWeights(float dayAmount);
 

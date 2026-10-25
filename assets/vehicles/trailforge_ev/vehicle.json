@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "id": "trailforge_ev",
+  "name": "TrailForge EV",
+  "description": "Dual-motor electric off-roader: one motor per axle, single fixed reduction, battery pack in the floor, regenerative braking.",
+  "visualModel": "trailforge_ev",
+  "audioProfile": "ev",
+  "body": {
+    "mass": 2650,
+    "inertiaScale": 1.0,
+    "inertia": [3490, 3670, 925],
+    "centerOfMass": {"frontWeightFraction": 0.50, "height": -0.15},
+    "friction": 0.5,
+    "angularDamping": 0.02
+  },
+  "geometry": {"wheelBase": 2.80, "attachHeight": 0.05},
+  "axles": {
+    "front": {
+      "track": 1.80,
+      "wheel": {"radius": 0.4155, "width": 0.285, "mass": 40, "inertia": 4.0, "angularDamping": 0.2, "rimRatio": 0.52, "tread": "all_terrain"},
+      "suspension": {
+        "frequency": 1.45, "compressionDamping": 0.50, "reboundDamping": 0.55,
+        "preload": 0.0, "minLength": 0.15, "maxLength": 0.53, "antiRoll": 400,
+        "bumpStop": {"range": 0.04, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 3800,
+      "handBrakeTorque": 0
+    },
+    "rear": {
+      "track": 1.80,
+      "wheel": {"radius": 0.4155, "width": 0.285, "mass": 40, "inertia": 4.0, "angularDamping": 0.2, "rimRatio": 0.52, "tread": "all_terrain"},
+      "suspension": {
+        "frequency": 1.45, "compressionDamping": 0.50, "reboundDamping": 0.55,
+        "preload": 0.0, "minLength": 0.15, "maxLength": 0.53, "antiRoll": 200,
+        "bumpStop": {"range": 0.04, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 3200,
+      "handBrakeTorque": 4500
+    }
+  },
+  "tires": {
+    "longitudinal": {"peakSlip": 0.10, "peakFriction": 1.00, "slideFriction": 0.80},
+    "lateral": {"peakSlipAngleDeg": 6.0, "peakFriction": 1.00, "slideFriction": 0.78},
+    "staticGrip": true,
+    "slipSpeedFloor": 1.0,
+    "frictionEllipse": true,
+    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 1, "grass": 1, "sand": 1}
+  },
+  "steering": {"maxAngleDeg": 35, "rate": 2.2, "returnRate": 3.5, "ackermann": 0.0},
+  "engine": {
+    "type": "electric",
+    "motors": {
+      "front": {"maxTorque": 400, "maxPowerKW": 180, "maxRPM": 15000, "reduction": 12.0, "rotorInertia": 0.05, "regenTorque": 300},
+      "rear": {"maxTorque": 450, "maxPowerKW": 220, "maxRPM": 15000, "reduction": 12.0, "rotorInertia": 0.05, "regenTorque": 300}
+    },
+    "battery": {"capacityKWh": 120, "initialSoC": 0.80, "auxPowerKW": 0.8, "maxChargePowerKW": 150},
+    "efficiency": {"drive": 0.90, "regen": 0.85},
+    "regen": {"liftOffDecel": 1.2, "fadeSpeed": 2.0}
+  },
+  "drivetrain": {
+    "layout": "dual_motor",
+    "frontTorqueShare": 0.40,
+    "offRoadFrontTorqueShare": 0.50,
+    "frontDiff": "open",
+    "rearDiff": "open",
+    "limitedSlipRatio": 1.4,
+    "lockedSlipRatio": 1.05
+  },
+  "aero": {"dragArea": 1.1, "airDensity": 1.225},
+  "aids": {
+    "absEnabled": false,
+    "traction": "off",
+    "absReleaseSlip": 0.18,
+    "absApplySlip": 0.08,
+    "absReleaseRate": 40,
+    "absApplyRate": 8,
+    "absMinPressure": 0.0,
+    "absMinSpeed": 1.5,
+    "tcSlipThreshold": 0.20,
+    "tcOffRoadSlipThreshold": 0.35,
+    "tcMinSpeed": 2.0,
+    "tcSlipFilterTime": 0.05,
+    "tcBrakeGain": 3000,
+    "tcMaxBrakeTorque": 1500,
+    "tcBrakeRate": 8000,
+    "tcCutRate": 4.0,
+    "tcRecoverRate": 1.0,
+    "tcMinThrottle": 0.05,
+    "tcOffRoadMinThrottle": 0.10,
+    "tcSpinSpeed": 0.3,
+    "tcRollbackSpeed": 0.3
+  },
+  "garage": {"ranges": {}},
+  "kits": []
+}

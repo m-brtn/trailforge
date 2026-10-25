@@ -39,6 +39,7 @@ struct Livery {
     Material glass;
 };
 Livery oliveExpedition(); // olive green, orange accents, white roof (Cars.png car #1)
+Livery arcticElectric();  // white / light grey, blue accents, black cladding (Cars.png car #2)
 
 // ---- Panels
 // Flat quad facing `n` (the winding is chosen from `n`).

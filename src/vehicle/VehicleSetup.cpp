@@ -27,6 +27,9 @@ void setBrakes(C& c, float total, float bias) {
 
 constexpr float kTwoPi = 6.28318530718f;
 
+bool combustionOnly(const C& b) { return !b.isElectric(); }
+bool electricOnly(const C& b) { return b.isElectric(); }
+
 std::vector<SetupParamInfo> buildParams() {
     using K = SetupParamKind;
     std::vector<SetupParamInfo> p;
@@ -101,15 +104,38 @@ std::vector<SetupParamInfo> buildParams() {
     p.push_back({"engine.torqueScale", "ENGINE AND GEARBOX", "Engine torque", "%", K::Number, 100.0f, 0, 0.02f, 0.3f,
                  2.0f, false, 0.7f, 1.3f, false, {},
                  [](const C& c, const C& b) { return c.tuning.engineMaxTorque / b.tuning.engineMaxTorque; },
-                 [](C& c, const C& b, float v) { c.tuning.engineMaxTorque = b.tuning.engineMaxTorque * v; }});
+                 [](C& c, const C& b, float v) { c.tuning.engineMaxTorque = b.tuning.engineMaxTorque * v; }, combustionOnly});
     p.push_back({"engine.revLimit", "ENGINE AND GEARBOX", "Rev limit", "rpm", K::Number, 1.0f, 0, 100.0f, 1000.0f,
                  12000.0f, true, 0.7f, 1.0f, false, {},
                  [](const C& c, const C&) { return c.tuning.revLimitRPM; },
-                 [](C& c, const C&, float v) { c.tuning.revLimitRPM = std::min(v, c.engineMaxRPM); }});
+                 [](C& c, const C&, float v) { c.tuning.revLimitRPM = std::min(v, c.engineMaxRPM); }, combustionOnly});
     p.push_back({"gearbox.finalDrive", "ENGINE AND GEARBOX", "Final drive", "", K::Number, 1.0f, 2, 0.05f, 1.5f, 8.0f, true,
                  0.8f, 1.25f, false, {},
                  [](const C& c, const C&) { return c.tuning.finalDrive; },
-                 [](C& c, const C&, float v) { c.tuning.finalDrive = v; }});
+                 [](C& c, const C&, float v) { c.tuning.finalDrive = v; }, combustionOnly});
+    // Electric drive (both motors scale together; the off-road split is the drive mode OFF-ROAD)
+    p.push_back({"motors.torqueScale", "MOTORS AND REGEN", "Motor torque", "%", K::Number, 100.0f, 0, 0.02f, 0.3f, 1.5f,
+                 false, 0.6f, 1.0f, false, {},
+                 [](const C& c, const C& b) { return c.electric.motors[0].maxTorque / b.electric.motors[0].maxTorque; },
+                 [](C& c, const C& b, float v) {
+                     for (int i = 0; i < 2; ++i) c.electric.motors[i].maxTorque = b.electric.motors[i].maxTorque * v;
+                 }, electricOnly});
+    p.push_back({"motors.regenScale", "MOTORS AND REGEN", "Regen torque", "%", K::Number, 100.0f, 0, 0.05f, 0.0f, 1.5f,
+                 false, 0.0f, 1.2f, false, {},
+                 [](const C& c, const C& b) {
+                     return c.electric.motors[0].regenTorque / std::max(b.electric.motors[0].regenTorque, 1.0f);
+                 },
+                 [](C& c, const C& b, float v) {
+                     for (int i = 0; i < 2; ++i) c.electric.motors[i].regenTorque = b.electric.motors[i].regenTorque * v;
+                 }, electricOnly});
+    p.push_back({"regen.liftOffDecel", "MOTORS AND REGEN", "Lift-off regen", "m/s2", K::Number, 1.0f, 1, 0.1f, 0.0f, 3.0f,
+                 false, 0.0f, 2.5f, false, {},
+                 [](const C& c, const C&) { return c.electric.liftOffDecel; },
+                 [](C& c, const C&, float v) { c.electric.liftOffDecel = v; }, electricOnly});
+    p.push_back({"drivetrain.offRoadFrontShare", "MOTORS AND REGEN", "Front torque share (OFF-ROAD mode)", "%",
+                 K::Number, 100.0f, 0, 0.05f, 0.05f, 0.95f, false, 0.3f, 0.7f, false, {},
+                 [](const C& c, const C&) { return c.electric.offRoadFrontShare; },
+                 [](C& c, const C&, float v) { c.electric.offRoadFrontShare = v; }, electricOnly});
     // Brakes
     p.push_back({"brakes.torqueScale", "BRAKES", "Brake torque", "%", K::Number, 100.0f, 0, 0.05f, 0.3f, 2.0f, false,
                  0.6f, 1.4f, false, {},
@@ -123,8 +149,8 @@ std::vector<SetupParamInfo> buildParams() {
     p.push_back({"drivetrain.layout", "DRIVETRAIN", "Layout", "", K::Choice, 1.0f, 0, 1.0f, 0.0f, 4.0f, false, 0.0f, 4.0f,
                  true, {"RWD", "FWD", "AWD", "PART-TIME 4WD", "ON-DEMAND AWD"},
                  [](const C& c, const C&) { return float(int(c.layout)); },
-                 [](C& c, const C&, float v) { c.layout = DriveLayout(std::clamp(int(std::lround(v)), 0, 4)); }});
-    p.push_back({"drivetrain.frontShare", "DRIVETRAIN", "Front torque share (AWD / on-demand)", "%", K::Number, 100.0f,
+                 [](C& c, const C&, float v) { c.layout = DriveLayout(std::clamp(int(std::lround(v)), 0, 4)); }, combustionOnly});
+    p.push_back({"drivetrain.frontShare", "DRIVETRAIN", "Front torque share (AWD / on-demand / dual motor)", "%", K::Number, 100.0f,
                  0, 0.05f, 0.05f, 0.95f, false, 0.1f, 0.9f, false, {},
                  [](const C& c, const C&) { return c.tuning.frontTorqueShare; },
                  [](C& c, const C&, float v) { c.tuning.frontTorqueShare = v; }});
@@ -140,7 +166,7 @@ std::vector<SetupParamInfo> buildParams() {
     p.push_back({"drivetrain.centerDiff", "DRIVETRAIN", "Center differential", "", K::Choice, 1.0f, 0, 1.0f, 0.0f, 2.0f,
                  false, 0.0f, 2.0f, false, kDiffs,
                  [](const C& c, const C&) { return float(int(c.tuning.centerDiff)); },
-                 [](C& c, const C&, float v) { c.tuning.centerDiff = DiffMode(std::clamp(int(std::lround(v)), 0, 2)); }});
+                 [](C& c, const C&, float v) { c.tuning.centerDiff = DiffMode(std::clamp(int(std::lround(v)), 0, 2)); }, combustionOnly});
     p.push_back({"drivetrain.lsdRatio", "DRIVETRAIN", "LSD lock ratio (front / rear)", "", K::Number, 1.0f, 2, 0.05f,
                  1.01f, 5.0f, false, 1.1f, 3.0f, false, {},
                  [](const C& c, const C&) { return c.tuning.limitedSlipRatio; },
@@ -192,6 +218,8 @@ const std::vector<SetupParamInfo>& setupParams() {
     return kParams;
 }
 
+bool setupParamApplies(const SetupParamInfo& p, const VehicleConfig& base) { return !p.applies || p.applies(base); }
+
 const SetupParamInfo* findSetupParam(const std::string& key) {
     for (const SetupParamInfo& p : setupParams())
         if (key == p.key) return &p;
@@ -232,6 +260,10 @@ bool buildSetupConfig(const VehicleDefinition& def, const VehicleSetup& setup, V
     for (const SetupParamInfo& p : setupParams()) {
         const auto it = setup.values.find(p.key);
         if (it == setup.values.end()) continue;
+        if (!setupParamApplies(p, base)) {
+            warnings.push_back("setup '" + setup.name + "': " + p.key + " does not apply to this vehicle, ignored");
+            continue;
+        }
         float v = it->second;
         if (!std::isfinite(v)) {
             warnings.push_back("setup '" + setup.name + "': " + p.key + " is not a number, ignored");

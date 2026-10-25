@@ -24,6 +24,8 @@ struct GameSettings {
     // Controls
     int driveKeys = 0;         // DriveKeys: 0 W A S D, 1 arrows (the other cluster moves the free camera)
     int padGlyphs = 0;         // PadGlyphSetting: 0 auto (from the connected pad), 1 Xbox, 2 PlayStation
+    // Vehicle chosen last on the vehicle page (catalog id, [a-z0-9_] only); empty = the default vehicle
+    std::string vehicle;
 
     bool operator==(const GameSettings&) const = default;
 };

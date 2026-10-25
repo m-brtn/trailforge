@@ -40,6 +40,10 @@ GameSettings sanitized(GameSettings s) {
     s.diffLocks = std::clamp(s.diffLocks, 0, 3);
     s.driveKeys = std::clamp(s.driveKeys, 0, 1);
     s.padGlyphs = std::clamp(s.padGlyphs, 0, 2);
+    const bool idOk = s.vehicle.size() <= 64 && std::all_of(s.vehicle.begin(), s.vehicle.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    });
+    if (!idOk) s.vehicle.clear();
     return s;
 }
 
@@ -64,7 +68,9 @@ std::string serializeSettings(const GameSettings& in) {
                   s.quality, double(s.renderScale), s.vsync ? 1 : 0, double(s.masterVolume), double(s.musicVolume),
                   double(s.effectsVolume), double(s.uiVolume), s.abs ? 1 : 0, s.traction, s.diffLocks,
                   s.autoReverse ? 1 : 0, s.driveKeys, s.padGlyphs);
-    return buf;
+    std::string out = buf;
+    if (!s.vehicle.empty()) out += "vehicle = " + s.vehicle + "\n";
+    return out;
 }
 
 GameSettings parseSettings(const std::string& text, int* skipped) {
@@ -78,6 +84,14 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
         line = trim(line);
         if (line.empty()) continue;
         const auto eq = line.find('=');
+        if (eq != std::string::npos && trim(line.substr(0, eq)) == "vehicle") {
+            s.vehicle = trim(line.substr(eq + 1));
+            if (sanitized(s).vehicle != s.vehicle) {
+                s.vehicle.clear();
+                ++bad;
+            }
+            continue;
+        }
         double v = 0.0;
         if (eq == std::string::npos || !parseNumber(trim(line.substr(eq + 1)), v)) {
             ++bad;

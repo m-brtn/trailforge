@@ -66,8 +66,13 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
         const auto& t = sim.vehicle().telemetry();
         char g[8];
-        ImGui::Text("%5.1f km/h  gear %s  %s%s  %4.0f rpm", std::abs(t.forwardSpeed) * 3.6f, gearName(t.gear, g, 8),
-                    t.direction == DriveDirection::Forward ? "D" : "R", t.lowRange ? " LOW" : "", t.engineRPM);
+        if (t.ev.electric)
+            ImGui::Text("%5.1f km/h  %s  %s  SoC %.1f %%  %+4.0f kW  motors %+4.0f / %+4.0f N*m", std::abs(t.forwardSpeed) * 3.6f,
+                        t.direction == DriveDirection::Forward ? "D" : "R", evDriveModeName(t.ev.mode), 100.0f * t.ev.soc,
+                        t.ev.motorPowerKW, t.ev.motorTorque[0], t.ev.motorTorque[1]);
+        else
+            ImGui::Text("%5.1f km/h  gear %s  %s%s  %4.0f rpm", std::abs(t.forwardSpeed) * 3.6f, gearName(t.gear, g, 8),
+                        t.direction == DriveDirection::Forward ? "D" : "R", t.lowRange ? " LOW" : "", t.engineRPM);
         // Suspension compression per wheel, laid out as seen from above (front row first, left wheel on the left).
         for (int row = 0; row < 2; ++row) {
             for (int col = 0; col < 2; ++col) {
@@ -87,7 +92,10 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "FROZEN (P to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("%s", driveHint.c_str());
-        ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
+        if (sim.vehicleConfig().isElectric())
+            ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
+        else
+            ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
         ImGui::TextDisabled("C camera  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
@@ -146,14 +154,14 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
     const bool reverse = t.direction == DriveDirection::Reverse;
-    const char* selector = t.gear == 0 ? "N" : reverse ? "R" : "D";
+    const char* selector = t.gear == 0 && !t.ev.electric ? "N" : reverse ? "R" : "D";
     char gear[8];
     ImGui::SetNextWindowPos(ImVec2(0.5f * display.x, display.y - 16.0f), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.5f);
     ImGui::Begin("##drivehud", nullptr, flags);
     remember("drive_hud", true);
     ImGui::PushFont(nullptr, 2.4f * ImGui::GetStyle().FontSizeBase);
-    const ImVec4 selColor = reverse ? ImVec4(1.0f, 0.55f, 0.25f, 1) : t.gear == 0 ? ImVec4(0.75f, 0.75f, 0.75f, 1)
+    const ImVec4 selColor = reverse ? ImVec4(1.0f, 0.55f, 0.25f, 1) : t.gear == 0 && !t.ev.electric ? ImVec4(0.75f, 0.75f, 0.75f, 1)
                                                                                   : ImVec4(0.45f, 0.9f, 0.45f, 1);
     ImGui::TextColored(selColor, "%s", selector);
     ImGui::SameLine();
@@ -162,11 +170,26 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::TextUnformatted("km/h");
-    ImGui::Text("gear %s  %s", gearName(t.gear, gear, sizeof(gear)), reverse ? "(reverse)" : "(forward)");
+    if (t.ev.electric) ImGui::Text("single speed  %s", reverse ? "(reverse)" : "(forward)");
+    else ImGui::Text("gear %s  %s", gearName(t.gear, gear, sizeof(gear)), reverse ? "(reverse)" : "(forward)");
     ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::BeginGroup();
-    if (t.layout == DriveLayout::PartTime) {
+    if (t.ev.electric) {
+        // Drive mode, battery state of charge and motor power (negative = regeneration, drawn in blue).
+        if (t.ev.mode == EvDriveMode::OffRoad) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "%s", evDriveModeName(t.ev.mode));
+        else ImGui::TextDisabled("%s", evDriveModeName(t.ev.mode));
+        ImGui::SameLine();
+        char soc[24];
+        std::snprintf(soc, sizeof(soc), "SoC %.1f %%", 100.0f * t.ev.soc);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, t.ev.soc < 0.1f ? ImVec4(0.85f, 0.3f, 0.2f, 1) : ImVec4(0.3f, 0.6f, 0.9f, 1));
+        ImGui::ProgressBar(std::clamp(t.ev.soc, 0.0f, 1.0f), ImVec2(110, 0), soc);
+        ImGui::PopStyleColor();
+        if (t.ev.motorPowerKW < -0.5f) ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1), "%+4.0f kW regen", t.ev.motorPowerKW);
+        else ImGui::TextDisabled("%+4.0f kW", t.ev.motorPowerKW);
+        ImGui::SameLine();
+        ImGui::TextDisabled("F %+4.0f  R %+4.0f N*m", t.ev.motorTorque[0], t.ev.motorTorque[1]);
+    } else if (t.layout == DriveLayout::PartTime) {
         // Transfer case: 2H dim, 4H green, 4L amber.
         const char* mode = transferModeName(t.transfer);
         if (t.transfer == TransferMode::FourLow) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "%s", mode);
@@ -178,7 +201,7 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
         if (t.lowRange) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1), "LOW");
         else ImGui::TextDisabled("HIGH");
     }
-    ImGui::TextDisabled("%4.0f rpm", t.engineRPM);
+    if (!t.ev.electric) ImGui::TextDisabled("%4.0f rpm", t.engineRPM);
     ImGui::EndGroup();
     ImGui::SameLine();
     drawAidIndicators(sim);
@@ -352,6 +375,11 @@ void DebugUI::drawAudio(AudioPanelState& a) {
         ImGui::Text("Exhaust rates  %.2f / %.2f / %.2f, whine %.0f Hz", st.exhaustRates[0], st.exhaustRates[1],
                     st.exhaustRates[2], st.whineHz);
     }
+    if (ImGui::CollapsingHeader("Electric drive (synthesized)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Motor, gear and inverter", &s.motor, 0.0f, 3.0f, "%.2f");
+        ImGui::Text("Motor order %.0f Hz, tone level %.4f, inverter %.4f, road hum %.2f", st.motorHz, st.motorLevel,
+                    st.inverterLevel, st.road);
+    }
     if (ImGui::CollapsingHeader("Layers", ImGuiTreeNodeFlags_DefaultOpen)) {
         bar("skid", st.skid, 0, 1.2f, "%.2f");
         bar("gravel", st.gravel, 0, 1.2f, "%.2f");
@@ -430,9 +458,21 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     const VehicleTelemetry& t = sim.vehicle().telemetry();
     char g[8];
     ImGui::Text("Speed %.2f m/s (%.1f km/h), along body Z %.2f m/s", t.speed, t.speed * 3.6f, t.forwardSpeed);
-    ImGui::Text("Engine %.0f rpm   Gear %s%s   Clutch %.2f   Direction %s   Range %s", t.engineRPM,
-                gearName(t.gear, g, 8), t.shifting ? " (shifting)" : "", t.clutchFriction,
-                t.direction == DriveDirection::Forward ? "forward" : "reverse", t.lowRange ? "LOW" : "high");
+    if (t.ev.electric) {
+        const EvTelemetry& e = t.ev;
+        ImGui::Text("Motors F %.0f rpm %+.0f N*m %+.0f kW   R %.0f rpm %+.0f N*m %+.0f kW   Direction %s", e.motorRPM[0],
+                    e.motorTorque[0], e.motorPowerAxleKW[0], e.motorRPM[1], e.motorTorque[1], e.motorPowerAxleKW[1],
+                    t.direction == DriveDirection::Forward ? "forward" : "reverse");
+        ImGui::Text("Battery SoC %.2f %%  %+.1f kW (incl. aux)   used %.3f kWh, recovered %.3f kWh   mode %s, front share %.2f",
+                    100.0f * e.soc, e.batteryPowerKW, e.energyOutKWh, e.energyInKWh, evDriveModeName(e.mode), e.frontShare);
+        ImGui::Text("TC factor F %.2f R %.2f   regen allowance F %.2f R %.2f   friction brake F %.2f R %.2f%s", e.tcFactor[0],
+                    e.tcFactor[1], e.regenFactor[0], e.regenFactor[1], e.frictionScale[0], e.frictionScale[1],
+                    e.regenActive ? "   REGEN" : "");
+    } else {
+        ImGui::Text("Engine %.0f rpm   Gear %s%s   Clutch %.2f   Direction %s   Range %s", t.engineRPM,
+                    gearName(t.gear, g, 8), t.shifting ? " (shifting)" : "", t.clutchFriction,
+                    t.direction == DriveDirection::Forward ? "forward" : "reverse", t.lowRange ? "LOW" : "high");
+    }
     ImGui::Text("Drivetrain %s%s%s   driven: %s%s   front share %.2f   drag %.0f N%s", driveLayoutName(t.layout),
                 t.layout == DriveLayout::PartTime ? " " : "",
                 t.layout == DriveLayout::PartTime ? transferModeName(t.transfer) : "", t.frontDriven ? "front " : "",
@@ -557,16 +597,20 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         ImGui::TextDisabled("(longitudinal, lateral)");
     }
     if (ImGui::CollapsingHeader("Drivetrain (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
-        changed |= ImGui::SliderFloat("Engine torque [N*m]", &m_tuning.engineMaxTorque, 100.0f, 1200.0f, "%.0f");
-        changed |= ImGui::SliderFloat("Clutch strength", &m_tuning.clutchStrength, 1.0f, 40.0f, "%.1f");
-        changed |= ImGui::Checkbox("Launch clutch limit", &m_tuning.launchClutchLimit);
-        remember("clutch_limit");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Near min rpm the clutch passes at most the engine torque at this throttle.\n"
-                              "Off: the slipping clutch delivers ~840 N*m at any throttle.");
-        changed |= ImGui::SliderFloat("Creep torque [N*m]", &m_tuning.creepTorque, 0.0f, 150.0f, "%.0f");
-        changed |= ImGui::SliderFloat("Final drive", &m_tuning.finalDrive, 2.0f, 7.0f, "%.2f");
-        changed |= ImGui::SliderFloat("Rev limit [rpm]", &m_tuning.revLimitRPM, 1000.0f, 12000.0f, "%.0f");
+        const bool electric = sim.vehicleConfig().isElectric();
+        if (electric) ImGui::TextDisabled("Electric: motor torque, regen and the OFF-ROAD split are set in the garage.");
+        if (!electric) {
+            changed |= ImGui::SliderFloat("Engine torque [N*m]", &m_tuning.engineMaxTorque, 100.0f, 1200.0f, "%.0f");
+            changed |= ImGui::SliderFloat("Clutch strength", &m_tuning.clutchStrength, 1.0f, 40.0f, "%.1f");
+            changed |= ImGui::Checkbox("Launch clutch limit", &m_tuning.launchClutchLimit);
+            remember("clutch_limit");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Near min rpm the clutch passes at most the engine torque at this throttle.\n"
+                                  "Off: the slipping clutch delivers ~840 N*m at any throttle.");
+            changed |= ImGui::SliderFloat("Creep torque [N*m]", &m_tuning.creepTorque, 0.0f, 150.0f, "%.0f");
+            changed |= ImGui::SliderFloat("Final drive", &m_tuning.finalDrive, 2.0f, 7.0f, "%.2f");
+            changed |= ImGui::SliderFloat("Rev limit [rpm]", &m_tuning.revLimitRPM, 1000.0f, 12000.0f, "%.0f");
+        }
         changed |= ImGui::SliderFloat("Front brake [N*m/wheel]", &fa.brakeTorque, 0.0f, 8000.0f, "%.0f");
         changed |= ImGui::SliderFloat("Rear brake [N*m/wheel]", &ra.brakeTorque, 0.0f, 8000.0f, "%.0f");
         changed |= ImGui::SliderFloat("Handbrake torque [N*m]", &ra.handBrakeTorque, 0.0f, 8000.0f, "%.0f");

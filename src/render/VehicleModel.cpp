@@ -258,8 +258,9 @@ void lowerBody(Parts& P, const style::Livery& L, const WheelFit& W) {
 }
 
 // Glasshouse: lofted from the belt deck (inset 8 cm from the body side) to the roof with a raked windshield and
-// tumblehome; black A/B/C pillars and window frames, orange rear quarter panel, chamfered white roof.
-void glasshouse(Parts& P, const style::Livery& L) {
+// tumblehome; black A/B/C pillars and window frames, accent rear quarter panel (or a quarter window with a
+// slanted accent graphic when `quarterWindow`), chamfered roof.
+void glasshouse(Parts& P, const style::Livery& L, bool quarterWindow = false) {
     const std::vector<float> endX{-1.0f, -0.94f, -0.80f, -0.74f, 0.74f, 0.80f, 0.94f, 1.0f};
     const style::Footprint base =
         style::roundedRect(0.80f, -2.13f, kShieldZ, 0.06f, kDeck, 4, {0.84f, -0.26f, -0.34f, -1.09f, -1.16f, -2.02f}, endX);
@@ -306,7 +307,7 @@ void glasshouse(Parts& P, const style::Livery& L) {
         else if (c.z > -0.34f) kind = Trim;
         else if (c.z > -1.09f) { kind = Glass; return P[sided("door_rear", sx)]; }
         else if (c.z > -1.16f) kind = Trim;
-        else if (c.z > -2.02f) kind = Accent;
+        else if (c.z > -2.02f) kind = quarterWindow ? Glass : Accent;
         else kind = Paint;
         return P["body_shell"];
     };
@@ -341,11 +342,27 @@ void glasshouse(Parts& P, const style::Livery& L) {
     for (float sx : {1.0f, -1.0f})
         shell.addBar({sx * 0.725f, kRoofY + 0.004f, -2.03f}, {sx * 0.725f, kRoofY + 0.004f, 0.34f}, 0.010f, 0.008f,
                      {0, 1, 0}, L.trim); // drip rails
+    if (!quarterWindow) return;
+    // Slanted accent graphic over the rear part of the quarter window (decal on the glass plane).
+    for (float sx : {1.0f, -1.0f}) {
+        const glm::vec3 n = glm::normalize(glm::vec3(sx * (kRoofY - kDeck), 0.08f, 0.0f));
+        auto at = [&](float t, float z) {
+            return glm::vec3(sx * (0.80f - 0.08f * t), kDeck + t * (kRoofY - kDeck), z) + n * 0.003f;
+        };
+        style::face(shell, at(0.10f, -1.86f), at(0.10f, -2.00f), at(0.90f, -1.97f), at(0.90f, -1.50f), n, L.accent);
+    }
 }
 
+// Hood styling: the fender tops carry the accent paint between accentZ0 and accentZ1; `ventPanel` replaces the
+// two small louvred vents by one closed dark panel in the center (electric: no radiator air to exhaust).
+struct HoodStyle {
+    float accentZ0 = 0.95f, accentZ1 = 1.75f;
+    bool ventPanel = false;
+};
+
 // Hood: cross-section (chamfered edges, panel gaps to the fender tops, raised center) lofted along z with a
-// crown that drops to a rounded nose over the grille. The fender tops carry the orange accent.
-void hood(Parts& P, const style::Livery& L) {
+// crown that drops to a rounded nose over the grille.
+void hood(Parts& P, const style::Livery& L, const HoodStyle& hs = {}) {
     const std::vector<float> xs{-0.79f, -0.772f, -0.52f, -0.512f, -0.504f, -0.36f, -0.34f,
                                 0.34f,  0.36f,   0.504f, 0.512f,  0.52f,   0.772f, 0.79f};
     const std::vector<float> dy{-0.035f, 0.0f, 0.0f, -0.004f, 0.0f, 0.0f, 0.02f,
@@ -369,15 +386,54 @@ void hood(Parts& P, const style::Livery& L) {
         rows, false,
         [&](int i, int k) -> style::SkinCell {
             const float z = 0.5f * (st[i].z + st[i + 1].z);
-            const bool outer = k <= 1 || k >= 12;
+            const bool outer = k <= 1 || k >= 11;
             if (k == 2 || k == 3 || k == 9 || k == 10) return {&h, &L.liner};
-            return {&h, outer && z > 0.95f && z < 1.75f ? &L.accent : &L.body};
+            return {&h, outer && z > hs.accentZ0 && z < hs.accentZ1 ? &L.accent : &L.body};
         },
         [](int, int, const glm::vec3& c) { return c - glm::vec3(0.0f, 0.3f, 1.5f); });
+    if (hs.ventPanel) {
+        // Hood crown at the center columns: y(z) from the stations plus the 2 cm bulge.
+        auto crown = [&](float z) {
+            for (std::size_t i = 0; i + 1 < std::size(st); ++i)
+                if (z >= st[i].z && z <= st[i + 1].z)
+                    return st[i].y + (st[i + 1].y - st[i].y) * (z - st[i].z) / (st[i + 1].z - st[i].z) + 0.02f;
+            return st[0].y + 0.02f;
+        };
+        const float z0 = 1.30f, z1 = 1.78f;
+        const glm::vec3 a(-0.20f, crown(z0) + 0.002f, z0), b(0.20f, crown(z0) + 0.002f, z0);
+        const glm::vec3 c(0.20f, crown(z1) + 0.002f, z1), d(-0.20f, crown(z1) + 0.002f, z1);
+        const glm::vec3 n = glm::normalize(glm::cross(c - b, a - b));
+        style::face(h, a, b, c, d, n.y > 0 ? n : -n, L.liner);
+        for (int k = 1; k < 6; ++k) {
+            const float z = z0 + (z1 - z0) * float(k) / 6.0f;
+            h.addBox({0.0f, crown(z) + 0.004f, z}, {0.185f, 0.0025f, 0.005f}, L.trim);
+        }
+        return;
+    }
     for (float sx : {1.0f, -1.0f}) {
         h.addBox({sx * 0.43f, 0.6995f, 1.12f}, {0.06f, 0.002f, 0.075f}, L.liner); // vents
         for (int k = 0; k < 4; ++k) h.addBox({sx * 0.43f, 0.7015f, 1.06f + 0.04f * k}, {0.055f, 0.0025f, 0.006f}, L.trim);
     }
+}
+
+// Bumper swept along the front (zSign +1) or rear (-1) face and around the body corners, ending 4 cm along the
+// sides. Profile: (d outward from the footprint skin, y above `y`).
+void wrapBumper(MeshData& m, float zSign, float y, const std::vector<glm::vec2>& profile, const Material& mat) {
+    std::vector<glm::vec3> path, normals;
+    for (float sx : {-1.0f, 1.0f})
+        for (int k = 0; k <= 6; ++k) {
+            // Right corner from the side to the end face, left corner back to the side.
+            const float a = 0.5f * kPi * float(sx < 0 ? k : 6 - k) / 6.0f; // 0 = side, pi/2 = end face
+            const glm::vec3 nrm(sx * std::cos(a), 0.0f, zSign * std::sin(a));
+            path.push_back(glm::vec3(sx * (kSkinX - kCornerR), y, zSign * (kFaceZ - kCornerR)) + nrm * kCornerR);
+            normals.push_back(nrm);
+        }
+    for (float sx : {-1.0f, 1.0f}) {
+        const std::size_t end = sx < 0 ? 0 : path.size() - 1;
+        path.insert(sx < 0 ? path.begin() : path.end(), path[end] - glm::vec3(0, 0, zSign * 0.04f));
+        normals.insert(sx < 0 ? normals.begin() : normals.end(), normals[end]);
+    }
+    style::sweepProfile(m, path, normals, profile, mat);
 }
 
 void buildSuv(VehicleVisual& v, const VehicleConfig& cfg) {
@@ -501,24 +557,11 @@ void buildSuv(VehicleVisual& v, const VehicleConfig& cfg) {
         MeshData& b = P.add("bumper_rear", "chassis", {0, 0.02f, -kFaceZ}, true, true);
         // Swept along the rear face and around the body corners: top deck, chamfer, upright face with a groove,
         // lower chamfer sloping back under the body.
-        std::vector<glm::vec3> path, normals;
-        for (float sx : {-1.0f, 1.0f})
-            for (int k = 0; k <= 6; ++k) {
-                const float a = 0.5f * kPi * float(sx < 0 ? 6 - k : k) / 6.0f; // 0 = side, pi/2 = rear
-                const glm::vec3 nrm(sx * std::cos(a), 0.0f, -std::sin(a));
-                path.push_back(glm::vec3(sx * (kSkinX - kCornerR), 0.0f, -kFaceZ + kCornerR) + nrm * kCornerR);
-                normals.push_back(nrm);
-            }
-        for (float sx : {-1.0f, 1.0f}) {
-            const std::size_t end = sx < 0 ? 0 : path.size() - 1;
-            path.insert(sx < 0 ? path.begin() : path.end(), path[end] + glm::vec3(0, 0, 0.04f));
-            normals.insert(sx < 0 ? normals.begin() : normals.end(), normals[end]);
-        }
-        style::sweepProfile(b, path, normals,
-                            {{-0.01f, 0.15f}, {0.075f, 0.15f}, {0.105f, 0.12f}, {0.105f, 0.045f}, {0.096f, 0.035f},
-                             {0.096f, 0.020f}, {0.105f, 0.010f}, {0.105f, -0.065f}, {0.085f, -0.11f}, {0.04f, -0.15f},
-                             {-0.01f, -0.15f}},
-                            L.steel);
+        wrapBumper(b, -1.0f, 0.0f,
+                   {{-0.01f, 0.15f}, {0.075f, 0.15f}, {0.105f, 0.12f}, {0.105f, 0.045f}, {0.096f, 0.035f},
+                    {0.096f, 0.020f}, {0.105f, 0.010f}, {0.105f, -0.065f}, {0.085f, -0.11f}, {0.04f, -0.15f},
+                    {-0.01f, -0.15f}},
+                   L.steel);
         b.addBeveledBox({0.0f, -0.12f, -2.27f}, {0.30f, 0.012f, 0.06f}, 0.004f, L.steel); // centre step plate
         b.addBox({0.0f, -0.08f, -2.36f}, {0.04f, 0.04f, 0.05f}, L.steel);               // hitch receiver
         b.addBox({0.0f, -0.08f, -2.411f}, {0.028f, 0.028f, 0.002f}, L.liner);
@@ -583,6 +626,183 @@ void buildSuv(VehicleVisual& v, const VehicleConfig& cfg) {
     v.wheel.beadlock = false;
     v.wheel.rim = {MatId::Generic, glm::vec3(0.040f), 0.40f, 0.9f, 0.6f};
     v.wheel.ring = {MatId::Generic, glm::vec3(0.22f), 0.35f, 1.0f, 0.5f};
+    v.headlightLens = {0.67f, 0.40f, 2.24f};
+}
+
+// ================================================================ trailforge_ev
+// Dual-motor electric SUV (Cars.png car #2) on the same wheel positions as trailforge_suv (track 1.80, wheelbase
+// 2.80), so it shares the fitted lower body, glasshouse and hood. Own livery (white / light grey, blue accents,
+// black cladding), closed front panel with a full-width LED bar, blue LED lamps, full-width tail light, low roof
+// rails with a light bar, spare on the tailgate. Chassis: frame rails, floor battery pack, one motor per axle.
+void buildEv(VehicleVisual& v, const VehicleConfig& cfg) {
+    const WheelFit W = fitWheels(cfg);
+    const style::Livery L = style::arcticElectric();
+    const Material chrome = style::metal(glm::vec3(0.92f), 0.05f, 0.0f);
+    const Material head = style::led(MatId::Headlight, {0.90f, 0.95f, 1.0f});
+    const Material blueLed = style::led(MatId::Headlight, {0.10f, 0.40f, 1.0f});
+    const Material brake = style::led(MatId::BrakeLight, {1.0f, 0.04f, 0.02f});
+    const Material reverse = style::led(MatId::ReverseLight, {1.0f, 1.0f, 1.0f});
+    const Material amber = style::led(MatId::Amber, {1.0f, 0.42f, 0.04f});
+    const Material gloss{MatId::Generic, glm::vec3(0.012f), 0.12f, 0.0f, 0.7f}; // piano-black front panel
+    const Material pack{MatId::Generic, glm::vec3(0.05f), 0.55f, 0.6f, 1.0f};
+    const glm::vec3 up(0, 1, 0), fwd(0, 0, 1);
+
+    Parts P;
+    MeshData& chassis = P.add("chassis", "", {0, 0, 0}, false, false);
+    P.add("body_shell", "chassis", {0, 0.30f, 0}, true, false);
+    for (float sx : {1.0f, -1.0f}) {
+        P.add(sided("fender_front", sx), "body_shell", {sx * kSkinX, 0.3f, 1.45f}, true, true);
+        P.add(sided("door_front", sx), "body_shell", {sx * kSkinX, 0.3f, kSeamFront}, true, true);
+        P.add(sided("door_rear", sx), "body_shell", {sx * kSkinX, 0.3f, kSeamB}, true, true);
+    }
+    P.add("hood", "body_shell", {0, kDeck, kShieldZ}, true, true);
+    MeshData& tailgate = P.add("tailgate", "body_shell", {-0.70f, 0.4f, -kFaceZ}, true, true);
+    P.add("windshield", "body_shell", {0, 0.93f, 0.66f}, false, true);
+    MeshData& panel = P.add("front_panel", "body_shell", {0, 0.41f, kFaceZ}, true, true);
+    MeshData& shell = P["body_shell"];
+
+    // ---- Chassis: frame rails, battery pack between the axles, motor + reduction housing on each axle
+    for (float sx : {1.0f, -1.0f})
+        chassis.addBeveledBox({sx * 0.40f, -0.14f, 0.0f}, {0.045f, 0.07f, 2.12f}, 0.01f, L.steel);
+    for (float z : {-2.0f, 2.0f}) chassis.addBox({0.0f, -0.14f, z}, {0.40f, 0.04f, 0.04f}, L.steel);
+    chassis.addBox({0.0f, 0.0f, 0.0f}, {0.50f, 0.27f, 2.10f}, L.underbody);
+    MeshData& battery = P.add("battery_pack", "chassis", {0, -0.24f, 0}, true, false);
+    battery.addBeveledBox({0.0f, -0.235f, 0.0f}, {0.50f, 0.055f, 0.88f}, 0.02f, pack);
+    for (float z : {-0.6f, -0.2f, 0.2f, 0.6f}) battery.addBox({0.0f, -0.291f, z}, {0.46f, 0.002f, 0.012f}, L.steel);
+    for (float zc : W.axleZ) {
+        MeshData& motor = P.add(zc > 0 ? "motor_front" : "motor_rear", "chassis", {0, -0.22f, zc}, false, true);
+        motor.addCylinder({-0.17f, -0.22f, zc + 0.02f}, {0.12f, -0.22f, zc + 0.02f}, 0.115f, 20, L.alu);
+        motor.addCylinder({0.12f, -0.22f, zc + 0.02f}, {0.15f, -0.22f, zc + 0.02f}, 0.085f, 20, L.gunmetal);
+        motor.addBeveledBox({-0.02f, -0.09f, zc + 0.02f}, {0.14f, 0.035f, 0.09f}, 0.012f, L.gunmetal); // inverter
+        motor.addCylinder({-0.08f, -0.22f, zc - 0.05f}, {-0.08f, -0.22f, zc - 0.16f}, 0.07f, 16, L.alu); // gearset
+    }
+    P.add("skid_plate", "chassis", {0, -0.26f, 2.20f}, true, true)
+        .addBar({0.0f, -0.24f, 2.24f}, {0.0f, -0.31f, 1.66f}, 0.40f, 0.008f, up, L.alu, 0.004f);
+
+    // ---- Body shell, glasshouse, hood, flares
+    lowerBody(P, L, W);
+    for (float sx : {1.0f, -1.0f})
+        for (float zc : W.axleZ) {
+            const float top = W.arch[W.arch.size() / 2].y + 0.03f, x = std::min(0.50f, W.innerX) - 0.006f;
+            shell.addBox({sx * x, 0.5f * (0.20f + top), zc}, {0.004f, 0.5f * (top - 0.20f), -W.arch.front().x},
+                         L.liner);
+        }
+    glasshouse(P, L, true);
+    HoodStyle hs;
+    hs.accentZ0 = 1.62f;
+    hs.accentZ1 = 2.13f;
+    hs.ventPanel = true;
+    hood(P, L, hs);
+    shell.addBar({-0.80f, 0.708f, kShieldZ + 0.004f}, {0.80f, 0.708f, kShieldZ + 0.004f}, 0.018f, 0.012f, up, L.trim);
+    const float stripeZ0 = W.axleZ[0] + W.arch.front().x - 0.03f, stripeZ1 = W.axleZ[1] + W.arch.back().x + 0.03f;
+    for (float sx : {1.0f, -1.0f}) {
+        for (float zc : W.axleZ) {
+            const std::string name = std::string("flare_") + (zc > 0 ? "front_" : "rear_") + sideName(sx);
+            style::fenderFlare(P.add(name, zc > 0 ? sided("fender_front", sx) : "body_shell", {sx * kSkinX, 0.10f, zc},
+                                     true, true),
+                               sx, archAt(W, zc), W.flareBand, kSkinX, kFlareProud, L.trim, L.liner);
+        }
+        P[sided("fender_front", sx)].addBox({sx * (kSkinX + 0.004f), 0.30f, 2.03f}, {0.004f, 0.02f, 0.04f}, amber);
+        shell.addBox({sx * (kSkinX + 0.004f), 0.30f, -2.04f}, {0.004f, 0.02f, 0.03f}, amber);
+        // Flush door handles.
+        for (float z : {0.28f, -0.64f})
+            P[z > kSeamB ? sided("door_front", sx) : sided("door_rear", sx)].addBeveledBox(
+                {sx * 0.884f, 0.52f, z}, {0.006f, 0.012f, 0.075f}, 0.004f, L.trim);
+        // Blue stripe low on the doors, just above the cladding, from arch to arch (decal).
+        for (const auto& [z0, z1, part] : {std::tuple{std::min(stripeZ0, kSeamFront - 0.02f), kSeamB + 0.01f, "door_front"},
+                                           std::tuple{kSeamB - 0.01f, stripeZ1, "door_rear"}})
+            style::panelGap(P[sided(part, sx)], {sx * 0.8847f, 0.035f, z0}, {sx * 0.8847f, 0.035f, z1}, {sx, 0, 0},
+                            0.022f, L.accent);
+        style::rockSlider(P.add(sided("rock_slider", sx), "chassis", {sx * 0.80f, kSill, 0}, true, true), sx, 0.95f,
+                          kSill - 0.02f, -0.70f, 0.60f, L.trim, L.accent, L.steel);
+        style::mirror(P.add(sided("mirror", sx), sided("door_front", sx), {sx * 0.82f, 0.70f, 0.74f}, false, true), sx,
+                      {sx * 0.82f, 0.70f, 0.74f}, L.trim, chrome);
+    }
+
+    // ---- Front: closed panel, full-width LED bar, headlights, wrapped bumper with blue lamps and tow points
+    panel.addBeveledBox({0.0f, 0.41f, kFaceZ + 0.006f}, {0.46f, 0.13f, 0.012f}, 0.006f, gloss);
+    for (int k = 0; k < 3; ++k)
+        panel.addBox({0.0f, 0.34f + 0.05f * k, kFaceZ + 0.0185f}, {0.40f, 0.0035f, 0.0015f}, L.trim);
+    panel.addBeveledBox({0.0f, 0.47f, kFaceZ + 0.020f}, {0.045f, 0.012f, 0.003f}, 0.002f, L.alu); // badge
+    panel.addBox({0.0f, 0.543f, kFaceZ + 0.014f}, {0.76f, 0.0055f, 0.004f}, head);             // light bar
+    for (float sx : {1.0f, -1.0f}) {
+        MeshData& hl = P.add(sided("headlight", sx), "body_shell", {sx * 0.64f, 0.45f, kFaceZ}, false, true);
+        const glm::vec3 c(sx * 0.64f, 0.45f, kFaceZ + 0.008f);
+        hl.addBeveledBox(c, {0.15f, 0.07f, 0.014f}, 0.007f, L.trim);
+        style::ledRing(hl, c + fwd * 0.014f, fwd, {1, 0, 0}, 0.075f, 0.050f, 0.022f, 0.010f, head);
+        hl.addBox(c + glm::vec3(0.0f, 0.0f, 0.016f), {0.032f, 0.016f, 0.002f}, head);
+        hl.addBox(c + glm::vec3(-sx * 0.115f, 0.0f, 0.016f), {0.022f, 0.045f, 0.002f}, L.gunmetal);
+    }
+    {
+        MeshData& b = P.add("bumper_front", "chassis", {0, 0.07f, kFaceZ}, true, true);
+        wrapBumper(b, 1.0f, 0.07f,
+                   {{-0.01f, 0.15f}, {0.055f, 0.15f}, {0.085f, 0.125f}, {0.10f, 0.05f}, {0.11f, 0.0f},
+                    {0.11f, -0.07f}, {0.09f, -0.11f}, {0.04f, -0.14f}, {-0.01f, -0.14f}},
+                   L.trim);
+        b.addBox({0.0f, 0.05f, kFaceZ + 0.111f}, {0.36f, 0.035f, 0.002f}, L.liner); // lower intake (closed)
+        for (float sx : {1.0f, -1.0f}) {
+            b.addBox({sx * 0.60f, 0.10f, kFaceZ + 0.111f}, {0.085f, 0.022f, 0.002f}, L.liner);
+            b.addBox({sx * 0.60f, 0.10f, kFaceZ + 0.1125f}, {0.075f, 0.014f, 0.001f}, blueLed);
+            b.addBox({sx * 0.40f, -0.02f, kFaceZ + 0.112f}, {0.035f, 0.025f, 0.002f}, L.accent); // recovery point
+            style::shackle(P.add(sided("tow_hook_front", sx), "bumper_front", {sx * 0.40f, -0.04f, 2.32f}, false, true),
+                           {sx * 0.40f, -0.04f, 2.32f}, fwd, L.hooks);
+        }
+    }
+
+    // ---- Rear: full-width tail light, wrapped bumper with blue tow hooks, spare on a tailgate carrier
+    tailgate.addBeveledBox({0.0f, 0.24f, -kFaceZ - 0.006f}, {0.16f, 0.012f, 0.006f}, 0.003f, L.trim); // handle
+    tailgate.addBox({0.0f, 0.505f, -kFaceZ - 0.008f}, {0.56f, 0.004f, 0.003f}, brake);              // light line
+    for (float sx : {1.0f, -1.0f}) {
+        MeshData& tl = P.add(sided("taillight", sx), "body_shell", {sx * 0.72f, 0.50f, -kFaceZ}, false, true);
+        tl.addBeveledBox({sx * 0.71f, 0.50f, -kFaceZ - 0.006f}, {0.15f, 0.035f, 0.012f}, 0.006f, L.trim);
+        tl.addBox({sx * 0.71f, 0.51f, -kFaceZ - 0.019f}, {0.135f, 0.012f, 0.002f}, brake);
+        tl.addBox({sx * 0.76f, 0.484f, -kFaceZ - 0.019f}, {0.06f, 0.006f, 0.002f}, reverse);
+    }
+    {
+        MeshData& b = P.add("bumper_rear", "chassis", {0, 0.02f, -kFaceZ}, true, true);
+        wrapBumper(b, -1.0f, 0.0f,
+                   {{-0.01f, 0.15f}, {0.075f, 0.15f}, {0.105f, 0.12f}, {0.105f, 0.045f}, {0.096f, 0.035f},
+                    {0.096f, 0.020f}, {0.105f, 0.010f}, {0.105f, -0.065f}, {0.085f, -0.11f}, {0.04f, -0.15f},
+                    {-0.01f, -0.15f}},
+                   L.trim);
+        b.addBox({0.0f, -0.08f, -2.36f}, {0.04f, 0.04f, 0.05f}, L.steel); // hitch receiver
+        b.addBox({0.0f, -0.08f, -2.411f}, {0.028f, 0.028f, 0.002f}, L.liner);
+        for (float sx : {1.0f, -1.0f}) {
+            b.addBox({sx * 0.62f, 0.075f, -kFaceZ - 0.1055f}, {0.070f, 0.026f, 0.002f}, L.accent); // blue blocks
+            b.addBox({sx * 0.62f, 0.075f, -kFaceZ - 0.1075f}, {0.050f, 0.005f, 0.001f}, brake);    // reflector
+            style::shackle(P.add(sided("tow_hook_rear", sx), "bumper_rear", {sx * 0.40f, -0.03f, -2.31f}, false, true),
+                           {sx * 0.40f, -0.03f, -2.31f}, -fwd, L.hooks);
+        }
+        style::spareCarrier(P.add("spare_carrier_rear", "tailgate", {0, 0.62f, -kFaceZ}, false, true),
+                            {0.0f, 0.62f, -kFaceZ}, -fwd, 0.30f, L.steel);
+    }
+    v.spares.push_back({"spare_rear", "spare_carrier_rear", {0.0f, 0.62f, -kFaceZ - 0.026f}, {0, 0, -1}, true});
+
+    // ---- Low roof rails with crossbars, front light bar with blue end pods, blue LED strips on the rails, one
+    // flat case. No antenna, no snorkel (no engine air intake).
+    {
+        constexpr float kRailX = 0.64f, kRail0 = -2.00f, kRail1 = 0.16f;
+        MeshData& rails = P.add("roof_rails", "body_shell", {0, kRoofTop, -0.92f}, true, true);
+        const float top = style::roofRails(rails, kRailX, kRail0, kRail1, kRoofTop, {0.04f, -0.85f, -1.70f}, L.trim,
+                                           L.liner);
+        for (float sx : {1.0f, -1.0f})
+            rails.addBox({sx * (kRailX + 0.0095f), kRoofTop + 0.050f, -0.92f}, {0.0015f, 0.004f, 0.80f}, blueLed);
+        MeshData& lb = P.add("light_bar", "roof_rails", {0, top, 0.04f}, false, true);
+        style::lightBar(lb, {0.0f, top + 0.06f, 0.09f}, 0.46f, L.trim, head);
+        for (float sx : {1.0f, -1.0f}) {
+            lb.addBeveledBox({sx * 0.57f, top + 0.05f, 0.08f}, {0.05f, 0.03f, 0.03f}, 0.01f, L.trim);
+            lb.addBox({sx * 0.57f, top + 0.05f, 0.111f}, {0.040f, 0.020f, 0.002f}, blueLed);
+        }
+        MeshData& cs = P.add("case_roof", "roof_rails", {0.0f, top, -1.27f}, false, true);
+        style::cargoCase(cs, {0.0f, top + 0.06f, -1.27f}, {0.42f, 0.06f, 0.36f}, L.trim, L.accent);
+    }
+
+    P.finish(v);
+    v.wheel.spokes = 6;
+    v.wheel.beadlock = false;
+    v.wheel.rim = {MatId::Generic, glm::vec3(0.030f), 0.38f, 0.9f, 0.6f};
+    v.wheel.ring = {MatId::Generic, glm::vec3(0.16f), 0.35f, 1.0f, 0.5f};
+    v.headlightLens = {0.64f, 0.45f, 2.23f};
 }
 
 } // namespace suv
@@ -596,8 +816,9 @@ const VehiclePart* VehicleVisual::find(const std::string& name) const {
 
 VehicleVisual buildVehicleVisual(const VehicleConfig& config) {
     VehicleVisual v;
-    // "trailforge_suv" is the only model; the loader rejects unknown ids
-    suv::buildSuv(v, config);
+    // The loader rejects unknown ids; an empty id falls back to trailforge_suv.
+    if (config.visualModel == "trailforge_ev") suv::buildEv(v, config);
+    else suv::buildSuv(v, config);
     return v;
 }
 

@@ -111,6 +111,60 @@ def spectrogram(path, png, title, t0=None, dur=None, max_hz=None):
     return subprocess.run(cmd, capture_output=True).returncode == 0
 
 
+def analyze_electric(mono, rate, p, prefix, wav):
+    """Electric drive: the motor order line found in the audio vs. the mixer's motor frequency (motor_hz, the
+    electrical order of the faster motor) while it sounds, the inverter carrier level at low and high motor
+    frequency, and the levels of the regen phase."""
+    t, hz, lvl = p["t"], p["motor_hz"], p["motor_level"]
+    sounding = (hz > 60.0) & (lvl > 0.004) & (p["gameplay"] > 0.99)
+    idx = np.nonzero(sounding)[0]
+    if not len(idx):
+        print("electric: the motor never sounds")
+        return
+    ta, tb = t[idx[0]], t[idx[-1]]
+    win, hop = 0.10, 0.05
+    rows = []
+    for c in np.arange(ta + win / 2, tb - win / 2, hop):
+        k = int(np.searchsorted(t, c))
+        if k >= len(t) or not sounding[k]:
+            continue
+        seg = mono[int((c - win / 2) * rate):int((c + win / 2) * rate)]
+        expected = float(np.interp(c, t, hz))
+        near = harmonic_f0(seg, rate, expected * 0.85, expected * 1.15, harmonics=2)
+        rows.append((c, expected, near, float(np.interp(c, t, lvl))))
+    if not rows:
+        print("electric: no analysis windows")
+        return
+    r = np.array(rows)
+    err = r[:, 2] / r[:, 1] - 1.0
+    print(f"electric motor {ta:.2f}-{tb:.2f} s: motor order {r[:, 1].min():.0f}-{r[:, 1].max():.0f} Hz, "
+          f"{len(r)} windows of {win * 1000:.0f} ms")
+    print(f"  order line searched within +-15 %: median error {np.median(err) * 100:+.2f} %, |error| < 2 % in "
+          f"{np.mean(np.abs(err) < 0.02) * 100:.0f} % of windows, correlation {np.corrcoef(r[:, 1], r[:, 2])[0, 1]:.4f}")
+    for c, e, n_, l_ in r[::max(1, len(r) // 8)]:
+        print(f"    t={c:6.2f} s  expected {e:7.1f} Hz  found {n_:7.1f} Hz  mixer level {l_:.4f}")
+    inv = p["inverter_level"]
+    low = sounding & (hz < 150.0)
+    high = sounding & (hz > 500.0)
+    if low.any() and high.any():
+        print(f"  inverter carrier level: {inv[low].mean():.4f} at motor order < 150 Hz, {inv[high].mean():.4f} above "
+              f"500 Hz (fades out with speed)")
+        tl = t[low]
+        th = t[high]
+        print(f"  3.0-3.5 kHz band at low speed {band_db(mono, rate, tl[0], tl[-1] + 0.05, 3000, 3500):.1f} dB, at "
+              f"high speed {band_db(mono, rate, th[0], th[-1], 3000, 3500):.1f} dB")
+    # Regen: the motor sounds while the throttle is released (load ~0).
+    regen = sounding & (p["load"] < 0.02)
+    drive = sounding & (p["load"] > 0.5)
+    if regen.any() and drive.any():
+        print(f"  mixer motor level: drive {lvl[drive].mean():.4f}, regen / coast {lvl[regen].mean():.4f} "
+              f"({regen.sum()} rows)")
+    if "road" in p:
+        moving = p["road"] > 0.0
+        print(f"  road hum level: max {p['road'].max():.3f}, mean while rolling {p['road'][moving].mean() if moving.any() else 0:.3f}")
+    spectrogram(wav, f"{prefix}_ev_motor.png", "electric drive (0-5 kHz)", max(0.0, ta - 0.5), tb - ta + 1.0, 5000)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("wav")
@@ -130,8 +184,12 @@ def main():
         print(f"integrated loudness {loud.get('I', float('nan')):.1f} LUFS, loudness range "
               f"{loud.get('LRA', float('nan')):.1f} LU, true peak {loud.get('Peak', float('nan')):.1f} dBTP")
 
+    electric = "motor_hz" in p and p["motor_hz"].max() > 0.0
+    if electric:
+        analyze_electric(mono, rate, p, args.png_prefix, args.wav)
+
     # ---- engine pitch tracking: first full-throttle run until the throttle is released for braking
-    i0 = first(p["load"] > 0.5)
+    i0 = first(p["load"] > 0.5) if not electric else None
     i1 = first(p["load"] < 0.3, i0) if i0 is not None else None
     if i0 is not None and i1 is not None:
         ta, tb = t[i0], t[i1] - 0.2
