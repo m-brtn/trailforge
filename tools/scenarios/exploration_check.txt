@@ -75,6 +75,13 @@ expect submersion <= 0
 capture /tmp/trailforge_expl_05_after_recovery.png
 wait 0.3
 
+# ---------------------------------------------------------------- play limit: warning 40 m before the recovery
+place -975 -238 270
+wait 0.5
+expect msg:Edge == 1
+wait 1.0
+expect d_recoveries == 1       # still only the lake recovery: the warning band does not recover
+
 # ---------------------------------------------------------------- POI teleports (features 1..13)
 teleport 1
 wait 2.5

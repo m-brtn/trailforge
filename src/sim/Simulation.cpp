@@ -77,6 +77,9 @@ void Simulation::checkRecovery(float dt) {
     const std::optional<float> water = level.waterAt(p.GetX(), p.GetZ());
     m_submersion = water ? *water - p.GetY() : 0.0f;
     m_submergedTime = m_submersion > 0.0f ? m_submergedTime + dt : 0.0f;
+    const bool nearEdge = !level.insidePlayArea(p.GetX(), p.GetZ(), 40.0f);
+    if (nearEdge && !m_nearEdge) setMessage("Edge of the map ahead: driving on recovers the vehicle to the nearest road");
+    m_nearEdge = nearEdge;
     const char* message = nullptr;
     if (!level.insidePlayArea(p.GetX(), p.GetZ(), -8.0f) || p.GetY() < level.bakeStats().minHeight - 30.0f)
         message = "Left the map: vehicle recovered to the nearest road";

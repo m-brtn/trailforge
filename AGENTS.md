@@ -28,7 +28,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 54 tests, 51 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 59 tests, 56 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -50,7 +50,7 @@ prints them). Visual changes to Metal output can be measured with `tools/render/
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
-`trailforge_audio_tests`, `trailforge_probe`
+`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
@@ -70,6 +70,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/wheel_fit.txt # visual wheels / arches follow a tire size change
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
+./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
@@ -78,7 +79,7 @@ python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 # EV motor sound: tools/scenarios/ev_audio.txt with --audio-capture, same analysis (motor order vs motor_hz)
 ```
 
-Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
+Other app flags: `--level ID` (`exploration_peaks`, `proving_ground`; scenarios and `--demo` start on the proving ground), `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
 `--audio-capture file.wav`, `--paths`, `--version`. Scenario checks must not depend on an audio device: everything except
 `audio_check.txt` and `skid_check.txt` (both check the mixer) passes with `--no-audio`.
 The scenario command reference is in `README.md` ("Scenario mode").
@@ -113,7 +114,8 @@ download the artifacts of the green CI run for the release commit (`gh run downl
 
 ```
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
-src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
+src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape), Level (level.json
+              bake: heights, surfaces, render-only water, trees, rocks, POIs), TerrainTiles (streamed HeightFieldShape tiles)
 src/core/     Json (reader, writer, merge)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
@@ -126,7 +128,7 @@ src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure ma
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
               materials, panels, lights, accessories, wheels), VehicleModel (named parts per model), Scenery,
-              GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
+              LevelScene (level props, water, horizon ring), GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
@@ -143,6 +145,7 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id)
+assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id)
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
               assets/images/ CREDITS.md (logo.png is copied from external_assets/images/Logo.png into build/<preset>/assets/images
               at configure time); each with CREDITS.md

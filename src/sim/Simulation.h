@@ -196,6 +196,7 @@ private:
     std::unique_ptr<Vehicle> m_vehicle; // after the track and tiles: destroyed first
     WaterSurface m_water;
     float m_submersion = 0.0f, m_submergedTime = 0.0f;
+    bool m_nearEdge = false; // within the warning band of the play limit (message once per approach)
     int m_recoveries = 0;
     std::optional<std::shared_ptr<const Level>> m_pendingLevel;
     int m_spawnFeature = 0;

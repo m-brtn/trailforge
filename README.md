@@ -146,6 +146,8 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
   choice on the vehicle page (not in scenario mode);
+- `--level ID` — start on level ID (`exploration_peaks`, `proving_ground`); scenarios and `--demo` start on the
+  proving ground unless it is given;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
 - `--paths` — print the asset lookup directories (`assets:` sounds, `music:`, `fonts:`, `images:`) and the user data
@@ -226,6 +228,7 @@ One command per line, `#` starts a comment:
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
+| `level ID` / `place X Z [YAW]` / `map on\|off` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees / show or hide the map overlay |
 
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
@@ -237,6 +240,9 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
+`tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
+streaming numbers, a ford, the deep-water recovery, the play-limit warning, all 13 POI teleports, the map, the EV
+on the level, overviews; `/tmp/trailforge_expl_*.png`),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
@@ -299,6 +305,11 @@ speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu
 `rear_bumper`, `front_bumper`), `wheel_width_r`, `wheel_visual_radius_r` / `wheel_visual_width_r` (measured rear
 wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference over both axles, m),
 `msg:<substring>` (1 if the latest UI message contains the substring),
+levels: `level` (1 on an open-world level, 0 on the proving ground), `level_choice` (index of the remembered
+choice in the level list), `submersion` (m below the water surface), `recoveries`,
+`water_depth` (render-only water over the ground at the vehicle), `road_dist`, `terrain_chunks`, `terrain_tris`,
+`tiles_loaded`, `tiles_async`, `tiles_sync`, `tiles_unloaded`, `tile_build_ms`, `tile_stall_ms`, `tile_update_ms`,
+`tile_x` / `tile_z`; `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -319,7 +330,8 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L; electric: none, a message says so) | L | Y (North) |
 | Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s); electric: drive mode NORMAL ↔ OFF-ROAD | V | D-pad left |
-| Reset to the last start point | R | Back / View |
+| Reset to the last start point (on a level: the nearest road point) | R | Back / View |
+| Map (level only: POIs, roads, rivers; click a POI to teleport) | M | — |
 
 Keyboard pedals are a driver-input model (`src/input/KeyboardPedals.h`, the constants are in `KeyboardPedalSettings`),
 not a force: a held W goes to 0.5 within 0.15 s and to 1.0 after 0.8 s, a held S to 0.4 within 0.1 s and to 1.0
@@ -414,7 +426,9 @@ on other platforms use Ctrl+click.
 
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
-src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
+src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape),
+              Level (level.json bake: heights, surfaces, water, trees, rocks, POIs), TerrainTiles (streamed
+              HeightFieldShape tiles + per-tile trunk / rock colliders)
 src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
@@ -425,7 +439,8 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepC
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
               VehicleAudioFeed (per-tick frame and events), AudioManifest + Json, AudioSystem (miniaudio device / WAV capture)
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
-              Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
+              Scenery (backdrop terrain, pine meshes and instances), LevelScene (level props, water, horizon ring,
+              tree instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL), KeyboardPedals
@@ -439,6 +454,7 @@ tests/        CTest physics, vehicle, app and audio tests (no window, no audio d
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
               shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
 assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format")
+assets/levels/ <id>/level.json — open-world level definitions (see "Exploration Peaks")
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
               assets/images/ (CREDITS.md; logo.png is copied from external_assets/images/Logo.png into the build tree)
@@ -884,6 +900,38 @@ momentum. Traction control results are under "Driver aids".
 
 Teleport points are in the Tuning window.
 
+## Exploration Peaks (open-world level)
+
+The first level, after `external_assets/images/Exploration.png`. Chosen with the LEVEL row of the start menu
+(EXPLORATION PEAKS / PROVING GROUND, saved as `level =` in settings.cfg) or `--level ID`; the proving ground stays as
+the development level and is what scenarios and `--demo` start on.
+
+- **Data:** `assets/levels/exploration_peaks/level.json` — elevation control points and peaks, coast polygons and
+  beaches, 2 lakes, 4 rivers, 11 spline roads (width, banking, trail flag), forests, a wheat field, flats for the POI
+  sites, 13 POIs, the spawn. `Level` bakes it at load (about 270 ms in Release on the M-series Mac) into a 2561 × 2561 grid at 1 m
+  (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
+  flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
+  shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
+  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI blockouts.
+- **Physics:** the grid is split into 255 m Jolt `HeightFieldShape` tiles (`TerrainTiles`) with per-sample
+  materials; tiles within 420 m are built on a worker thread (removed beyond 620 m), a tile within 110 m that is
+  not ready yet is built synchronously. Tree trunks and rocks are per-tile mesh colliders. The rendered terrain, the props and the colliders
+  come from the same grid and triangles.
+- **Water is render-only:** rivers, the lakes and the sea are surfaces drawn over rigid ground. Fords are shallow
+  dips the vehicle drives through on rigid ground. Deep water: when the body origin stays below the water surface for
+  1 s the vehicle is put on the nearest road with the message "Deep water: vehicle recovered to the nearest road (no
+  buoyancy or water simulated)". The play limit (±1000 m) shows a warning 40 m before it and recovers the vehicle to
+  the nearest road 8 m past it. R resets to the nearest road point, not to the spawn.
+- **Rendering:** quadtree terrain LOD over the same height grid (64 × 64 patch, split by distance and by a height
+  error; `terrainDetail` per preset), splat weights (road paint with worn shoulders, rock, sand, snow) over the grass
+  / mud / wet / wheat masks; 4 tree LODs (crossed cards beyond 380 m; drawn out to 1.5 / 2.5 / 3.5 / 4.5 km per
+  preset); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
+  to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
+  ~1.2e-4 m and reversed-Z keeps the depth precision.
+- **Map (M):** hill-shaded overview with roads, rivers, POI markers (click to teleport) and a teleport list.
+- **Frame times** (2880 × 1800, Metal, the display caps at 120 FPS): High 112–120 FPS on the roads, in the village and
+  at the quarry, 95 FPS looking across the Alpine Lake; Ultra 89 FPS in the village. Details in the devlog.
+
 ## Rendering
 
 SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); one HLSL shader source
@@ -1261,6 +1309,11 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
   sinkage, flotation or bulldozing; puddles have no water physics.
+- Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
+  engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
+  message (the only teleports besides R, the teleport buttons / map and scenario `teleport` / `place`). Snow is rigid
+  low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
+  the play limit is inside the bake).
 - Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
   the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
@@ -1344,8 +1397,9 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 54 of 54 tests pass in Debug and Release, 51 of 51 in headless (no model tests) as of v0.11.0 (new in
-  v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,
+- **CTest.** 59 of 59 tests pass in Debug and Release, 56 of 56 in headless (no model tests) as of v0.12.0 (new in
+  v0.12.0: `level_heightfield_sampling`, `level_tile_streaming`, `level_road_carving`, `level_surfaces_water`,
+  `level_vehicles` in the new `trailforge_level_tests`; new in v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,
   `ev_simulation`, `audio_electric`, `vehicle_page`; 30 before v0.8.0, then `vehicle_catalog_sweep`,
   `vehicle_definition_validation`, `drivetrain_layouts`, `garage_setups`, `suv_definition_matches_builtin`,
   `garage_model` and later ones) (numbers below are from the latest run where they changed):
