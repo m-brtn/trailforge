@@ -6,8 +6,10 @@ A small custom engine in C++20: SDL3 (window, input, gamepad), SDL GPU (renderin
 (`VehicleConstraint` + `WheeledVehicleController`), Dear ImGui (diagnostics), GLM. The focus of the prototype is
 vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs.
 
-All geometry and textures are procedural. The only external assets are the sounds in `assets/audio/` (Freesound
-recordings, see [Audio](#audio) and `assets/audio/CREDITS.md`).
+All geometry is procedural. External assets: the sounds in `assets/audio/` (Freesound recordings, see [Audio](#audio)
+and `assets/audio/CREDITS.md`) and the CC0 photo-scanned ground materials of the open-world level in
+`assets/textures/terrain/` (Poly Haven, BC7 KTX2 in Git LFS, see [Terrain textures](#terrain-textures) and
+`assets/textures/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass, trees) is procedural.
 
 ![Showcase](docs/showcase.jpg)
 
@@ -55,6 +57,9 @@ Trying Windows or Linux (please report what happens):
   `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev
   libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev libasound2-dev
   libpulse-dev libudev-dev libdbus-1-dev`, the list used in `.github/workflows/ci.yml`).
+- Git LFS (`brew install git-lfs`, then `git lfs install` once) before cloning, or `git lfs pull` after: the terrain
+  textures are LFS objects (~168 MB). Without them the level falls back to the procedural ground and the
+  `terrain_textures_assets` test fails.
 - Internet access for the first configure. Dependencies are downloaded via FetchContent as archives
   of exact commits with SHA256 verification:
 
@@ -67,6 +72,7 @@ Trying Windows or Linux (please report what happens):
 | miniaudio | 0.11.25 | `9634bedb` |
 | SPIRV-Headers, SPIRV-Tools, glslang, SPIRV-Cross (shader compiler, host tool only) | Vulkan SDK tag vulkan-sdk-1.4.357.0 | `29981f65`, `9a49b088`, `168d452a`, `6c09849f` |
 | DXC (prebuilt, Windows hosts only) | v1.9.2609 | release zip `dxc_2026_09_29.zip` |
+| bc7enc_rdo, stb_image (texture encoder `tools/texc`, only for `fetch_textures.py`) | master snapshots | `b9438627`, `003501f6` |
 
 ## Build and run
 
@@ -243,6 +249,8 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
 streaming numbers, a ford, the deep-water recovery, the play-limit warning, all 13 POI teleports, the map, the EV
 on the level, overviews; `/tmp/trailforge_expl_*.png`),
+`tools/scenarios/terrain_textures.txt` (terrain texture size per preset and Off, no reloads while driving, frame
+times textured vs procedural per preset, `/tmp/trailforge_tex_*.png`),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
@@ -429,7 +437,8 @@ src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job s
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape),
               Level (level.json bake: heights, surfaces, water, trees, rocks, POIs), TerrainTiles (streamed
               HeightFieldShape tiles + per-tile trunk / rock colliders)
-src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest)
+src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest), Ktx2 (BC7 KTX2
+              reader / writer), TerrainTextureSet (terrain.json, level skip per texture size)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
               ElectricDrive (motor envelope, torque split, regen blend, battery; used by the electric controller in Vehicle.cpp),
@@ -452,9 +461,11 @@ src/app/      Application (lifecycle and main loop), GameFlow (screen / menu sta
 shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedded into the binary
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only definitions
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
-              shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
+              shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts;
+              texc/ — BC7 KTX2 encoder (standalone CMake project); textures/ — terrain texture download and rebuild
 assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format")
 assets/levels/ <id>/level.json — open-world level definitions (see "Exploration Peaks")
+assets/textures/ terrain/ — terrain.json, 12 BC7 KTX2 maps (Git LFS), sources.lock.json; CREDITS.md
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
               assets/images/ (CREDITS.md; logo.png is copied from external_assets/images/Logo.png into the build tree)
@@ -924,7 +935,7 @@ the development level and is what scenarios and `--demo` start on.
   the nearest road 8 m past it. R resets to the nearest road point, not to the spawn.
 - **Rendering:** quadtree terrain LOD over the same height grid (64 × 64 patch, split by distance and by a height
   error; `terrainDetail` per preset), splat weights (road paint with worn shoulders, rock, sand, snow) over the grass
-  / mud / wet / wheat masks; 4 tree LODs (crossed cards beyond 380 m; drawn out to 1.5 / 2.5 / 3.5 / 4.5 km per
+  / mud / wet / wheat masks, shaded with photo-scanned materials ([Terrain textures](#terrain-textures)); 4 tree LODs (crossed cards beyond 380 m; drawn out to 1.5 / 2.5 / 3.5 / 4.5 km per
   preset); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
@@ -955,7 +966,7 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
 
 ### Shader pipeline
 
-`shaders/scene.hlsl` holds all 26 entry points (10 vertex, 16 fragment). Each entry's resources are declared inside
+`shaders/scene.hlsl` holds all 29 entry points (12 vertex, 17 fragment). Each entry's resources are declared inside
 `#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
 in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
 fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
@@ -988,6 +999,40 @@ on Vulkan the shadow depth bias is not clamped (SDL does not enable the `depthBi
 D3D12 clamp at 0.01); MSAA uses the highest sample count the device supports at or below the preset's (Mesa
 lavapipe has 4× but no 2×). The Linux CI job runs the packaged app on lavapipe with the Khronos validation layer
 and fails on any validation error or a black frame.
+
+### Terrain textures
+
+The ground of Exploration Peaks uses six CC0 photo-scanned materials from [Poly Haven](https://polyhaven.com) (list,
+links and authors in `assets/textures/CREDITS.md`): grass (`forrest_ground_01`), soil (`dirt_floor`), road gravel
+(`rocky_trail`), rock (`rock_face_03`), sand (`coast_sand_01`), snow (`snow_02`). The proving ground keeps its
+procedural materials.
+
+- **Files:** `assets/textures/terrain/terrain.json` (layer order, tile size in m, optional tint) and per layer
+  `<id>_albedo.ktx2` (BC7 sRGB 4096², height in alpha) and `<id>_nra.ktx2` (BC7 UNORM 2048²: DirectX normal x / y,
+  roughness, AO), KTX 2.0 with full mip chains down to 1×1, 22.4 MB / 5.6 MB each, 167.8 MB in total, stored in Git
+  LFS. `src/core/Ktx2` reads them (and skips the largest levels for smaller sizes without reading them).
+- **Rebuild:** `python3 tools/textures/fetch_textures.py` downloads the source maps through the Poly Haven API
+  (JPG, cached in `build/texture_cache`), checks their MD5 against `sources.lock.json`, builds `tools/texc`
+  (bc7enc_rdo + stb_image, pinned with SHA256, standalone CMake project in `build/texc`) and encodes all 12 maps
+  (16 s from the cache on the M-series Mac; the output is deterministic). `--only ID` rebuilds one layer, `--lock`
+  records new source hashes. Mips are averaged in linear light; the normal map mips widen the roughness by the lost
+  normal variance (Toksvig).
+- **GPU format:** BC7 on every backend. SDL GPU also has ASTC formats, but Apple Silicon Metal samples BC7 (verified
+  here) and BC7 is the desktop D3D12 / Vulkan format, so one set of files serves all backends (D3D12 / Vulkan are
+  untested on real hardware). If the device does not support BC7 (`SDL_GPUTextureSupportsFormat`) or the files are
+  missing / LFS pointers, the level falls back to the procedural ground and logs why.
+- **Quality:** Graphics → "Level ground textures" (Off, 512, 1024, 2048, 4096; scenario `set terrain_tex N`).
+  Presets: Low 512, Medium 1024, High 2048, Ultra 4096 (normal / roughness / AO maps at most 2048). The textures are
+  loaded when a level is entered or the size changes (Ultra 167.8 MB in 150–175 ms, High 67.1 MB in 22–80 ms,
+  Medium 16.8 MB in 27 ms, Low 4.2 MB in 19 ms) and are not streamed; driving causes no texture loads.
+- **Shader (`terrain_fs`):** top-down projection per layer, triplanar for rock on steep faces; layers are blended by
+  their height maps (the higher material shows through near a weight of 0.5). Beyond ~15 m a second, rotated
+  sample at 0.29× frequency breaks up the repeats; from 60 to 250 m every layer fades to its mean colour (its 1×1
+  mip) so the tiles do not line up into a pattern seen from far away. The mud, wet-ground, wheat and distant grass
+  canopy colours of the procedural material are kept on top.
+- **Cost** (2880 × 1800, Metal, vsync off, village view, same process textured vs Off; `terrain_textures.txt`): GPU
+  ms per frame Low 4.78 vs 4.45, Medium 6.79 vs 5.89, High 9.73 vs 8.99, Ultra 13.78 vs 13.16; FPS Low 207.6 vs
+  215.1, Medium 171.5 vs 190.7, High 128.3 vs 136.0, Ultra 97.9 vs 99.5.
 
 ### Grass, flowers and wheat
 
@@ -1314,6 +1359,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   message (the only teleports besides R, the teleport buttons / map and scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake).
+- The terrain textures are render-only: their height and normal maps shade the ground and pick which layer shows
+  where layers meet; they never change the collision (the heightfield samples) or the surface friction (the baked
+  per-sample material).
 - Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
   the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0

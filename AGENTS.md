@@ -7,10 +7,16 @@ Instructions for coding agents working on TrailForge. Human-facing documentation
 TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 (window, input, gamepad),
 SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
-believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry and
-textures are procedural; the only external assets are the sounds in `assets/audio/` (licenses in
-`assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY` from the
-environment — never write the key into any file).
+believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
+procedural, and so are all textures except the level ground. External assets: the sounds in `assets/audio/`
+(licenses in `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY`
+from the environment — never write the key into any file) and the CC0 PBR ground materials in
+`assets/textures/terrain/` (Poly Haven, BC7 KTX2 up to 4096², rebuilt reproducibly by
+`tools/textures/fetch_textures.py` against `sources.lock.json`; credits in `assets/textures/CREDITS.md`). Further
+textures must also be CC0 (Poly Haven / ambientCG), go through that script and `tools/texc`, and be listed in the
+CREDITS file. `*.ktx2` under `assets/textures/` are Git LFS objects (`.gitattributes`; run `git lfs pull` after
+cloning). Keep the LFS total small (currently 167.8 MB; GitHub's LFS storage and bandwidth quota is shared with CI,
+which caches `.git/lfs`), and report size changes in the devlog.
 
 Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on the same Mac as a test of the
 SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
@@ -28,7 +34,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 59 tests, 56 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 61 tests, 58 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -40,7 +46,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
 
-Shaders: `shaders/scene.hlsl` is the only shader source (26 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
+Shaders: `shaders/scene.hlsl` is the only shader source (29 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
 register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
 tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
 MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->
@@ -71,6 +77,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
 ./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
+./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, PERF tex vs off, /tmp/trailforge_tex_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
@@ -116,7 +123,7 @@ download the artifacts of the green CI run for the release commit (`gh run downl
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape), Level (level.json
               bake: heights, surfaces, render-only water, trees, rocks, POIs), TerrainTiles (streamed HeightFieldShape tiles)
-src/core/     Json (reader, writer, merge)
+src/core/     Json (reader, writer, merge), Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
  in Vehicle.cpp), DrivingAids (ABS / traction control logic, brake torque and throttle
@@ -141,11 +148,13 @@ tests/        CTest physics, vehicle, app and audio tests (no window, no audio d
               definitions (rwd_test), swept by vehicle_catalog_sweep together with assets/vehicles
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
-              packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics)
+              packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
+              texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain texture rebuild)
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id)
 assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id)
+assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; CREDITS.md
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
               assets/images/ CREDITS.md (logo.png is copied from external_assets/images/Logo.png into build/<preset>/assets/images
               at configure time); each with CREDITS.md
