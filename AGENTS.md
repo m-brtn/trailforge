@@ -28,7 +28,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 36 tests; no window, no audio device)
+# headless physics, audio and model tests (CTest, 39 tests, 36 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -66,6 +66,8 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
+./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
+./build/release/trailforge --script tools/scenarios/wheel_fit.txt # visual wheels / arches follow a tire size change
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
@@ -118,7 +120,8 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepC
               BodyImpacts (chassis contact listener for impact sounds)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
-src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, VehicleModel, Scenery,
+src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
+              materials, panels, lights, accessories, wheels), VehicleModel (named parts per model), Scenery,
               GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
@@ -201,7 +204,9 @@ Example stage entry:
 - Do not claim simulation that does not exist. Mud is a rigid low-friction surface, puddles are dips in rigid
   ground with a render-only water plane, vehicle dirt is cosmetic. Deformable terrain is a later stage.
 - Wheel and suspension visuals are placed from the Jolt wheel transforms and suspension length every frame;
-  no decorative animation.
+  no decorative animation. The wheel mesh size is the physics wheel (outer radius == `wheel.radius`, width ==
+  `wheel.width` of the active config; never fitted to a concept or scaled separately), and wheel-dependent body
+  parts (arches, flares) are derived from the wheels plus suspension travel and steering.
 - Render geometry and collision of the proving ground come from the same triangles.
 - Sound is cosmetic and never feeds back into physics. It is driven only by simulation data (rpm, throttle, wheel
   contact samples, contacts); body impact strength is an estimated impulse (Jolt's listener has no solved impulse).

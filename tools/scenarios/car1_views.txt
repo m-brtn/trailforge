@@ -1,0 +1,96 @@
+# Vehicle model views for comparison with the concept sheet (external_assets/images/Cars.png, car #1):
+#   ./build/release/trailforge --script tools/scenarios/car1_views.txt
+# Near-orthographic side / top / front / rear views (far camera, narrow field of view), 3/4 views at noon and
+# at sunset, then the body after wheelspin in the mud bath. Captures /tmp/trailforge_car1_*.png.
+set ui 0
+set hud 0
+set auto_reverse 0
+quality High
+time Noon
+teleport 0
+wait 2.5
+expect speed_kmh < 0.5
+# No grass blades between the far camera and the vehicle in the flat views.
+set grass 0
+camera vehicle side 24 13
+wait 0.4
+capture /tmp/trailforge_car1_side.png
+wait 0.3
+camera vehicle top 24 13
+wait 0.4
+capture /tmp/trailforge_car1_top.png
+wait 0.3
+camera vehicle front 24 8.5
+wait 0.4
+capture /tmp/trailforge_car1_front.png
+wait 0.3
+quality High
+camera vehicle three_quarter 9 45
+wait 0.4
+capture /tmp/trailforge_car1_34_noon.png
+wait 0.3
+camera vehicle three_quarter_rear 9 45
+wait 0.4
+capture /tmp/trailforge_car1_34rear_noon.png
+wait 0.3
+camera vehicle three_quarter 5.5 42
+wait 0.4
+capture /tmp/trailforge_car1_34_closeup.png
+wait 0.3
+# Side and front at the follow camera's distance and field of view.
+camera vehicle side 7 60
+wait 0.4
+capture /tmp/trailforge_car1_game_side.png
+wait 0.3
+camera vehicle front 7 60
+wait 0.4
+capture /tmp/trailforge_car1_game_front.png
+wait 0.3
+time Sunset
+camera vehicle three_quarter 9 45
+wait 0.6
+capture /tmp/trailforge_car1_34_sunset.png
+wait 0.3
+camera vehicle three_quarter_rear 9 45
+wait 0.4
+capture /tmp/trailforge_car1_34rear_sunset.png
+wait 0.3
+camera vehicle three_quarter_rear 5.5 42
+wait 0.4
+capture /tmp/trailforge_car1_34rear_closeup_sunset.png
+wait 0.3
+# Rear view from the low grip patch (the start pad is 10 m in front of the south wall).
+time Noon
+teleport 3
+wait 2.5
+set grass 0
+camera vehicle rear 24 8.5
+wait 0.4
+capture /tmp/trailforge_car1_rear.png
+wait 0.3
+quality High
+# Body mud after 4 s of wheelspin in the mud bath (cosmetic layer driven by the spray).
+time Noon
+camera follow
+teleport 12
+wait 1.5
+set mud 0
+set auto_mud 1
+set body_mud_clear 1
+set spray_clear 1
+down W
+wait 4.0
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+wait 0.5
+expect body_mud_arch_rear_rr > 0.5
+camera vehicle three_quarter_rear 8 45
+wait 0.4
+capture /tmp/trailforge_car1_mud_rear.png
+wait 0.3
+camera vehicle side 9 40
+wait 0.4
+capture /tmp/trailforge_car1_mud_side.png
+quit

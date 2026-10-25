@@ -160,11 +160,11 @@ Application::Application(const AppOptions& options)
     const Uint64 t0 = SDL_GetPerformanceCounter();
     const MeshData trackMesh = buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces());
     const MeshData sceneryMesh = buildSceneryMesh();
-    const MeshData bodyMesh = buildVehicleBodyMesh();
+    rebuildVehicleVisual();
+    const MeshData& bodyMesh = m_vehicleVisual.mesh;
     m_trackMesh = m_renderer->upload(trackMesh);
     m_sceneryMesh = m_renderer->upload(sceneryMesh);
     m_waterMesh = m_renderer->upload(buildWaterMesh());
-    m_bodyMesh = m_renderer->upload(bodyMesh);
     m_springMesh = m_renderer->upload(buildUnitSpringMesh());
     m_armMesh = m_renderer->upload(buildUnitTubeMesh(0.021f));
     m_halfShaftMesh = m_renderer->upload(buildUnitTubeMesh(0.028f));
@@ -175,10 +175,10 @@ Application::Application(const AppOptions& options)
     m_renderer->setTrees(buildPineMeshes(), trees);
     m_gfx.settings = m_renderer->settings();
     std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu, render triangles: track %zu, "
-                "scenery %zu, vehicle body %zu, trees %zu (instanced), scene build %.0f ms\n",
+                "scenery %zu, vehicle body %zu (%zu parts), trees %zu (instanced), scene build %.0f ms\n",
                 m_renderer->driverName(), m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount(),
                 trackMesh.vertices.size() / 3, sceneryMesh.vertices.size() / 3, bodyMesh.vertices.size() / 3,
-                trees.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
+                m_vehicleVisual.parts.size(), trees.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
     if (!options.scriptPath.empty()) {
         m_scenario = Scenario::load(options.scriptPath);
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
@@ -822,16 +822,23 @@ void Application::fillTireMarks() {
     }
 }
 
+void Application::rebuildVehicleVisual() {
+    const VehicleConfig& vc = m_sim.vehicleConfig();
+    m_vehicleVisual = buildVehicleVisual(vc);
+    m_bodyMesh = m_renderer->upload(m_vehicleVisual.mesh);
+    for (int a = 0; a < 2; ++a) {
+        const MeshData wheel = buildAxleWheelMesh(m_vehicleVisual, vc.axles[std::size_t(a)]);
+        m_wheelVisualSize[std::size_t(a)] = wheelMeshSize(wheel);
+        (a == 0 ? m_wheelMesh : m_rearWheelMesh) = m_renderer->upload(wheel);
+    }
+    m_visualFit = vc;
+}
+
 void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
     const VehicleConfig& vc = m_sim.vehicleConfig();
-    for (int a = 0; a < 2; ++a) {
-        const AxleConfig& ax = vc.axles[std::size_t(a)];
-        if (ax.wheelRadius == m_wheelMeshRadius[std::size_t(a)] && ax.wheelWidth == m_wheelMeshWidth[std::size_t(a)])
-            continue;
+    if (!m_visualFit || !sameWheelFit(*m_visualFit, vc)) {
         SDL_WaitForGPUIdle(m_renderer->device());
-        (a == 0 ? m_wheelMesh : m_rearWheelMesh) = m_renderer->upload(buildWheelMesh(ax.wheelRadius, ax.wheelWidth));
-        m_wheelMeshRadius[std::size_t(a)] = ax.wheelRadius;
-        m_wheelMeshWidth[std::size_t(a)] = ax.wheelWidth;
+        rebuildVehicleVisual();
     }
 
     m_draws.clear();
@@ -846,9 +853,12 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
     add(m_trackMesh, glm::mat4(1.0f));
     add(m_sceneryMesh, glm::mat4(1.0f));
     add(m_bodyMesh, bodyM);
-    add(m_rearWheelMesh, bodyM * spareWheelMatrix(vc.axles[kRearAxle].wheelRadius, vc.axles[kRearAxle].wheelWidth));
-    m_draws.back().mud = 0.25f; // the spare on the roof stays mostly clean
-    m_draws.back().wheelMud = true;
+    for (const SpareMount& spare : m_vehicleVisual.spares) {
+        add(m_rearWheelMesh,
+            bodyM * spareWheelMatrix(spare, vc.axles[kRearAxle].wheelRadius, vc.axles[kRearAxle].wheelWidth));
+        m_draws.back().mud = spare.outward.y > 0.5f ? 0.25f : 0.6f; // the roof spare stays mostly clean
+        m_draws.back().wheelMud = true;
+    }
 
     const glm::mat4 invBody = glm::inverse(bodyM);
     for (int i = 0; i < kWheelCount; ++i) {
@@ -1410,15 +1420,54 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_gfx.changed = true;
         return Exec::Done;
     }
+    if (c.op == "wheels") {
+        // wheels RADIUS WIDTH: a tire size change on both axles (what a tire kit would do); rebuilds the vehicle.
+        if (c.args.size() < 2) return Exec::Failed;
+        VehicleConfig vc = m_sim.vehicleConfig();
+        const float r = float(std::atof(c.args[0].c_str())), w = float(std::atof(c.args[1].c_str()));
+        if (!(r >= 0.2f && r <= 0.8f && w >= 0.1f && w <= 0.6f)) return Exec::Failed;
+        for (AxleConfig& ax : vc.axles) {
+            ax.wheelRadius = r;
+            ax.wheelWidth = w;
+        }
+        m_sim.requestRebuild(vc);
+        return Exec::Done;
+    }
     if (c.op == "camera") {
         if (arg == "follow") {
             if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+            m_camera.fovYDeg = 60.0f;
+            return Exec::Done;
+        }
+        if (arg == "vehicle") {
+            // Near-orthographic views of the parked vehicle in its own frame: a far camera with a narrow
+            // field of view (the top view is tilted 4 deg, the free camera's pitch limit).
+            if (c.args.size() < 2) return Exec::Failed;
+            const std::string& view = c.args[1];
+            glm::vec3 dir;
+            if (view == "side") dir = {1.0f, 0.0f, 0.0f};
+            else if (view == "top") dir = {0.07f, 1.0f, 0.0f};
+            else if (view == "front") dir = {0.0f, 0.0f, 1.0f};
+            else if (view == "rear") dir = {0.0f, 0.05f, -1.0f};
+            else if (view == "three_quarter") dir = {0.72f, 0.30f, 0.62f};
+            else if (view == "three_quarter_rear") dir = {-0.72f, 0.30f, -0.62f};
+            else return Exec::Failed;
+            const float dist = c.args.size() > 2 ? float(std::atof(c.args[2].c_str())) : 30.0f;
+            const float fov = c.args.size() > 3 ? float(std::atof(c.args[3].c_str()))
+                                                : glm::degrees(2.0f * std::atan(3.0f / std::max(dist, 1.0f)));
+            if (dist < 1.0f || fov < 1.0f || fov > 120.0f) return Exec::Failed;
+            const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+            const glm::quat rot = toGlm(m_sim.currentSnapshot().body.rotation);
+            const glm::vec3 aim = car + rot * glm::vec3(0.0f, 0.30f, 0.0f);
+            m_camera.setFreePose(aim + rot * (glm::normalize(dir) * dist), aim);
+            m_camera.fovYDeg = fov;
             return Exec::Done;
         }
         if (c.args.size() < 6) return Exec::Failed;
         float v[6];
         for (int i = 0; i < 6; ++i) v[i] = float(std::atof(c.args[std::size_t(i)].c_str()));
         m_camera.setFreePose({v[0], v[1], v[2]}, {v[3], v[4], v[5]});
+        m_camera.fovYDeg = 60.0f;
         return Exec::Done;
     }
     if (c.op == "perf_begin") {
@@ -1562,6 +1611,19 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "front_driven") return t.frontDriven ? 1.0 : 0.0;
     if (n == "rear_driven") return t.rearDriven ? 1.0 : 0.0;
     if (n == "wheel_radius_r") return m_sim.vehicleConfig().axles[kRearAxle].wheelRadius;
+    if (n == "wheel_width_r") return m_sim.vehicleConfig().axles[kRearAxle].wheelWidth;
+    if (n == "wheel_visual_radius_r") return m_wheelVisualSize[kRearAxle].x;
+    if (n == "wheel_visual_width_r") return m_wheelVisualSize[kRearAxle].y;
+    if (n == "wheel_fit_err") {
+        // Largest difference between a wheel mesh as drawn and its physics wheel (radius, width), m.
+        double e = m_visualFit && sameWheelFit(*m_visualFit, m_sim.vehicleConfig()) ? 0.0 : 1.0;
+        for (std::size_t a = 0; a < 2; ++a) {
+            const AxleConfig& ax = m_sim.vehicleConfig().axles[a];
+            e = std::max({e, double(std::abs(m_wheelVisualSize[a].x - ax.wheelRadius)),
+                          double(std::abs(m_wheelVisualSize[a].y - ax.wheelWidth))});
+        }
+        return e;
+    }
     if (n == "front_spring") return m_sim.vehicleConfig().tuning.axles[kFrontAxle].springFrequency;
     if (n == "mass") return m_sim.vehicleConfig().mass;
     if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;

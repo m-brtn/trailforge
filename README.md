@@ -199,6 +199,8 @@ One command per line, `#` starts a comment:
 | `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
+| `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
+| `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
 | `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `back` |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
@@ -262,7 +264,8 @@ speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
 `spray` (live spray particles), `spray_emitted`, `spray_drawn`, `spray_max`, `spray_fine` (share of fine bits),
 `body_mud_max`, `body_mud_<region>` (`arch_rear_<w>`, `arch_front_<w>`, `behind_<w>` with `w` = fl/fr/rl/rr,
-`rear_bumper`, `front_bumper`),
+`rear_bumper`, `front_bumper`), `wheel_width_r`, `wheel_visual_radius_r` / `wheel_visual_width_r` (measured rear
+wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference over both axles, m),
 `msg:<substring>` (1 if the latest UI message contains the substring),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -341,7 +344,7 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepC
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
               VehicleAudioFeed (per-tick frame and events), AudioManifest + Json, AudioSystem (miniaudio device / WAV capture)
-src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
+src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
@@ -395,9 +398,8 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 
 - Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares), wheels r = 0.4 m and 0.3 m wide (35 kg each).
 - Center of mass 0.10 m below the frame center.
-- The body collision is a compound of three boxes. The visible model (`VehicleModel`, ~7k triangles) is a
-  procedural off-roader built around those boxes: beveled body, fenders, bumpers, snorkel, roof rack with lights,
-  spare wheel, lamps. Visual parts stick out slightly beyond the collision boxes.
+- The body collision is a compound of three boxes. The visible model is a procedural five-door expedition SUV
+  (Cars.png car #1, ~16.6k triangles, 43 named parts) fitted around the physics wheels; see "Vehicle rendering".
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
@@ -413,6 +415,65 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 - Roll and pitch limits are disabled (`mMaxPitchRollAngle = π`): the vehicle can roll over.
 - No hidden downforce, no direct setting of velocity or position.
   The only teleports are the R reset and the teleport buttons in the UI.
+
+### Vehicle rendering and the style kit
+
+All vehicle geometry is procedural and visual only (collision stays the three boxes of `vehicle/VehicleShape.h`).
+
+- **Style kit** (`src/render/StyleKit`): the shared building blocks for every car model.
+  - Materials: clear-coat paint without metallic flakes (stylized-realistic), matte plastic trim, metal, rubber,
+    glass, emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
+    a `Livery` groups base paint, accent paint (two-tone panels, decal stripes), roof, trims.
+  - Surfaces: `skin` lofts rows of points into quads with per-face orientation and normals averaged only within
+    38 degrees, so chamfers and creases stay hard edges that catch the light and curved parts shade smooth;
+    `roundedRect` builds rounded footprints (body sides, greenhouse) with matching stations between rings;
+    `grid`, `prism`, `face`, `panelGap` (panel gaps and decal stripes).
+  - Lights: LED rings (DRL outline), strips, round lamps. Accessories: roof rack, light bar, winch, bow shackles,
+    snorkel, slim fender flares over any arch outline (rounded lip, chamfered band), profile sweeps (bumpers),
+    jerry cans, cargo cases, ladder, rock sliders, mirrors, spare carrier. No mud flaps (the concept has none).
+    No antennas: they were left out on purpose (the concept sheet has them).
+  - Wheels: `buildWheel(radius, width, WheelStyle)` with spoke count, rim fraction, optional beadlock, mud- or
+    all-terrain tread (chevron blocks, shoulder lugs wrapping the sidewall), bulging sidewalls, deep-dish rim with
+    recessed spokes. The mesh fits exactly in the physics wheel: its outer radius is the physics radius (the
+    beveled block corners end up to 1 mm inside it) and its axial extent is the physics width; the bulge and the
+    lugs stay inside. Size never comes from the model, only from the axle (see "Wheels follow the physics" below).
+- **Parts**: a model is a list of named parts (`VehiclePart`: name, parent, attachment point, flags `deformable`
+  and `detachable`, vertex range), merged into one mesh and one draw call. The flags only mark what a later damage
+  stage may bend or knock off; there is no damage logic. Spare wheels are mount points (`SpareMount`) drawn with
+  the rear wheel mesh, so they follow the rear tire size.
+- **trailforge_suv**: lower body swept from one profile (chamfered rocker with black cladding, shoulder crease,
+  chamfered shoulder, belt deck) around a rounded footprint, arches clipped out of it; greenhouse lofted from the
+  deck (8 cm inside the body side) to the roof with a raked windshield and tumblehome; hood with crown, panel gaps
+  and a nose dropping to the grille; olive paint, orange fender tops, side stripe, rear quarter panel and roof band,
+  white roof, black pillars, flares, bumpers. Parts include doors, hood, tailgate, windshield, fenders, flares,
+  bumpers (the rear one swept around the body corners with chamfers, a groove and lamp pockets), winch, tow hooks,
+  lights, mirrors, rack, light bar, cases, jerry cans, ladder, snorkel, rock sliders and two spare mounts (roof
+  rack, tailgate).
+- **Wheels follow the physics**: the wheel meshes are built per axle from the active configuration (definition,
+  kit, setup): `wheel.radius` and `wheel.width` give the tire size, the optional visual keys `wheel.rimRatio` and
+  `wheel.tread` the rim and the tread. The arches, the flares and the wheel-house clearance are derived from
+  the wheels too: every arch point is pushed out until it clears the tire swept over the whole suspension travel
+  (`attachHeight` minus `minLength` .. `maxLength`) and 0..`maxSteerAngleDeg` with a 3 cm margin, on top of a
+  circular arc of 1.2 wheel radii (vertical down to the rocker); the flares are a slim band along that arch
+  (0.30 x the wheel radius wide, clamped to 10-14 cm, 7.5 cm proud of the body side), so the tires stick out past
+  them as on the sheet. When a
+  kit or setup changes any of these values the app rebuilds the body and wheel meshes. Tests: `model_wheel_size`
+  (mesh radius / width equal the physics wheel for several sizes, rim ratios and treads) and
+  `model_wheel_clearance` (no body triangle point, vertices plus edge midpoints and centroids, inside any
+  wheel's sweep for the default wheels and 0.43 / 0.33, 0.45 / 0.30 and 0.36 / 0.26 m tires). The scenario
+  `tools/scenarios/wheel_fit.txt` changes the tire size in the running app (`wheels R W`) and checks
+  `wheel_fit_err` (measured mesh vs physics) after each rebuild.
+- **Fit to the concept**: known mismatches with the sheet and the collision (the physics was not changed):
+  - the tire is 0.80 m (physics radius 0.40; the sheet scaled by wheelbase suggests ~0.90 m), so the body looks
+    taller relative to the wheels: ground to roof 2.0 m vs ~1.75 m on the sheet. The visual wheel is not fitted
+    to the sheet; bigger tires are left to a later tire kit;
+  - at rest the tire top is 0.30 m below the arch top (0.25 m of bump travel plus margin; the sheet shows ~0.15 m);
+  - the greenhouse is 0.72–0.80 m half width while the cab collision box is 0.85 m, and the visual roof (1.245 m)
+    is 5 cm below the collision top; the windshield rakes back from z 0.92 to 0.40 while the box ends at z 0.80;
+  - the rear (z -1.50 to -2.20 above the belt) has no collision, the rear spare and bumpers reach 0.25 m behind
+    the -2.30 collision end, the front bumper and winch up to 0.16 m ahead of it.
+- Body mud and tread soil are the same cosmetic layers as before: the mud mask is computed in the shader from the
+  body-space position and the per-vertex receptivity of each material.
 
 ## Vehicle data format
 
@@ -430,7 +491,7 @@ documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` 
 | top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping` |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
-| `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
+| `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
 | `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`} |
 | `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
 | `engine` | `type` (`combustion`; `electric` is reserved and rejected for now), `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |

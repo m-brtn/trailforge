@@ -90,6 +90,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/Mesh.cpp
         src/render/GroundMaps.cpp
         src/render/VehicleModel.cpp
+        src/render/StyleKit.cpp
         src/render/Scenery.cpp
         src/render/TimeOfDay.cpp
         src/render/Camera.cpp
@@ -184,4 +185,16 @@ if(TRAILFORGE_BUILD_TESTS)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
+
+    # Procedural vehicle model: parts and wheel clearance (CPU mesh only; GLM comes with the app build).
+    if(TRAILFORGE_BUILD_APP)
+        add_executable(trailforge_model_tests tests/ModelTests.cpp src/render/Mesh.cpp src/render/StyleKit.cpp
+                                              src/render/VehicleModel.cpp)
+        target_include_directories(trailforge_model_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_link_libraries(trailforge_model_tests PRIVATE trailforge_sim glm_headers)
+        foreach(test_name model_parts model_wheel_size model_wheel_clearance)
+            add_test(NAME ${test_name} COMMAND trailforge_model_tests ${test_name})
+            set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+        endforeach()
+    endif()
 endif()

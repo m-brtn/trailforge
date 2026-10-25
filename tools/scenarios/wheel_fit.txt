@@ -1,0 +1,38 @@
+# Visual wheels follow the physics wheels (tire size change on both axles, as a tire kit would do):
+#   ./build/release/trailforge --script tools/scenarios/wheel_fit.txt
+# wheel_fit_err = largest |measured wheel mesh radius / width - physics radius / width| over both axles (m);
+# the mesh corners are beveled, so the measured radius is up to 3 mm under the physics radius.
+# Captures /tmp/trailforge_wheelfit_*.png (3/4 close-up, the arches are rebuilt around the tires).
+set ui 0
+set hud 0
+set auto_reverse 0
+time Noon
+teleport 0
+wait 2.5
+expect wheel_fit_err < 0.003
+expect wheel_visual_width_r > 0.2999
+expect wheel_visual_width_r < 0.3001
+camera vehicle three_quarter 6 42
+wait 0.4
+capture /tmp/trailforge_wheelfit_040.png
+wheels 0.45 0.30
+wait 2.5
+expect wheel_radius_r > 0.449
+expect wheel_fit_err < 0.003
+expect wheel_visual_width_r > 0.2999
+expect wheel_visual_width_r < 0.3001
+camera vehicle three_quarter 6 42
+wait 0.4
+capture /tmp/trailforge_wheelfit_045.png
+wheels 0.36 0.26
+wait 2.5
+expect wheel_radius_r < 0.361
+expect wheel_fit_err < 0.003
+camera vehicle three_quarter 6 42
+wait 0.4
+capture /tmp/trailforge_wheelfit_036.png
+wheels 0.40 0.30
+wait 2.5
+expect wheel_radius_r > 0.399
+expect wheel_radius_r < 0.401
+expect wheel_fit_err < 0.003

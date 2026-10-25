@@ -1,17 +1,61 @@
 #pragma once
 
 #include "render/Mesh.h"
+#include "render/StyleKit.h"
+#include "vehicle/VehicleConfig.h"
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
 namespace tf {
 
+// Named part of a vehicle model. Parts are built separately and merged into one mesh (one draw); the flags
+// mark what later damage stages may bend or knock off (there is no damage logic yet).
+struct VehiclePart {
+    std::string name;
+    std::string parent;      // part it is bolted / hinged to ("" = the body root)
+    glm::vec3 attach{0.0f};  // attachment point in body space (hinge line center, bolt-on point)
+    bool deformable = false;
+    bool detachable = false;
+    std::size_t firstVertex = 0; // vertex range in VehicleVisual::mesh
+    std::size_t vertexCount = 0;
+};
+
+// Spare wheel slot, drawn with the rear wheel mesh: the wheel's outer face points along `outward`.
+struct SpareMount {
+    std::string name;
+    std::string parent;
+    glm::vec3 seat{0.0f};          // body-space point the inner face of the tire rests on
+    glm::vec3 outward{0, 1, 0};
+    bool detachable = true;
+};
+
 // Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The collision shape stays the
-// three boxes from vehicle/VehicleShape.h; the visual body fits around them (rack, mirrors, snorkel and
-// bed rails stick out by a few centimeters).
-MeshData buildVehicleBodyMesh();
-// Wheel with lug tread, sidewall, beadlock rim and brake disc. Axle along local X, outer face at +X.
-MeshData buildWheelMesh(float radius, float width);
+// three boxes from vehicle/VehicleShape.h; the visual body fits around the wheels (see README "Vehicle rendering").
+struct VehicleVisual {
+    MeshData mesh;                 // all parts, in `parts` order
+    std::vector<VehiclePart> parts;
+    std::vector<SpareMount> spares;
+    style::WheelStyle wheel;       // rim / tire materials and spokes; size and tread come from the axle
+    const VehiclePart* find(const std::string& name) const;
+};
+
+// Builds `config.visualModel` (known: "trailforge_suv", gasoline expedition SUV, Cars.png car #1). Arches and
+// flares are fitted to the physics wheels (radius, width, track, travel, steering), so rebuild on a wheel change.
+VehicleVisual buildVehicleVisual(const VehicleConfig& config);
+// Wheel style of an axle: the model's materials with the axle's visual rim ratio and tread.
+style::WheelStyle axleWheelStyle(const VehicleVisual& visual, const AxleConfig& axle);
+// Wheel mesh of an axle: outer radius == wheelRadius, width == wheelWidth (the physics wheel).
+MeshData buildAxleWheelMesh(const VehicleVisual& visual, const AxleConfig& axle);
+// Measured size of a wheel mesh (axle along local X): (max distance from the axle, axial extent).
+glm::vec2 wheelMeshSize(const MeshData& wheel);
+// True when two configs give the same body fit and wheel meshes (no rebuild needed).
+bool sameWheelFit(const VehicleConfig& a, const VehicleConfig& b);
+// Body-space matrix of a spare wheel (wheel mesh: axle along local X, outer face at +X).
+glm::mat4 spareWheelMatrix(const SpareMount& mount, float radius, float width);
 
 // Suspension parts, drawn per wheel with transforms computed from the Jolt wheel position each frame.
 // "Unit" meshes span local z = 0..1 and are stretched between two points.
@@ -40,8 +84,5 @@ SuspensionPose suspensionPose(const glm::vec3& hubBody, float attachZ);
 glm::mat4 segmentMatrix(const glm::vec3& a, const glm::vec3& b);
 // Rigid matrix with +Z pointing from a toward b, origin at a.
 glm::mat4 aimMatrix(const glm::vec3& a, const glm::vec3& b);
-
-// Spare wheel on the roof rack (body space; wheel axle along body Y).
-glm::mat4 spareWheelMatrix(float radius, float width);
 
 } // namespace tf

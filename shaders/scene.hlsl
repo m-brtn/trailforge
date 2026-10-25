@@ -712,10 +712,8 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
             // Light through the needles when backlit.
             s.emissive = s.albedo * f.sunColor.rgb * 0.08 * pow(saturate(dot(-V, f.sunDir.xyz)), 3.0);
         } else if (mat == MAT_PAINT) {
+            // Solid (flake-free) paint under a clear coat.
             s.clearCoat = 1.0;
-            // Subtle metallic flake.
-            const float flake = noiseTex.Sample(noiseSampler, vin.localPos.xy * 37.0 + vin.localPos.z * 11.0).a;
-            s.albedo *= 0.92 + 0.16 * flake;
         } else if (mat == MAT_RUBBER) {
             const float n = noiseTex.Sample(noiseSampler, vin.localPos.yz * 6.0).a;
             s.albedo *= 0.85 + 0.3 * n;

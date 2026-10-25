@@ -10,6 +10,7 @@
 #include "render/Camera.h"
 #include "render/DebugDraw.h"
 #include "render/Renderer.h"
+#include "render/VehicleModel.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 #include "sim/BodyMud.h"
@@ -140,6 +141,7 @@ private:
     AudioPanelState m_audioPanel;
     std::unique_ptr<AudioSystem> m_audio;
 
+    void rebuildVehicleVisual(); // body (fitted to the wheels) and wheel meshes from the current config
     void buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM);
     void updateCosmetics(float dt);
     void endPerf();
@@ -147,7 +149,9 @@ private:
 
     GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_bodyMesh, m_wheelMesh, m_rearWheelMesh; // wheels: front, rear axle
     GpuMesh m_springMesh, m_armMesh, m_halfShaftMesh, m_shockBodyMesh, m_shockShaftMesh;
-    std::array<float, 2> m_wheelMeshRadius{}, m_wheelMeshWidth{};
+    std::optional<VehicleConfig> m_visualFit;  // config the body and wheel meshes were built for
+    std::array<glm::vec2, 2> m_wheelVisualSize{}; // measured wheel mesh (outer radius, width) per axle
+    VehicleVisual m_vehicleVisual; // parts, spare mounts and wheel style of the body model
     std::vector<DrawItem> m_draws;
     GraphicsState m_gfx;
     double m_cpuMs = 0.0;            // last frame: CPU work without the swapchain wait
