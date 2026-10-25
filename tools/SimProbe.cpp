@@ -356,6 +356,7 @@ struct SkidRig {
         float longSlip = 0, latSlip = 0, ratio = 0, joltSlip = 0, slipDeg = 0, skid = 0, skidRaw = 0, mud = 0,
               mark = 0, maxSpeed = 0;
         double skidTime = 0, dist = 0, time = 0, t30 = -1;
+        std::array<double, kSurfaceCount> squealOn{}; // wheel-seconds with squeal > 0.05, by the surface under the wheel
     } st;
 
     void tick(const DriverIntent& in, bool record) {
@@ -389,6 +390,7 @@ struct SkidRig {
                 st.joltSlip = std::max(st.joltSlip, w.longitudinalSlip);
                 st.slipDeg = std::max(st.slipDeg, w.lateralSlipDeg);
             }
+            if (f.wheels[std::size_t(i)].squeal > 0.05f) st.squealOn[f.wheels[std::size_t(i)].surface] += sim.fixedStep();
             st.mark = std::max(st.mark, markIntensity(c, sim.tireMarks().settings().referenceLoad,
                                                       sim.tireMarks().soil(std::size_t(i))).slip);
         }
@@ -426,6 +428,9 @@ struct SkidRig {
                     " | skid raw %4.2f mixed %4.2f (%.2f s > 0.15) mud %4.2f | mark %4.2f | dist %5.1f m, 0-30 %4.2f s\n",
                     lane, what, st.maxSpeed * 3.6f, st.longSlip, st.latSlip, st.ratio, st.joltSlip, st.slipDeg,
                     st.skidRaw, st.skid, st.skidTime, st.mud, st.mark, st.dist, st.t30);
+        for (std::size_t k = 0; k < kSurfaceCount; ++k)
+            if (st.squealOn[k] > 0.0)
+                std::printf("         squeal on %s: %.2f wheel-s\n", sim.surfaces().get(SurfaceId(k)).name, st.squealOn[k]);
     }
 };
 
