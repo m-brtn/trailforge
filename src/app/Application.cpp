@@ -643,6 +643,7 @@ void Application::buildWorldContent() {
     if (level) {
         m_trackMesh = m_renderer->upload(buildLevelPropsMesh(*level));
         m_waterMesh = m_renderer->upload(buildLevelWaterMesh(*level));
+        m_sceneryMesh = m_renderer->upload(buildLevelHorizonMesh(*level));
         m_renderer->setGround(buildLevelGroundMaps(*level), 0.0f);
         TerrainSource src;
         src.samples = level->samples();
@@ -654,7 +655,7 @@ void Application::buildWorldContent() {
         const std::vector<TreeInstance> inst = buildLevelTreeInstances(*level);
         trees = inst.size();
         m_renderer->setTrees(buildPineMeshes(), inst);
-        m_camera.farPlane = 4000.0f;
+        m_camera.farPlane = 1.1f * kHorizonSea; // the sea reaches the horizon
     } else {
         m_trackMesh = m_renderer->upload(buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces()));
         m_sceneryMesh = m_renderer->upload(buildSceneryMesh());
@@ -666,7 +667,7 @@ void Application::buildWorldContent() {
         m_renderer->setTrees(buildPineMeshes(), inst);
         m_camera.farPlane = Camera{}.farPlane;
     }
-    std::printf("World: %s, render triangles: props/track %u, scenery %u, water %u, trees %zu, build %.0f ms\n",
+    std::printf("World: %s, render triangles: props/track %u, scenery/horizon %u, water %u, trees %zu, build %.0f ms\n",
                 level ? level->name().c_str() : "Proving Ground", m_trackMesh.vertexCount() / 3,
                 m_sceneryMesh.vertexCount() / 3, m_waterMesh.vertexCount() / 3, trees,
                 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
@@ -998,6 +999,8 @@ void Application::renderFrame(float frameTime) {
         frame.fogFalloff = 0.004f;
         frame.shadowScale = 2.0f;
         frame.waterReflection = false;
+        frame.skyMountains = false;
+        frame.deepOutsideGround = true;
     }
     frame.vehicleModel = bodyM;
     frame.vehicleMud = m_gfx.mud;
@@ -1125,7 +1128,7 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         m_draws.push_back(d);
     };
     add(m_trackMesh, glm::mat4(1.0f));
-    add(m_sceneryMesh, glm::mat4(1.0f));
+    add(m_sceneryMesh, glm::mat4(1.0f), !m_sim.level(), !m_sim.level()); // the level horizon casts no shadows
     add(m_bodyMesh, bodyM);
     for (const SpareMount& spare : m_vehicleVisual.spares) {
         add(m_rearWheelMesh,
@@ -1324,6 +1327,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             std::vector<std::string> ids = m_flow.vehicles();
             m_flow = GameFlow(Screen::Intro);
             m_flow.setVehicles(std::move(ids));
+            m_flow.setLevels(m_levelIds);
             enterMenuWorld(true);
         } else if (arg == "main") {
             m_flow.toMainMenu();
@@ -1717,6 +1721,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "spray_dust") s.sprayDust = v != 0.0f;
         else if (k == "exposure") s.exposure = v;
         else if (k == "fog") s.fogDensity = v;
+        else if (k == "tree_dist") s.treeDistance = v;
+        else if (k == "terrain_detail") s.terrainDetail = v;
         else {
             render = false;
             // Look-only settings: they do not turn the quality preset into Custom.

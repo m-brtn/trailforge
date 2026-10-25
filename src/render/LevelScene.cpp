@@ -1,5 +1,6 @@
 #include "render/LevelScene.h"
 
+#include "render/GroundMaps.h"
 #include "track/Level.h"
 
 #include <algorithm>
@@ -91,8 +92,8 @@ MeshData buildLevelWaterMesh(const Level& level) {
     const int n = level.samples();
     const float o = level.origin(), cell = level.cell();
     auto px = [&](int i) { return o + float(i) * cell; };
-    // Water surface per sample, grown 3 samples into the dry neighbors (highest neighboring surface), so quad edges
-    // end under the banks and water_fs fades the shoreline by depth instead of showing the block outline.
+    // Water surface per sample, grown up to 3 samples under the banks (dry neighbors whose ground is above the
+    // neighboring surface), so cell edges end inside the banks and water_fs fades the shoreline by depth.
     const std::size_t total = std::size_t(n) * std::size_t(n);
     std::vector<float> surf(level.waterSurfaces().begin(), level.waterSurfaces().end());
     std::vector<WaterKind> kinds(total, WaterKind::None);
@@ -107,7 +108,7 @@ MeshData buildLevelWaterMesh(const Level& level) {
                 const std::size_t k = std::size_t(j) * n + i;
                 if (surf[k] > 0.5f * Level::kNoWater) continue;
                 for (const std::size_t q : {k - 1, k + 1, k - std::size_t(n), k + std::size_t(n)})
-                    if (surf[q] > next[k]) {
+                    if (surf[q] > next[k] && level.heights()[k] >= surf[q] - 0.05f) {
                         next[k] = surf[q];
                         nextKind[k] = kinds[q];
                     }
@@ -119,81 +120,182 @@ MeshData buildLevelWaterMesh(const Level& level) {
     auto waterAt = [&](int i, int j) { return surf[std::size_t(j) * n + i]; };
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
 
-    // Flat if every wet sample of the block has the same surface; returns false when the block is dry.
-    auto scan = [&](int i0, int j0, int size, float& lo, float& hi, WaterKind& kind) {
-        lo = 1e30f;
-        hi = -1e30f;
-        kind = WaterKind::None;
+    // Block statistics: the range of the wet surfaces, the kind, and whether a dry sample lies below the surface
+    // (a flat quad would put water there).
+    struct Block {
+        float lo = 1e30f, hi = -1e30f;
+        WaterKind kind = WaterKind::None;
+        bool dryLow = false;
+    };
+    auto scan = [&](int i0, int j0, int size) {
+        Block b;
         for (int j = j0; j <= std::min(j0 + size, n - 1); ++j)
             for (int i = i0; i <= std::min(i0 + size, n - 1); ++i) {
                 if (!wet(i, j)) continue;
                 const float w = waterAt(i, j);
-                lo = std::min(lo, w);
-                hi = std::max(hi, w);
-                if (kind == WaterKind::None) kind = kinds[std::size_t(j) * n + i];
+                b.lo = std::min(b.lo, w);
+                b.hi = std::max(b.hi, w);
+                if (b.kind == WaterKind::None) b.kind = kinds[std::size_t(j) * n + i];
             }
-        return hi >= lo;
-    };
-    auto flatQuad = [&](int i0, int j0, int size, float y, WaterKind kind) {
-        const int i1 = std::min(i0 + size, n - 1), j1 = std::min(j0 + size, n - 1);
-        const Material mat = waterMaterial(kind);
-        // CCW from above (+Y): (x0, z0) -> (x0, z1) -> (x1, z1) -> (x1, z0).
-        m.addQuad({px(i0), y, px(j0)}, {px(i0), y, px(j1)}, {px(i1), y, px(j1)}, {px(i1), y, px(j0)}, mat);
-    };
-
-    constexpr int kBig = 16, kSmall = 4;
-    for (int bj = 0; bj < n - 1; bj += kBig)
-        for (int bi = 0; bi < n - 1; bi += kBig) {
-            float lo, hi;
-            WaterKind kind;
-            if (!scan(bi, bj, kBig, lo, hi, kind)) continue;
-            if (hi - lo < 0.02f) {
-                flatQuad(bi, bj, kBig, hi, kind);
-                continue;
-            }
-            for (int sj = bj; sj < std::min(bj + kBig, n - 1); sj += kSmall)
-                for (int si = bi; si < std::min(bi + kBig, n - 1); si += kSmall) {
-                    if (!scan(si, sj, kSmall, lo, hi, kind)) continue;
-                    if (hi - lo < 0.02f) {
-                        flatQuad(si, sj, kSmall, hi, kind);
-                        continue;
-                    }
-                    // Sloped (river) block: corner heights from the wet corner samples, dry corners at the mean.
-                    const int i1 = std::min(si + kSmall, n - 1), j1 = std::min(sj + kSmall, n - 1);
-                    const int ci[4] = {si, si, i1, i1}, cj[4] = {sj, j1, j1, sj};
-                    float y[4], sum = 0.0f;
-                    int wetCorners = 0;
-                    for (int k = 0; k < 4; ++k)
-                        if (wet(ci[k], cj[k])) {
-                            sum += waterAt(ci[k], cj[k]);
-                            ++wetCorners;
-                        }
-                    const float mean = wetCorners > 0 ? sum / float(wetCorners) : 0.5f * (lo + hi);
-                    for (int k = 0; k < 4; ++k) y[k] = wet(ci[k], cj[k]) ? waterAt(ci[k], cj[k]) : mean;
-                    const Material mat = waterMaterial(kind);
-                    const glm::vec3 a(px(ci[0]), y[0], px(cj[0])), b(px(ci[1]), y[1], px(cj[1]));
-                    const glm::vec3 c(px(ci[2]), y[2], px(cj[2])), d(px(ci[3]), y[3], px(cj[3]));
-                    m.addTri(a, b, c, up, up, up, mat);
-                    m.addTri(a, c, d, up, up, up, mat);
+        if (b.hi < b.lo) return b;
+        for (int j = j0; j <= std::min(j0 + size, n - 1) && !b.dryLow; ++j)
+            for (int i = i0; i <= std::min(i0 + size, n - 1); ++i)
+                if (!wet(i, j) && level.heightSample(i, j) < b.hi - 0.02f) {
+                    b.dryLow = true;
+                    break;
                 }
+        return b;
+    };
+    auto emit = [&](auto&& self, int i0, int j0, int size) -> void {
+        const Block b = scan(i0, j0, size);
+        if (b.hi < b.lo) return;
+        const int i1 = std::min(i0 + size, n - 1), j1 = std::min(j0 + size, n - 1);
+        const Material mat = waterMaterial(b.kind);
+        if (b.hi - b.lo < 0.02f && !b.dryLow) {
+            // CCW from above (+Y): (x0, z0) -> (x0, z1) -> (x1, z1) -> (x1, z0).
+            const float y = b.hi;
+            m.addQuad({px(i0), y, px(j0)}, {px(i0), y, px(j1)}, {px(i1), y, px(j1)}, {px(i1), y, px(j0)}, mat);
+            return;
         }
+        if (size > 1) {
+            const int sub = size / 4;
+            for (int sj = j0; sj < j1; sj += sub)
+                for (int si = i0; si < i1; si += sub) self(self, si, sj, sub);
+            return;
+        }
+        // One cell: corner heights from the wet corners, dry corners at their mean (water_fs fades them by depth).
+        const int ci[4] = {i0, i0, i1, i1}, cj[4] = {j0, j1, j1, j0};
+        float y[4], sum = 0.0f;
+        int wetCorners = 0;
+        for (int k = 0; k < 4; ++k)
+            if (wet(ci[k], cj[k])) {
+                sum += waterAt(ci[k], cj[k]);
+                ++wetCorners;
+            }
+        if (wetCorners == 0) return;
+        const float mean = sum / float(wetCorners);
+        for (int k = 0; k < 4; ++k) y[k] = wet(ci[k], cj[k]) ? waterAt(ci[k], cj[k]) : mean;
+        const glm::vec3 a(px(ci[0]), y[0], px(cj[0])), bb(px(ci[1]), y[1], px(cj[1]));
+        const glm::vec3 c(px(ci[2]), y[2], px(cj[2])), d(px(ci[3]), y[3], px(cj[3]));
+        m.addTri(a, bb, c, up, up, up, mat);
+        m.addTri(a, c, d, up, up, up, mat);
+    };
+    constexpr int kBig = 16;
+    for (int bj = 0; bj < n - 1; bj += kBig)
+        for (int bi = 0; bi < n - 1; bi += kBig) emit(emit, bi, bj, kBig);
 
-    // Sea outside the baked square: beyond the south (+Z) edge if it is sea, and beyond the east / west edges from
-    // where the coast meets them (the first sea sample scanning the edge toward +Z).
-    const float e = -o, far = 6000.0f, sl = 0.0f;
+    // Open sea outside the baked square out to kHorizonSea on every side; the horizon terrain (land side) covers it.
+    const float e = -o, far = kHorizonSea;
     const Material sea = waterMaterial(WaterKind::Sea);
-    auto edgeSea = [&](float x, float z) { return level.waterKindAt(x, z) == WaterKind::Sea; };
     auto quad = [&](float x0, float z0, float x1, float z1) {
-        m.addQuad({x0, sl, z0}, {x0, sl, z1}, {x1, sl, z1}, {x1, sl, z0}, sea);
+        m.addQuad({x0, 0.0f, z0}, {x0, 0.0f, z1}, {x1, 0.0f, z1}, {x1, 0.0f, z0}, sea);
     };
-    auto coastZ = [&](float x) {
-        for (float z = -e; z < e; z += 4.0f)
-            if (edgeSea(x, z)) return z;
-        return e;
+    quad(-far, e, far, far);
+    quad(-far, -far, far, -e);
+    quad(e, -e, far, e);
+    quad(-far, -e, -e, e);
+    return m;
+}
+
+MeshData buildLevelHorizonMesh(const Level& level) {
+    const int n = level.samples();
+    const float e = -level.origin(); // half side of the baked square
+    // Columns along the bake edge (every 16 samples, shared with the terrain edge heights), counter-clockwise.
+    constexpr int kStride = 16;
+    const int perSide = (n - 1) / kStride;
+    struct Column {
+        glm::vec2 p;  // on the bake edge
+        float h0;     // terrain height there
+        float land;   // 0 sea .. 1 land, smoothed along the edge
     };
-    if (edgeSea(0.0f, e - 2.0f)) quad(-far, e, far, far);
-    if (const float z = coastZ(e - 2.0f); z < e) quad(e, z, far, e);
-    if (const float z = coastZ(-e + 2.0f); z < e) quad(-far, z, -e, e);
+    std::vector<Column> cols;
+    for (int side = 0; side < 4; ++side)
+        for (int k = 0; k < perSide; ++k) {
+            const int t = k * kStride;
+            int i = 0, j = 0;
+            switch (side) {
+            case 0: i = t; j = n - 1; break;         // south edge, west -> east
+            case 1: i = n - 1; j = n - 1 - t; break; // east edge, south -> north
+            case 2: i = n - 1 - t; j = 0; break;     // north edge, east -> west
+            default: i = 0; j = t; break;            // west edge, north -> south
+            }
+            const float x = level.origin() + float(i) * level.cell(), z = level.origin() + float(j) * level.cell();
+            cols.push_back({{x, z}, level.heightSample(i, j), 0.0f});
+        }
+    const int nc = int(cols.size());
+    for (int c = 0; c < nc; ++c) {
+        float sum = 0.0f;
+        for (int d = -8; d <= 8; ++d) sum += cols[std::size_t((c + d + nc) % nc)].h0;
+        cols[std::size_t(c)].land = glm::smoothstep(-6.0f, 8.0f, sum / 17.0f);
+    }
+
+    // Rings: geometric spacing out to ~14 km; the square scales outward from the center.
+    static constexpr float kRings[] = {0,    8,    24,   50,   90,   150,  220,  300,  400,  520,  660,  820,  1000, 1200,
+                                       1450, 1750, 2100, 2500, 3000, 3600, 4300, 5100, 6100, 7300, 8700, 10300, 12100, 14000};
+    constexpr int nr = int(std::size(kRings));
+    auto heightAt = [&](const Column& col, float r) {
+        const glm::vec2 p = col.p * ((e + r) / e);
+        const float w = glm::smoothstep(0.0f, 700.0f, r);
+        // Hills everywhere on land; to the north (-Z) a mountain range from ~2 km out, lower again far away.
+        const float north = glm::smoothstep(0.1f, 0.8f, -p.y / glm::length(p));
+        const float hills = 40.0f + 170.0f * fbm2(p.x / 1100.0f, p.y / 1100.0f, 4, 711u);
+        const float ridge = 1.0f - std::abs(2.0f * fbm2(p.x / 1700.0f, p.y / 1700.0f, 4, 733u) - 1.0f);
+        const float range = (260.0f + 640.0f * ridge * ridge) * glm::smoothstep(1200.0f, 4200.0f, r) *
+                            (1.0f - 0.55f * glm::smoothstep(7000.0f, 14000.0f, r));
+        const float land = glm::mix(hills, std::max(hills, range), north);
+        const float seabed = -18.0f - 12.0f * glm::smoothstep(0.0f, 2500.0f, r);
+        const float target = glm::mix(seabed, land, col.land);
+        return glm::mix(col.h0, target, w);
+    };
+    std::vector<glm::vec3> pos(std::size_t(nc + 1) * nr);
+    for (int c = 0; c <= nc; ++c)
+        for (int k = 0; k < nr; ++k) {
+            const Column& col = cols[std::size_t(c % nc)];
+            const glm::vec2 p = col.p * ((e + kRings[k]) / e);
+            pos[std::size_t(c) * nr + k] = glm::vec3(p.x, heightAt(col, kRings[k]), p.y);
+        }
+    auto P = [&](int c, int k) { return pos[std::size_t(c) * nr + std::size_t(k)]; };
+    auto normal = [&](int c, int k) {
+        const glm::vec3 dc = P(std::min(c + 1, nc), k) - P(std::max(c - 1, 0), k);
+        const glm::vec3 dk = P(c, std::min(k + 1, nr - 1)) - P(c, std::max(k - 1, 0));
+        glm::vec3 nn = glm::cross(dk, dc);
+        if (nn.y < 0.0f) nn = -nn;
+        return glm::normalize(nn);
+    };
+    // Per-vertex albedo (generic material, no procedural ground pattern that would tile visibly from far away):
+    // grass and forest tones in large noise patches, rock on steep or high ground, snow only on gentle faces above
+    // a noisy snow line, sand at the waterline. Colors blend smoothly across the large ring quads.
+    auto albedo = [](const glm::vec3& p, const glm::vec3& nn) {
+        const float slope = 1.0f - nn.y;
+        const float n1 = fbm2(p.x / 700.0f, p.z / 700.0f, 3, 751u);
+        const float n2 = fbm2(p.x / 260.0f, p.z / 260.0f, 3, 757u);
+        glm::vec3 c = glm::mix(glm::vec3(0.060f, 0.080f, 0.026f), glm::vec3(0.115f, 0.112f, 0.045f), glm::smoothstep(0.35f, 0.75f, n1));
+        c = glm::mix(c, glm::vec3(0.032f, 0.050f, 0.022f), 0.8f * glm::smoothstep(0.55f, 0.75f, n2)); // forest
+        const glm::vec3 rock = glm::mix(glm::vec3(0.115f, 0.105f, 0.095f), glm::vec3(0.205f, 0.190f, 0.170f), n2);
+        c = glm::mix(c, rock, glm::max(glm::smoothstep(0.18f, 0.32f, slope), glm::smoothstep(380.0f, 560.0f, p.y)));
+        const float snowLine = 720.0f + 260.0f * (n1 - 0.5f);
+        const float snow = glm::smoothstep(snowLine, snowLine + 120.0f, p.y) * (1.0f - glm::smoothstep(0.22f, 0.36f, slope));
+        c = glm::mix(c, glm::vec3(0.72f, 0.74f, 0.78f), snow);
+        c = glm::mix(c, glm::vec3(0.36f, 0.31f, 0.21f), 1.0f - glm::smoothstep(1.5f, 5.0f, p.y));
+        return c;
+    };
+    MeshData m;
+    m.vertices.reserve(std::size_t(nc) * std::size_t(nr - 1) * 6);
+    auto vert = [&](int c, int k) {
+        const glm::vec3 p = P(c, k), nn = normal(c, k);
+        m.vertices.push_back({p, nn, albedo(p, nn), glm::vec4(float(MatId::Generic), 0.92f, 0.0f, 0.0f)});
+    };
+    for (int c = 0; c < nc; ++c)
+        for (int k = 0; k + 1 < nr; ++k) {
+            const glm::vec3 a = P(c, k), b = P(c + 1, k), d = P(c, k + 1);
+            // Winding: CCW seen from above (the columns run counter-clockwise when seen from +Y).
+            const bool ccw = glm::cross(b - a, d - a).y >= 0.0f;
+            const int tri[6][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 0}, {1, 1}, {0, 1}};
+            for (int v = 0; v < 6; ++v) {
+                const int t = ccw ? v : (v % 3 == 0 ? v : (v % 3 == 1 ? v + 1 : v - 1));
+                vert(c + tri[t][0], k + tri[t][1]);
+            }
+        }
     return m;
 }
 

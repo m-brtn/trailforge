@@ -132,7 +132,7 @@ public:
     SurfaceId surfaceAt(float x, float z) const;
     // RGBA8 per cell: grass blade density, mud, wet, wheat (the proving ground mask semantics).
     const std::vector<std::uint32_t>& maskTexels() const { return m_mask; }
-    // RGBA8 per cell: splat weights dirt, rock, sand, snow (grass is the rest).
+    // RGBA8 per cell: road paint (render-only, includes the worn shoulder), rock, sand, snow weights.
     const std::vector<std::uint32_t>& splatTexels() const { return m_splat; }
 
     const std::vector<LevelPoi>& pois() const { return m_pois; }

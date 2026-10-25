@@ -428,12 +428,13 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
             if (item == MenuItem::PadGlyphs && settings.padGlyphs == int(PadGlyphSetting::Auto))
                 v += std::string(" (") + padGlyphsName(view.padGlyphs) + ")";
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.06f);
+            const float adx = std::max(arrowDx, 0.5f * vw + 0.7f * textSize); // long values (level names) push the arrows out
             text(dl, m_body, textSize, ImVec2(valueX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.75f) * alpha),
                  v.c_str(), 0.06f);
             // Value arrows (clickable); bright on the selected row.
             const float ah = textSize * 0.32f, acy = ty + textSize * 0.55f;
             const ImU32 ac = sel ? col(kOrange, alpha) : col(kWhite, 0.25f * alpha);
-            const float lx = valueX - arrowDx, rx = valueX + arrowDx;
+            const float lx = valueX - adx, rx = valueX + adx;
             dl->AddTriangleFilled(ImVec2(lx - ah * 0.6f, acy), ImVec2(lx + ah * 0.6f, acy - ah), ImVec2(lx + ah * 0.6f, acy + ah), ac);
             dl->AddTriangleFilled(ImVec2(rx + ah * 0.6f, acy), ImVec2(rx - ah * 0.6f, acy - ah), ImVec2(rx - ah * 0.6f, acy + ah), ac);
             row.arrowL0 = lx - textSize;

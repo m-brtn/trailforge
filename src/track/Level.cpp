@@ -157,6 +157,24 @@ Polygon readPolygon(const json::Value& v) {
     return poly;
 }
 
+// Chaikin corner cutting: each pass replaces every edge by its 1/4 and 3/4 points (organic outlines from a few
+// authored vertices; the shape shrinks slightly at the corners).
+Polygon smoothedPolygon(Polygon poly, int passes) {
+    for (int k = 0; k < passes && poly.p.size() >= 3; ++k) {
+        std::vector<Vec2> out;
+        out.reserve(poly.p.size() * 2);
+        for (std::size_t i = 0; i < poly.p.size(); ++i) {
+            const Vec2 a = poly.p[i], b = poly.p[(i + 1) % poly.p.size()];
+            out.push_back({0.75f * a.x + 0.25f * b.x, 0.75f * a.z + 0.25f * b.z});
+            out.push_back({0.25f * a.x + 0.75f * b.x, 0.25f * a.z + 0.75f * b.z});
+        }
+        poly.p = std::move(out);
+    }
+    poly = Polygon{poly.p};
+    poly.finish();
+    return poly;
+}
+
 SurfaceId surfaceFromName(const std::string& s) {
     if (s == "rock") return SurfaceId::Rock;
     if (s == "dirt") return SurfaceId::PackedDirt;
@@ -476,6 +494,7 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
             err = "level: lake " + lake.name + " needs a polygon";
             return false;
         }
+        lake.poly = smoothedPolygon(std::move(lake.poly), 3);
         m_lakes.push_back(std::move(lake));
     }
     for (const json::Value& r : doc["rivers"].array) {
@@ -1037,6 +1056,11 @@ void LevelBaker::bakeSurfaces() {
             const float gx = 0.5f * ((m_h[b] - m_h[a]) + (m_h[d] - m_h[c])) / m_cell;
             const float gz = 0.5f * ((m_h[c] - m_h[a]) + (m_h[d] - m_h[b])) / m_cell;
             const float grad = std::hypot(gx, gz);
+            // Rock by the slope over ~4 m: 1 m detail bumps alone do not turn a grassy bank into rock.
+            const int il = std::max(i - 1, 0), ir = std::min(i + 2, m_n - 1), jl = std::max(j - 1, 0), jr = std::min(j + 2, m_n - 1);
+            const float gx4 = 0.5f * ((m_h[idx(ir, j)] - m_h[idx(il, j)]) + (m_h[idx(ir, j + 1)] - m_h[idx(il, j + 1)])) / (float(ir - il) * m_cell);
+            const float gz4 = 0.5f * ((m_h[idx(i, jr)] - m_h[idx(i, jl)]) + (m_h[idx(i + 1, jr)] - m_h[idx(i + 1, jl)])) / (float(jr - jl) * m_cell);
+            const float slope4 = std::hypot(gx4, gz4);
             const float road = 0.25f * (m_roadness[a] + m_roadness[b] + m_roadness[c] + m_roadness[d]);
             float wd = 0.0f;
             WaterKind wk = WaterKind::None;
@@ -1067,15 +1091,13 @@ void LevelBaker::bakeSurfaces() {
                 s = wk == WaterKind::River ? SurfaceId::Rock : wk == WaterKind::Lake ? SurfaceId::Mud : SurfaceId::Sand;
             } else if (flatS != SurfaceId::Count) {
                 s = flatS;
-            } else if (grad > rockTan) {
+            } else if (slope4 > rockTan) {
                 s = SurfaceId::Rock;
             } else if (h > snowAt) {
                 s = SurfaceId::Snow;
             } else if ((coastD < 35.0f && beach > 0.3f && h < 4.0f + m_seaLevel) || (coastD < 8.0f && h < 1.4f + m_seaLevel)) {
                 s = SurfaceId::Sand;
-            } else if (near > 0.5f && grad < 0.25f && patch > 0.45f) {
-                s = SurfaceId::Mud;
-            } else if (patch > 0.80f && grad < 0.18f && forest < 0.3f) {
+            } else if (near > 0.5f && grad < 0.25f && patch > 0.55f) {
                 s = SurfaceId::Mud;
             } else if (treeDensity(x, z, forest) > 0.55f && !wheat) {
                 s = SurfaceId::PackedDirt; // needle floor under dense trees
@@ -1085,10 +1107,14 @@ void LevelBaker::bakeSurfaces() {
             const float rock = s == SurfaceId::Rock ? 1.0f : 0.0f;
             const float sand = s == SurfaceId::Sand ? 1.0f : 0.0f;
             const float snow = s == SurfaceId::Snow ? 1.0f : 0.0f;
-            const float dirt = s == SurfaceId::PackedDirt ? 1.0f : 0.0f;
             const float mud = s == SurfaceId::Mud ? 1.0f : 0.0f;
+            // Render-only road paint: the packed running surface plus a worn shoulder of about 1.8 m that fades
+            // into the grass (the physics class above keeps the sharp road edge).
+            const float edge = std::min({m_roadEdge[a], m_roadEdge[b], m_roadEdge[c], m_roadEdge[d]});
+            const float roadPaint = std::max(road, 1.0f - smoothstep(-0.2f, 1.8f, edge));
+            const float dirt = s == SurfaceId::PackedDirt || s == SurfaceId::Grass ? roadPaint : 0.0f;
             float grass = 0.0f;
-            if (s == SurfaceId::Grass) grass = 0.35f + 0.65f * smoothstep(0.3f, 0.7f, meadow);
+            if (s == SurfaceId::Grass) grass = (0.35f + 0.65f * smoothstep(0.3f, 0.7f, meadow)) * (1.0f - 0.85f * dirt);
             else if (s == SurfaceId::PackedDirt && road < 0.2f) grass = 0.12f * smoothstep(0.4f, 0.7f, patch);
             const float wet = wd > 0.0f ? 1.0f : 0.55f * near;
             mask[std::size_t(j) * std::size_t(cn) + std::size_t(i)] = packRgba(grass, mud, wet, wheat ? 1.0f : 0.0f);

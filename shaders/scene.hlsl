@@ -87,6 +87,7 @@ struct FrameUniforms {
     float4 bodyMudFlecks[4]; // grass blades in the coat per region
     float4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     float4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
+    float4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
 };
 
 struct DrawUniforms {
@@ -562,12 +563,21 @@ GroundSurface mixGround(GroundSurface a, GroundSurface b, float t) {
 
 // Level terrain: packed dirt / grass (from the mask) under rock, sand and snow by the baked splat weights. The edges
 // are sharpened with noise so the layers do not blur into each other over the 1 m splat cells.
-GroundSurface terrainMaterial(float3 w, float3 P, float3 N, float4 mask, Texture2D<float4> noiseTex, SamplerState ns, float far) {
+GroundSurface terrainMaterial(float3 w, float road, float3 P, float3 N, float4 mask, Texture2D<float4> noiseTex, SamplerState ns,
+                              float far) {
     const float2 nz = noiseTex.Sample(ns, P.xz * 0.13).rg;
     const float rock = saturate((w.x - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, w.x);
     const float sand = saturate((w.y - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, w.y);
     const float snow = saturate((w.z - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, w.z);
     GroundSurface g = groundMaterial(MAT_DIRT, P, N, mask, noiseTex, ns, far);
+    // Road paint: lighter, sun-bleached packed dirt with a smoother, compacted top (edges broken up with noise).
+    const float paint = saturate(road * 1.3 - 0.15 + (nz.r - 0.5) * 0.35);
+    if (paint > 0.0) {
+        const float3 packed = float3(0.300, 0.225, 0.150) * (0.85 + 0.3 * nz.g);
+        g.albedo = lerp(g.albedo, lerp(g.albedo, packed, 0.7), paint);
+        g.roughness = lerp(g.roughness, 0.86, paint);
+        g.bump *= 1.0 - 0.4 * paint;
+    }
     if (sand > 0.0) g = mixGround(g, groundMaterial(MAT_SAND, P, N, mask, noiseTex, ns, far), sand);
     if (rock > 0.0) g = mixGround(g, groundMaterial(MAT_ROCK, P, N, mask, noiseTex, ns, far), rock);
     if (snow > 0.0) g = mixGround(g, groundMaterial(MAT_SNOW, P, N, mask, noiseTex, ns, far), snow);
@@ -714,7 +724,7 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND || mat == MAT_SNOW || mat == MAT_TERRAIN;
     if (ground) {
         const float4 m = sampleMask(mask, maskSampler, P.xz);
-        GroundSurface g = mat == MAT_TERRAIN ? terrainMaterial(vin.color, P, N, m, noiseTex, noiseSampler, grassFar(P))
+        GroundSurface g = mat == MAT_TERRAIN ? terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, grassFar(P))
                                              : groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
         s.albedo = g.albedo;
         s.roughness = g.roughness;
@@ -946,7 +956,7 @@ LitOut terrain_vs(LitIn vin) {
     vout.color = sp.gba; // rock, sand, snow
     vout.material = float4(float(MAT_TERRAIN), 0.0, 0.0, 0.0);
     vout.localPos = world;
-    vout.localNormal = vout.normal;
+    vout.localNormal = float3(sp.r, 0.0, 0.0); // terrain: x = road paint (interpolated; unused by ground shading)
     vout.mudMode = 0.0;
     vout.soil = ((float4)(0.0));
     vout.soilParams = ((float2)(0.0));
@@ -1100,8 +1110,10 @@ float4 sky_fs(FullscreenOut vin) : SV_Target0 {
     // Horizon haze matches the fog color.
     const float haze = pow(1.0 - saturate(abs(dir.y)), 6.0) * 0.6;
     col = lerp(col, hazeColor(dir), haze);
-    const float4 m = mountains(dir);
-    col = lerp(col, m.rgb, m.a);
+    if (f.worldParams.x > 0.5) {
+        const float4 m = mountains(dir);
+        col = lerp(col, m.rgb, m.a);
+    }
     return float4(col, 1.0);
 }
 #endif
@@ -1125,8 +1137,11 @@ SamplerState rs : SMP(3);
 
 float4 water_fs(LitOut vin) : SV_Target0 {
     const float3 P = vin.worldPos;
-    const float terrain = heightTex.SampleLevel(cs, groundUV(P.xz), 0).r;
-    const float depth = P.y - terrain;
+    const float2 guv = groundUV(P.xz);
+    const bool outside = any(guv < 0.0) || any(guv > 1.0);
+    const float terrain = heightTex.SampleLevel(cs, guv, 0).r;
+    // Outside the baked square the open sea continues at about the depth the baked seabed ends with (no seam).
+    const float depth = outside && f.worldParams.y > 0.5 ? 24.0 : P.y - terrain;
     if (depth <= 0.0) discard;
     const float t = f.cameraPos.w;
     // Ripples: two scrolling noise layers, normal from finite differences.

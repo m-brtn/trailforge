@@ -224,5 +224,5 @@ expect garage_cursor == 1
 tap Escape
 wait 0.3
 expect menu_screen == 1
-expect menu_cursor == 1
+expect menu_cursor == 2        # back on GARAGE (Start, Level, Garage, ...)
 expect garage_open == 0

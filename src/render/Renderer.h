@@ -58,6 +58,7 @@ struct FrameUniforms {
     glm::vec4 bodyMudFlecks[4]; // grass blades in the coat per region
     glm::vec4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     glm::vec4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
+    glm::vec4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
 };
 
 struct DrawUniforms {
@@ -152,6 +153,8 @@ struct FrameDesc {
     std::span<const DrawItem> draws;
     const GpuMesh* water = nullptr; // water surfaces (identity transform): puddles, or a level's lakes, rivers and sea
     bool waterReflection = true;    // planar reflection at the ground maps' water level (puddles only)
+    bool skyMountains = true;       // stylized mountain silhouettes in the sky (off where real distant terrain exists)
+    bool deepOutsideGround = false; // water beyond the ground maps is open sea (no floor height there)
     float fogDensity = 0.0016f;     // height fog at y = 0 (1/m), times the fog setting
     float fogFalloff = 0.05f;       // 1/m
     float shadowScale = 1.0f;       // multiplies the shadow distance setting (open levels see farther)
@@ -209,7 +212,7 @@ struct TerrainSource {
     int samples = 0;                          // per side; samples - 1 must be a multiple of 512
     float origin = 0.0f, cell = 1.0f;         // sample (0, 0) at (origin, origin)
     const float* heights = nullptr;           // samples^2, row-major by z
-    const std::uint32_t* splat = nullptr;     // (samples - 1)^2 RGBA8: dirt, rock, sand, snow
+    const std::uint32_t* splat = nullptr;     // (samples - 1)^2 RGBA8: road paint, rock, sand, snow
 };
 
 // SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
@@ -385,6 +388,7 @@ private:
     // Level terrain.
     struct TerrainNode {
         float minY, maxY;
+        float error = 0.0f; // m: largest height deviation of this node's step grid (and its subtree) from the samples
     };
     Texture m_terrainHeight, m_terrainSplat;
     GpuMesh m_terrainPatch;

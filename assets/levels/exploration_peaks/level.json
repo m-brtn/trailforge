@@ -7,7 +7,7 @@
   "bakeHalfExtent": 1280,
   "playHalfExtent": 1000,
   "snow": { "line": 182, "noise": 16, "eastRise": 0.06, "eastFrom": -380 },
-  "rockSlopeDeg": 36,
+  "rockSlopeDeg": 40,
   "spawn": { "x": -488, "z": 236, "towards": [-470, 180] },
   "detail": {
     "mountainLow": 75, "mountainHigh": 175, "ridgeAmplitude": 30, "ridgeScale": 140,
@@ -62,7 +62,7 @@
   "coast": {
     "seaLevel": 0.0,
     "maxDepth": 22,
-    "cliffRise": 1.1,
+    "cliffRise": 0.5,
     "beachRise": 0.035,
     "land": [
       [[-1400, -1400], [1400, -1400], [1400, 380], [1000, 380], [950, 420], [860, 400], [800, 410], [790, 480],

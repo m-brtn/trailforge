@@ -770,6 +770,38 @@ void Renderer::setTerrain(const TerrainSource* src) {
             }
     }
 
+    // Geometric error per node: the step grid interpolated over its cells (same diagonal as the patch) against every
+    // sample inside, then the maximum with the children, so a coarse node is never more accurate than its subtree.
+    const float* hs = src->heights;
+    auto H = [&](int i, int j) { return hs[std::size_t(j) * std::size_t(n) + std::size_t(i)]; };
+    for (int level = kTerrainLevels - 2; level >= 0; --level) {
+        const int side = m_terrainRoots << level;
+        const int step = 1 << (kTerrainLevels - 1 - level);
+        std::vector<TerrainNode>& nodes = m_terrainNodes[std::size_t(level)];
+        const auto& fine = m_terrainNodes[std::size_t(level + 1)];
+        for (int nj = 0; nj < side; ++nj)
+            for (int ni = 0; ni < side; ++ni) {
+                TerrainNode& node = nodes[std::size_t(nj) * std::size_t(side) + std::size_t(ni)];
+                float err = 0.0f;
+                const int ci0 = ni * kTerrainPatch * step, cj0 = nj * kTerrainPatch * step;
+                for (int cj = cj0; cj < cj0 + kTerrainPatch * step; cj += step)
+                    for (int ci = ci0; ci < ci0 + kTerrainPatch * step; ci += step) {
+                        const float h00 = H(ci, cj), h10 = H(ci + step, cj), h01 = H(ci, cj + step), h11 = H(ci + step, cj + step);
+                        for (int j = 0; j <= step; ++j)
+                            for (int i = 0; i <= step; ++i) {
+                                const float u = float(i) / float(step), w = float(j) / float(step);
+                                // Triangles {00, 01, 11} (w >= u) and {00, 11, 10}.
+                                const float y = w >= u ? h00 + u * (h11 - h01) + w * (h01 - h00)
+                                                       : h00 + u * (h10 - h00) + w * (h11 - h10);
+                                err = std::max(err, std::abs(y - H(ci + i, cj + j)));
+                            }
+                    }
+                for (int c = 0; c < 4; ++c)
+                    err = std::max(err, fine[std::size_t(nj * 2 + c / 2) * std::size_t(side * 2) + std::size_t(ni * 2 + c % 2)].error);
+                node.error = err;
+            }
+    }
+
     // Shared patch: kTerrainPatch^2 cells as two triangles each, plus a skirt quad along every edge segment.
     MeshData patch;
     const Material m{};
@@ -813,7 +845,10 @@ void Renderer::selectTerrain(const glm::vec3& cam, const glm::mat4* viewProj, fl
         const float d = glm::length(nearest - cam);
         if (d > maxDistance) return;
         if (fr && !fr->box(bmin - glm::vec3(0.0f, 2.0f * float(step), 0.0f), bmax)) return;
-        if (step > 1 && d < lodScale * size) {
+        // Split near the camera, or where the coarse grid would deviate by more than ~0.2 % of the distance (banks,
+        // shorelines, road cuts): about one pixel at 1080p and 60 deg for lodScale 2.
+        const float tolerance = 0.004f * 2.0f / std::max(lodScale, 0.5f);
+        if (step > 1 && (d < lodScale * size || node.error > tolerance * std::max(d, 1.0f))) {
             for (int c = 0; c < 4; ++c) self(self, level + 1, ni * 2 + c % 2, nj * 2 + c / 2);
             return;
         }
@@ -1209,6 +1244,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
     }
     fu.trampleRect = m_trampleRect;
+    fu.worldParams = glm::vec4(frame.skyMountains ? 1.0f : 0.0f, frame.deepOutsideGround ? 1.0f : 0.0f, 0.0f, 0.0f);
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
     if (frame.bodyMud) {
         for (int r = 0; r < kBodyMudRegions; ++r) {

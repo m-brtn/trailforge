@@ -372,16 +372,19 @@ std::optional<TrackFeature> lakeShore(const Level& L) {
     for (const LevelPoi& p : L.pois())
         if (p.name == "Alpine Lake") lake = &p;
     if (!lake) return std::nullopt;
-    for (float r = 0.0f; r < 200.0f; r += 4.0f)
+    for (float r = 0.0f; r < 400.0f; r += 4.0f)
         for (int a = 0; a < 72; ++a) {
             const float ang = float(a) * 0.0872665f;
             const float x = lake->x + r * std::sin(ang), z = lake->z + r * std::cos(ang);
             if (L.waterAt(x, z)) continue;
             const float gx = L.heightAt(x + 1.5f, z) - L.heightAt(x - 1.5f, z), gz = L.heightAt(x, z + 1.5f) - L.heightAt(x, z - 1.5f);
-            if (std::hypot(gx, gz) / 3.0f > 0.12f) continue;
+            if (std::hypot(gx, gz) / 3.0f > 0.22f) continue;
             for (int d = 0; d < 36; ++d) {
                 const float yaw = float(d) * 0.174533f, dx = std::sin(yaw), dz = std::cos(yaw);
                 bool deep = true;
+                // A gentle approach (no river bank or channel step on the way in).
+                for (float k = 0.0f; k < 10.0f && deep; k += 1.0f)
+                    deep = std::abs(L.heightAt(x + dx * (k + 1.0f), z + dz * (k + 1.0f)) - L.heightAt(x + dx * k, z + dz * k)) < 0.45f;
                 for (float k = 10.0f; k <= 42.0f && deep; k += 2.0f) {
                     const std::optional<float> w = L.waterAt(x + dx * k, z + dz * k);
                     deep = w && L.waterKindAt(x + dx * k, z + dz * k) == WaterKind::Lake &&
