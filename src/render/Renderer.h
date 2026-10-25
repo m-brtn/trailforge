@@ -22,7 +22,7 @@ class TireMarks;
 class WheelSpray;
 class BodyMud;
 
-// Uniform block layouts; must match the structs of the same name in shaders/scene.metal.
+// Uniform block layouts; must match the structs of the same name in shaders/scene.hlsl.
 struct FrameUniforms {
     glm::mat4 viewProj;
     glm::mat4 invViewProj;
@@ -207,6 +207,8 @@ public:
     SDL_GPUTextureFormat swapchainFormat() const;
     const char* driverName() const { return m_driver; }
     const char* shaderFormatName() const { return m_shaderFormatName; }
+    // GPU frame time is measured only on the Metal backend; elsewhere it is reported as unavailable.
+    bool gpuTimingAvailable() const { return m_gpuTiming; }
 
     GpuMesh upload(const MeshData& mesh);
     // Ground maps (height, mask, noise) and grass chunk list; call once after loading the track.
@@ -231,6 +233,7 @@ public:
     int depthCreations() const { return m_targetCreations; }
 
 private:
+    int supportedMsaa(int n) const; // highest supported sample count <= n
     struct Texture {
         SDL_GPUTexture* tex = nullptr;
         std::uint32_t w = 0, h = 0;
@@ -268,6 +271,7 @@ private:
     void ensureMarkCapacity(std::uint32_t segments);
     void clearTrample();
     void pollGpuTiming();
+    double gpuFenceMs(SDL_GPUFence* fence) const;
     bool saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::uint32_t w, std::uint32_t h, const char* path);
 
     void computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj);
@@ -285,12 +289,15 @@ private:
     SDL_GPUDevice* m_device = nullptr;
     const char* m_driver = "";
     const char* m_shaderFormatName = "";
+    bool m_gpuTiming = false;
     SDL_GPUShaderFormat m_shaderFormat = SDL_GPU_SHADERFORMAT_INVALID;
     SDL_GPUTextureFormat m_colorFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
     static constexpr SDL_GPUTextureFormat kHdrFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
     static constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     bool m_vsync = true;
     int m_maxMsaa = 1;
+    bool m_msaa2 = false;
+    float m_shadowBiasClamp = 0.01f;
 
     RenderSettings m_settings;
     bool m_targetsDirty = true;

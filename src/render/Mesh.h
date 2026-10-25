@@ -9,7 +9,7 @@ namespace tf {
 struct TrackGeometry;
 class SurfaceTable;
 
-// Shader material ids (LitVertex::material.x). Must match the MAT_* constants in shaders/scene.metal.
+// Shader material ids (LitVertex::material.x). Must match the MAT_* constants in shaders/scene.hlsl.
 enum class MatId : int {
     Generic = 0,      // PBR from the vertex: color, roughness, metallic
     Dirt = 1,         // procedural ground materials (world-space noise)
@@ -37,7 +37,7 @@ struct Material {
     float mud = 0.0f;       // 0..1, how much cosmetic mud this surface collects
 };
 
-// Lit mesh vertex. Layout matches LitIn in shaders/scene.metal.
+// Lit mesh vertex. Layout matches LitIn in shaders/scene.hlsl.
 struct LitVertex {
     glm::vec3 position;
     glm::vec3 normal;

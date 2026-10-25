@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace tf {
 namespace {
@@ -17,6 +18,13 @@ const char* gearName(int gear, char* buf, std::size_t n) {
     if (gear < 0) std::snprintf(buf, n, "R%d", -gear);
     else if (gear == 0) std::snprintf(buf, n, "N");
     else std::snprintf(buf, n, "%d", gear);
+    return buf;
+}
+
+std::string gpuText(double ms) {
+    if (ms < 0.0) return "n/a";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.2f ms", ms);
     return buf;
 }
 
@@ -80,9 +88,9 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         ImGui::TextDisabled("W gas / S brake (stopped: release, press again for reverse)  A/D steer  Space handbrake");
         ImGui::TextDisabled("Q fwd/rev  L low range  B ABS  T traction control  X diff locks  R reset");
         ImGui::TextDisabled("C camera  H lights  F1 UI  F2 graphics  F3 audio");
-        ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %.2f ms  %s %ux%u  v%s", stats.fps, stats.frameMs,
-                            stats.cpuFrameMs, stats.gpuFrameMs, presetName(gfx.preset), stats.renderW, stats.renderH,
-                            TRAILFORGE_VERSION);
+        ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
+                            stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
+                            stats.renderH, TRAILFORGE_VERSION);
         ImGui::End();
         drawDriveHud(sim);
     }
@@ -185,8 +193,8 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
     RenderSettings& s = gfx.settings;
     bool edited = false;
 
-    ImGui::Text("CPU %.2f ms  GPU %.2f ms  frame %.2f ms (%.0f FPS)", stats.cpuFrameMs, stats.gpuFrameMs, stats.frameMs,
-                stats.fps);
+    ImGui::Text("CPU %.2f ms  GPU %s  frame %.2f ms (%.0f FPS)", stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(),
+                stats.frameMs, stats.fps);
     ImGui::Text("3D %ux%u -> %ux%u, %d draws, %.0fk grass blades%s", stats.renderW, stats.renderH, stats.outputW,
                 stats.outputH, stats.drawCalls, double(stats.grassBlades) / 1000.0,
                 stats.reflection ? ", reflection" : "");

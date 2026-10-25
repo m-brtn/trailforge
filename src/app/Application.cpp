@@ -290,7 +290,7 @@ void Application::renderFrame(float frameTime) {
     stats.gamepad = m_input.gamepadConnected() ? m_input.gamepadName() : "";
     const RenderStats& rs = m_renderer->stats();
     stats.cpuFrameMs = m_cpuMs;
-    stats.gpuFrameMs = rs.gpuMs;
+    stats.gpuFrameMs = m_renderer->gpuTimingAvailable() ? rs.gpuMs : -1.0;
     stats.renderW = rs.renderW;
     stats.renderH = rs.renderH;
     stats.outputW = rs.outputW;

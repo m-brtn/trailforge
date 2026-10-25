@@ -34,7 +34,7 @@ struct FrameStats {
     const char* shaderFormat = "";
     const char* gamepad = ""; // empty: not connected
     double cpuFrameMs = 0.0;  // CPU time of the last frame without waiting for the swapchain
-    double gpuFrameMs = 0.0;  // GPU time of the last completed command buffer
+    double gpuFrameMs = 0.0;  // GPU time of the last completed command buffer, < 0: not available (non-Metal)
     unsigned renderW = 0, renderH = 0, outputW = 0, outputH = 0;
     int drawCalls = 0;
     unsigned long long grassBlades = 0;

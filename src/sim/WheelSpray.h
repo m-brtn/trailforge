@@ -42,7 +42,7 @@ struct SprayParticle {
     bool frozen = false;  // synthetic fill: not moved
 };
 
-// GPU instance (must match SprayInstance in shaders/scene.metal).
+// GPU instance (must match SprayInstance in shaders/scene.hlsl).
 struct SprayInstance {
     float posSize[4];  // xyz, radius (m)
     float color[4];    // linear rgb, alpha

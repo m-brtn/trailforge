@@ -16,7 +16,7 @@ namespace tf {
 
 // One piece of a tire mark ribbon, from p0 to p1. Consecutive segments of a ribbon share the end point and the side
 // vector, so the ribbon is continuous. Plain floats in the layout of the `TireMarkSegment` struct in
-// shaders/scene.metal (5 x float4); the renderer uploads the ring buffer as is.
+// shaders/scene.hlsl (5 x float4); the renderer uploads the ring buffer as is.
 struct TireMarkSegment {
     float p0[3];    // world, m: patch center at the start
     float u0;       // m: distance along the ribbon at p0 (tread pattern coordinate)
