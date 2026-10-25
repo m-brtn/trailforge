@@ -407,7 +407,7 @@ void feedAndMixer() {
     d.run(0.5);
     const double playing = d.rms();
 
-    // Pause: gameplay sounds fade out and freeze; only the (ducked) ambience keeps playing.
+    // Pause: gameplay sounds fade out and freeze; only the ambience (unchanged level) keeps playing.
     d.paused = true;
     d.run(1.0);
     const double pausedRms = d.rms();
@@ -505,10 +505,83 @@ void skidGating() {
     CHECK(skid == 0.0f && mud > 0.3f, "mud: skid %.3f mud %.2f", skid, mud);
 }
 
+// Music bus with a synthetic streamed track: fades, volume, loop, restart, and no change while the game is paused.
+void music() {
+    struct Sine : MusicSource {
+        long long pos = 0, length = 48000; // 1 s track
+        int rewinds = 0, reads = 0;
+        int read(float* stereo, int frames) override {
+            ++reads;
+            const int n = int(std::min<long long>(frames, length - pos));
+            for (int i = 0; i < n; ++i) {
+                const float v = 0.25f * float(std::sin(6.283185307 * 440.0 * double(pos + i) / 48000.0));
+                stereo[2 * i] = stereo[2 * i + 1] = v;
+            }
+            pos += n;
+            return n;
+        }
+        void rewind() override {
+            pos = 0;
+            ++rewinds;
+        }
+        int sampleRate() const override { return 48000; }
+    } track;
+    const SoundBank bank; // no other sounds
+    AudioMixer mixer(bank);
+    mixer.setMusic(&track);
+    AudioFrame f;
+    f.settings.master = 1.0f;
+    f.settings.music = 1.0f;
+    f.music = 1.0f;
+    f.musicFadeSeconds = 1.0f;
+    std::vector<float> buf(2 * 4800);
+    auto rms = [&](double seconds) { // renders in 0.1 s chunks, returns the RMS of the last chunk
+        double r = 0.0;
+        for (int k = 0; k < int(std::lround(seconds * 10.0)); ++k) {
+            mixer.setFrame(f);
+            mixer.render(buf.data(), 4800);
+            double p = 0.0;
+            for (float x : buf) p += double(x) * double(x);
+            r = std::sqrt(p / double(buf.size()));
+        }
+        return r;
+    };
+    const double fading = rms(0.5);
+    const double full = rms(1.5);
+    std::printf("    music rms: 0.5 s into a 1 s fade %.4f, full %.4f, track rewinds %d\n", fading, full,
+                track.rewinds);
+    CHECK(std::abs(full - 0.25 / std::sqrt(2.0)) < 0.01, "full music level %.4f", full);
+    CHECK(fading > 0.3 * full && fading < 0.6 * full, "fade-in level %.4f of %.4f", fading, full);
+    CHECK(track.rewinds >= 1, "the 1 s track did not loop after 2 s (rewinds %d)", track.rewinds);
+    f.paused = true;
+    const double paused = rms(1.0);
+    CHECK(std::abs(paused - full) < 0.01 * full, "music changed while paused: %.4f vs %.4f", paused, full);
+    f.paused = false;
+    f.settings.music = 0.5f;
+    const double half = rms(0.5);
+    CHECK(std::abs(half - 0.5 * full) < 0.02 * full, "music volume 0.5: %.4f vs %.4f", half, full);
+    f.music = 0.0f;
+    f.musicFadeSeconds = 2.0f;
+    rms(2.1);
+    const int reads = track.reads;
+    const double silent = rms(0.5);
+    std::printf("    music after a 2 s fade-out: rms %.6f, gain %.3f, reads while silent %d\n", silent,
+                mixer.stats().musicGain, track.reads - reads);
+    CHECK(silent < 1e-6 && mixer.stats().musicGain == 0.0f, "music not silent after the fade-out: %.6f", silent);
+    CHECK(track.reads == reads, "the track was decoded while silent");
+    const int rewinds = track.rewinds;
+    f.musicRestart = 1;
+    f.music = 1.0f;
+    rms(0.1);
+    CHECK(track.rewinds == rewinds + 1 && mixer.stats().musicSeconds < 0.11, "restart: rewinds %d -> %d, t %.3f",
+          rewinds, track.rewinds, mixer.stats().musicSeconds);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"audio_music", music},
         {"audio_engine_layers", engineLayers},
         {"audio_tire_layers", tireLayers},
         {"audio_manifest", manifest},

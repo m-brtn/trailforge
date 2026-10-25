@@ -235,7 +235,8 @@ Renderer::~Renderer() {
     releaseTargets();
     releaseScenePipelines();
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
-                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe})
+                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe,
+                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
     for (GpuMesh& m : m_treeMeshes) m.release();
     if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
@@ -444,6 +445,12 @@ void Renderer::createStaticPipelines() {
                                     SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
     m_tramplePipe = createPipeline("mark_mask_vs", "mark_mask_fs", 2, 0, 0, 0, 1, kLayoutNone, kTrampleFormat, s1,
                                    false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendMax);
+    m_blurDownPipe = createPipeline("fullscreen_vs", "blur_down_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1,
+                                    false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_blurUpPipe = createPipeline("fullscreen_vs", "blur_up_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false,
+                                  false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_blurCompositePipe = createPipeline("fullscreen_vs", "blur_composite_fs", 0, 1, 0, 2, 0, kLayoutNone,
+                                         m_colorFormat, s1, false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
 }
 
 void Renderer::createScenePipelines() {
@@ -515,6 +522,9 @@ void Renderer::releaseTargets() {
     for (Texture& t : m_bloom) releaseTexture(t);
     m_bloom.clear();
     releaseTexture(m_ldr);
+    releaseTexture(m_blurSrc);
+    for (Texture& t : m_blur) releaseTexture(t);
+    m_blur.clear();
 }
 
 void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
@@ -553,6 +563,13 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
         }
     }
     if (s.fxaa) m_ldr = makeTexture(outW, outH, m_colorFormat, colorRT | sampled);
+    // Menu blur: the finished frame, then a 1/2 .. 1/16 chain.
+    m_blurSrc = makeTexture(outW, outH, m_colorFormat, colorRT | sampled);
+    for (std::uint32_t i = 1, bw = outW, bh = outH; i <= kBlurLevels; ++i) {
+        bw = std::max<std::uint32_t>(1, bw / 2);
+        bh = std::max<std::uint32_t>(1, bh / 2);
+        m_blur.push_back(makeTexture(bw, bh, m_colorFormat, colorRT | sampled));
+    }
     m_outW = outW;
     m_outH = outH;
     m_stats.renderW = rw;
@@ -588,6 +605,24 @@ void Renderer::uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_
     SDL_EndGPUCopyPass(copy);
     SDL_SubmitGPUCommandBuffer(cmd);
     SDL_ReleaseGPUTransferBuffer(m_device, tb);
+}
+
+SDL_GPUTexture* Renderer::createImage(const void* rgba, std::uint32_t w, std::uint32_t h) {
+    std::uint32_t levels = 1;
+    while ((std::max(w, h) >> levels) > 0) ++levels;
+    // Mip generation needs the texture to be a color target as well.
+    Texture t = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                            SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_SAMPLECOUNT_1, 1,
+                            levels);
+    uploadTexture(t.tex, rgba, w, h, 4);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+    SDL_GenerateMipmapsForGPUTexture(cmd, t.tex);
+    SDL_SubmitGPUCommandBuffer(cmd);
+    return t.tex;
+}
+
+void Renderer::releaseImage(SDL_GPUTexture* tex) {
+    if (tex) SDL_ReleaseGPUTexture(m_device, tex);
 }
 
 void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
@@ -1477,7 +1512,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
     }
 
-    // ---- 5. Tonemap (+ upscale from the render resolution), 6. FXAA
+    // ---- 5. Tonemap (+ upscale from the render resolution), 6. FXAA; into the blur source while a menu blurs
+    const bool blur = frame.blur > 0.0f && !m_blur.empty();
+    SDL_GPUTexture* const post = blur ? m_blurSrc.tex : target;
     {
         PostUniforms pu{};
         pu.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(w), 1.0f / float(h));
@@ -1490,10 +1527,32 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             PostUniforms fx{};
             fx.texel = glm::vec4(1.0f / float(w), 1.0f / float(h), 0, 0);
             SDL_GPUTextureSamplerBinding b{m_ldr.tex, m_clampSampler};
-            fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_fxaaPipe, fx, &b, 1);
+            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_fxaaPipe, fx, &b, 1);
         } else {
-            fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
+            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
         }
+    }
+
+    // ---- 6b. Menu blur: dual Kawase down to 1/16 and back up to 1/2, composited over the sharp frame
+    if (blur) {
+        PostUniforms pu{};
+        pu.params.x = 1.0f + 0.5f * frame.blur; // tap offset grows with the blur amount
+        for (int i = 0; i < kBlurLevels; ++i) {
+            const Texture& src = i == 0 ? m_blurSrc : m_blur[std::size_t(i - 1)];
+            pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
+            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_blur[std::size_t(i)].tex, SDL_GPU_LOADOP_DONT_CARE, m_blurDownPipe, pu, &b, 1);
+        }
+        for (int i = kBlurLevels - 1; i > 0; --i) {
+            const Texture& src = m_blur[std::size_t(i)];
+            pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
+            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_blur[std::size_t(i - 1)].tex, SDL_GPU_LOADOP_DONT_CARE, m_blurUpPipe, pu, &b, 1);
+        }
+        PostUniforms cu{};
+        cu.params = glm::vec4(frame.blur, frame.blurDim, frame.blurDesaturate, 0.0f);
+        SDL_GPUTextureSamplerBinding tex[2] = {{m_blurSrc.tex, m_clampSampler}, {m_blur[0].tex, m_clampSampler}};
+        fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_blurCompositePipe, cu, tex, 2);
     }
 
     // ---- 7. UI on top (the ImGui pipeline is created without a depth target)

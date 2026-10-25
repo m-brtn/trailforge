@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/GameFlow.h"
+#include "app/GameSettings.h"
 #include "app/Scenario.h"
 #include "audio/AudioSystem.h"
 #include "audio/VehicleAudioFeed.h"
@@ -12,6 +14,7 @@
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 #include "ui/DebugUI.h"
+#include "ui/MenuUI.h"
 
 #include <SDL3/SDL_video.h>
 
@@ -33,6 +36,7 @@ struct AppOptions {
     std::string scriptPath;    // non-empty: run a verification scenario (see Scenario.h)
     bool audio = true;         // false: --no-audio (no device, no sound assets loaded)
     std::string audioCapturePath; // non-empty: offline audio render to this WAV instead of the device
+    bool intro = true;         // false: --no-intro (start at the main menu); scenarios and --demo start driving
 };
 
 // RAII wrapper for SDL initialization.
@@ -74,6 +78,14 @@ public:
 
 private:
     void processEvents();
+    void handleMenu();
+    void onMenuCommand(MenuCommand c);
+    void startGameplay();
+    void enterMenuWorld(bool restartMusic);
+    void applySettings(bool force);
+    void saveSettings();
+    void updateMenuCamera(float dt);
+    bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
     void stepSimulation(double frameTime);
@@ -99,6 +111,17 @@ private:
     Camera m_camera;
     DebugDraw m_debugDraw;
     DebugUI m_ui;
+    MenuUI m_menu;        // releases its logo texture explicitly before the renderer (see ~Application)
+    GameFlow m_flow;
+    GameSettings m_settings;
+    GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
+    std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)
+    float m_musicTarget = 0.0f;
+    float m_musicFade = 0.3f;
+    int m_musicRestart = 0;
+    double m_menuCamTime = 0.0;
+    float m_gameplayTimeOfDay = 9.0f; // restored when gameplay starts (the menus use a sunset)
+    float m_menuBlur = 0.0f;          // eased blur of the 3D frame under the pause / settings menus
     FixedStepClock m_clock;
     // Audio: the feed turns every physics tick into sound parameters and events; the system owns the device
     // (or the offline capture) and the mixer that runs on the audio thread.
@@ -126,7 +149,7 @@ private:
     int m_perfGpuCount = 0;
 
     bool m_running = true;
-    bool m_paused = false;
+    bool m_paused = false;   // debug freeze (P / Pause button in F1), independent of the pause menu
     bool m_stepOnce = false;
     bool m_captured = false;
     int m_stepsThisFrame = 0;

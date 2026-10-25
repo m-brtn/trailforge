@@ -26,6 +26,8 @@ struct AudioSettings {
     float impacts = 1.0f;
     float ambience = 1.0f;
     float ui = 1.0f;
+    float music = 0.8f;
+    float effects = 1.0f;        // Settings screen: scales engine, tires, impacts and ambience together
     bool mute = false;
     float enginePitch = 0.80f;   // source rpm = engine rpm x this (the recordings are a petrol inline-4)
     float levelSpreadDb = 12.0f; // engine: spread of the recorded loop levels after compression
@@ -66,7 +68,10 @@ struct AudioFrame {
     std::array<WheelAudio, kAudioWheels> wheels;
     float dayAmount = 1.0f;    // 0 = night, 1 = day (from the sun elevation)
     bool paused = false;
-    bool menuAmbience = false; // pause-menu drone (reserved for the upcoming menu)
+    bool menuAmbience = false; // menu drone loop (loaded, not used by the menus: they keep the world sound)
+    float music = 0.0f;        // music target level 0..1; the mixer ramps toward it
+    float musicFadeSeconds = 1.5f; // duration of a full 0 <-> 1 ramp
+    int musicRestart = 0;      // a changed value rewinds the track before it plays again
     bool vehicleValid = false; // false until the first tick was seen
     AudioSettings settings;
 };
@@ -107,6 +112,8 @@ struct AudioStats {
     float day = 0.0f, night = 0.0f; // ambience weights
     float whineHz = 0.0f;
     float gameplayGain = 1.0f;     // 0 while paused (gameplay sounds are paused)
+    float musicGain = 0.0f;        // current music level (before the volume settings)
+    double musicSeconds = 0.0;     // music played since the last restart (s, counts across loops)
     int activeVoices = 0;
     int oneShotsPlayed = 0;
     std::array<int, 8> eventsByType{}; // AudioEventType counts since start

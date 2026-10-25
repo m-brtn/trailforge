@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace tf {
 
@@ -28,6 +30,24 @@ struct AudioSystem::Capture {
         if (initialized) ma_encoder_uninit(&encoder);
         if (csv) std::fclose(csv);
     }
+};
+
+// Streams an MP3 (or WAV) from memory: the whole file is read once, decoding happens block by block in read().
+struct AudioSystem::Music final : MusicSource {
+    std::vector<char> bytes;
+    ma_decoder decoder{};
+    bool initialized = false;
+    int rate = 48000;
+    ~Music() override {
+        if (initialized) ma_decoder_uninit(&decoder);
+    }
+    int read(float* stereo, int frames) override {
+        ma_uint64 got = 0;
+        ma_decoder_read_pcm_frames(&decoder, stereo, ma_uint64(frames), &got);
+        return int(got);
+    }
+    void rewind() override { ma_decoder_seek_to_pcm_frame(&decoder, 0); }
+    int sampleRate() const override { return rate; }
 };
 
 namespace {
@@ -68,6 +88,7 @@ AudioSystem::AudioSystem(const AudioOptions& options) {
     }
     if (!loadBank(options.assetDirs)) return;
     m_mixer = std::make_unique<AudioMixer>(m_bank, m_bank.manifest.sampleRate);
+    openMusic(options.musicFiles);
 
     if (!options.capturePath.empty()) {
         // Offline render: no device; the main thread drives the mixer from the physics ticks.
@@ -183,6 +204,31 @@ bool AudioSystem::loadBank(const std::vector<std::string>& dirs) {
     std::printf("Audio: %d sounds loaded from %s (%.1f MB as float, %d missing), %.0f ms\n", loaded, dir.c_str(),
                 double(bytes) / (1024.0 * 1024.0), failed, ms);
     return loaded > 0;
+}
+
+void AudioSystem::openMusic(const std::vector<std::string>& files) {
+    for (const std::string& path : files) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) continue;
+        auto music = std::make_unique<Music>();
+        music->bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        music->rate = m_mixer->sampleRate();
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, ma_uint32(music->rate));
+        const ma_result r = ma_decoder_init_memory(music->bytes.data(), music->bytes.size(), &cfg, &music->decoder);
+        if (r != MA_SUCCESS) {
+            std::printf("Audio: cannot decode music %s (%s)\n", path.c_str(), ma_result_description(r));
+            continue;
+        }
+        music->initialized = true;
+        ma_uint64 length = 0;
+        ma_decoder_get_length_in_pcm_frames(&music->decoder, &length);
+        std::printf("Audio: music %s (%.1f MB, %.1f s, streamed)\n", path.c_str(),
+                    double(music->bytes.size()) / (1024.0 * 1024.0), double(length) / double(music->rate));
+        m_music = std::move(music);
+        m_mixer->setMusic(m_music.get());
+        return;
+    }
+    std::printf("Audio: no music file found (menus stay without music)\n");
 }
 
 void AudioSystem::renderOnAudioThread(float* out, unsigned frames) {

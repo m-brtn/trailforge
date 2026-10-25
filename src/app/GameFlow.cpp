@@ -1,0 +1,305 @@
+#include "app/GameFlow.h"
+
+#include "render/RenderSettings.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <iterator>
+
+namespace tf {
+namespace {
+
+constexpr float kScaleSteps[] = {0.0f, 0.5f, 0.6f, 0.67f, 0.75f, 0.85f, 1.0f};
+
+int wrap(int v, int n) { return ((v % n) + n) % n; }
+
+bool stepVolume(float& v, int dir) {
+    const float old = v;
+    v = std::clamp(std::round((v + 0.05f * float(dir)) * 20.0f) / 20.0f, 0.0f, 1.0f);
+    return v != old;
+}
+
+std::string percent(float v) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d %%", int(std::lround(v * 100.0f)));
+    return buf;
+}
+
+} // namespace
+
+GameFlow::GameFlow(Screen start) : m_screen(start) {
+    m_stack.push_back({start == Screen::Paused ? MenuPage::Pause : MenuPage::Main, 0});
+}
+
+const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
+    using M = MenuItem;
+    static const std::vector<MenuItem> kMain = {M::Start, M::Settings, M::Quit};
+    static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Settings, M::QuitToMenu, M::QuitGame};
+    static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::VSync,     M::MasterVolume,
+                                                    M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
+                                                    M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
+                                                    M::Back};
+    static const std::vector<MenuItem> kControls = {M::Back};
+    switch (p) {
+    case MenuPage::Main: return kMain;
+    case MenuPage::Pause: return kPause;
+    case MenuPage::Settings: return kSettings;
+    case MenuPage::Controls: return kControls;
+    }
+    return kMain;
+}
+
+float GameFlow::menuFade() const {
+    if (m_screen == Screen::Intro) return 0.0f;
+    if (m_screen != Screen::MainMenu || m_menuFadeLength <= 0.0) return 1.0f;
+    return float(std::clamp(m_screenTime / m_menuFadeLength, 0.0, 1.0));
+}
+
+void GameFlow::setScreen(Screen s, MenuPage root) {
+    m_screen = s;
+    m_stack.assign(1, PageState{root, 0});
+    m_screenTime = 0.0;
+    m_menuFadeLength = 0.0;
+}
+
+void GameFlow::update(double dt) {
+    m_screenTime += dt;
+    if (m_screen == Screen::Intro) {
+        m_introTime += dt;
+        if (m_introTime >= kIntroLength) {
+            setScreen(Screen::MainMenu, MenuPage::Main);
+            m_menuFadeLength = kMenuFadeIn;
+        }
+    }
+}
+
+void GameFlow::skipIntro() {
+    if (m_screen != Screen::Intro) return;
+    setScreen(Screen::MainMenu, MenuPage::Main);
+    m_menuFadeLength = kSkipFade;
+}
+
+void GameFlow::startGame() { setScreen(Screen::Playing, MenuPage::Main); }
+
+void GameFlow::pause() {
+    if (m_screen == Screen::Playing) setScreen(Screen::Paused, MenuPage::Pause);
+}
+
+void GameFlow::resume() {
+    if (m_screen == Screen::Paused) setScreen(Screen::Playing, MenuPage::Main);
+}
+
+void GameFlow::toMainMenu() { setScreen(Screen::MainMenu, MenuPage::Main); }
+
+void GameFlow::openSettings() {
+    if (!menuActive() || m_screen == Screen::Intro || page() == MenuPage::Settings) return;
+    m_stack.push_back({MenuPage::Settings, 0});
+}
+
+bool GameFlow::back() {
+    if (m_stack.size() <= 1) return false;
+    m_stack.pop_back();
+    return true;
+}
+
+bool GameFlow::select(MenuItem item) {
+    const auto& list = items();
+    const auto it = std::find(list.begin(), list.end(), item);
+    if (it == list.end()) return false;
+    m_stack.back().cursor = int(it - list.begin());
+    return true;
+}
+
+MenuResult GameFlow::goBack() {
+    const MenuPage leaving = page();
+    if (back()) {
+        return {leaving == MenuPage::Settings ? MenuCommand::SettingsClosed : MenuCommand::None, MenuSound::Back};
+    }
+    if (m_screen == Screen::Paused) {
+        resume();
+        return {MenuCommand::Resume, MenuSound::Close};
+    }
+    return {};
+}
+
+MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
+    using M = MenuItem;
+    switch (item) {
+    case M::Start:
+        startGame();
+        return {MenuCommand::StartGame, MenuSound::Confirm};
+    case M::Settings:
+        m_stack.push_back({MenuPage::Settings, 0});
+        return {MenuCommand::None, MenuSound::Confirm};
+    case M::Controls:
+        m_stack.push_back({MenuPage::Controls, 0});
+        return {MenuCommand::None, MenuSound::Confirm};
+    case M::Quit:
+    case M::QuitGame: return {MenuCommand::QuitGame, MenuSound::Confirm};
+    case M::Resume:
+        resume();
+        return {MenuCommand::Resume, MenuSound::Close};
+    case M::Restart:
+        resume();
+        return {MenuCommand::Restart, MenuSound::Confirm};
+    case M::QuitToMenu:
+        toMainMenu();
+        return {MenuCommand::QuitToMenu, MenuSound::Confirm};
+    case M::Back: return goBack();
+    default: break;
+    }
+    // Volumes change only with left / right; choices and switches also cycle on accept.
+    const bool slider = item == M::MasterVolume || item == M::MusicVolume || item == M::EffectsVolume ||
+                        item == M::UiVolume || item == M::RenderScale;
+    if (dir == 0 && slider) return {};
+    if (!adjustSetting(item, settings, dir == 0 ? 1 : dir)) return {};
+    return {MenuCommand::SettingsChanged, MenuSound::Adjust};
+}
+
+MenuResult GameFlow::handle(const MenuInput& in, GameSettings& settings) {
+    if (m_screen == Screen::Intro) {
+        if (in.any) skipIntro();
+        return {};
+    }
+    if (m_screen == Screen::Playing) {
+        if (in.pause) {
+            pause();
+            return {MenuCommand::None, MenuSound::Open};
+        }
+        return {};
+    }
+    const int n = int(items().size());
+    int& cur = m_stack.back().cursor;
+    MenuResult r;
+    if (in.hover >= 0 && in.hover < n && in.hover != cur) {
+        cur = in.hover;
+        r.sound = MenuSound::Move;
+    }
+    if (in.up || in.down) {
+        cur = wrap(cur + (in.down ? 1 : -1), n);
+        r.sound = MenuSound::Move;
+    }
+    if (in.click >= 0 && in.click < n) {
+        cur = in.click;
+        const MenuItem item = items()[std::size_t(cur)];
+        if (in.clickDir != 0 && menuAdjustable(item)) return activate(item, settings, in.clickDir);
+        return activate(item, settings, 0);
+    }
+    const MenuItem item = items()[std::size_t(cur)];
+    if ((in.left || in.right) && menuAdjustable(item)) {
+        const MenuResult a = activate(item, settings, in.right ? 1 : -1);
+        return a.command == MenuCommand::None ? r : a;
+    }
+    if (in.accept) return activate(item, settings, 0);
+    if (in.back || in.pause) return goBack();
+    return r;
+}
+
+const char* menuLabel(MenuItem item) {
+    using M = MenuItem;
+    switch (item) {
+    case M::Start: return "START";
+    case M::Settings: return "SETTINGS";
+    case M::Quit: return "QUIT";
+    case M::Resume: return "RESUME";
+    case M::Restart: return "RESET VEHICLE";
+    case M::QuitToMenu: return "QUIT TO MAIN MENU";
+    case M::QuitGame: return "QUIT GAME";
+    case M::Quality: return "QUALITY PRESET";
+    case M::RenderScale: return "RESOLUTION SCALE";
+    case M::VSync: return "VSYNC";
+    case M::MasterVolume: return "MASTER VOLUME";
+    case M::MusicVolume: return "MUSIC";
+    case M::EffectsVolume: return "EFFECTS";
+    case M::UiVolume: return "INTERFACE";
+    case M::Abs: return "ABS";
+    case M::Traction: return "TRACTION CONTROL";
+    case M::DiffLocks: return "DIFFERENTIAL LOCKS";
+    case M::AutoReverse: return "AUTO REVERSE";
+    case M::Controls: return "CONTROLS";
+    case M::Back: return "BACK";
+    }
+    return "";
+}
+
+const char* menuPageTitle(MenuPage page) {
+    switch (page) {
+    case MenuPage::Main: return "";
+    case MenuPage::Pause: return "PAUSED";
+    case MenuPage::Settings: return "SETTINGS";
+    case MenuPage::Controls: return "CONTROLS";
+    }
+    return "";
+}
+
+const char* menuSection(MenuItem item) {
+    switch (item) {
+    case MenuItem::Quality: return "GRAPHICS";
+    case MenuItem::MasterVolume: return "AUDIO";
+    case MenuItem::Abs: return "DRIVING AIDS (DEFAULTS)";
+    default: return nullptr;
+    }
+}
+
+bool menuAdjustable(MenuItem item) { return int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::AutoReverse); }
+
+std::string menuValue(MenuItem item, const GameSettings& s) {
+    using M = MenuItem;
+    switch (item) {
+    case M::Quality: {
+        std::string n = presetName(QualityPreset(std::clamp(s.quality, 0, 3)));
+        for (char& c : n) c = char(std::toupper(static_cast<unsigned char>(c)));
+        return n;
+    }
+    case M::RenderScale:
+        if (s.renderScale <= 0.0f)
+            return "PRESET (" + percent(presetSettings(QualityPreset(std::clamp(s.quality, 0, 3))).renderScale) + ")";
+        return percent(s.renderScale);
+    case M::VSync: return s.vsync ? "ON" : "OFF";
+    case M::MasterVolume: return percent(s.masterVolume);
+    case M::MusicVolume: return percent(s.musicVolume);
+    case M::EffectsVolume: return percent(s.effectsVolume);
+    case M::UiVolume: return percent(s.uiVolume);
+    case M::Abs: return s.abs ? "ON" : "OFF";
+    case M::Traction: {
+        static const char* kNames[] = {"OFF", "ON", "OFF-ROAD"};
+        return kNames[std::clamp(s.traction, 0, 2)];
+    }
+    case M::DiffLocks: {
+        static const char* kNames[] = {"OPEN", "REAR", "REAR + CENTER", "ALL"};
+        return kNames[std::clamp(s.diffLocks, 0, 3)];
+    }
+    case M::AutoReverse: return s.autoReverse ? "ON" : "OFF";
+    default: return {};
+    }
+}
+
+bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
+    using M = MenuItem;
+    const GameSettings before = s;
+    switch (item) {
+    case M::Quality: s.quality = wrap(s.quality + dir, 4); break;
+    case M::RenderScale: {
+        int best = 0;
+        for (int i = 0; i < int(std::size(kScaleSteps)); ++i)
+            if (std::abs(kScaleSteps[i] - s.renderScale) < std::abs(kScaleSteps[best] - s.renderScale)) best = i;
+        s.renderScale = kScaleSteps[std::clamp(best + dir, 0, int(std::size(kScaleSteps)) - 1)];
+        break;
+    }
+    case M::VSync: s.vsync = !s.vsync; break;
+    case M::MasterVolume: stepVolume(s.masterVolume, dir); break;
+    case M::MusicVolume: stepVolume(s.musicVolume, dir); break;
+    case M::EffectsVolume: stepVolume(s.effectsVolume, dir); break;
+    case M::UiVolume: stepVolume(s.uiVolume, dir); break;
+    case M::Abs: s.abs = !s.abs; break;
+    case M::Traction: s.traction = wrap(s.traction + dir, 3); break;
+    case M::DiffLocks: s.diffLocks = wrap(s.diffLocks + dir, 4); break;
+    case M::AutoReverse: s.autoReverse = !s.autoReverse; break;
+    default: return false;
+    }
+    return !(s == before);
+}
+
+} // namespace tf

@@ -82,11 +82,11 @@ if(TRAILFORGE_BUILD_APP)
     FetchContent_MakeAvailable(SDL3 imgui glm miniaudio)
 
     # Only the low-level API is used (device, decoder, encoder); the engine, node graph, resource manager and
-    # the MP3/FLAC decoders are compiled out. The defines are PUBLIC so the header sees the same configuration.
+    # the FLAC decoder are compiled out. MP3 stays in for the music (assets/music/intro.mp3). The defines are PUBLIC so the header sees the same configuration.
     add_library(miniaudio_lib STATIC ${miniaudio_SOURCE_DIR}/miniaudio.c)
     target_include_directories(miniaudio_lib SYSTEM PUBLIC ${miniaudio_SOURCE_DIR})
     target_compile_definitions(miniaudio_lib PUBLIC
-        MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_MP3 MA_NO_FLAC MA_NO_GENERATION)
+        MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER MA_NO_FLAC MA_NO_GENERATION)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(miniaudio_lib PRIVATE -w)
     endif()

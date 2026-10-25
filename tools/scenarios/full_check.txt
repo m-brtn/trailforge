@@ -307,12 +307,13 @@ tap F1
 wait 0.1
 expect ui_visible == 1
 
-# ---------------------------------------------------------------- Esc pause and N step
+# ---------------------------------------------------------------- Esc pause menu, P debug freeze and N step
 down W
 wait 0.5
 tap Escape
 wait 0.1
 expect paused == 1
+expect menu_screen == 3
 mark ticks
 mark z
 wait 1.0
@@ -320,14 +321,29 @@ expect d_ticks == 0             # while paused the physics is frozen even with W
 expect d_z == 0
 tap N
 wait 0.1
-expect d_ticks == 1             # exactly one step
-tap N
-wait 0.1
-expect d_ticks == 2
+expect d_ticks == 0             # no single step from the pause menu
 capture /tmp/trailforge_07_paused.png
 tap Escape
 wait 0.5
 expect paused == 0
+expect menu_screen == 2
+expect d_ticks > 40
+tap P
+wait 0.1
+expect frozen == 1
+expect paused == 1
+mark ticks
+wait 0.5
+expect d_ticks == 0
+tap N
+wait 0.1
+expect d_ticks == 1             # exactly one step
+tap N
+wait 0.1
+expect d_ticks == 2
+tap P
+wait 0.5
+expect frozen == 0
 expect d_ticks > 40
 up W
 down S

@@ -98,7 +98,8 @@ struct DrawUniforms {
 // The frame uniforms are uniform slot 0 of almost every entry point. The entry points whose slot 0 holds other
 // uniforms do not read them; there `f` is parked on an unused slot and the compiler drops it.
 #if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs) || defined(TF_ENTRY_bloom_down_fs) || \
-    defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs)
+    defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs) || \
+    defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs)
 ConstantBuffer<FrameUniforms> f : UBO(13);
 #else
 ConstantBuffer<FrameUniforms> f : UBO(0);
@@ -2009,7 +2010,8 @@ struct PostUniforms {
 };
 
 #if defined(TF_ENTRY_bloom_down_fs) || defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || \
-    defined(TF_ENTRY_fxaa_fs)
+    defined(TF_ENTRY_fxaa_fs) || defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || \
+    defined(TF_ENTRY_blur_composite_fs)
 ConstantBuffer<PostUniforms> p : UBO(0);
 Texture2D<float4> src : TEX(0);
 SamplerState ls : SMP(0);
@@ -2143,5 +2145,51 @@ float4 fxaa_fs(FullscreenOut vin) : SV_Target0 {
     float2 fuv = uv;
     if (horizontal) fuv.y += pixelOffset * stepLen; else fuv.x += pixelOffset * stepLen;
     return float4(src.Sample(ls, fuv).rgb, 1.0);
+}
+#endif
+
+// ---------------------------------------------------------------- menu blur (dual Kawase, display-referred LDR)
+
+#if defined(TF_ENTRY_blur_down_fs)
+// Half-resolution step: centre plus four diagonal taps at half-texel offsets (p.texel.xy: 1/source size,
+// p.params.x: offset scale).
+float4 blur_down_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float2 h = p.texel.xy * 0.5 * p.params.x;
+    float3 c = src.Sample(ls, uv).rgb * 4.0;
+    c += src.Sample(ls, uv - h).rgb + src.Sample(ls, uv + h).rgb;
+    c += src.Sample(ls, uv + float2(h.x, -h.y)).rgb + src.Sample(ls, uv - float2(h.x, -h.y)).rgb;
+    return float4(c * 0.125, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_blur_up_fs)
+// Double-resolution step: eight taps on a diamond around the pixel.
+float4 blur_up_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float2 h = p.texel.xy * 0.5 * p.params.x;
+    float3 c = src.Sample(ls, uv + float2(-h.x * 2.0, 0.0)).rgb + src.Sample(ls, uv + float2(h.x * 2.0, 0.0)).rgb;
+    c += src.Sample(ls, uv + float2(0.0, -h.y * 2.0)).rgb + src.Sample(ls, uv + float2(0.0, h.y * 2.0)).rgb;
+    c += (src.Sample(ls, uv + float2(-h.x, h.y)).rgb + src.Sample(ls, uv + float2(h.x, h.y)).rgb +
+          src.Sample(ls, uv + float2(h.x, -h.y)).rgb + src.Sample(ls, uv + float2(-h.x, -h.y)).rgb) * 2.0;
+    return float4(c / 12.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_blur_composite_fs)
+Texture2D<float4> blurred : TEX(1);
+SamplerState bls : SMP(1);
+
+// Sharp frame -> blurred, dimmed and slightly desaturated by p.params.x (0..1). p.params.y: dim factor at full blur,
+// p.params.z: desaturation at full blur.
+float4 blur_composite_fs(FullscreenOut vin) : SV_Target0 {
+    const float a = saturate(p.params.x);
+    const float3 sharp = src.Sample(ls, vin.uv).rgb;
+    float3 c = blurred.Sample(bls, vin.uv).rgb;
+    c = lerp(c, (float3)luminance(c), p.params.z);
+    c *= p.params.y;
+    // Dither: the blurred gradients are smooth enough to band in 8 bits.
+    c += (hash12(vin.position.xy) - 0.5) / 255.0;
+    return float4(lerp(sharp, c, a), 1.0);
 }
 #endif

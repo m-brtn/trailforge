@@ -23,10 +23,22 @@ enum class Action {
     ToggleAbs,        // B / gamepad D-pad up
     CycleTraction,    // T / gamepad D-pad right
     CycleDiffLock,    // X / gamepad D-pad down
-    TogglePause,     // Escape / gamepad Start
-    StepOnce,        // N (while paused: a single physics step)
+    TogglePause,     // P: debug freeze without the menu (Escape / gamepad Start open the pause menu, see MenuKeys)
+    StepOnce,        // N (while frozen: a single physics step)
     Quit,
     Count
+};
+
+// Menu navigation of one frame, from every device. Gameplay ignores it except `pause`.
+struct MenuKeys {
+    bool up = false, down = false, left = false, right = false; // with key / D-pad / stick auto-repeat
+    bool accept = false;  // Enter, Space, gamepad A
+    bool back = false;    // Escape, Backspace, gamepad B
+    bool pause = false;   // Escape, gamepad Start
+    bool any = false;     // any key, mouse button or gamepad button
+    bool mouseMoved = false;
+    bool click = false;   // left mouse button pressed (not over an ImGui window)
+    float mouseX = 0.0f, mouseY = 0.0f; // window coordinates (the same as ImGui's)
 };
 
 // Keyboard, mouse and gamepad state. When ImGui captures the keyboard/mouse,
@@ -40,11 +52,12 @@ public:
 
     void beginFrame();
     void handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMouse);
-    // Call after processing the frame's events.
-    void endEvents(bool uiWantsKeyboard, bool uiWantsMouse);
+    // Call after processing the frame's events. dt drives the menu auto-repeat of held directions.
+    void endEvents(bool uiWantsKeyboard, bool uiWantsMouse, float dt = 0.0f);
 
     bool pressed(Action a) const { return m_pressed[static_cast<int>(a)]; }
     const DriverIntent& driverIntent() const { return m_intent; }
+    const MenuKeys& menuKeys() const { return m_menu; }
 
     glm::vec2 mouseDelta() const { return m_mouseDelta; }
     float wheel() const { return m_wheel; }
@@ -68,6 +81,11 @@ private:
     bool m_fast = false;
     bool m_rmb = false;
     SDL_Gamepad* m_gamepad = nullptr;
+    MenuKeys m_menu;
+    float m_mouseX = 0.0f, m_mouseY = 0.0f;
+    // Held menu directions from the gamepad (D-pad or stick): 0 up, 1 down, 2 left, 3 right, with repeat timers.
+    std::array<bool, 4> m_padHeld{};
+    std::array<float, 4> m_padRepeat{};
 };
 
 } // namespace tf

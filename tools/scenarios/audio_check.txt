@@ -107,6 +107,8 @@ tap Escape
 wait 2
 log paused
 expect audio_gameplay < 0.05
+expect audio_night > 0.95       # ambience is not simulation-driven: no duck in the pause menu
+expect audio_music < 0.01       # no menu music in pause
 tap Escape
 wait 2
 log resumed
@@ -124,4 +126,24 @@ set audio_ui 1
 wait 0.6
 capture /tmp/trailforge_audio_panel.png
 wait 0.3
+set audio_ui 0
+
+# ---------------------------------------------------------------- intro music: start menu, fade out on Start
+expect audio_music < 0.01
+menu intro
+wait 3
+log intro
+expect audio_music > 0.95       # intro.mp3 decoded and at full level after the 1.5 s fade-in
+expect audio_music_t > 2.5
+menu main
+wait 1
+expect audio_music > 0.95       # the music continues into the start menu
+menu start
+wait 1.5
+expect audio_music > 0.3        # 3 s fade-out when gameplay starts
+expect audio_music < 0.7
+wait 2
+log gameplay
+expect audio_music < 0.01
+expect audio_clipped == 0
 quit

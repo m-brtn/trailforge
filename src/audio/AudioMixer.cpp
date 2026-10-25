@@ -41,6 +41,7 @@ inline float hermite(float xm1, float x0, float x1, float x2, float t) {
 AudioMixer::AudioMixer(const SoundBank& bank, int sampleRate, std::uint32_t seed)
     : m_bank(bank), m_rate(sampleRate), m_rng(seed ? seed : 1u) {
     m_acc.resize(std::size_t(kBlock) * 2);
+    m_musicBuf.resize(std::size_t(kBlock) * 2);
     auto loopVoice = [&](Voice& v, SoundId id, Bus bus, bool gameplay) {
         v.data = &m_bank[id];
         v.loop = true;
@@ -191,7 +192,8 @@ void AudioMixer::controlUpdate(float dt) {
     const AudioFrame& f = m_frame;
     const AudioSettings& s = f.settings;
     m_master = approach(m_master, s.mute ? 0.0f : s.master, 0.05f, dt);
-    const float busTarget[int(Bus::Count)] = {s.engine, s.tires, s.impacts, s.ambience, s.ui};
+    const float fx = s.effects;
+    const float busTarget[int(Bus::Count)] = {s.engine * fx, s.tires * fx, s.impacts * fx, s.ambience * fx, s.ui, s.music};
     for (int b = 0; b < int(Bus::Count); ++b)
         m_bus[std::size_t(b)] = approach(m_bus[std::size_t(b)], busTarget[b], 0.05f, dt);
     m_gameplay = approach(m_gameplay, f.paused ? 0.0f : 1.0f, 0.06f, dt);
@@ -336,9 +338,9 @@ void AudioMixer::controlUpdate(float dt) {
     setLoop(m_wind, kWindGain * m_windGain, place(f.vehiclePos + f.vehicleUp * 1.0f));
     m_dayAmount = approach(m_dayAmount, std::clamp(f.dayAmount, 0.0f, 1.0f), 1.0f, dt);
     const auto dn = dayNightWeights(m_dayAmount);
-    const float duck = 0.5f + 0.5f * m_gameplay; // ambience ducks (does not stop) while paused
-    setLoop(m_day, kDayGain * dn[0] * duck, {1.0f, 1.0f});
-    setLoop(m_night, kNightGain * dn[1] * duck, {1.0f, 1.0f});
+    // The ambience bed is not driven by the simulation: it keeps playing unchanged while paused.
+    setLoop(m_day, kDayGain * dn[0], {1.0f, 1.0f});
+    setLoop(m_night, kNightGain * dn[1], {1.0f, 1.0f});
     setLoop(m_menu, f.menuAmbience ? 1.0f : 0.0f, {1.0f, 1.0f});
     m_stats.wind = m_windGain;
     m_stats.day = dn[0];
@@ -436,6 +438,8 @@ void AudioMixer::renderBlock(float* out, int frames) {
     run(m_night);
     run(m_menu);
     for (Voice& v : m_shots) run(v);
+    mixMusic(acc, frames, dt);
+    if (m_musicOut > 1e-5f) ++voices;
     m_stats.activeVoices = voices;
 
     if (!frozen && (m_whineTl > 1e-6f || m_whineL > 1e-6f)) {
@@ -495,6 +499,42 @@ void AudioMixer::renderBlock(float* out, int frames) {
         m_peakTimer = 0.0;
     }
     m_time += dt;
+}
+
+void AudioMixer::mixMusic(float* acc, int frames, float dt) {
+    const AudioFrame& f = m_frame;
+    if (f.musicRestart != m_musicRestart) {
+        m_musicRestart = f.musicRestart;
+        if (m_music) m_music->rewind();
+        m_musicFrames = 0;
+    }
+    const float target = std::clamp(f.music, 0.0f, 1.0f);
+    const float rate = dt / std::max(f.musicFadeSeconds, 0.01f);
+    m_musicGain = m_musicGain < target ? std::min(target, m_musicGain + rate) : std::max(target, m_musicGain - rate);
+    m_stats.musicGain = m_musicGain;
+    const float out = m_musicGain * m_bus[std::size_t(Bus::Music)] * m_master;
+    if (!m_music || (out <= 0.0f && m_musicOut <= 0.0f)) {
+        // Silent: the track holds its position (no decoding).
+        m_musicOut = 0.0f;
+        return;
+    }
+    float* buf = m_musicBuf.data();
+    int got = 0;
+    for (int tries = 0; got < frames && tries < 2; ++tries) {
+        const int n = m_music->read(buf + 2 * got, frames - got);
+        got += std::max(0, n);
+        if (got < frames) m_music->rewind(); // loop
+    }
+    std::fill(buf + 2 * got, buf + 2 * frames, 0.0f);
+    m_musicFrames += frames;
+    m_stats.musicSeconds = double(m_musicFrames) / double(m_rate);
+    const float invN = 1.0f / float(frames);
+    for (int i = 0; i < frames; ++i) {
+        const float g = m_musicOut + (out - m_musicOut) * float(i + 1) * invN;
+        acc[2 * i] += buf[2 * i] * g;
+        acc[2 * i + 1] += buf[2 * i + 1] * g;
+    }
+    m_musicOut = out;
 }
 
 void AudioMixer::render(float* stereo, int frames) {

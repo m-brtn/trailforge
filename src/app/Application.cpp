@@ -72,11 +72,56 @@ ImGuiContextGuard::~ImGuiContextGuard() {
 
 // ------------------------------------------------------------------ Application
 
+namespace {
+
+// Scenarios and the demo drive start in gameplay so existing scripts keep working; `menu ...` commands reach the menus.
+Screen initialScreen(const AppOptions& o) {
+    if (!o.scriptPath.empty() || o.demoDrive) return Screen::Playing;
+    return o.intro ? Screen::Intro : Screen::MainMenu;
+}
+
+UiSound uiSound(MenuSound s) {
+    switch (s) {
+    case MenuSound::Move: return UiSound::Hover;
+    case MenuSound::Confirm: return UiSound::Confirm;
+    case MenuSound::Back: return UiSound::Back;
+    case MenuSound::Adjust: return UiSound::SliderTick;
+    case MenuSound::Open: return UiSound::MenuOpen;
+    case MenuSound::Close: return UiSound::MenuClose;
+    default: return UiSound::Click;
+    }
+}
+
+constexpr float kMenuTimeOfDay = 18.25f; // h: low warm sun for the intro and the start menu
+
+struct NamedItem {
+    const char* name;
+    MenuItem item;
+};
+constexpr NamedItem kItemNames[] = {
+    {"start", MenuItem::Start},         {"settings", MenuItem::Settings},     {"quit", MenuItem::Quit},
+    {"resume", MenuItem::Resume},       {"restart", MenuItem::Restart},       {"quit_to_menu", MenuItem::QuitToMenu},
+    {"quit_game", MenuItem::QuitGame},  {"quality", MenuItem::Quality},       {"render_scale", MenuItem::RenderScale},
+    {"vsync", MenuItem::VSync},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
+    {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
+    {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
+    {"controls", MenuItem::Controls},   {"back", MenuItem::Back},
+};
+
+std::optional<MenuItem> itemByName(const std::string& n) {
+    for (const NamedItem& i : kItemNames)
+        if (n == i.name) return i.item;
+    return std::nullopt;
+}
+
+} // namespace
+
 Application::Application(const AppOptions& options)
     : m_options(options),
       m_window("TrailForge " TRAILFORGE_VERSION, 1440, 900),
       m_sim(SimulationSettings{}),
       m_ui(m_sim.vehicleConfig()),
+      m_flow(initialScreen(options)),
       m_clock(m_sim.fixedStep()) {
 #if defined(NDEBUG)
     const bool debugDevice = false;
@@ -85,6 +130,7 @@ Application::Application(const AppOptions& options)
 #endif
     m_renderer = std::make_unique<Renderer>(m_window.get(), debugDevice);
     m_imgui = std::make_unique<ImGuiContextGuard>(m_window.get(), *m_renderer);
+    m_menu.load(*m_renderer, assetDirs("fonts"), assetDirs("images"));
     m_ui.visible = options.startWithUi;
 
     const Uint64 t0 = SDL_GetPerformanceCounter();
@@ -114,17 +160,35 @@ Application::Application(const AppOptions& options)
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
     }
 
+    // Settings: loaded from (and saved to) the user data directory, except in scenario mode where every run starts
+    // from the defaults and nothing is written.
+    if (!m_scenario) {
+        const std::string dir = userDataDir();
+        if (!dir.empty()) m_settingsPath = dir + "settings.ini";
+        int skipped = 0;
+        if (!m_settingsPath.empty() && loadSettingsFile(m_settingsPath, m_settings, &skipped))
+            std::printf("Settings: loaded %s (%d lines skipped)\n", m_settingsPath.c_str(), skipped);
+        else
+            std::printf("Settings: defaults (%s)\n", m_settingsPath.empty() ? "no user data directory" : "no settings file yet");
+    }
+
     AudioOptions audio;
     audio.device = options.audio;
     audio.capturePath = options.audioCapturePath;
     audio.assetDirs = assetDirs("audio");
+    for (const std::string& d : assetDirs("music")) audio.musicFiles.push_back(d + "/intro.mp3");
     m_audio = std::make_unique<AudioSystem>(audio);
+
+    applySettings(true);
+    m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
+    if (m_flow.menuActive()) enterMenuWorld(false);
 }
 
 Application::~Application() {
     m_audio.reset(); // stop the audio thread first
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
+    m_menu.release();
     for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_springMesh,
                        &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
         m->release();
@@ -146,12 +210,18 @@ void Application::processEvents() {
                         SDL_GetScancodeName(e.key.scancode));
         m_input.handleEvent(e, io.WantCaptureKeyboard, io.WantCaptureMouse);
     }
-    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse);
+    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, float(std::min(io.DeltaTime, 0.1f)));
 
     if (m_input.pressed(Action::Quit)) m_running = false;
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
     if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
     if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
+    handleMenu();
+    if (m_flow.menuActive()) {
+        // Menus own the input: no gameplay actions, no pedals.
+        m_sim.setIntent(DriverIntent{});
+        return;
+    }
     if (m_input.pressed(Action::ToggleHeadlights)) m_gfx.headlights = !m_gfx.headlights;
     if (m_input.pressed(Action::TogglePause)) setPaused(!m_paused);
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
@@ -179,8 +249,138 @@ void Application::processEvents() {
 void Application::setPaused(bool paused) {
     if (paused == m_paused) return;
     m_paused = paused;
-    // Gameplay sounds fade out and freeze while paused; the menu open/close sounds mark the toggle.
-    m_audio->playUi(paused ? UiSound::MenuOpen : UiSound::MenuClose);
+}
+
+void Application::handleMenu() {
+    const MenuKeys& k = m_input.menuKeys();
+    MenuInput in;
+    in.up = k.up;
+    in.down = k.down;
+    in.left = k.left;
+    in.right = k.right;
+    in.accept = k.accept;
+    in.back = k.back;
+    in.pause = k.pause;
+    in.any = k.any;
+    if (m_flow.menuActive() && m_flow.screen() != Screen::Intro) {
+        int dir = 0;
+        if (k.mouseMoved) in.hover = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
+        if (k.click) {
+            in.click = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
+            in.clickDir = dir;
+        }
+    }
+    const Screen before = m_flow.screen();
+    const MenuResult r = m_flow.handle(in, m_settings);
+    if (r.sound != MenuSound::None) m_audio->playUi(uiSound(r.sound));
+    if (before == Screen::Intro && m_flow.screen() == Screen::MainMenu) m_audio->playUi(UiSound::Confirm);
+    onMenuCommand(r.command);
+}
+
+void Application::onMenuCommand(MenuCommand c) {
+    switch (c) {
+    case MenuCommand::StartGame: startGameplay(); break;
+    case MenuCommand::Restart: m_sim.requestReset(); break;
+    case MenuCommand::QuitToMenu: enterMenuWorld(true); break;
+    case MenuCommand::QuitGame:
+        saveSettings();
+        m_running = false;
+        break;
+    case MenuCommand::SettingsChanged: applySettings(false); break;
+    case MenuCommand::SettingsClosed: saveSettings(); break;
+    default: break;
+    }
+}
+
+// Start: a fresh run at the start of the current proving ground with the current vehicle (level and vehicle
+// selection will come before this), the driving aid defaults from the settings, the follow camera, and the gameplay
+// time of day. The music fades out.
+void Application::startGameplay() {
+    m_sim.requestReset();
+    AidControls aids;
+    aids.abs = m_settings.abs;
+    aids.traction = TractionMode(m_settings.traction);
+    aids.diffLocks = m_settings.diffLocks;
+    m_sim.requestAidControls(aids);
+    m_ui.autoReverse = m_settings.autoReverse;
+    if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+    m_gfx.settings.timeOfDay = m_gameplayTimeOfDay;
+    m_gfx.changed = true;
+    m_musicTarget = 0.0f;
+    m_musicFade = 3.0f;
+}
+
+// Main menu (or intro) world: the vehicle back at the start, a sunset, the cinematic camera, the music from the top.
+void Application::enterMenuWorld(bool restartMusic) {
+    if (restartMusic) {
+        ++m_musicRestart;
+        m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
+        m_sim.requestReset();
+    }
+    m_gfx.settings.timeOfDay = kMenuTimeOfDay;
+    m_gfx.timeLapse = false;
+    m_gfx.changed = true;
+    m_musicTarget = 1.0f;
+    m_musicFade = restartMusic ? 1.0f : 0.3f;
+    m_menuCamTime = 0.0;
+}
+
+void Application::applySettings(bool force) {
+    const GameSettings& s = m_settings;
+    if (force || s.quality != m_applied.quality || s.renderScale != m_applied.renderScale) {
+        const QualityPreset preset = QualityPreset(s.quality);
+        RenderSettings r = presetSettings(preset);
+        copyLook(r, m_gfx.settings);
+        if (s.renderScale > 0.0f) r.renderScale = s.renderScale;
+        m_gfx.preset = r.renderScale == presetSettings(preset).renderScale ? preset : QualityPreset::Custom;
+        if (!force || r.renderScale != m_gfx.settings.renderScale || m_gfx.preset != QualityPreset::High) {
+            m_gfx.settings = r;
+            m_gfx.changed = true;
+        }
+    }
+    if (force || s.vsync != m_applied.vsync) m_renderer->setVSync(s.vsync);
+    AudioSettings& a = m_audioPanel.settings;
+    a.master = s.masterVolume;
+    a.music = s.musicVolume;
+    a.effects = s.effectsVolume;
+    a.ui = s.uiVolume;
+    if (force || s.abs != m_applied.abs || s.traction != m_applied.traction || s.diffLocks != m_applied.diffLocks) {
+        AidControls aids = m_sim.aidControls();
+        aids.abs = s.abs;
+        aids.traction = TractionMode(s.traction);
+        aids.diffLocks = s.diffLocks;
+        m_sim.requestAidControls(aids);
+    }
+    if (force || s.autoReverse != m_applied.autoReverse) m_ui.autoReverse = s.autoReverse;
+    m_applied = s;
+}
+
+void Application::saveSettings() {
+    if (m_settingsPath.empty()) return;
+    std::string error;
+    if (saveSettingsFile(m_settingsPath, m_settings, &error)) std::printf("Settings: saved %s\n", m_settingsPath.c_str());
+    else std::printf("Settings: %s\n", error.c_str());
+}
+
+// Slow cinematic camera for the intro and the start menu: a slow arc behind the vehicle into the low sun (the vehicle
+// and the sun right of the menu column). Read-only like the follow camera; a ray keeps it above the ground.
+void Application::updateMenuCamera(float dt) {
+    m_menuCamTime += dt;
+    const double t = m_menuCamTime;
+    const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+    const float yaw = -0.3f + 0.35f * float(std::sin(t * 6.2831853 / 70.0));
+    const float radius = 8.0f + 1.2f * float(std::sin(t * 6.2831853 / 47.0 + 1.0));
+    const float height = 1.25f + 0.35f * float(std::sin(t * 6.2831853 / 39.0));
+    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, height, -std::cos(yaw) * radius);
+    const JPH::Vec3 above(pos.x, pos.y + 20.0f, pos.z), below(pos.x, pos.y - 20.0f, pos.z);
+    if (auto hit = m_sim.castRayIgnoringVehicle(above, below)) {
+        const float ground = above.GetY() + (below.GetY() - above.GetY()) * *hit;
+        pos.y = std::max(pos.y, ground + 0.9f);
+    }
+    const glm::vec3 fwd = glm::normalize(glm::vec3(car.x - pos.x, 0.0f, car.z - pos.z));
+    const glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0, 1, 0)));
+    const glm::vec3 target = car + glm::vec3(0.0f, 0.75f, 0.0f) - right * 2.6f;
+    m_camera.setFreePose(pos, target);
 }
 
 void Application::publishAudio() {
@@ -192,7 +392,11 @@ void Application::publishAudio() {
     f.listenerForward = {-v[0][2], -v[1][2], -v[2][2]};
     const SkyState sky = computeSky(m_gfx.settings.timeOfDay, m_gfx.settings.sunHeadingDeg);
     f.dayAmount = std::clamp((sky.sunElevationDeg + 6.0f) / 12.0f, 0.0f, 1.0f);
-    f.paused = m_paused;
+    // Gameplay sounds stop with the simulation (pause menu, debug freeze) and stay silent behind the start menu.
+    f.paused = !simulationRuns() || m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu;
+    f.music = m_musicTarget;
+    f.musicFadeSeconds = m_musicFade;
+    f.musicRestart = m_musicRestart;
     f.settings = m_audioPanel.settings;
     m_audio->publish(f, m_audioFeed.events());
     m_audioFeed.clearEvents();
@@ -211,9 +415,9 @@ void Application::stepSimulation(double frameTime) {
             m_audio->captureAdvance(m_sim.fixedStep());
         }
     };
-    if (m_paused) {
-        m_clock.reset();
-        if (m_stepOnce) {
+    if (!simulationRuns()) {
+        // Frozen: no ticks and the fixed-step accumulator keeps its value (resume continues where it stopped).
+        if (m_stepOnce && m_paused && m_flow.simulationRuns()) {
             tick();
             m_stepsThisFrame = 1;
             m_stepOnce = false;
@@ -224,14 +428,14 @@ void Application::stepSimulation(double frameTime) {
         return;
     }
     // Input is already passed to Simulation; each tick applies it with smoothing over the fixed dt.
-    const int steps = m_clock.advance(frameTime);
+    const int steps = m_flow.stepsForFrame(m_clock, frameTime);
     for (int i = 0; i < steps; ++i) tick();
     m_stepsThisFrame = steps;
 }
 
 void Application::renderFrame(float frameTime) {
     // ---- Pose interpolation between the last two physics ticks
-    const float alpha = m_paused ? 1.0f : float(m_clock.alpha());
+    const float alpha = float(m_clock.alpha()); // constant while frozen: the accumulator does not change
     const RenderSnapshot& a = m_sim.previousSnapshot();
     const RenderSnapshot& b = m_sim.currentSnapshot();
     auto interp = [&](const Pose& p0, const Pose& p1) {
@@ -243,10 +447,13 @@ void Application::renderFrame(float frameTime) {
 
     // ---- Camera (read-only access to the world)
     CameraInput ci;
-    ci.mouseDelta = m_input.mouseDelta();
-    ci.wheel = m_input.wheel();
-    ci.move = m_input.freeCameraMove();
-    ci.fast = m_input.fastModifier();
+    if (!m_flow.menuActive()) {
+        ci.mouseDelta = m_input.mouseDelta();
+        ci.wheel = m_input.wheel();
+        ci.move = m_input.freeCameraMove();
+        ci.fast = m_input.fastModifier();
+    }
+    if (m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) updateMenuCamera(frameTime);
     m_camera.update(frameTime, ci, glm::vec3(bodyM[3]), glm::vec3(bodyM[2]),
                     [this](const glm::vec3& from, const glm::vec3& to) {
                         return m_sim.castRayIgnoringVehicle(JPH::Vec3(from.x, from.y, from.z), JPH::Vec3(to.x, to.y, to.z));
@@ -284,6 +491,7 @@ void Application::renderFrame(float frameTime) {
     stats.droppedTotalMs = m_clock.totalDropped() * 1000.0;
     stats.overloaded = m_clock.overloaded();
     stats.paused = m_paused;
+    m_ui.menuOpen = m_flow.menuActive();
     stats.followCamera = m_camera.mode() == Camera::Mode::Follow;
     stats.gpuDriver = m_renderer->driverName();
     stats.shaderFormat = m_renderer->shaderFormatName();
@@ -309,7 +517,11 @@ void Application::renderFrame(float frameTime) {
     m_audioPanel.stats = m_audio->stats();
     m_audioPanel.status = m_audio->status().c_str();
     m_audioPanel.active = m_audio->active();
-    m_ui.drawAudio(m_audioPanel);
+    if (!m_flow.menuActive()) m_ui.drawAudio(m_audioPanel);
+    MenuView view;
+    view.gamepad = m_input.gamepadConnected();
+    view.version = TRAILFORGE_VERSION;
+    m_menu.draw(m_flow, m_settings, view);
     ImGui::Render();
     if (req.togglePause) setPaused(!m_paused);
     if (!m_audio->capturing()) publishAudio();
@@ -392,6 +604,15 @@ void Application::renderFrame(float frameTime) {
     frame.lines = m_debugDraw.lines();
     frame.linesOnTop = m_ui.linesOnTop;
     frame.ui = ImGui::GetDrawData();
+    {
+        // Blur under the pause menu and under Settings / Controls opened from the start menu.
+        const float target = m_flow.screen() == Screen::Paused ? 1.0f
+                             : m_flow.screen() == Screen::MainMenu && m_flow.depth() > 1 ? 0.75f
+                                                                                         : 0.0f;
+        const float step = frameTime / 0.25f;
+        m_menuBlur = m_menuBlur < target ? std::min(target, m_menuBlur + step) : std::max(target, m_menuBlur - step);
+        frame.blur = m_menuBlur;
+    }
     if (!m_options.capturePath.empty() && !m_captured && m_time >= m_options.captureAtSeconds) {
         frame.capturePath = m_options.capturePath.c_str();
         m_captured = true;
@@ -657,6 +878,56 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         e.text.windowID = win;
         e.text.text = m_textStorage.back().c_str();
         queueEvent(e, 0);
+        return Exec::Done;
+    }
+    if (c.op == "menu") {
+        // menu intro|main|start|pause|resume|settings|back|select ITEM: drive the game flow directly (key taps and
+        // `click menu:ITEM` go through the real input path instead).
+        const Screen before = m_flow.screen();
+        if (arg == "intro") {
+            m_flow = GameFlow(Screen::Intro);
+            enterMenuWorld(true);
+        } else if (arg == "main") {
+            m_flow.toMainMenu();
+            if (before != Screen::MainMenu) enterMenuWorld(true);
+        } else if (arg == "start") {
+            if (before != Screen::MainMenu) return Exec::Failed;
+            m_flow.startGame();
+            startGameplay();
+        } else if (arg == "pause") {
+            if (before != Screen::Playing) return Exec::Failed;
+            m_flow.pause();
+            m_audio->playUi(UiSound::MenuOpen);
+        } else if (arg == "resume") {
+            if (before != Screen::Paused) return Exec::Failed;
+            m_flow.resume();
+            m_audio->playUi(UiSound::MenuClose);
+        } else if (arg == "settings") {
+            m_flow.openSettings();
+            if (m_flow.page() != MenuPage::Settings) return Exec::Failed;
+        } else if (arg == "back") {
+            if (m_flow.page() == MenuPage::Settings) saveSettings();
+            if (!m_flow.back()) return Exec::Failed;
+        } else if (arg == "select") {
+            const auto item = itemByName(c.args.size() > 1 ? c.args[1] : "");
+            if (!item || !m_flow.select(*item)) {
+                std::printf("SCENARIO: menu item '%s' is not on this page\n", c.args.size() > 1 ? c.args[1].c_str() : "");
+                return Exec::Failed;
+            }
+        } else {
+            return Exec::Failed;
+        }
+        return Exec::Done;
+    }
+    if (c.op == "click" && arg.rfind("menu:", 0) == 0) {
+        const auto item = itemByName(arg.substr(5));
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!item || !m_menu.itemRect(*item, x0, y0, x1, y1)) {
+            std::printf("SCENARIO: menu row '%s' is not on screen\n", arg.c_str());
+            return Exec::Failed;
+        }
+        // The middle of the label (left part of the row), away from the value arrows.
+        queueClick(x0 + 0.15f * (x1 - x0), 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
     if (c.op == "click" || c.op == "inputclick") {
@@ -954,7 +1225,32 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "y") return p.GetY();
     if (n == "z") return p.GetZ();
     if (n == "ticks") return double(m_sim.timing().ticks);
-    if (n == "paused") return m_paused ? 1.0 : 0.0;
+    if (n == "paused") return simulationRuns() ? 0.0 : 1.0;
+    if (n == "frozen") return m_paused ? 1.0 : 0.0;
+    if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
+    if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls
+    if (n == "menu_depth") return m_flow.depth();
+    if (n == "menu_cursor") return m_flow.cursor();
+    if (n == "menu_fade") return m_flow.menuFade();
+    if (n == "menu_blur") return m_menuBlur;
+    if (n == "menu_font") return m_menu.fontsLoaded() ? 1.0 : 0.0;
+    if (n == "menu_logo") return m_menu.logoLoaded() ? 1.0 : 0.0;
+    if (n.rfind("setting_", 0) == 0) {
+        const GameSettings& g = m_settings;
+        const std::string k = n.substr(8);
+        if (k == "quality") return g.quality;
+        if (k == "render_scale") return g.renderScale;
+        if (k == "vsync") return g.vsync ? 1.0 : 0.0;
+        if (k == "master") return g.masterVolume;
+        if (k == "music") return g.musicVolume;
+        if (k == "effects") return g.effectsVolume;
+        if (k == "ui") return g.uiVolume;
+        if (k == "abs") return g.abs ? 1.0 : 0.0;
+        if (k == "tc") return g.traction;
+        if (k == "diff") return g.diffLocks;
+        if (k == "auto_reverse") return g.autoReverse ? 1.0 : 0.0;
+        return std::nullopt;
+    }
     if (n == "cam_free") return m_camera.mode() == Camera::Mode::Free ? 1.0 : 0.0;
     if (n == "ui_visible") return m_ui.visible ? 1.0 : 0.0;
     if (n == "ui_kb") return ImGui::GetIO().WantCaptureKeyboard ? 1.0 : 0.0;
@@ -1037,6 +1333,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (n == "audio_day") return a.day;
         if (n == "audio_night") return a.night;
         if (n == "audio_gameplay") return a.gameplayGain;
+        if (n == "audio_music") return a.musicGain;
+        if (n == "audio_music_t") return a.musicSeconds;
         if (n == "audio_voices") return a.activeVoices;
         if (n == "audio_oneshots") return a.oneShotsPlayed;
         if (n == "audio_peak_db") return a.peakDb;
@@ -1100,6 +1398,7 @@ int Application::run() {
             m_fpsFrames = 0;
         }
 
+        m_flow.update(std::min(frameTime, 0.1));
         processEvents();
         if (SDL_GetWindowFlags(m_window.get()) & SDL_WINDOW_MINIMIZED) {
             m_clock.reset();

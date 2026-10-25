@@ -24,13 +24,23 @@ struct SoundBank {
     const SoundData& operator[](SoundId s) const { return sounds[std::size_t(s)]; }
 };
 
+// Streamed music (the app decodes the MP3; tests use synthetic sources). Called only from the thread that renders.
+class MusicSource {
+public:
+    virtual ~MusicSource() = default;
+    // Interleaved stereo float at the mixer rate. Returns the frames written; fewer than asked at the end of the track.
+    virtual int read(float* stereo, int frames) = 0;
+    virtual void rewind() = 0;
+    virtual int sampleRate() const = 0;
+};
+
 // The game's sound model and mixer. Plain C++ (no device): the audio thread calls setFrame/trigger with what the
 // mailbox delivered and then render(); the offline capture calls the same functions on the main thread.
 // All state is owned here; nothing allocates after construction.
 //
 // Voices: 12 engine loops (3 rpm bands x off/full load x exhaust/engine-bay mic), 4 loose-ground tire loops, one
-// squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, and a
-// pool of one-shots. Gains ramp
+// squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, a pool of
+// one-shots and a streamed music track (looped; not paused with the game). Gains ramp
 // linearly over each 64-frame control block; a look-ahead peak limiter guards the master output.
 class AudioMixer {
 public:
@@ -39,6 +49,8 @@ public:
     void setFrame(const AudioFrame& frame) { m_frame = frame; }
     void trigger(const AudioEvent& e);
     void playUi(UiSound s);
+    // Before rendering starts; nullptr = no music. The source must outlive the mixer's use of it.
+    void setMusic(MusicSource* source) { m_music = source; }
     // Interleaved stereo float output.
     void render(float* stereo, int frames);
 
@@ -49,7 +61,7 @@ public:
     static constexpr int kOneShots = 32;
 
 private:
-    enum class Bus : std::uint8_t { Engine, Tires, Impacts, Ambience, Ui, Count };
+    enum class Bus : std::uint8_t { Engine, Tires, Impacts, Ambience, Ui, Music, Count };
 
     struct Voice {
         const SoundData* data = nullptr;
@@ -88,6 +100,7 @@ private:
     StereoGain place(const AudioVec3& p) const;
     void setLoop(Voice& v, float gain, const StereoGain& g);
     void recomputeEngineLevels(float spreadDb);
+    void mixMusic(float* acc, int frames, float dt);
     float rand01();
     SoundId pick(SoundId first, int count);
 
@@ -132,6 +145,14 @@ private:
     float m_dcInL = 0.0f, m_dcInR = 0.0f, m_dcOutL = 0.0f, m_dcOutR = 0.0f;
 
     std::vector<float> m_acc; // block accumulator (stereo)
+
+    // Music
+    MusicSource* m_music = nullptr;
+    std::vector<float> m_musicBuf;
+    float m_musicGain = 0.0f; // ramp state, 0..1
+    float m_musicOut = 0.0f;  // gain applied at the end of the previous block (with bus and master)
+    int m_musicRestart = 0;
+    long long m_musicFrames = 0;
 };
 
 } // namespace tf

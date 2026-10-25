@@ -55,6 +55,16 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_audio PRIVATE -Wall -Wextra)
 endif()
 
+# ------------------------------------------------------------------ game flow
+# Menu / screen state machine and the settings file. Plain C++ (no SDL), tested headless.
+add_library(trailforge_flow STATIC
+    src/app/GameFlow.cpp
+    src/app/GameSettings.cpp)
+target_include_directories(trailforge_flow PUBLIC src)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(trailforge_flow PRIVATE -Wall -Wextra)
+endif()
+
 add_executable(trailforge_probe tools/SimProbe.cpp)
 target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
 
@@ -80,10 +90,11 @@ if(TRAILFORGE_BUILD_APP)
         src/render/Camera.cpp
         src/render/DebugDraw.cpp
         src/ui/DebugUI.cpp
+        src/ui/MenuUI.cpp
         ${TRAILFORGE_SHADER_SOURCES}
         ${TRAILFORGE_ICON_SOURCES})
     # trailforge_audio brings trailforge_sim.
-    target_link_libraries(trailforge PRIVATE trailforge_audio miniaudio_lib SDL3::SDL3-static imgui glm_headers)
+    target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static imgui glm_headers)
     if(APPLE)
         target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
         target_link_libraries(trailforge PRIVATE "-framework Metal")
@@ -136,8 +147,17 @@ if(TRAILFORGE_BUILD_TESTS)
             audio_tire_layers
             audio_manifest
             audio_feed_and_mixer
-            audio_skid_gating)
+            audio_skid_gating
+            audio_music)
         add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+    endforeach()
+
+    # Game flow: settings file, menu navigation, pause.
+    add_executable(trailforge_app_tests tests/AppTests.cpp)
+    target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
+    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks)
+        add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
 endif()

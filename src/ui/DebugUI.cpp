@@ -56,6 +56,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
     UiRequests req;
     req.vsync = m_vsync;
 
+    if (menuOpen) return req;
     // A short hint is always visible (even with the UI hidden), unless turned off for clean screenshots.
     if (hud) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
@@ -83,11 +84,11 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
                 ImGui::PopStyleColor();
             }
         }
-        if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "PAUSED (Esc to resume, N = single step)");
+        if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "FROZEN (P to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
         ImGui::TextDisabled("W gas / S brake (stopped: release, press again for reverse)  A/D steer  Space handbrake");
         ImGui::TextDisabled("Q fwd/rev  L low range  B ABS  T traction control  X diff locks  R reset");
-        ImGui::TextDisabled("C camera  H lights  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("C camera  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
                             stats.renderH, TRAILFORGE_VERSION);
@@ -330,6 +331,7 @@ void DebugUI::drawAudio(AudioPanelState& a) {
     ImGui::SliderFloat("Impacts", &s.impacts, 0.0f, 2.0f, "%.2f");
     ImGui::SliderFloat("Ambience & wind", &s.ambience, 0.0f, 2.0f, "%.2f");
     ImGui::SliderFloat("UI", &s.ui, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Music", &s.music, 0.0f, 1.0f, "%.2f");
     if (ImGui::CollapsingHeader("Engine model", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Pitch factor", &s.enginePitch, 0.6f, 1.1f, "%.2f");
         ImGui::SliderFloat("Level spread [dB]", &s.levelSpreadDb, 0.0f, 40.0f, "%.1f");
@@ -357,7 +359,7 @@ void DebugUI::drawAudio(AudioPanelState& a) {
         ImGui::Text("Audio thread: %.0f us/callback (max %.0f), %.2f %% of real time", st.callbackUs,
                     st.callbackMaxUs, 100.0 * st.cpuLoad);
     }
-    ImGui::TextDisabled("Pause-menu UI sounds are loaded; the menu itself is not built yet.");
+    ImGui::Text("Music %.0f %% (%.0f s played)", 100.0 * st.musicGain, st.musicSeconds);
     ImGui::End();
 }
 
@@ -403,7 +405,7 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     if (sim.hadPhysicsError()) ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), "Jolt reported an update error (buffers full)");
     ImGui::Text("Gamepad: %s   Camera: %s", stats.gamepad[0] ? stats.gamepad : "not connected",
                 stats.followCamera ? "follow" : "free (arrows, PgUp/PgDn, RMB look)");
-    if (ImGui::Button(stats.paused ? "Resume (Esc)" : "Pause (Esc)")) req.togglePause = true;
+    if (ImGui::Button(stats.paused ? "Resume (P)" : "Freeze (P)")) req.togglePause = true;
     ImGui::SameLine();
     ImGui::BeginDisabled(!stats.paused);
     if (ImGui::Button("Step one physics tick (N)")) req.stepOnce = true;

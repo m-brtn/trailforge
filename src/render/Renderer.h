@@ -154,6 +154,9 @@ struct FrameDesc {
     bool linesOnTop = false;   // true: lines without depth test (visible through the body)
     ImDrawData* ui = nullptr;
     const char* capturePath = nullptr; // non-null: save this frame as BMP or PNG (by extension)
+    float blur = 0.0f;           // 0..1: menu blur of the finished 3D frame (under the UI)
+    float blurDim = 0.55f;       // brightness of the blurred frame at full blur
+    float blurDesaturate = 0.25f;
 
     // Vehicle state for shading only (cosmetic): body transform, mud amount and lamps.
     glm::mat4 vehicleModel{1.0f};
@@ -195,7 +198,7 @@ struct RenderStats {
 
 // SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
 // (lit, instanced trees, tire marks, grass, sky with mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale)
-// -> FXAA -> ImGui.
+// -> FXAA -> menu blur (dual Kawase, only with FrameDesc::blur) -> ImGui.
 class Renderer {
 public:
     explicit Renderer(SDL_Window* window, bool debugDevice);
@@ -218,6 +221,11 @@ public:
 
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
+
+    // RGBA8 image (sRGB-encoded, straight alpha) with a full mip chain, for ImGui (ImTextureID = SDL_GPUTexture*).
+    // The caller releases it with releaseImage before the renderer goes away.
+    SDL_GPUTexture* createImage(const void* rgba, std::uint32_t w, std::uint32_t h);
+    void releaseImage(SDL_GPUTexture* tex);
 
     void setVSync(bool on);
     bool vsync() const { return m_vsync; }
@@ -313,6 +321,9 @@ private:
     SDL_GPUGraphicsPipeline* m_treeShadowPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_reflTreePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_tramplePipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_blurDownPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_blurUpPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_blurCompositePipe = nullptr;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
     SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
@@ -333,6 +344,9 @@ private:
     Texture m_shadow;
     std::vector<Texture> m_bloom;
     Texture m_ldr;
+    static constexpr int kBlurLevels = 4;
+    Texture m_blurSrc;
+    std::vector<Texture> m_blur;
 
     // Static textures and samplers.
     Texture m_noise, m_mask, m_height;

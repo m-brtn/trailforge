@@ -1,0 +1,157 @@
+# Intro, start menu, Settings, Controls, pause menu (blurred frame), reset and quit to the start menu:
+#   ./build/release/trailforge --script tools/scenarios/menus.txt
+# Keys and clicks go through the real input path (SDL events -> Input -> GameFlow); `menu ...` jumps directly.
+# Captures: /tmp/trailforge_menu_*.png. Music levels are checked in audio_check.txt (this one runs with --no-audio).
+
+# ---------------------------------------------------------------- scenarios start in gameplay
+wait 1.0
+expect menu_screen == 2
+expect menu_font == 1
+expect menu_logo == 1
+expect cam_free == 0
+
+# ---------------------------------------------------------------- intro: logo, then the start menu fades in
+menu intro
+wait 0.1
+expect menu_screen == 0
+wait 1.8
+capture /tmp/trailforge_menu_01_intro.png
+until menu_screen == 1 6
+wait 0.9
+log fade
+expect menu_fade > 0.2
+expect menu_fade < 0.9
+capture /tmp/trailforge_menu_02_intro_fade.png
+until menu_fade == 1 6          # menu time is clamped to 0.1 s per frame (slow Debug frames take longer)
+expect cam_free == 1           # cinematic camera behind the start menu
+expect paused == 0             # the world runs behind the start menu (the vehicle idles at the start)
+capture /tmp/trailforge_menu_03_start_menu.png
+wait 0.1                       # the capture is taken at the end of the next frame
+
+# any key skips the intro
+menu intro
+wait 0.8
+tap X
+wait 0.1
+expect menu_screen == 1
+expect menu_fade < 0.5
+wait 1.0
+
+# ---------------------------------------------------------------- start menu -> Settings (keyboard)
+expect menu_cursor == 0
+tap Up
+wait 0.1
+expect menu_cursor == 2        # wraps to Quit
+tap Down
+tap Down
+wait 0.1
+expect menu_cursor == 1
+tap Return
+wait 0.1
+expect menu_page == 2
+wait 0.6
+expect menu_blur > 0.7         # the start-menu scene is blurred under Settings
+capture /tmp/trailforge_menu_04_settings.png
+menu select music
+tap Left
+wait 0.1
+expect setting_music > 0.74
+expect setting_music < 0.76
+tap Right
+wait 0.1
+expect setting_music > 0.79
+menu select tc
+tap Return
+wait 0.1
+expect setting_tc == 1
+tap Left
+wait 0.1
+expect setting_tc == 0
+
+# mouse: click a row
+click menu:controls
+wait 0.4
+expect menu_page == 3
+capture /tmp/trailforge_menu_05_controls.png
+tap Escape
+wait 0.1
+expect menu_page == 2
+tap Escape
+wait 0.1
+expect menu_page == 0
+expect menu_screen == 1
+
+# ---------------------------------------------------------------- Start -> gameplay
+menu select start
+tap Return
+wait 0.2
+expect menu_screen == 2
+expect cam_free == 0
+wait 1.5
+down W
+wait 1.2
+expect fwd_kmh > 5
+
+# ---------------------------------------------------------------- pause: Esc, simulation frozen, frame blurred
+tap Escape
+wait 0.05
+expect menu_screen == 3
+expect paused == 1
+mark ticks
+mark z
+mark x
+wait 1.0
+log paused
+expect d_ticks == 0            # W is still held: no ticks while paused
+expect d_z == 0
+expect d_x == 0
+expect menu_blur > 0.99
+capture /tmp/trailforge_menu_06_pause.png
+tap R                          # gameplay keys do nothing in the menu
+tap Q
+wait 0.2
+expect d_ticks == 0
+expect d_z == 0
+
+# Settings from the pause menu, then back and resume
+tap Down
+tap Down
+wait 0.1
+tap Return
+wait 0.3
+expect menu_page == 2
+expect d_ticks == 0
+capture /tmp/trailforge_menu_07_pause_settings.png
+tap Escape
+wait 0.1
+expect menu_page == 1
+tap Escape
+wait 0.6
+expect menu_screen == 2
+expect d_ticks > 40            # resume continues the simulation (W still held)
+log resumed
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+
+# ---------------------------------------------------------------- Reset vehicle from the pause menu
+expect z > -35
+tap Escape
+wait 0.1
+menu select restart
+tap Return
+wait 1.5
+expect menu_screen == 2
+expect z < -38                 # back at the start pad
+expect speed_kmh < 0.5
+
+# ---------------------------------------------------------------- Quit to the start menu (mouse)
+tap Escape
+wait 0.4
+click menu:quit_to_menu
+wait 0.5
+expect menu_screen == 1
+expect cam_free == 1
+wait 1.5
+capture /tmp/trailforge_menu_08_back_to_start.png

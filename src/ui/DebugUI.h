@@ -90,6 +90,7 @@ public:
 
     bool visible = true;
     bool hud = true;               // the small always-on hint/perf window and the driving read-out
+    bool menuOpen = false;         // a menu is on screen: no HUD and no diagnostics windows (F1-F3 keep their state)
     bool autoReverse = true;       // S/W at a standstill switch direction (DriverIntent::autoReverse)
     bool drawPhysicsDebug = false; // off by default so the scene reads cleanly; Tuning > Debug drawing
     bool linesOnTop = true;

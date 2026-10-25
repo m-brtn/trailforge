@@ -28,6 +28,9 @@ const char* Input::gamepadName() const {
 
 void Input::beginFrame() {
     m_pressed.fill(false);
+    m_menu = MenuKeys{};
+    m_menu.mouseX = m_mouseX;
+    m_menu.mouseY = m_mouseY;
     m_mouseDelta = glm::vec2(0.0f);
     m_wheel = 0.0f;
 }
@@ -42,12 +45,29 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         // Held state is always tracked (even when the UI captures input) so a release is not lost;
         // it is applied in endEvents only when the UI does not own the keyboard.
         if (e.key.scancode < SDL_SCANCODE_COUNT) m_held[e.key.scancode] = true;
+        if (e.key.key == SDLK_ESCAPE) {
+            // Escape always works: pause menu in gameplay, back in the menus.
+            if (!e.key.repeat) m_menu.back = m_menu.pause = m_menu.any = true;
+            break;
+        }
+        if (!uiWantsKeyboard) {
+            // Menu navigation (held arrows repeat with the system key repeat).
+            switch (e.key.key) {
+            case SDLK_UP: case SDLK_W: m_menu.up = true; break;
+            case SDLK_DOWN: case SDLK_S: m_menu.down = true; break;
+            case SDLK_LEFT: case SDLK_A: m_menu.left = true; break;
+            case SDLK_RIGHT: case SDLK_D: m_menu.right = true; break;
+            case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: if (!e.key.repeat) m_menu.accept = true; break;
+            case SDLK_BACKSPACE: if (!e.key.repeat) m_menu.back = true; break;
+            default: break;
+            }
+            if (!e.key.repeat) m_menu.any = true;
+        }
         if (e.key.repeat) break;
-        // F1-F3 and Escape always work; everything else only if the UI does not own the keyboard.
+        // F1-F3 always work; everything else only if the UI does not own the keyboard.
         if (e.key.key == SDLK_F1) { press(Action::ToggleDebugUI); break; }
         if (e.key.key == SDLK_F2) { press(Action::ToggleGraphicsUI); break; }
         if (e.key.key == SDLK_F3) { press(Action::ToggleAudioUI); break; }
-        if (e.key.key == SDLK_ESCAPE) { press(Action::TogglePause); break; }
         if (uiWantsKeyboard) break;
         switch (e.key.key) {
         case SDLK_Q: press(Action::ToggleDirection); break;
@@ -55,6 +75,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDLK_R: press(Action::Reset); break;
         case SDLK_C: press(Action::ToggleCamera); break;
         case SDLK_N: press(Action::StepOnce); break;
+        case SDLK_P: press(Action::TogglePause); break;
         case SDLK_H: press(Action::ToggleHeadlights); break;
         case SDLK_B: press(Action::ToggleAbs); break;
         case SDLK_T: press(Action::CycleTraction); break;
@@ -64,12 +85,23 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (!uiWantsMouse && e.button.button == SDL_BUTTON_RIGHT) m_rmb = true;
+        if (!uiWantsMouse) {
+            m_menu.any = true;
+            if (e.button.button == SDL_BUTTON_LEFT) {
+                m_menu.click = true;
+                m_menu.mouseX = m_mouseX = e.button.x;
+                m_menu.mouseY = m_mouseY = e.button.y;
+            }
+        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button == SDL_BUTTON_RIGHT) m_rmb = false;
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (m_rmb && !uiWantsMouse) m_mouseDelta += glm::vec2(e.motion.xrel, e.motion.yrel);
+        m_menu.mouseX = m_mouseX = e.motion.x;
+        m_menu.mouseY = m_mouseY = e.motion.y;
+        m_menu.mouseMoved = !uiWantsMouse;
         break;
     case SDL_EVENT_MOUSE_WHEEL:
         if (!uiWantsMouse) m_wheel += e.wheel.y;
@@ -85,12 +117,18 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         if (!m_gamepad || e.gbutton.which != SDL_GetGamepadID(m_gamepad)) break;
+        m_menu.any = true;
+        switch (e.gbutton.button) {
+        case SDL_GAMEPAD_BUTTON_SOUTH: m_menu.accept = true; break;
+        case SDL_GAMEPAD_BUTTON_EAST: m_menu.back = true; break;
+        case SDL_GAMEPAD_BUTTON_START: m_menu.pause = true; break;
+        default: break;
+        }
         switch (e.gbutton.button) {
         case SDL_GAMEPAD_BUTTON_WEST: press(Action::ToggleDirection); break;
         case SDL_GAMEPAD_BUTTON_NORTH: press(Action::ToggleLowRange); break;
         case SDL_GAMEPAD_BUTTON_BACK: press(Action::Reset); break;
         case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: press(Action::ToggleCamera); break;
-        case SDL_GAMEPAD_BUTTON_START: press(Action::TogglePause); break;
         case SDL_GAMEPAD_BUTTON_DPAD_UP: press(Action::ToggleAbs); break;
         case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: press(Action::CycleTraction); break;
         case SDL_GAMEPAD_BUTTON_DPAD_DOWN: press(Action::CycleDiffLock); break;
@@ -101,7 +139,31 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
     }
 }
 
-void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/) {
+void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
+    // Gamepad menu directions: D-pad or left stick, first step on the press, then repeat after a delay.
+    std::array<bool, 4> held{};
+    if (m_gamepad) {
+        const float sx = axisValue(m_gamepad, SDL_GAMEPAD_AXIS_LEFTX, 0.5f);
+        const float sy = axisValue(m_gamepad, SDL_GAMEPAD_AXIS_LEFTY, 0.5f);
+        held[0] = SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_DPAD_UP) || sy < 0.0f;
+        held[1] = SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN) || sy > 0.0f;
+        held[2] = SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_DPAD_LEFT) || sx < 0.0f;
+        held[3] = SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || sx > 0.0f;
+    }
+    bool* dirs[4] = {&m_menu.up, &m_menu.down, &m_menu.left, &m_menu.right};
+    for (std::size_t i = 0; i < 4; ++i) {
+        if (held[i] && !m_padHeld[i]) {
+            *dirs[i] = true;
+            m_padRepeat[i] = 0.4f;
+        } else if (held[i]) {
+            m_padRepeat[i] -= dt;
+            if (m_padRepeat[i] <= 0.0f) {
+                *dirs[i] = true;
+                m_padRepeat[i] = 0.12f;
+            }
+        }
+        m_padHeld[i] = held[i];
+    }
     DriverIntent in;
     m_freeMove = glm::vec3(0.0f);
     m_fast = false;

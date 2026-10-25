@@ -13,6 +13,7 @@ struct AudioOptions {
     bool device = true;              // false: --no-audio (nothing is opened or loaded)
     std::string capturePath;         // non-empty: offline render to this WAV instead of a device
     std::vector<std::string> assetDirs; // candidate directories containing manifest.json
+    std::vector<std::string> musicFiles; // candidate paths of the menu music (first existing one is streamed)
 };
 
 // Owns the sound bank, the mixer and either a miniaudio playback device (its callback runs on the device's audio
@@ -42,12 +43,15 @@ public:
 private:
     struct Device;
     struct Capture;
+    struct Music;
+    void openMusic(const std::vector<std::string>& files);
     bool loadBank(const std::vector<std::string>& dirs);
     void renderOnAudioThread(float* out, unsigned frames);
 
     std::string m_status = "disabled";
     SoundBank m_bank;
     std::unique_ptr<AudioMixer> m_mixer;
+    std::unique_ptr<Music> m_music; // decoded on the audio thread (or the capture's main thread)
     AudioMailbox m_mailbox;
     std::vector<AudioEvent> m_pendingUi;
     // Audio-thread scratch (no allocation in the callback).

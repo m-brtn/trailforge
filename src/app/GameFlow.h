@@ -1,0 +1,119 @@
+#pragma once
+
+#include "app/GameSettings.h"
+#include "sim/FixedStepClock.h"
+
+#include <string>
+#include <vector>
+
+namespace tf {
+
+// Top-level state of the game. Pure C++ (no SDL, no ImGui): the Application feeds it menu input and acts on the
+// returned commands; the menu renderer only reads it.
+enum class Screen { Intro, MainMenu, Playing, Paused };
+
+// Menu pages. Start enters the game directly for now; level and vehicle selection pages will go between Main and
+// the StartGame command (push them from MenuItem::Start).
+enum class MenuPage { Main, Pause, Settings, Controls };
+
+enum class MenuItem {
+    Start, Settings, Quit,                       // main
+    Resume, Restart, QuitToMenu, QuitGame,       // pause (+ Settings)
+    Quality, RenderScale, VSync,                 // settings: graphics
+    MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
+    Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
+    Controls, Back,
+};
+
+enum class MenuCommand { None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed };
+enum class MenuSound { None, Move, Confirm, Back, Adjust, Open, Close };
+
+// One frame of menu input (keyboard, mouse and gamepad already merged).
+struct MenuInput {
+    bool up = false, down = false, left = false, right = false;
+    bool accept = false, back = false;
+    bool pause = false;  // Esc / gamepad Start
+    bool any = false;    // any key, button or click (skips the intro)
+    int hover = -1;      // row index under a moving mouse, -1 = none
+    int click = -1;      // row index clicked
+    int clickDir = 0;    // -1 / +1: a value arrow was clicked, 0: the row itself
+};
+
+struct MenuResult {
+    MenuCommand command = MenuCommand::None;
+    MenuSound sound = MenuSound::None;
+};
+
+class GameFlow {
+public:
+    // Intro timeline (s): the logo fades in, holds, then the start menu fades in over the live scene.
+    static constexpr double kLogoFadeIn = 1.2;
+    static constexpr double kIntroLength = 4.6;
+    static constexpr double kMenuFadeIn = 1.8;
+    static constexpr double kSkipFade = 0.5;
+
+    explicit GameFlow(Screen start = Screen::Intro);
+
+    Screen screen() const { return m_screen; }
+    MenuPage page() const { return m_stack.back().page; }
+    int depth() const { return int(m_stack.size()); }
+    int cursor() const { return m_stack.back().cursor; }
+    MenuItem current() const { return items()[std::size_t(cursor())]; }
+    const std::vector<MenuItem>& items() const { return items(page()); }
+    static const std::vector<MenuItem>& items(MenuPage p);
+
+    // A menu (or the intro) owns the input; gameplay controls are ignored.
+    bool menuActive() const { return m_screen != Screen::Playing; }
+    // The pause menu freezes the simulation: no ticks, the fixed-step accumulator keeps its value.
+    bool simulationRuns() const { return m_screen != Screen::Paused; }
+    // Physics ticks for this frame: 0 (accumulator untouched) unless the simulation runs.
+    int stepsForFrame(FixedStepClock& clock, double frameTime) const {
+        return simulationRuns() ? clock.advance(frameTime) : 0;
+    }
+
+    double screenTime() const { return m_screenTime; } // s since the last screen change
+    double introTime() const { return m_introTime; }
+    // 0..1 opacity of the start menu (fades in after the intro or a skip); 1 when not coming from the intro.
+    float menuFade() const;
+
+    void update(double dt);
+    MenuResult handle(const MenuInput& in, GameSettings& settings);
+
+    // Direct transitions (scenario commands and the application).
+    void skipIntro();
+    void startGame();
+    void pause();
+    void resume();
+    void toMainMenu();
+    void openSettings();
+    bool back(); // pops a page; false at a root page
+    bool select(MenuItem item); // moves the cursor to the item on the current page
+
+private:
+    struct PageState {
+        MenuPage page;
+        int cursor = 0;
+    };
+    void setScreen(Screen s, MenuPage root);
+    MenuResult activate(MenuItem item, GameSettings& settings, int dir);
+    MenuResult goBack();
+
+    Screen m_screen;
+    std::vector<PageState> m_stack;
+    double m_screenTime = 0.0;
+    double m_introTime = 0.0;
+    double m_menuFadeLength = 0.0; // > 0 while the start menu fades in after the intro
+};
+
+const char* menuLabel(MenuItem item);
+const char* menuPageTitle(MenuPage page);
+// Section heading drawn above this row of the Settings page, or nullptr.
+const char* menuSection(MenuItem item);
+// Rows with a value (left / right change it).
+bool menuAdjustable(MenuItem item);
+// Current value as shown in the menu ("ON", "HIGH", "80 %"); empty for plain actions.
+std::string menuValue(MenuItem item, const GameSettings& s);
+// Changes the value one step (dir -1 / +1); returns false if nothing changed.
+bool adjustSetting(MenuItem item, GameSettings& s, int dir);
+
+} // namespace tf
