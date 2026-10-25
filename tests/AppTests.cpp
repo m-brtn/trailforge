@@ -326,14 +326,46 @@ void garageModel() {
     // Rename typed through the input path.
     g.selectRow(GarageRowKind::Action, "RENAME");
     g.handle(gkey(&GarageInput::accept));
-    CHECK(g.renaming(), "rename mode");
-    for (int i = 0; i < 8; ++i) g.handle(gkey(&GarageInput::backspace));
+    CHECK(g.renaming() && g.modal() == GarageModal::Rename && g.renameSelected(), "rename modal, name preselected");
+    {
+        // Modal validation: unsafe characters refused, a taken name blocks Confirm, rows do not react.
+        const int cursorBefore = g.cursor();
+        g.handle(gkey(&GarageInput::down));
+        CHECK(g.cursor() == cursorBefore, "rows ignore input under the modal");
+        GarageInput bad;
+        bad.text = "a/b";
+        g.handle(bad);
+        CHECK(g.renameText() == "ab" && !g.modalError().empty(), "'/' refused: '%s' (%s)", g.renameText().c_str(),
+              g.modalError().c_str());
+        g.handle(gkey(&GarageInput::backspace));
+        g.handle(gkey(&GarageInput::backspace));
+        GarageInput taken;
+        taken.text = "Rock crawl";
+        g.handle(taken);
+        g.handle(gkey(&GarageInput::accept));
+        CHECK(g.renaming() && g.modalError().find("ALREADY") != std::string::npos, "taken name keeps the modal: %s",
+              g.modalError().c_str());
+        CHECK(g.nameProblem("Mud").empty() && !g.nameProblem("factory").empty() &&
+                  !g.nameProblem(std::string(40, 'x')).empty() && !g.nameProblem("  ").empty(),
+              "name rules");
+    }
+    for (int i = 0; i < 12; ++i) g.handle(gkey(&GarageInput::backspace));
     GarageInput typed;
     typed.text = "Mud";
     g.handle(typed);
     g.handle(gkey(&GarageInput::accept));
     CHECK(!g.renaming() && g.activeName() == "Mud", "typed rename -> '%s'", g.activeName().c_str());
-    CHECK(g.deleteActive() && g.factoryActive() && g.setups().setups.size() == 1, "delete -> factory");
+    // Delete asks first: Cancel has the focus, Esc cancels, Confirm deletes.
+    g.selectRow(GarageRowKind::Action, "DELETE");
+    g.handle(gkey(&GarageInput::accept));
+    CHECK(g.modal() == GarageModal::ConfirmDelete && g.modalFocus() == 1, "delete confirmation, focus on Cancel");
+    g.handle(gkey(&GarageInput::accept));
+    CHECK(g.modal() == GarageModal::None && g.activeName() == "Mud", "Enter on Cancel keeps the setup");
+    g.handle(gkey(&GarageInput::accept));
+    GarageInput confirm;
+    confirm.modalClick = 0;
+    g.handle(confirm);
+    CHECK(g.modal() == GarageModal::None && g.factoryActive() && g.setups().setups.size() == 1, "delete -> factory");
     CHECK(g.config() == catalog[0].config, "factory config after delete");
     // Selection on the Setup row: right cycles Factory -> Rock crawl.
     g.selectRow(GarageRowKind::Setup);

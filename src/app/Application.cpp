@@ -351,6 +351,7 @@ void Application::openGarage() {
 
 void Application::closeGarage() {
     SDL_StopTextInput(m_window.get());
+    m_input.setModalCapture(false, false);
     m_flow.closeGarage();
     if (m_garageFollowCamera && m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
     if (m_flow.screen() == Screen::MainMenu) m_menuCamTime = 0.0;
@@ -375,7 +376,11 @@ void Application::handleGarage() {
     in.back = k.back;
     in.text = k.text;
     in.backspace = k.backspace;
-    if (!m_garage->renaming()) {
+    if (m_garage->modal() != GarageModal::None) {
+        // The modal owns the pointer too: only its buttons react.
+        if (k.mouseMoved) in.modalHover = m_menu.modalHitTest(k.mouseX, k.mouseY);
+        if (k.click) in.modalClick = m_menu.modalHitTest(k.mouseX, k.mouseY);
+    } else {
         int dir = 0;
         float fraction = -1.0f;
         if (k.mouseMoved && !k.mouseDown) in.hover = m_menu.garageHitTest(k.mouseX, k.mouseY, &dir, &fraction);
@@ -397,6 +402,7 @@ void Application::handleGarage() {
         if (m_garage->renaming()) SDL_StartTextInput(m_window.get());
         else SDL_StopTextInput(m_window.get());
     }
+    m_input.setModalCapture(m_garage->modal() != GarageModal::None, m_garage->renaming());
     switch (r.sound) {
     case GarageSound::Move: m_audio->playUi(UiSound::Hover); break;
     case GarageSound::Confirm: m_audio->playUi(UiSound::Confirm); break;
@@ -1173,6 +1179,17 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueClick(x, 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
+    if (c.op == "click" && arg.rfind("modal:", 0) == 0) {
+        // click modal:confirm|cancel - a button of the open modal dialog, through the real mouse path.
+        const int button = arg == "modal:confirm" ? 0 : arg == "modal:cancel" ? 1 : -1;
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!m_menu.modalButtonRect(button, x0, y0, x1, y1)) {
+            std::printf("SCENARIO: modal button '%s' is not on screen\n", arg.c_str());
+            return Exec::Failed;
+        }
+        queueClick(0.5f * (x0 + x1), 0.5f * (y0 + y1), false);
+        return Exec::Done;
+    }
     if (c.op == "click" && arg.rfind("menu:", 0) == 0) {
         const auto item = itemByName(arg.substr(5));
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
@@ -1517,6 +1534,15 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "garage_open") return m_flow.screen() == Screen::Garage ? 1.0 : 0.0;
     if (m_garage) {
         if (n == "garage_cursor") return m_garage->cursor();
+        if (n == "garage_modal") return double(int(m_garage->modal())); // 0 none, 1 rename, 2 delete, 3 reset
+        if (n == "garage_modal_error") return m_garage->modalError().empty() ? 0.0 : 1.0;
+        if (n == "garage_rename_len") return double(m_garage->renameText().size());
+        if (n == "garage_rate_front" || n == "garage_rate_rear") {
+            // Wheel rate per corner (N/mm) shown next to the spring frequency.
+            const int a = n == "garage_rate_front" ? kFrontAxle : kRearAxle;
+            const VehicleConfig& gc = m_garage->config();
+            return wheelRateFromFrequency(gc.tuning.axles[std::size_t(a)].springFrequency, sprungCornerMass(gc, a)) / 1000.0;
+        }
         if (n == "garage_dirty") return m_garage->dirty() ? 1.0 : 0.0;
         if (n == "garage_setups") return double(m_garage->setups().setups.size());
         if (n == "garage_factory") return m_garage->factoryActive() ? 1.0 : 0.0;

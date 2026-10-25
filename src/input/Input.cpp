@@ -46,6 +46,20 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         // Held state is always tracked (even when the UI captures input) so a release is not lost;
         // it is applied in endEvents only when the UI does not own the keyboard.
         if (e.key.scancode < SDL_SCANCODE_COUNT) m_held[e.key.scancode] = true;
+        if (m_modal) {
+            switch (e.key.key) {
+            case SDLK_ESCAPE: if (!e.key.repeat) m_menu.back = true; break;
+            case SDLK_RETURN: case SDLK_KP_ENTER: if (!e.key.repeat) m_menu.accept = true; break;
+            case SDLK_SPACE: if (!e.key.repeat && !m_modalText) m_menu.accept = true; break;
+            case SDLK_BACKSPACE: m_menu.backspace = true; break;
+            case SDLK_UP: m_menu.up = true; break;
+            case SDLK_DOWN: m_menu.down = true; break;
+            case SDLK_LEFT: m_menu.left = true; break;
+            case SDLK_RIGHT: m_menu.right = true; break;
+            default: break;
+            }
+            break;
+        }
         if (e.key.key == SDLK_ESCAPE) {
             // Escape always works: pause menu in gameplay, back in the menus.
             if (!e.key.repeat) m_menu.back = m_menu.pause = m_menu.any = true;
@@ -138,6 +152,10 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         case SDL_GAMEPAD_BUTTON_EAST: m_menu.back = true; break;
         case SDL_GAMEPAD_BUTTON_START: m_menu.pause = true; break;
         default: break;
+        }
+        if (m_modal) {
+            m_menu.pause = false;
+            break;
         }
         switch (e.gbutton.button) {
         case SDL_GAMEPAD_BUTTON_WEST: press(Action::ToggleDirection); break;

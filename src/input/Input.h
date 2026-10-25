@@ -57,6 +57,13 @@ public:
     Input(const Input&) = delete;
     Input& operator=(const Input&) = delete;
 
+    // A modal dialog owns the keyboard and gamepad: only Enter, Escape (back, never pause), Backspace and the arrow
+    // keys / D-pad reach the menus; no hotkeys, no F1-F3, no WASD navigation. textEntry: Space types (SDL text
+    // input) instead of accepting.
+    void setModalCapture(bool on, bool textEntry) {
+        m_modal = on;
+        m_modalText = on && textEntry;
+    }
     void beginFrame();
     void handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMouse);
     // Call after processing the frame's events. dt drives the menu auto-repeat of held directions.
@@ -87,6 +94,7 @@ private:
     glm::vec3 m_freeMove{0.0f};
     bool m_fast = false;
     bool m_rmb = false;
+    bool m_modal = false, m_modalText = false;
     bool m_mouseDown = false;
     SDL_Gamepad* m_gamepad = nullptr;
     MenuKeys m_menu;

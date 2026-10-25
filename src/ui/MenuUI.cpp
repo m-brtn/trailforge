@@ -162,7 +162,10 @@ void MenuUI::drawLogo(float cx, float cy, float width, float alpha) {
 
 void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const MenuView& view) {
     m_rows.clear();
-    if (flow.screen() != Screen::Garage) m_garageRows.clear();
+    if (flow.screen() != Screen::Garage) {
+        m_garageRows.clear();
+        m_modalButtons.clear();
+    }
     if (!flow.menuActive() || flow.screen() == Screen::Garage) {
         m_lastPage = -1;
         return;
@@ -571,18 +574,10 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
             hit.bar0 = barX0 - 8.0f;
             hit.bar1 = barX1 + 8.0f;
         } else if (r.kind != GarageRowKind::Action) {
-            std::string v = g.valueText(r);
-            if (r.kind == GarageRowKind::Setup && g.renaming()) {
-                v = g.renameText();
-                if (std::fmod(ImGui::GetTime(), 1.0) < 0.6) v += "_";
-            }
+            const std::string v = g.valueText(r);
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.04f);
-            const bool editing = r.kind == GarageRowKind::Setup && g.renaming();
-            if (editing)
-                dl->AddRect(ImVec2(choiceX - arrowDx + textSize, ry + 1.0f), ImVec2(choiceX + arrowDx - textSize, ry + rowH * 0.9f),
-                            col(kOrange, 1.0f), 3.0f, 0, 1.5f);
             text(dl, m_body, textSize, ImVec2(choiceX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.8f)), v.c_str(), 0.04f);
-            if (!editing) {
+            {
                 const float ah = textSize * 0.30f, acy = ty + textSize * 0.55f;
                 const ImU32 ac = sel ? col(kOrange, 1.0f) : col(kWhite, 0.25f);
                 const float lx = choiceX - arrowDx, rx = choiceX + arrowDx;
@@ -667,7 +662,8 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
 
     // Hints.
     const float fs = 0.018f * H;
-    const char* hint = g.renaming() ? (view.gamepad ? "TYPE A NAME   A CONFIRM   B CANCEL" : "TYPE A NAME   ENTER CONFIRM   ESC CANCEL")
+    const bool modal = g.modal() != GarageModal::None;
+    const char* hint = modal ? (view.gamepad ? "A CONFIRM   B CANCEL" : "ENTER CONFIRM   ESC CANCEL")
                        : view.gamepad ? "D-PAD CHANGE   A SELECT   B BACK"
                                       : "ARROWS / W S A D CHANGE   ENTER SELECT   MOUSE CLICK / DRAG   ESC BACK";
     text(dl, m_body, fs, ImVec2(W - std::max(0.05f * W, 40.0f) - textWidth(m_body, fs, hint, 0.15f), H - 0.055f * H),
@@ -675,6 +671,115 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     char version[64];
     std::snprintf(version, sizeof(version), "TRAILFORGE %s", view.version);
     text(dl, m_body, fs, ImVec2(x0, H - 0.05f * H), col(kWhite, 0.4f), version, 0.2f);
+
+    m_modalButtons.clear();
+    if (!modal) return;
+    ModalSpec s;
+    s.focus = g.modalFocus();
+    const std::string name = g.activeName();
+    switch (g.modal()) {
+    case GarageModal::Rename:
+        s.title = "RENAME SETUP";
+        s.message = "NEW NAME FOR '" + name + "'";
+        s.textField = true;
+        s.text = g.renameText();
+        s.selected = g.renameSelected();
+        s.error = g.modalError();
+        s.hint = view.gamepad ? "TYPE WITH A KEYBOARD.  A KEEPS THE CURRENT NAME, B CANCELS"
+                              : "LETTERS, DIGITS, SPACE AND - _ . ( ) +, UP TO 32.  ENTER CONFIRM, ESC CANCEL";
+        s.confirm = "CONFIRM";
+        break;
+    case GarageModal::ConfirmDelete:
+        s.title = "DELETE SETUP?";
+        s.message = "'" + name + "' WILL BE REMOVED FROM THE SETUP FILE. THIS CANNOT BE UNDONE.";
+        s.confirm = "DELETE";
+        break;
+    case GarageModal::ConfirmReset:
+        s.title = "RESET TO FACTORY?";
+        s.message = g.factoryActive() ? "ALL VALUES GO BACK TO THE VEHICLE DEFINITION."
+                                     : "ALL VALUES GO BACK TO THE DEFINITION. '" + name + "' CHANGES ONLY WHEN SAVED.";
+        s.confirm = "RESET";
+        break;
+    case GarageModal::None: break;
+    }
+    drawModal(s);
+}
+
+void MenuUI::drawModal(const ModalSpec& s) {
+    // Over a dimmed screen: dark panel, thin lines, spaced uppercase title with an orange accent, optional text field
+    // with selection and caret, an error line, Confirm / Cancel buttons (the focused one filled).
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float W = ds.x, H = ds.y;
+    dl->AddRectFilled(ImVec2(0, 0), ds, col(kDark, 0.62f));
+    const float pw = std::clamp(0.40f * W, std::min(560.0f, 0.92f * W), 0.92f * W), pad = 0.028f * H;
+    const float ts = 0.034f * H, bs = 0.020f * H, fs = 0.027f * H, btnH = 0.050f * H;
+    float ph = pad + ts + 0.02f * H + bs * 1.6f + (s.textField ? fs * 1.9f + 0.012f * H : 0.0f) + bs * 1.5f + btnH +
+               (s.hint.empty() ? 0.0f : bs * 1.6f) + pad;
+    const ImVec2 a(0.5f * (W - pw), 0.5f * (H - ph)), b(a.x + pw, a.y + ph);
+    dl->AddRectFilled(a, b, col(kDark, 0.96f), 4.0f);
+    dl->AddRect(a, b, col(kWhite, 0.22f), 4.0f, 0, 1.0f);
+    dl->AddRectFilled(a, ImVec2(a.x + 0.22f * pw, a.y + 3.0f), col(kOrange, 1.0f));
+    const float x = a.x + pad;
+    float y = a.y + pad;
+    text(dl, m_heading, ts, ImVec2(x, y), col(kWhite, 1.0f), s.title, 0.22f);
+    y += ts + 0.012f * H;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(b.x - pad, y + 1.0f), col(kWhite, 0.25f));
+    y += 0.008f * H;
+    text(dl, m_body, bs, ImVec2(x, y + 0.2f * bs), col(kWhite, 0.75f), s.message.c_str(), 0.06f);
+    y += bs * 1.6f;
+    if (s.textField) {
+        y += 0.012f * H;
+        const ImVec2 fa(x, y), fb(b.x - pad, y + fs * 1.6f);
+        dl->AddRectFilled(fa, fb, col(ImVec4(0.0f, 0.0f, 0.0f, 1.0f), 0.55f), 3.0f);
+        dl->AddRect(fa, fb, col(kOrange, 1.0f), 3.0f, 0, 1.5f);
+        const float tx = fa.x + 0.4f * fs, ty = fa.y + 0.3f * fs;
+        const float tw = textWidth(m_body, fs, s.text.c_str(), 0.04f);
+        if (s.selected && !s.text.empty())
+            dl->AddRectFilled(ImVec2(tx - 2.0f, ty - 1.0f), ImVec2(tx + tw + 2.0f, ty + fs + 1.0f), col(kOrange, 0.45f), 2.0f);
+        text(dl, m_body, fs, ImVec2(tx, ty), col(kWhite, 1.0f), s.text.c_str(), 0.04f);
+        if (std::fmod(ImGui::GetTime(), 1.0) < 0.6)
+            dl->AddRectFilled(ImVec2(tx + tw + 3.0f, ty), ImVec2(tx + tw + 5.0f, ty + fs), col(kWhite, 1.0f));
+        y = fb.y;
+    }
+    if (!s.error.empty())
+        text(dl, m_body, bs, ImVec2(x, y + 0.25f * bs), col(ImVec4(1.0f, 0.36f, 0.26f, 1.0f), 1.0f), s.error.c_str(), 0.06f);
+    y += bs * 1.5f;
+    // Buttons, right aligned: Confirm then Cancel.
+    const char* labels[2] = {s.confirm, "CANCEL"};
+    const float bw = std::max(0.16f * pw, textWidth(m_heading, bs, s.confirm, 0.2f) + 2.0f * pad);
+    float bx = b.x - pad - 2.0f * bw - 0.015f * W;
+    for (int i = 0; i < 2; ++i) {
+        const ImVec2 ba(bx, y), bb(bx + bw, y + btnH);
+        const bool f = s.focus == i;
+        if (f) dl->AddRectFilled(ba, bb, col(kOrange, 1.0f), 3.0f);
+        else dl->AddRect(ba, bb, col(kWhite, 0.45f), 3.0f, 0, 1.0f);
+        const float lw = textWidth(m_heading, bs, labels[i], 0.2f);
+        text(dl, m_heading, bs, ImVec2(bx + 0.5f * (bw - lw), y + 0.5f * (btnH - bs)), f ? col(kDark, 1.0f) : col(kWhite, 0.9f),
+             labels[i], 0.2f);
+        m_modalButtons.push_back({ba.x, ba.y, bb.x, bb.y});
+        bx += bw + 0.015f * W;
+    }
+    y += btnH;
+    if (!s.hint.empty()) text(dl, m_body, bs * 0.85f, ImVec2(x, y + 0.6f * bs), col(kWhite, 0.5f), s.hint.c_str(), 0.08f);
+}
+
+int MenuUI::modalHitTest(float x, float y) const {
+    for (std::size_t i = 0; i < m_modalButtons.size(); ++i) {
+        const auto& r = m_modalButtons[i];
+        if (x >= r[0] && x < r[2] && y >= r[1] && y < r[3]) return int(i);
+    }
+    return -1;
+}
+
+bool MenuUI::modalButtonRect(int button, float& x0, float& y0, float& x1, float& y1) const {
+    if (button < 0 || button >= int(m_modalButtons.size())) return false;
+    const auto& r = m_modalButtons[std::size_t(button)];
+    x0 = r[0];
+    y0 = r[1];
+    x1 = r[2];
+    y1 = r[3];
+    return true;
 }
 
 int MenuUI::garageHitTest(float x, float y, int* dir, float* fraction) const {

@@ -1,14 +1,21 @@
 #include "app/Garage.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <string_view>
 
 namespace tf {
 namespace {
 
-constexpr std::size_t kMaxNameLength = 32;
+// Setup names: letters, digits, space and - _ . ( ) + (safe in file names and JSON).
+bool nameChar(char c) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    return (u >= '0' && u <= '9') || (u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') ||
+           std::string_view(" -_.()+").find(c) != std::string_view::npos;
+}
 
 int wrap(int v, int n) { return ((v % n) + n) % n; }
 
@@ -228,18 +235,27 @@ bool Garage::saveAsNew() {
     return true;
 }
 
+std::string Garage::nameProblem(const std::string& raw) const {
+    const std::string name = trim(raw);
+    if (name.empty()) return "THE NAME IS EMPTY";
+    if (name.size() > kMaxNameLength) return "AT MOST " + std::to_string(kMaxNameLength) + " CHARACTERS";
+    for (char c : name)
+        if (!nameChar(c)) return "ONLY LETTERS, DIGITS, SPACE AND - _ . ( ) +";
+    std::string lower = name;
+    for (char& c : lower) c = char(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "factory") return "'FACTORY' IS RESERVED";
+    if (name != m_file.selected && m_file.find(name)) return "A SETUP NAMED '" + name + "' ALREADY EXISTS";
+    return {};
+}
+
 bool Garage::rename(const std::string& raw) {
-    const std::string name = trim(raw).substr(0, kMaxNameLength);
+    const std::string name = trim(raw);
     if (factoryActive()) {
         say("The factory setup cannot be renamed");
         return false;
     }
-    if (name.empty() || name == "Factory") {
-        say(name.empty() ? "The name is empty" : "'Factory' is reserved");
-        return false;
-    }
-    if (name != m_file.selected && m_file.find(name)) {
-        say("A setup named '" + name + "' already exists");
+    if (const std::string problem = nameProblem(name); !problem.empty()) {
+        say(problem);
         return false;
     }
     m_file.find(m_file.selected)->name = name;
@@ -440,14 +456,20 @@ GarageResult Garage::activate(int row, int dir) {
                 res.sound = GarageSound::Error;
                 break;
             }
-            m_renaming = true;
-            m_renameText = m_file.selected;
-            say("Type a name, ENTER to confirm, ESC to cancel");
+            openModal(GarageModal::Rename, 0);
             res.sound = GarageSound::Confirm;
             break;
-        case GarageAction::Delete: res.sound = deleteActive() ? GarageSound::Confirm : GarageSound::Error; break;
+        case GarageAction::Delete:
+            if (factoryActive()) {
+                say("The factory setup cannot be deleted");
+                res.sound = GarageSound::Error;
+                break;
+            }
+            openModal(GarageModal::ConfirmDelete, 1); // destructive: Cancel has the focus
+            res.sound = GarageSound::Confirm;
+            break;
         case GarageAction::ResetFactory:
-            resetToFactory();
+            openModal(GarageModal::ConfirmReset, 1);
             res.sound = GarageSound::Confirm;
             break;
         case GarageAction::Back:
@@ -460,33 +482,94 @@ GarageResult Garage::activate(int row, int dir) {
     return res;
 }
 
+void Garage::openModal(GarageModal m, int focus) {
+    m_modal = m;
+    m_modalFocus = focus;
+    m_modalError.clear();
+    m_renameText = m == GarageModal::Rename ? m_file.selected : std::string();
+    m_renameSelected = m == GarageModal::Rename;
+}
+
+GarageResult Garage::handleModal(const GarageInput& in) {
+    GarageResult res;
+    if (in.modalHover == 0 || in.modalHover == 1) m_modalFocus = in.modalHover;
+    if (m_modal == GarageModal::Rename) {
+        // Typed text: the preselected name is replaced by the first character (or cleared by Backspace); characters
+        // outside the safe set and anything past the length limit are refused with a visible reason.
+        bool edited = false;
+        for (char c : in.text) {
+            if (m_renameSelected) {
+                m_renameText.clear();
+                m_renameSelected = false;
+            }
+            if (!nameChar(c)) {
+                m_modalError = "ONLY LETTERS, DIGITS, SPACE AND - _ . ( ) +";
+                res.sound = GarageSound::Error;
+                continue;
+            }
+            if (m_renameText.size() >= kMaxNameLength) {
+                m_modalError = "AT MOST " + std::to_string(kMaxNameLength) + " CHARACTERS";
+                res.sound = GarageSound::Error;
+                continue;
+            }
+            m_renameText += c;
+            edited = true;
+        }
+        if (in.backspace) {
+            if (m_renameSelected) m_renameText.clear();
+            else if (!m_renameText.empty()) m_renameText.pop_back();
+            m_renameSelected = false;
+            edited = true;
+        }
+        if (in.left || in.right) m_renameSelected = false; // caret to the end, keep the text
+        if (edited && res.sound != GarageSound::Error) {
+            m_modalError = nameProblem(m_renameText);
+            if (m_modalError.rfind("A SETUP", 0) != 0 && m_modalError.rfind("ONLY", 0) != 0) m_modalError.clear();
+        }
+    } else if (in.left || in.right || in.up || in.down) {
+        m_modalFocus = 1 - m_modalFocus;
+        res.sound = GarageSound::Move;
+    }
+
+    int button = in.modalClick;
+    if (button < 0 && in.accept) button = m_modal == GarageModal::Rename ? 0 : m_modalFocus;
+    if (button < 0 && in.back && !in.backspace) button = 1;
+    if (button == 1) {
+        say(m_modal == GarageModal::Rename ? "Rename cancelled" : "Cancelled");
+        m_modal = GarageModal::None;
+        res.sound = GarageSound::Back;
+    } else if (button == 0) {
+        switch (m_modal) {
+        case GarageModal::Rename:
+            if (std::string problem = nameProblem(m_renameText); !problem.empty()) {
+                m_modalError = problem;
+                res.sound = GarageSound::Error;
+                return res;
+            }
+            if (!rename(m_renameText)) {
+                m_modalError = "COULD NOT SAVE THE SETUP FILE";
+                res.sound = GarageSound::Error;
+                return res;
+            }
+            break;
+        case GarageModal::ConfirmDelete: deleteActive(); break;
+        case GarageModal::ConfirmReset: resetToFactory(); break;
+        case GarageModal::None: break;
+        }
+        m_modal = GarageModal::None;
+        res.sound = GarageSound::Confirm;
+    }
+    return res;
+}
+
 GarageResult Garage::handle(const GarageInput& in) {
     GarageResult res;
     if (m_catalog.empty()) {
         res.close = in.back;
         return res;
     }
-    if (m_renaming) {
-        for (char c : in.text)
-            if (static_cast<unsigned char>(c) >= 0x20 && m_renameText.size() < kMaxNameLength) m_renameText += c;
-        if (in.backspace && !m_renameText.empty()) {
-            // Remove one UTF-8 character.
-            std::size_t n = m_renameText.size() - 1;
-            while (n > 0 && (static_cast<unsigned char>(m_renameText[n]) & 0xC0) == 0x80) --n;
-            m_renameText.resize(n);
-        }
-        if (in.accept) {
-            if (rename(m_renameText)) {
-                m_renaming = false;
-                res.sound = GarageSound::Confirm;
-            } else {
-                res.sound = GarageSound::Error;
-            }
-        } else if (in.back && !in.backspace) {
-            m_renaming = false;
-            say("Rename cancelled");
-            res.sound = GarageSound::Back;
-        }
+    if (m_modal != GarageModal::None) {
+        res = handleModal(in);
         res.configChanged = needsApply();
         return res;
     }

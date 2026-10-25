@@ -205,6 +205,7 @@ One command per line, `#` starts a comment:
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
 | `garage save` / `save_new` / `rename NAME` / `delete` / `select NAME\|factory` / `reset` / `kit ID\|none` / `vehicle ID` | setup operations of the garage model |
 | `click garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
+| `click modal:confirm` / `click modal:cancel` | click a button of the open modal dialog through the SDL queue |
 | `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
@@ -243,7 +244,9 @@ simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
 `abs`, `tc`, `diff`, `auto_reverse`), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
-`garage_factory`, `garage_renaming`, `garage_pending`, `garage:<key>` (the garage's value of a setup parameter),
+`garage_factory`, `garage_renaming`, `garage_modal` (0 none, 1 rename, 2 delete, 3 reset), `garage_modal_error`,
+`garage_rename_len`, `garage_pending`, `garage_rate_front` / `garage_rate_rear` (wheel rate N/mm
+shown next to the spring frequency), `garage:<key>` (the garage's value of a setup parameter),
 `cfg:<key>` (the same parameter read from the running vehicle), `text_input` (SDL text input active), drivetrain:
 `layout` (0 RWD, 1 FWD, 2 AWD, 3 part-time, 4 on-demand), `transfer` (0 2H, 1 4H, 2 4L), `front_driven`,
 `rear_driven`,
@@ -489,7 +492,24 @@ rebuild the vehicle in place (same position and heading, lowered onto the ground
 transfer mode kept). Setups (several per vehicle: Factory is read-only; save, save as new, rename, delete, reset to
 factory) are saved as JSON in `<user data>/setups/<vehicle id>.json` (`trailforge --paths`); the selected setup is
 applied at the next start. Keyboard (arrows, Enter, Esc), mouse (hover, click arrows, click or drag a slider) and
-gamepad (D-pad, A, B) work; rename takes typed text.
+gamepad (D-pad, A, B) work. Rename, Delete and Reset to factory open a modal dialog over the dimmed garage (one
+reusable component): Rename has a text field with the current name preselected (typing replaces it) and a caret,
+SDL text input runs only while it is open, names are checked live (not empty, not "Factory", unique, at most 32
+characters of letters, digits, space and `- _ . ( ) +`) with a visible error line; Confirm / Cancel are clickable,
+Enter confirms (on Delete / Reset the focus starts on Cancel), Esc or gamepad B cancels. While a modal is open it
+owns the input: rows, W/A/S/D, hotkeys, F1–F3 and Escape-to-pause do not react behind it. With a gamepad only (no
+keyboard) A keeps the current name. The mouse wheel / trackpad scrolls the parameter list (and every
+menu list that does not fit, e.g. Settings); keyboard and gamepad moves keep the selected row in view.
+
+**Spring and damper units.** Springs are tuned by natural frequency in Hz, f = (1/2π)·√(k/m): it says how the
+body moves independently of the vehicle mass (~1–1.5 Hz soft off-road, 2–3 Hz stiff road / race). Next to each
+spring the garage shows the equivalent wheel rate per corner, k = (2πf)²·m_corner, with m_corner = body mass × axle
+weight fraction / 2 (SUV: 518 kg front, 482 kg rear; 1.35 Hz → 37 N/mm front, 35 N/mm rear). Damping values are
+damping ratios (1 = critical; ~0.2–0.4 comfort, 0.5–0.7 sporty); next to them the equivalent damper coefficient
+c = ratio × 2·√(k·m_corner) in kN·s/m. A help line under the list explains both. These are textbook estimates: Jolt
+applies the frequency and the ratio to the effective mass of each wheel constraint, which includes the body's
+rotational inertia. At rest the SUV front wheels carry 5.07 kN at 38 % of the 0.40 m travel, about 33 N/mm, roughly
+10 % below the estimate. Values are entered in Hz only (no N/mm input).
 
 ## Driver aids
 

@@ -45,6 +45,10 @@ expect garage:suspension.front.frequency > 1.39
 expect garage:suspension.front.frequency < 1.41
 expect cfg:suspension.front.frequency > 1.39     # reached the running vehicle
 expect garage_dirty == 1
+expect garage_rate_front > 39.9                  # 1.40 Hz on a 518 kg corner = 40.1 N/mm (shown next to Hz)
+expect garage_rate_front < 40.3
+capture /tmp/trailforge_garage_02b_spring_rate.png
+wait 0.1
 tap Down                       # rear spring
 tap Left
 tap Left
@@ -82,22 +86,55 @@ expect garage_dirty == 0
 click garage:rename
 wait 0.2
 expect garage_renaming == 1
+expect garage_modal == 1
 expect text_input == 1
-tap Backspace
-tap Backspace
-tap Backspace
-tap Backspace
-tap Backspace
+expect garage_rename_len == 7      # 'Setup 1' preselected
+# The modal owns the input: F1, hotkeys and W/A/S/D do nothing behind it.
+mark ui_visible
+mark garage_cursor
+mark abs
+tap F1
+tap B
+tap S
+tap D
+wait 0.2
+expect d_ui_visible == 0
+expect d_garage_cursor == 0
+expect d_abs == 0
+expect garage_modal == 1
+# Typing replaces the selection; '/' is refused with a visible error; an empty name cannot be confirmed.
+text a/b
+wait 0.1
+expect garage_rename_len == 2
+expect garage_modal_error == 1
 tap Backspace
 tap Backspace
 wait 0.1
+expect garage_rename_len == 0
+tap Return
+wait 0.1
+expect garage_modal == 1
+expect garage_modal_error == 1
 text Lifted
 wait 0.1
+expect garage_modal_error == 0
+wait 0.4
 capture /tmp/trailforge_garage_04_rename.png
 wait 0.1
-tap Return
+click modal:confirm
 wait 0.2
 expect garage_renaming == 0
+expect garage_modal == 0
+expect text_input == 0
+expect garage_open == 1
+expect garage_factory == 0
+# Escape cancels the rename modal without leaving the garage (no pause menu).
+click garage:rename
+wait 0.2
+expect garage_modal == 1
+tap Escape
+wait 0.2
+expect garage_modal == 0
 expect text_input == 0
 expect garage_open == 1
 garage step tires.gripScale -1
@@ -121,12 +158,31 @@ expect cfg:tires.gripScale < 1
 garage select factory
 garage step engine.torqueScale 1
 expect garage_dirty == 1
-garage reset
+click garage:reset
+wait 0.3
+expect garage_modal == 3          # "Reset to factory?"
+expect garage_dirty == 1
+click modal:confirm
+wait 0.2
+expect garage_modal == 0
 expect garage_dirty == 0
 
 # ---------------------------------------------------------------- delete and back to the pause menu
 garage select Lifted
-garage delete
+click garage:delete
+wait 0.3
+expect garage_modal == 2          # "Delete setup?" with the focus on Cancel
+capture /tmp/trailforge_garage_07_delete_confirm.png
+wait 0.1
+tap Return
+wait 0.2
+expect garage_modal == 0
+expect garage_setups == 2
+click garage:delete
+wait 0.3
+click modal:confirm
+wait 0.2
+expect garage_modal == 0
 expect garage_setups == 1
 expect garage_factory == 1
 tap Escape

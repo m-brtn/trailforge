@@ -44,6 +44,23 @@ public:
     int garageHitTest(float x, float y, int* dir, float* fraction) const;
     bool garageRowRect(int row, float& x0, float& y0, float& x1, float& y1) const;
 
+    // Modal dialog (drawn over everything, screen dimmed). Reused by the garage for rename, delete and reset.
+    struct ModalSpec {
+        const char* title = "";
+        std::string message;
+        bool textField = false;
+        std::string text;
+        bool selected = false;    // the whole text is selected (typing replaces it)
+        std::string error;
+        std::string hint;
+        const char* confirm = "CONFIRM";
+        int focus = 0;            // 0 confirm, 1 cancel
+    };
+    void drawModal(const ModalSpec& spec);
+    // Modal button under a point of the last drawn modal: 0 confirm, 1 cancel, -1 none.
+    int modalHitTest(float x, float y) const;
+    bool modalButtonRect(int button, float& x0, float& y0, float& x1, float& y1) const;
+
     // Row under a point (ImGui coordinates) of the menu drawn last; dir: -1 / +1 on a value arrow, else 0.
     int hitTest(float x, float y, int* dir) const;
     // Screen rectangle (ImGui coordinates) of a row drawn in the last frame; false if it is not on screen.
@@ -85,6 +102,7 @@ private:
         float bar0 = 0, bar1 = 0; // slider bar x range (0 = none)
     };
     std::vector<GarageHit> m_garageRows;
+    std::vector<std::array<float, 4>> m_modalButtons; // x0, y0, x1, y1 of the last drawn modal's buttons
     float m_garageScroll = 0.0f;      // eased list offset (px)
     float m_garageScrollTarget = 0.0f;
     float m_garageSelectAnim = 0.0f;  // eased highlight position (px)

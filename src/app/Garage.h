@@ -29,7 +29,12 @@ struct GarageInput {
     float clickFraction = -1.0f; // 0..1: position on a parameter's slider bar (click or drag), -1 = none
     std::string text;        // typed text (rename)
     bool backspace = false;
+    int modalHover = -1;     // modal button under a moving mouse (0 confirm, 1 cancel)
+    int modalClick = -1;     // modal button clicked
 };
+
+// Modal dialogs: while one is open it owns all garage input (rows, hotkeys and the pause menu do not react).
+enum class GarageModal { None, Rename, ConfirmDelete, ConfirmReset };
 
 enum class GarageSound { None, Move, Confirm, Back, Adjust, Error };
 
@@ -63,8 +68,15 @@ public:
     const std::vector<GarageRow>& rows() const { return m_rows; }
     int cursor() const { return m_cursor; }
     void setCursor(int row) { m_cursor = std::clamp(row, 0, int(m_rows.size()) - 1); }
-    bool renaming() const { return m_renaming; }
+    GarageModal modal() const { return m_modal; }
+    bool renaming() const { return m_modal == GarageModal::Rename; }
     const std::string& renameText() const { return m_renameText; }
+    bool renameSelected() const { return m_renameSelected; } // the whole name is selected: typing replaces it
+    const std::string& modalError() const { return m_modalError; } // validation error shown in the modal
+    int modalFocus() const { return m_modalFocus; }               // 0 confirm, 1 cancel
+    // A setup name problem ("" = valid): empty, reserved, taken by another setup, too long or unsafe characters.
+    std::string nameProblem(const std::string& name) const;
+    static constexpr std::size_t kMaxNameLength = 32;
     const std::string& message() const { return m_message; }
     int messageSerial() const { return m_messageSerial; } // increments with every new message
 
@@ -109,8 +121,11 @@ private:
     std::vector<std::string> m_warnings;
     std::vector<GarageRow> m_rows;
     int m_cursor = 0;
-    bool m_renaming = false;
+    GarageModal m_modal = GarageModal::None;
     std::string m_renameText;
+    bool m_renameSelected = false;
+    std::string m_modalError;
+    int m_modalFocus = 0;
     std::string m_message;
     int m_messageSerial = 0;
 
@@ -122,6 +137,8 @@ private:
     std::string filePath() const;
     void say(std::string msg);
     GarageResult activate(int row, int dir);
+    GarageResult handleModal(const GarageInput& in);
+    void openModal(GarageModal m, int focus);
 };
 
 } // namespace tf
