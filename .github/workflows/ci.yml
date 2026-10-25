@@ -42,7 +42,7 @@ jobs:
           cd "$PKG"
           VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation SDL_GPU_DRIVER=vulkan \
             timeout 300 xvfb-run -a -s "-screen 0 1280x720x24" \
-            ./trailforge --no-audio --no-ui --quit-after 10 --capture "$OUT/lavapipe_smoke.png" --capture-at 7 \
+            ./trailforge --no-audio --no-ui --no-intro --quit-after 10 --capture "$OUT/lavapipe_smoke.png" --capture-at 7 \
             > "$OUT/lavapipe_smoke.log" 2>&1
           cat "$OUT/lavapipe_smoke.log"
           grep -F "GPU driver 'vulkan', shaders: SPIR-V" "$OUT/lavapipe_smoke.log"
