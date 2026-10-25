@@ -80,6 +80,13 @@ public:
     bool fastModifier() const { return m_fast; }
 
     bool gamepadConnected() const { return m_gamepad != nullptr; }
+    // Scenario `pedal throttle|brake V`: an analog pedal held like a gamepad trigger (max with keyboard / gamepad).
+    void setScriptPedals(float throttle, float brake) {
+        m_scriptThrottle = throttle;
+        m_scriptBrake = brake;
+    }
+    float scriptThrottle() const { return m_scriptThrottle; }
+    float scriptBrake() const { return m_scriptBrake; }
     const char* gamepadName() const;
 
 private:
@@ -90,6 +97,7 @@ private:
     // scenario events (SDL_PushEvent) take the same path. On focus loss SDL sends KEY_UP itself.
     std::array<bool, SDL_SCANCODE_COUNT> m_held{};
     KeyboardPedals m_keyPedals; // W / S: progressive pedals (KeyboardPedals.h)
+    float m_scriptThrottle = 0.0f, m_scriptBrake = 0.0f;
     DriverIntent m_intent;
     glm::vec2 m_mouseDelta{0.0f};
     float m_wheel = 0.0f;

@@ -215,6 +215,7 @@ One command per line, `#` starts a comment:
 | `click garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
 | `click modal:confirm` / `click modal:cancel` | click a button of the open modal dialog through the SDL queue |
 | `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
+| `pedal throttle\|brake V` | hold an analog pedal at V (0..1) like a gamepad trigger (not ramped; max with the keys) until set to 0 |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
