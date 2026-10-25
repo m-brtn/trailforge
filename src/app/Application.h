@@ -128,6 +128,11 @@ private:
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)
+    // Scenario-only overrides for the Controls page captures: key cap wording and the connected pad type.
+    std::optional<KeyboardStyle> m_keyboardOverride;
+    std::optional<PadType> m_padTypeOverride;
+    KeyboardStyle keyboardStyle() const { return m_keyboardOverride.value_or(nativeKeyboardStyle()); }
+    PadType padType() const { return m_padTypeOverride.value_or(m_input.gamepadType()); }
     float m_musicTarget = 0.0f;
     float m_musicFade = 0.3f;
     int m_musicRestart = 0;

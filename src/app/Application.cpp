@@ -106,7 +106,8 @@ constexpr NamedItem kItemNames[] = {
     {"vsync", MenuItem::VSync},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
     {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
     {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
-    {"controls", MenuItem::Controls},   {"back", MenuItem::Back},
+    {"controls", MenuItem::Controls},   {"back", MenuItem::Back},             {"drive_keys", MenuItem::DriveKeys},
+    {"pad_glyphs", MenuItem::PadGlyphs},
 };
 
 std::optional<MenuItem> itemByName(const std::string& n) {
@@ -475,6 +476,8 @@ void Application::applySettings(bool force) {
         m_sim.requestAidControls(aids);
     }
     if (force || s.autoReverse != m_applied.autoReverse) m_ui.autoReverse = s.autoReverse;
+    m_input.setDriveKeys(DriveKeys(s.driveKeys));
+    m_ui.driveHint = driveHint(DriveKeys(s.driveKeys), keyboardStyle());
     m_applied = s;
 }
 
@@ -666,6 +669,10 @@ void Application::renderFrame(float frameTime) {
     MenuView view;
     view.gamepad = m_input.gamepadConnected();
     view.version = TRAILFORGE_VERSION;
+    view.driveKeys = DriveKeys(m_settings.driveKeys);
+    view.keyboard = keyboardStyle();
+    view.padType = padType();
+    view.padGlyphs = resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), view.padType);
     m_menu.draw(m_flow, m_settings, view);
     if (m_flow.screen() == Screen::Garage && m_garage) m_menu.drawGarage(*m_garage, m_sim.vehicle().telemetry(), view);
     ImGui::Render();
@@ -1083,6 +1090,30 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
                 std::printf("SCENARIO: menu item '%s' is not on this page\n", c.args.size() > 1 ? c.args[1].c_str() : "");
                 return Exec::Failed;
             }
+        } else {
+            return Exec::Failed;
+        }
+        return Exec::Done;
+    }
+    if (c.op == "controls") {
+        // controls keyboard mac|pc|native | pad_type none|xbox|ps4|ps5|switch|unknown|real: Controls page overrides for
+        // the captures (key cap wording, the connected pad seen by the automatic glyph choice). Not persisted.
+        const std::string v = c.args.size() > 1 ? c.args[1] : std::string();
+        if (arg == "keyboard") {
+            if (v == "mac") m_keyboardOverride = KeyboardStyle::Mac;
+            else if (v == "pc") m_keyboardOverride = KeyboardStyle::Pc;
+            else if (v == "native") m_keyboardOverride.reset();
+            else return Exec::Failed;
+            m_ui.driveHint = driveHint(DriveKeys(m_settings.driveKeys), keyboardStyle());
+        } else if (arg == "pad_type") {
+            if (v == "none") m_padTypeOverride = PadType::None;
+            else if (v == "xbox") m_padTypeOverride = PadType::XboxOne;
+            else if (v == "ps4") m_padTypeOverride = PadType::PS4;
+            else if (v == "ps5") m_padTypeOverride = PadType::PS5;
+            else if (v == "switch") m_padTypeOverride = PadType::SwitchPro;
+            else if (v == "unknown") m_padTypeOverride = PadType::Unknown;
+            else if (v == "real") m_padTypeOverride.reset();
+            else return Exec::Failed;
         } else {
             return Exec::Failed;
         }
@@ -1572,8 +1603,17 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (k == "tc") return g.traction;
         if (k == "diff") return g.diffLocks;
         if (k == "auto_reverse") return g.autoReverse ? 1.0 : 0.0;
+        if (k == "drive_keys") return g.driveKeys;
+        if (k == "pad_glyphs") return g.padGlyphs;
         return std::nullopt;
     }
+    // The settings file format keeps every value of the current settings (parse(serialize(s)) == s).
+    if (n == "settings_roundtrip") return parseSettings(serializeSettings(m_settings)) == m_settings ? 1.0 : 0.0;
+    if (n == "drive_keys") return double(int(m_input.driveKeys()));
+    if (n == "kb_style") return double(int(keyboardStyle())); // 0 Mac, 1 PC
+    if (n == "pad_glyphs") return double(int(resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), padType())));
+    if (n == "controls_callouts") return m_menu.controlsCallouts();
+    if (n == "controls_overlaps") return m_menu.controlsOverlaps();
     if (n == "cam_free") return m_camera.mode() == Camera::Mode::Free ? 1.0 : 0.0;
     if (n == "ui_visible") return m_ui.visible ? 1.0 : 0.0;
     if (n == "ui_kb") return ImGui::GetIO().WantCaptureKeyboard ? 1.0 : 0.0;

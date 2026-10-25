@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "input/ControlLayout.h"
 #include "input/KeyboardPedals.h"
 #include "sim/Simulation.h"
 
@@ -12,26 +13,6 @@
 #include <array>
 
 namespace tf {
-
-// Discrete user actions (triggered on press).
-enum class Action {
-    ToggleDirection, // Q / gamepad X
-    ToggleLowRange,  // L / gamepad Y
-    Reset,           // R / gamepad Back
-    ToggleCamera,    // C / gamepad RB
-    ToggleDebugUI,   // F1
-    ToggleGraphicsUI, // F2
-    ToggleAudioUI,    // F3
-    ToggleHeadlights, // H
-    ToggleAbs,        // B / gamepad D-pad up
-    CycleTraction,    // T / gamepad D-pad right
-    CycleDiffLock,    // X / gamepad D-pad down
-    CycleTransfer,    // V / gamepad D-pad left: part-time transfer case 2H -> 4H -> 4L
-    TogglePause,     // P: debug freeze without the menu (Escape / gamepad Start open the pause menu, see MenuKeys)
-    StepOnce,        // N (while frozen: a single physics step)
-    Quit,
-    Count
-};
 
 // Menu navigation of one frame, from every device. Gameplay ignores it except `pause`.
 struct MenuKeys {
@@ -81,6 +62,11 @@ public:
 
     bool gamepadConnected() const { return m_gamepad != nullptr; }
     const char* gamepadName() const;
+    PadType gamepadType() const; // PadType::None without a pad
+
+    // Driving cluster (W A S D or the arrows); the other cluster moves the free camera. Both ramp (KeyboardPedals).
+    void setDriveKeys(DriveKeys layout) { m_driveKeys = layout; }
+    DriveKeys driveKeys() const { return m_driveKeys; }
 
 private:
     void press(Action a) { m_pressed[static_cast<int>(a)] = true; }
@@ -89,7 +75,8 @@ private:
     // Held keys come from KEY_DOWN/KEY_UP events (not SDL_GetKeyboardState) so that
     // scenario events (SDL_PushEvent) take the same path. On focus loss SDL sends KEY_UP itself.
     std::array<bool, SDL_SCANCODE_COUNT> m_held{};
-    KeyboardPedals m_keyPedals; // W / S: progressive pedals (KeyboardPedals.h)
+    KeyboardPedals m_keyPedals; // forward / backward drive keys: progressive pedals (KeyboardPedals.h)
+    DriveKeys m_driveKeys = DriveKeys::Wasd;
     DriverIntent m_intent;
     glm::vec2 m_mouseDelta{0.0f};
     float m_wheel = 0.0f;

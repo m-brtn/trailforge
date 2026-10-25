@@ -62,7 +62,8 @@ endif()
 add_library(trailforge_flow STATIC
     src/app/GameFlow.cpp
     src/app/GameSettings.cpp
-    src/app/Garage.cpp)
+    src/app/Garage.cpp
+    src/input/ControlLayout.cpp)
 target_include_directories(trailforge_flow PUBLIC src)
 target_link_libraries(trailforge_flow PUBLIC trailforge_sim)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -184,7 +185,8 @@ if(TRAILFORGE_BUILD_TESTS)
     add_executable(trailforge_app_tests tests/AppTests.cpp)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model)
+    foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model controls_layout pad_glyph_detect
+                         callout_spread)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

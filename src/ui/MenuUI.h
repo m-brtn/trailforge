@@ -3,11 +3,13 @@
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
+#include "input/ControlLayout.h"
 
 #include <array>
 #include <string>
 #include <vector>
 
+struct ImDrawList;
 struct ImFont;
 struct SDL_GPUTexture;
 
@@ -21,6 +23,10 @@ struct MenuView {
     bool gamepad = false;         // button hints for a gamepad instead of keys
     const char* version = "";
     float pauseBlur = 0.0f;       // 0..1, already applied to the 3D frame by the renderer
+    DriveKeys driveKeys = DriveKeys::Wasd;
+    KeyboardStyle keyboard = KeyboardStyle::Pc; // key cap wording of the running platform
+    PadType padType = PadType::None;            // connected gamepad
+    PadGlyphs padGlyphs = PadGlyphs::Xbox;      // resolved from the setting and padType
 };
 
 // Draws the intro, the start menu, the pause menu, Settings and Controls with ImGui's draw lists (behind every
@@ -72,6 +78,10 @@ public:
     float menuScroll() const { return m_menuScrollTarget; }   // px, list offset of the menu page
     float garageScroll() const { return m_garageScrollTarget; } // px, list offset of the garage
     bool fontsLoaded() const { return m_body != nullptr; }
+    // Controls page of the last frame: callouts drawn and overlapping pairs (callout / callout or callout / key cap /
+    // controller outline), measured with the real font.
+    int controlsCallouts() const { return m_controlsCallouts; }
+    int controlsOverlaps() const { return m_controlsOverlaps; }
     bool logoLoaded() const { return m_logo != nullptr; }
 
 private:
@@ -82,7 +92,14 @@ private:
     };
     void drawLogo(float cx, float cy, float width, float alpha);
     void drawMenu(const GameFlow& flow, const GameSettings& settings, const MenuView& view, float alpha);
-    void drawControls(float x, float y, float w, float rowH, float alpha);
+    struct Box {
+        float x0, y0, x1, y1;
+    };
+    // Controls page diagrams; both add their callout boxes and obstacles (key caps, controller outline) for the
+    // overlap count.
+    void drawKeyboard(ImDrawList* dl, float x, float y, float u, const MenuView& view, float alpha);
+    void drawGamepad(ImDrawList* dl, float cx, float y, float g, const MenuView& view, float alpha);
+    float labelSize(float u) const;
     void drawHints(const GameFlow& flow, const MenuView& view, float alpha);
     void updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
                       float viewH, bool follow);
@@ -115,6 +132,8 @@ private:
     float m_menuScroll = 0.0f, m_menuScrollTarget = 0.0f; // menu page list offset (px), eased / target
     float m_wheel = 0.0f;               // pending wheel steps
     bool m_pointerCursor = false;       // the cursor of this frame was set by the mouse
+    std::vector<Box> m_callouts, m_obstacles;
+    int m_controlsCallouts = 0, m_controlsOverlaps = 0;
 };
 
 } // namespace tf

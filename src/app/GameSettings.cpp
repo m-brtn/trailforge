@@ -38,6 +38,8 @@ GameSettings sanitized(GameSettings s) {
     s.uiVolume = volume(s.uiVolume);
     s.traction = std::clamp(s.traction, 0, 2);
     s.diffLocks = std::clamp(s.diffLocks, 0, 3);
+    s.driveKeys = std::clamp(s.driveKeys, 0, 1);
+    s.padGlyphs = std::clamp(s.padGlyphs, 0, 2);
     return s;
 }
 
@@ -56,10 +58,12 @@ std::string serializeSettings(const GameSettings& in) {
                   "abs = %d\n"
                   "traction = %d\n"
                   "diff_locks = %d\n"
-                  "auto_reverse = %d\n",
+                  "auto_reverse = %d\n"
+                  "drive_keys = %d\n"
+                  "pad_glyphs = %d\n",
                   s.quality, double(s.renderScale), s.vsync ? 1 : 0, double(s.masterVolume), double(s.musicVolume),
                   double(s.effectsVolume), double(s.uiVolume), s.abs ? 1 : 0, s.traction, s.diffLocks,
-                  s.autoReverse ? 1 : 0);
+                  s.autoReverse ? 1 : 0, s.driveKeys, s.padGlyphs);
     return buf;
 }
 
@@ -92,6 +96,8 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
         else if (k == "traction") s.traction = i;
         else if (k == "diff_locks") s.diffLocks = i;
         else if (k == "auto_reverse") s.autoReverse = i != 0;
+        else if (k == "drive_keys") s.driveKeys = i;
+        else if (k == "pad_glyphs") s.padGlyphs = i;
         else ++bad;
     }
     if (skipped) *skipped = bad;

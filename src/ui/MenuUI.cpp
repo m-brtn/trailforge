@@ -7,6 +7,8 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
@@ -66,28 +68,96 @@ std::string findFile(const std::vector<std::string>& dirs, const char* name) {
     return {};
 }
 
-struct ControlRow {
-    const char* action;
-    const char* keys;
-    const char* pad;
-};
+// ------------------------------------------------------------------ Controls page geometry
+// Keyboard diagram, in units of u (key cap pitch): the keys keep their ANSI positions, spread horizontally a little
+// so that the callouts under them have room.
+constexpr float kPitchX = 1.1f;    // horizontal key pitch / u
+constexpr float kCap = 0.96f;      // key cap height / u
+constexpr float kKbPitches = 21.6f; // diagram width in horizontal pitches (keys, arrows, mouse with its callout)
+constexpr float kMouseX = 20.1f;   // mouse centre, in horizontal pitches
 
-constexpr ControlRow kControls[] = {
-    {"THROTTLE / BRAKE", "W / S", "RT / LT"},
-    {"STEER", "A / D", "LEFT STICK"},
-    {"HANDBRAKE", "SPACE", "A"},
-    {"FORWARD / REVERSE", "Q", "X"},
-    {"LOW RANGE", "L", "Y"},
-    {"TRANSFER CASE 2H / 4H / 4L", "V", "D-PAD LEFT"},
-    {"ABS / TRACTION / DIFF LOCKS", "B / T / X", "D-PAD UP / RIGHT / DOWN"},
-    {"CAMERA", "C, RIGHT MOUSE, WHEEL", "RB"},
-    {"HEADLIGHTS", "H", "-"},
-    {"RESET VEHICLE", "R", "BACK / VIEW"},
-    {"PAUSE MENU", "ESC", "START / MENU"},
-    {"MENUS", "ARROWS / W S A D, ENTER, ESC", "D-PAD / STICK, A, B"},
-    {"DIAGNOSTICS (F1 / F2 / F3)", "F1 / F2 / F3", "-"},
-    {"DEBUG FREEZE / SINGLE STEP", "P / N", "-"},
+float kbRowPitch(float u, float lf) { return u * (kCap + 0.30f) + 2.0f * 1.12f * lf; }
+float kbHeight(float u, float lf) { return 6.0f * kbRowPitch(u, lf); }
+// Gamepad diagram, in units of g, origin at the top centre of the body: callouts above (to y0 - 1.3 g), triggers,
+// body down to 4.75 g, callouts below.
+constexpr float kPadTop = 2.3f;     // block top to the body origin, in g
+float padHeight(float g, float lf) { return g * (kPadTop + 4.95f) + 2.0f * 1.12f * lf + 0.3f * g; }
+
+template <typename B>
+bool overlaps(const B& a, const B& b) {
+    return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+
+void arrowGlyph(ImDrawList* dl, ImVec2 c, ImVec2 dir, float s, ImU32 colour, float stroke) {
+    const ImVec2 tip(c.x + dir.x * s, c.y + dir.y * s), tail(c.x - dir.x * s, c.y - dir.y * s);
+    const ImVec2 n(-dir.y, dir.x);
+    const float h = 0.55f * s;
+    dl->AddLine(tail, tip, colour, stroke);
+    dl->AddLine(tip, ImVec2(tip.x - dir.x * h + n.x * h, tip.y - dir.y * h + n.y * h), colour, stroke);
+    dl->AddLine(tip, ImVec2(tip.x - dir.x * h - n.x * h, tip.y - dir.y * h - n.y * h), colour, stroke);
+}
+
+ImVec2 keyArrowDir(Key k) {
+    switch (k) {
+    case Key::Up: return {0, -1};
+    case Key::Down: return {0, 1};
+    case Key::Left: return {-1, 0};
+    case Key::Right: return {1, 0};
+    default: return {0, 0};
+    }
+}
+
+// Gamepad control positions (g units): Xbox has the left stick above the D-pad, PlayStation the other way round,
+// with a touchpad in the middle and Create / Options beside it.
+struct PadLayout {
+    ImVec2 leftStick, rightStick, dpad, face, back, start, guide;
+    bool touchpad;
 };
+PadLayout padLayout(PadGlyphs g) {
+    if (g == PadGlyphs::PlayStation)
+        return {{-1.15f, 2.2f}, {1.15f, 2.2f}, {-2.25f, 1.25f}, {2.25f, 1.25f}, {-1.3f, 0.5f}, {1.3f, 0.5f}, {0.0f, 2.05f}, true};
+    return {{-2.25f, 1.25f}, {1.15f, 2.2f}, {-1.15f, 2.2f}, {2.25f, 1.25f}, {-0.6f, 1.05f}, {0.6f, 1.05f}, {0.0f, 0.5f}, false};
+}
+constexpr float kStickR = 0.52f, kFaceR = 0.23f, kFaceOff = 0.5f, kDpadArm = 0.48f, kDpadHalf = 0.16f;
+
+ImVec2 faceOffset(PadControl c) {
+    switch (c) {
+    case PadControl::South: return {0.0f, kFaceOff};
+    case PadControl::East: return {kFaceOff, 0.0f};
+    case PadControl::West: return {-kFaceOff, 0.0f};
+    case PadControl::North: return {0.0f, -kFaceOff};
+    default: return {0, 0};
+    }
+}
+bool isFace(PadControl c) {
+    return c == PadControl::South || c == PadControl::East || c == PadControl::West || c == PadControl::North;
+}
+
+// Face button glyph: a ring with the Xbox letter or the PlayStation shape.
+void faceGlyph(ImDrawList* dl, ImFont* font, ImVec2 c, float r, PadControl b, PadGlyphs g, ImU32 colour, float stroke) {
+    dl->AddCircle(c, r, colour, 0, stroke);
+    if (g == PadGlyphs::Xbox) {
+        const char* s = padControlName(b, g);
+        const float size = 1.55f * r;
+        const float w = textWidth(font, size, s);
+        text(dl, font, size, ImVec2(c.x - 0.5f * w, c.y - 0.52f * size), colour, s);
+        return;
+    }
+    const float s = 0.46f * r;
+    switch (b) {
+    case PadControl::South:
+        dl->AddLine(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), colour, stroke);
+        dl->AddLine(ImVec2(c.x - s, c.y + s), ImVec2(c.x + s, c.y - s), colour, stroke);
+        break;
+    case PadControl::East: dl->AddCircle(c, 1.1f * s, colour, 0, stroke); break;
+    case PadControl::West: dl->AddRect(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), colour, 0.0f, 0, stroke); break;
+    case PadControl::North:
+        dl->AddTriangle(ImVec2(c.x, c.y - 1.15f * s), ImVec2(c.x + 1.1f * s, c.y + 0.8f * s), ImVec2(c.x - 1.1f * s, c.y + 0.8f * s),
+                        colour, stroke);
+        break;
+    default: break;
+    }
+}
 
 } // namespace
 
@@ -205,7 +275,7 @@ void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const Menu
         drawMenu(flow, settings, view, smooth(0.35f, 1.0f, flow.menuFade()));
         return;
     }
-    drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f);
+    if (flow.page() != MenuPage::Controls) drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f); // diagrams need the room
     drawMenu(flow, settings, view, 1.0f);
 }
 
@@ -218,15 +288,17 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     const MenuPage page = flow.page();
 
     // Readability: a dark gradient behind the left column (the frame itself is blurred in the pause menu).
+    const bool controls = page == MenuPage::Controls;
     const float shade = paused ? 0.45f : 0.62f;
     const float gradW = 0.62f * W;
     dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(gradW, H), col(kDark, shade * alpha), 0, 0, col(kDark, shade * alpha));
     dl->AddRectFilledMultiColor(ImVec2(0, H * 0.82f), ImVec2(W, H), 0, 0, col(kDark, 0.5f * alpha), col(kDark, 0.5f * alpha));
+    if (controls) dl->AddRectFilled(ImVec2(0, 0), ds, col(kDark, 0.5f * alpha)); // the diagrams span the whole width
 
     const float logoW = std::min(0.27f * W, 0.75f * H);
     const float logoBottom = 0.08f * H + logoW / m_logoAspect;
-    const bool compact = page == MenuPage::Settings || page == MenuPage::Controls;
-    float y = logoBottom + 0.05f * H;
+    const bool compact = page == MenuPage::Settings || controls;
+    float y = controls ? 0.05f * H : logoBottom + 0.05f * H;
 
     // Page title: thin rule, large spaced uppercase heading.
     if (const char* title = menuPageTitle(page); title[0]) {
@@ -251,34 +323,60 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
 
     const float textSize = compact ? 0.027f * H : 0.036f * H;
     const float rowH = compact ? 0.040f * H : 0.064f * H;
-    const float barW = page == MenuPage::Settings ? 0.46f * W : 0.34f * W;
-    const float valueX = x0 + 0.36f * W; // centre of the value column (Settings)
+    const float barW = page == MenuPage::Settings || controls ? 0.46f * W : 0.34f * W;
+    const float valueX = x0 + 0.36f * W; // centre of the value column (Settings, Controls)
     const float arrowDx = 0.075f * W;
 
-    // Everything below the title scrolls when it does not fit above the footer: the Controls table, then the rows
-    // (section headings take space). Positions are relative to the top of the list.
+    // Controls: the keyboard diagram under DRIVE KEYS, the gamepad diagram under GAMEPAD BUTTONS.
+    const float contentW = W - 2.0f * x0;
+    const float u = std::min(0.056f * H, contentW / (kKbPitches * kPitchX));
+    const float g = 1.1f * u;
+    const float lf = labelSize(u);
+    const float kbBlock = 0.02f * H + kbHeight(u, lf), padBlock = 0.01f * H + padHeight(g, lf);
+
+    // Everything below the title scrolls when it does not fit above the footer: the rows (section headings take
+    // space) and the Controls diagrams. Positions are relative to the top of the list.
     const float listTop = y, listBottom = 0.88f * H;
     float cy = 0.0f;
-    if (page == MenuPage::Controls) cy += 0.034f * H * float(std::size(kControls) + 1) + 0.02f * H;
-    std::vector<float> rowY(items.size());
+    std::vector<float> rowY(items.size()), blockH(items.size(), 0.0f);
     for (std::size_t i = 0; i < items.size(); ++i) {
         if (page == MenuPage::Settings && menuSection(items[i])) cy += 0.020f * H + (i > 0 ? 0.014f * H : 0.0f);
         if (items[i] == MenuItem::Controls) cy += 0.016f * H;
         rowY[i] = cy;
         cy += rowH;
+        if (controls && items[i] == MenuItem::DriveKeys) blockH[i] = kbBlock;
+        if (controls && items[i] == MenuItem::PadGlyphs) blockH[i] = padBlock;
+        cy += blockH[i];
     }
     const float viewH = listBottom - listTop;
     const bool follow = (newPage || cursor != m_lastCursor) && !m_pointerCursor;
-    // The first heading of Settings sits above its row: keep it in view with the row.
+    // The first heading of Settings sits above its row: keep it in view with the row. A Controls row brings its
+    // diagram into view with it.
     const float cursorTop = rowY[std::size_t(cursor)] - (cursor == 0 ? rowY[0] : 0.0f);
-    updateScroll(m_menuScroll, m_menuScrollTarget, cursorTop, rowY[std::size_t(cursor)] + rowH - cursorTop, rowH, cy,
-                 viewH, follow);
+    const float cursorH = std::min(rowY[std::size_t(cursor)] + rowH + blockH[std::size_t(cursor)] - cursorTop, viewH);
+    updateScroll(m_menuScroll, m_menuScrollTarget, cursorTop, cursorH, rowH, cy, viewH, follow);
     if (newPage) m_menuScroll = m_menuScrollTarget;
     m_lastCursor = cursor;
     for (float& r : rowY) r += listTop - m_menuScroll;
     dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
 
-    if (page == MenuPage::Controls) drawControls(x0, listTop - m_menuScroll, barW, 0.034f * H, alpha);
+    if (controls) {
+        m_callouts.clear();
+        m_obstacles.clear();
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (items[i] == MenuItem::DriveKeys) drawKeyboard(dl, x0, rowY[i] + rowH + 0.02f * H, u, view, alpha);
+            if (items[i] == MenuItem::PadGlyphs)
+                drawGamepad(dl, x0 + 0.5f * kKbPitches * kPitchX * u, rowY[i] + rowH + 0.01f * H, g, view, alpha);
+        }
+        int n = 0;
+        for (std::size_t a = 0; a < m_callouts.size(); ++a) {
+            for (std::size_t b = a + 1; b < m_callouts.size(); ++b) n += overlaps(m_callouts[a], m_callouts[b]);
+            for (const Box& o : m_obstacles) n += overlaps(m_callouts[a], o);
+        }
+        if (n != m_controlsOverlaps) std::printf("Menu: controls page callouts %zu, overlaps %d\n", m_callouts.size(), n);
+        m_controlsCallouts = int(m_callouts.size());
+        m_controlsOverlaps = n;
+    }
     // Highlight bar eased between rows: soft fill fading to the right, orange edge on the left.
     {
         const float f = std::clamp(m_selectAnim, 0.0f, float(items.size() - 1));
@@ -312,7 +410,9 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         text(dl, m_body, textSize, ImVec2(x0 + 0.006f * W, ty), c, menuLabel(item), 0.08f);
         Row row{item, x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
         if (menuAdjustable(item)) {
-            const std::string v = menuValue(item, settings);
+            std::string v = menuValue(item, settings);
+            if (item == MenuItem::PadGlyphs && settings.padGlyphs == int(PadGlyphSetting::Auto))
+                v += std::string(" (") + padGlyphsName(view.padGlyphs) + ")";
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.06f);
             text(dl, m_body, textSize, ImVec2(valueX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.75f) * alpha),
                  v.c_str(), 0.06f);
@@ -343,30 +443,351 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     drawHints(flow, view, alpha);
 }
 
-void MenuUI::drawControls(float x, float y, float w, float rowH, float alpha) {
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const float H = ImGui::GetIO().DisplaySize.y;
-    const float ts = 0.020f * H;
-    float wAction = 0.0f, wKeys = textWidth(m_heading, ts * 0.9f, "KEYBOARD / MOUSE", 0.3f), wPad = 0.0f;
-    for (const ControlRow& r : kControls) {
-        wAction = std::max(wAction, textWidth(m_body, ts, r.action, 0.05f));
-        wKeys = std::max(wKeys, textWidth(m_body, ts, r.keys, 0.05f));
-        wPad = std::max(wPad, textWidth(m_body, ts, r.pad, 0.05f));
+float MenuUI::labelSize(float u) const { return std::min(0.0165f * ImGui::GetIO().DisplaySize.y, 0.31f * u); }
+
+void MenuUI::drawKeyboard(ImDrawList* dl, float ox, float oy, float u, const MenuView& view, float alpha) {
+    const float lf = labelSize(u), lineH = 1.12f * lf;
+    const float pitchX = kPitchX * u, cap = kCap * u, gapX = pitchX - cap;
+    const float rowPitch = kbRowPitch(u, lf);
+    const float thin = std::max(1.0f, 0.028f * u), bold = std::max(2.0f, 0.06f * u);
+    const float rounding = 0.16f * u, tick = 0.22f * u;
+    const ImU32 leader = col(kWhite, 0.4f * alpha);
+    const auto rowTop = [&](int row) { return oy + float(row) * rowPitch; };
+
+    struct Label {
+        float want = 0.0f, width = 0.0f, capBottom = 0.0f;
+        std::vector<std::string> lines;
+        ImFont* font = nullptr;
+        ImU32 colour = 0;
+    };
+    std::array<std::vector<Label>, 6> rows;
+    for (const KeyBinding& b : keyboardBindings(view.driveKeys)) {
+        const KeyRect r = keyRect(b.key);
+        const bool hi = b.group == BindingGroup::Drive;
+        const ImVec2 a(ox + r.x * pitchX, rowTop(r.row));
+        const ImVec2 z(a.x + r.w * pitchX - gapX, a.y + cap);
+        const ImVec2 c(0.5f * (a.x + z.x), 0.5f * (a.y + z.y));
+        const ImU32 kc = col(kWhite, (hi ? 1.0f : 0.72f) * alpha);
+        if (hi) dl->AddRectFilled(a, z, col(kWhite, 0.10f * alpha), rounding);
+        dl->AddRect(a, z, kc, rounding, 0, hi ? bold : thin);
+        m_obstacles.push_back({a.x, a.y, z.x, z.y});
+        const ImVec2 dir = keyArrowDir(b.key);
+        if (dir.x != 0.0f || dir.y != 0.0f) {
+            arrowGlyph(dl, c, dir, 0.2f * u, kc, hi ? bold : 1.3f * thin);
+        } else {
+            std::vector<std::string> lines;
+            const std::string face = keyLabel(b.key, view.keyboard);
+            for (std::size_t p = 0, q; p <= face.size(); p = q + 1) {
+                q = face.find('\n', p);
+                if (q == std::string::npos) q = face.size();
+                lines.push_back(face.substr(p, q - p));
+            }
+            float size = face.size() <= 2 ? 0.40f * u : face.size() <= 3 ? 0.30f * u : 0.28f * u;
+            for (const std::string& l : lines)
+                size = std::min(size, (z.x - a.x - 0.16f * u) / std::max(1.0f, textWidth(m_heading, 1.0f, l.c_str(), 0.04f)));
+            float ty = c.y - 0.5f * float(lines.size()) * 1.05f * size;
+            for (const std::string& l : lines) {
+                text(dl, m_heading, size, ImVec2(c.x - 0.5f * textWidth(m_heading, size, l.c_str(), 0.04f), ty), kc,
+                     l.c_str(), 0.04f);
+                ty += 1.05f * size;
+            }
+        }
+        Label l;
+        l.font = hi ? m_heading : m_body;
+        l.colour = hi ? col(kOrange, alpha) : col(kWhite, 0.8f * alpha);
+        const auto width = [&](const std::string& s) { return textWidth(l.font, lf, s.c_str(), 0.05f); };
+        l.lines = wrapLabel(b.label, std::max(z.x - a.x, pitchX), width);
+        for (const std::string& s : l.lines) l.width = std::max(l.width, width(s));
+        l.want = c.x;
+        l.capBottom = z.y;
+        rows[std::size_t(r.row)].push_back(l);
     }
-    const float gap = 0.03f * H;
-    const float cKeys = x + wAction + gap, cPad = cKeys + wKeys + gap;
-    w = std::max(w, cPad + wPad - x) / 1.12f;
-    text(dl, m_heading, ts * 0.9f, ImVec2(x, y), col(kOrange, alpha), "ACTION", 0.3f);
-    text(dl, m_heading, ts * 0.9f, ImVec2(cKeys, y), col(kOrange, alpha), "KEYBOARD / MOUSE", 0.3f);
-    text(dl, m_heading, ts * 0.9f, ImVec2(cPad, y), col(kOrange, alpha), "GAMEPAD", 0.3f);
-    y += rowH;
-    for (const ControlRow& r : kControls) {
-        dl->AddRectFilled(ImVec2(x, y - 0.004f * H), ImVec2(x + w * 1.12f, y - 0.004f * H + 1.0f), col(kWhite, 0.08f * alpha));
-        text(dl, m_body, ts, ImVec2(x, y), col(kWhite, 0.85f * alpha), r.action, 0.05f);
-        text(dl, m_body, ts, ImVec2(cKeys, y), col(kWhite, 0.6f * alpha), r.keys, 0.05f);
-        text(dl, m_body, ts, ImVec2(cPad, y), col(kWhite, 0.6f * alpha), r.pad, 0.05f);
-        y += rowH;
+
+    // Callouts under each row, pushed apart where neighbours would overlap (rows 0-3 stop short of the mouse).
+    for (int row = 0; row < 6; ++row) {
+        std::vector<Label>& ls = rows[std::size_t(row)];
+        std::sort(ls.begin(), ls.end(), [](const Label& p, const Label& q) { return p.want < q.want; });
+        std::vector<float> want, size;
+        for (const Label& l : ls) {
+            want.push_back(l.want);
+            size.push_back(l.width);
+        }
+        const float hi = ox + (row <= 3 ? kMouseX - 1.0f : kKbPitches) * pitchX;
+        const std::vector<float> at = spreadLabels(want, size, 0.6f * lf, ox, hi);
+        for (std::size_t i = 0; i < ls.size(); ++i) {
+            const Label& l = ls[i];
+            const float top = l.capBottom + tick;
+            dl->AddLine(ImVec2(l.want, l.capBottom + 0.05f * u), ImVec2(at[i], top - 0.05f * u), leader, thin);
+            float ty = top;
+            for (const std::string& s : l.lines) {
+                text(dl, l.font, lf, ImVec2(at[i] - 0.5f * textWidth(l.font, lf, s.c_str(), 0.05f), ty), l.colour, s.c_str(),
+                     0.05f);
+                ty += lineH;
+            }
+            m_callouts.push_back({at[i] - 0.5f * l.width, top, at[i] + 0.5f * l.width, ty});
+        }
     }
+
+    // Mouse: right button held + move orbits the camera, the wheel zooms.
+    const float mw = 1.4f * u, mh = 2.1f * u, mcx = ox + kMouseX * pitchX;
+    const float mTop = rowTop(1) + 0.5f * (rowTop(3) + cap - rowTop(1) - mh);
+    const ImVec2 ma(mcx - 0.5f * mw, mTop), mz(mcx + 0.5f * mw, mTop + mh);
+    const float split = mTop + 0.42f * mh;
+    const ImU32 mc = col(kWhite, 0.72f * alpha);
+    dl->AddRectFilled(ImVec2(mcx, mTop + 0.5f * thin), ImVec2(mz.x - 0.5f * thin, split), col(kWhite, 0.18f * alpha),
+                      0.5f * mw, ImDrawFlags_RoundCornersTopRight);
+    dl->AddRect(ma, mz, mc, 0.5f * mw, 0, thin);
+    dl->AddLine(ImVec2(ma.x, split), ImVec2(mz.x, split), mc, thin);
+    dl->AddLine(ImVec2(mcx, mTop), ImVec2(mcx, split), mc, thin);
+    const ImVec2 wa(mcx - 0.08f * u, mTop + 0.15f * mh), wz(mcx + 0.08f * u, mTop + 0.31f * mh);
+    dl->AddRectFilled(wa, wz, col(kDark, alpha), 0.08f * u);
+    dl->AddRect(wa, wz, mc, 0.08f * u, 0, thin);
+    m_obstacles.push_back({ma.x, ma.y, mz.x, mz.y});
+    const char* mouseLines[] = {"ORBIT: RIGHT BUTTON + MOVE", "ZOOM: WHEEL"};
+    float mlw = 0.0f;
+    for (const char* s : mouseLines) mlw = std::max(mlw, textWidth(m_body, lf, s, 0.05f));
+    const float mlx = std::min(mcx, ox + kKbPitches * pitchX - 0.5f * mlw);
+    float ty = mz.y + tick;
+    dl->AddLine(ImVec2(mcx, mz.y + 0.05f * u), ImVec2(mlx, ty - 0.05f * u), leader, thin);
+    for (const char* s : mouseLines) {
+        text(dl, m_body, lf, ImVec2(mlx - 0.5f * textWidth(m_body, lf, s, 0.05f), ty), col(kWhite, 0.8f * alpha), s, 0.05f);
+        ty += lineH;
+    }
+    m_callouts.push_back({mlx - 0.5f * mlw, mz.y + tick, mlx + 0.5f * mlw, ty});
+}
+
+void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const MenuView& view, float alpha) {
+    const PadGlyphs glyphs = view.padGlyphs;
+    const PadLayout L = padLayout(glyphs);
+    const float u = g / 1.1f;
+    const float lf = labelSize(u), lineH = 1.12f * lf;
+    const float thin = std::max(1.0f, 0.028f * u), bold = std::max(2.0f, 0.06f * u);
+    const float y0 = oy + kPadTop * g;
+    const auto P = [&](float x, float y) { return ImVec2(cx + x * g, y0 + y * g); };
+    const auto Pv = [&](ImVec2 v) { return P(v.x, v.y); };
+    const ImU32 outline = col(kWhite, 0.78f * alpha), dim = col(kWhite, 0.32f * alpha), bright = col(kWhite, alpha);
+    const ImU32 leader = col(kWhite, 0.4f * alpha);
+
+    std::array<const PadBinding*, std::size_t(PadControl::Count)> bind{};
+    const std::vector<PadBinding> bindings = padBindings();
+    for (const PadBinding& b : bindings) bind[std::size_t(b.control)] = &b;
+    const auto drive = [&](PadControl c) { return bind[std::size_t(c)] && bind[std::size_t(c)]->group == BindingGroup::Drive; };
+    const auto colourOf = [&](PadControl c) { return !bind[std::size_t(c)] ? dim : drive(c) ? bright : outline; };
+    const auto strokeOf = [&](PadControl c) { return drive(c) ? bold : thin; };
+
+    // Body: right half as cubic segments from the top centre to the bottom centre, the left half mirrored.
+    struct Seg {
+        ImVec2 c1, c2, p;
+    };
+    const ImVec2 start(0.0f, -0.05f);
+    static const Seg kRight[] = {{{0.9f, -0.12f}, {1.7f, -0.08f}, {2.3f, 0.05f}},  {{2.95f, 0.15f}, {3.35f, 0.5f}, {3.45f, 1.0f}},
+                                 {{3.6f, 1.8f}, {3.85f, 3.2f}, {3.55f, 3.9f}},     {{3.4f, 4.5f}, {2.95f, 4.75f}, {2.55f, 4.55f}},
+                                 {{2.15f, 4.3f}, {1.95f, 3.25f}, {1.55f, 3.05f}},  {{1.15f, 2.88f}, {0.6f, 2.85f}, {0.0f, 2.85f}}};
+    dl->PathLineTo(Pv(start));
+    for (const Seg& s : kRight) dl->PathBezierCubicCurveTo(Pv(s.c1), Pv(s.c2), Pv(s.p));
+    for (int i = int(std::size(kRight)) - 1; i >= 0; --i) {
+        const Seg& s = kRight[std::size_t(i)];
+        const ImVec2 from = i > 0 ? kRight[std::size_t(i) - 1].p : start;
+        dl->PathBezierCubicCurveTo(P(-s.c2.x, s.c2.y), P(-s.c1.x, s.c1.y), P(-from.x, from.y));
+    }
+    dl->PathStroke(outline, ImDrawFlags_Closed, 1.3f * thin);
+    m_obstacles.push_back({P(-3.65f, -1.1f).x, P(-3.65f, -1.1f).y, P(3.65f, 4.8f).x, P(3.65f, 4.8f).y});
+
+    // Shoulders: bumpers on the top edge, triggers behind them.
+    for (int side = -1; side <= 1; side += 2) {
+        const float s = float(side);
+        const PadControl bumper = side < 0 ? PadControl::LeftShoulder : PadControl::RightShoulder;
+        const PadControl trigger = side < 0 ? PadControl::LeftTrigger : PadControl::RightTrigger;
+        const ImVec2 ba = P(side < 0 ? -3.05f : 1.95f, -0.24f), bz = P(side < 0 ? -1.95f : 3.05f, 0.04f);
+        dl->AddRect(ba, bz, colourOf(bumper), 0.14f * g, 0, strokeOf(bumper));
+        const ImVec2 ta = P(s < 0 ? -2.9f : 2.1f, -0.92f), tz = P(s < 0 ? -2.1f : 2.9f, -0.34f);
+        if (drive(trigger)) dl->AddRectFilled(ta, tz, col(kWhite, 0.12f * alpha), 0.22f * g, ImDrawFlags_RoundCornersTop);
+        dl->AddRect(ta, tz, colourOf(trigger), 0.22f * g, ImDrawFlags_RoundCornersTop, strokeOf(trigger));
+    }
+    // Sticks.
+    for (const auto& [c, pos] : {std::pair{PadControl::LeftStick, L.leftStick}, std::pair{PadControl::RightStick, L.rightStick}}) {
+        const ImVec2 p = Pv(pos);
+        if (drive(c)) dl->AddCircleFilled(p, 0.62f * kStickR * g, col(kWhite, 0.12f * alpha));
+        dl->AddCircle(p, kStickR * g, colourOf(c), 0, strokeOf(c));
+        dl->AddCircle(p, 0.62f * kStickR * g, colourOf(c), 0, thin);
+    }
+    // D-pad: a plus outline.
+    {
+        const float a = kDpadArm, h = kDpadHalf;
+        const ImVec2 d = L.dpad;
+        const ImVec2 pts[12] = {P(d.x - h, d.y - a), P(d.x + h, d.y - a), P(d.x + h, d.y - h), P(d.x + a, d.y - h),
+                                P(d.x + a, d.y + h), P(d.x + h, d.y + h), P(d.x + h, d.y + a), P(d.x - h, d.y + a),
+                                P(d.x - h, d.y + h), P(d.x - a, d.y + h), P(d.x - a, d.y - h), P(d.x - h, d.y - h)};
+        dl->AddPolyline(pts, 12, colourOf(PadControl::DpadUp), ImDrawFlags_Closed, thin);
+        for (const PadControl c : {PadControl::DpadUp, PadControl::DpadDown, PadControl::DpadLeft, PadControl::DpadRight}) {
+            const ImVec2 dir = c == PadControl::DpadUp ? ImVec2(0, -1) : c == PadControl::DpadDown ? ImVec2(0, 1)
+                               : c == PadControl::DpadLeft ? ImVec2(-1, 0) : ImVec2(1, 0);
+            const ImVec2 t = P(d.x + dir.x * (a - 0.13f), d.y + dir.y * (a - 0.13f));
+            const ImVec2 n(-dir.y, dir.x);
+            const float s = 0.07f * g;
+            dl->AddTriangleFilled(ImVec2(t.x + dir.x * s, t.y + dir.y * s), ImVec2(t.x - dir.x * s + n.x * s, t.y - dir.y * s + n.y * s),
+                                  ImVec2(t.x - dir.x * s - n.x * s, t.y - dir.y * s - n.y * s), colourOf(c));
+        }
+    }
+    // Face buttons.
+    for (const PadControl c : {PadControl::South, PadControl::East, PadControl::West, PadControl::North}) {
+        const ImVec2 o = faceOffset(c);
+        faceGlyph(dl, m_heading, P(L.face.x + o.x, L.face.y + o.y), kFaceR * g, c, glyphs, colourOf(c), strokeOf(c));
+    }
+    // View / Menu (Create / Options), guide, touchpad.
+    for (const auto& [c, pos] : {std::pair{PadControl::Back, L.back}, std::pair{PadControl::Start, L.start}}) {
+        const ImVec2 hs = L.touchpad ? ImVec2(0.07f, 0.14f) : ImVec2(0.16f, 0.11f);
+        dl->AddRect(P(pos.x - hs.x, pos.y - hs.y), P(pos.x + hs.x, pos.y + hs.y), colourOf(c), 0.07f * g, 0, thin);
+    }
+    dl->AddCircle(Pv(L.guide), (L.touchpad ? 0.17f : 0.26f) * g, dim, 0, thin);
+    if (L.touchpad) dl->AddRect(P(-0.85f, 0.15f), P(0.85f, 1.35f), dim, 0.18f * g, 0, thin);
+
+    // Callouts: columns left and right of the body, rows above and below it for the controls in the middle.
+    enum class Side { Left, Right, Top, Bottom };
+    struct Line {
+        PadControl icon = PadControl::Count; // face button glyph instead of the name
+        ImVec2 arrow{0, 0};                  // D-pad direction marker instead of the name
+        std::string name, action;
+        bool drive = false;
+    };
+    struct Item {
+        Side side;
+        ImVec2 anchor; // g units
+        std::vector<Line> lines;
+        float w = 0.0f, h = 0.0f, at = 0.0f;
+    };
+    const float gapName = 0.45f * lf;
+    const auto lineWidth = [&](const Line& l) {
+        float w = l.icon != PadControl::Count ? lineH : l.arrow.x != 0.0f || l.arrow.y != 0.0f ? 0.7f * lineH
+                                                                                              : textWidth(m_heading, lf, l.name.c_str(), 0.05f);
+        if (!l.action.empty()) w += (w > 0.0f ? gapName : 0.0f) + textWidth(l.drive ? m_heading : m_body, lf, l.action.c_str(), 0.05f);
+        return w;
+    };
+    std::vector<Item> items;
+    Item dpad{Side::Left, ImVec2(L.dpad.x - kDpadArm, L.dpad.y), {Line{PadControl::Count, {0, 0}, "D-PAD", "", false}}};
+    for (const PadBinding& b : bindings) {
+        const PadControl c = b.control;
+        const bool face = isFace(c);
+        const bool isDrive = b.group == BindingGroup::Drive;
+        Line name{face ? c : PadControl::Count, {0, 0}, face ? "" : padControlName(c, glyphs), "", isDrive};
+        if (c == PadControl::DpadUp || c == PadControl::DpadDown || c == PadControl::DpadLeft || c == PadControl::DpadRight) {
+            const ImVec2 dir = c == PadControl::DpadUp ? ImVec2(0, -1) : c == PadControl::DpadDown ? ImVec2(0, 1)
+                               : c == PadControl::DpadLeft ? ImVec2(-1, 0) : ImVec2(1, 0);
+            dpad.lines.push_back(Line{PadControl::Count, dir, "", b.label, isDrive});
+            continue;
+        }
+        Item it{Side::Left, {0, 0}, {}};
+        const ImVec2 fo = faceOffset(c);
+        const ImVec2 fc(L.face.x + fo.x, L.face.y + fo.y);
+        switch (c) {
+        case PadControl::LeftTrigger: it = {Side::Left, {-2.9f, -0.63f}, {}}; break;
+        case PadControl::RightTrigger: it = {Side::Right, {2.9f, -0.63f}, {}}; break;
+        case PadControl::LeftShoulder: it = {Side::Left, {-3.05f, -0.1f}, {}}; break;
+        case PadControl::RightShoulder: it = {Side::Right, {3.05f, -0.1f}, {}}; break;
+        case PadControl::LeftStick: it = {Side::Left, {L.leftStick.x - kStickR, L.leftStick.y}, {}}; break;
+        case PadControl::RightStick: it = {Side::Right, {L.rightStick.x + kStickR, L.rightStick.y}, {}}; break;
+        case PadControl::West: it = {Side::Top, {fc.x, fc.y - kFaceR}, {}}; break;
+        case PadControl::South: case PadControl::East: case PadControl::North:
+            it = {Side::Right, {fc.x + kFaceR, fc.y}, {}};
+            break;
+        case PadControl::Back: case PadControl::Start: {
+            const ImVec2 p = c == PadControl::Back ? L.back : L.start;
+            it = L.touchpad ? Item{Side::Top, {p.x, p.y - 0.14f}, {}} : Item{Side::Bottom, {p.x, p.y + 0.11f}, {}};
+            break;
+        }
+        default: continue;
+        }
+        if (it.side == Side::Left || it.side == Side::Right) {
+            name.action = b.label;
+            it.lines = {name};
+        } else {
+            it.lines = {name, Line{PadControl::Count, {0, 0}, "", b.label, isDrive}};
+        }
+        items.push_back(it);
+    }
+    if (dpad.lines.size() > 1) items.push_back(dpad);
+    for (Item& it : items) {
+        for (const Line& l : it.lines) it.w = std::max(it.w, lineWidth(l));
+        it.h = float(it.lines.size()) * lineH;
+    }
+
+    const float edge = 4.15f * g, elbow = 3.9f * g;
+    const auto drawLine = [&](const Line& l, float x, float y) { // x: left edge
+        const float mid = y + 0.5f * lineH;
+        if (l.icon != PadControl::Count) {
+            faceGlyph(dl, m_heading, ImVec2(x + 0.5f * lineH, mid), 0.55f * lineH, l.icon, glyphs,
+                      l.drive ? bright : outline, l.drive ? 0.75f * bold : thin);
+            x += lineH + gapName;
+        } else if (l.arrow.x != 0.0f || l.arrow.y != 0.0f) {
+            const ImVec2 c(x + 0.35f * lineH, mid), d = l.arrow, n(-d.y, d.x);
+            const float s = 0.22f * lineH;
+            dl->AddTriangleFilled(ImVec2(c.x + d.x * s, c.y + d.y * s), ImVec2(c.x - d.x * s + n.x * s, c.y - d.y * s + n.y * s),
+                                  ImVec2(c.x - d.x * s - n.x * s, c.y - d.y * s - n.y * s), outline);
+            x += 0.7f * lineH + gapName;
+        } else if (!l.name.empty()) {
+            text(dl, m_heading, lf, ImVec2(x, y), bright, l.name.c_str(), 0.05f);
+            x += textWidth(m_heading, lf, l.name.c_str(), 0.05f) + gapName;
+        }
+        if (!l.action.empty())
+            text(dl, l.drive ? m_heading : m_body, lf, ImVec2(x, y), l.drive ? col(kOrange, alpha) : col(kWhite, 0.8f * alpha),
+                 l.action.c_str(), 0.05f);
+    };
+    for (const Side side : {Side::Left, Side::Right, Side::Top, Side::Bottom}) {
+        std::vector<Item*> col_;
+        for (Item& it : items)
+            if (it.side == side) col_.push_back(&it);
+        const bool vertical = side == Side::Left || side == Side::Right;
+        std::sort(col_.begin(), col_.end(), [&](const Item* a, const Item* b) {
+            return vertical ? a->anchor.y < b->anchor.y : a->anchor.x < b->anchor.x;
+        });
+        std::vector<float> want, size;
+        for (const Item* it : col_) {
+            // Side labels: the first line (the name) at the anchor height.
+            want.push_back(vertical ? y0 + it->anchor.y * g + 0.5f * (it->h - lineH) : cx + it->anchor.x * g);
+            size.push_back(vertical ? it->h : it->w);
+        }
+        const std::vector<float> at = vertical ? spreadLabels(want, size, 0.35f * lf, y0 - 1.2f * g, y0 + 5.0f * g)
+                                               : spreadLabels(want, size, 1.2f * lf, cx - edge, cx + edge);
+        for (std::size_t i = 0; i < col_.size(); ++i) {
+            const Item& it = *col_[i];
+            const ImVec2 a = Pv(it.anchor);
+            float bx0, by0;
+            if (vertical) {
+                const float s = side == Side::Left ? -1.0f : 1.0f;
+                by0 = at[i] - 0.5f * it.h;
+                const float ly = by0 + 0.5f * lineH;
+                const ImVec2 pts[3] = {ImVec2(cx + s * (edge - 0.12f * g), ly), ImVec2(cx + s * elbow, ly), a};
+                dl->AddPolyline(pts, 3, leader, 0, thin);
+                bx0 = side == Side::Left ? cx - edge - it.w : cx + edge;
+                float y = by0;
+                for (const Line& l : it.lines) {
+                    drawLine(l, side == Side::Left ? cx - edge - lineWidth(l) : bx0, y);
+                    y += lineH;
+                }
+            } else {
+                const bool top = side == Side::Top;
+                by0 = top ? y0 - 1.38f * g - it.h : y0 + 4.98f * g;
+                const float ey = top ? y0 - 1.2f * g : y0 + 4.82f * g;
+                const ImVec2 pts[3] = {a, ImVec2(a.x, ey), ImVec2(at[i], top ? by0 + it.h + 0.04f * g : by0 - 0.04f * g)};
+                dl->AddPolyline(pts, 3, leader, 0, thin);
+                bx0 = at[i] - 0.5f * it.w;
+                float y = by0;
+                for (const Line& l : it.lines) {
+                    drawLine(l, at[i] - 0.5f * lineWidth(l), y);
+                    y += lineH;
+                }
+            }
+            dl->AddCircleFilled(a, std::max(1.5f, 0.05f * g), leader);
+            m_callouts.push_back({bx0, by0, bx0 + it.w, by0 + it.h});
+        }
+    }
+
+    // Which pad the names follow.
+    std::string status = view.padType == PadType::None ? "NO GAMEPAD CONNECTED" : std::string("CONNECTED: ") + padTypeName(view.padType);
+    for (char& ch : status) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    const float sw = textWidth(m_body, lf, status.c_str(), 0.08f);
+    text(dl, m_body, lf, ImVec2(cx - edge - sw, oy + 0.1f * g), col(kWhite, 0.55f * alpha), status.c_str(), 0.08f);
+    m_callouts.push_back({cx - edge - sw, oy + 0.1f * g, cx - edge, oy + 0.1f * g + lineH});
 }
 
 void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) {
@@ -382,12 +803,13 @@ void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) 
     const bool adjustable = menuAdjustable(flow.current());
     if (view.gamepad) {
         if (adjustable) hints.push_back({"D-PAD", "CHANGE"});
-        hints.push_back({"A", "SELECT"});
-        if (flow.depth() > 1 || flow.screen() == Screen::Paused) hints.push_back({"B", "BACK"});
+        hints.push_back({padControlName(PadControl::South, view.padGlyphs), "SELECT"});
+        if (flow.depth() > 1 || flow.screen() == Screen::Paused)
+            hints.push_back({padControlName(PadControl::East, view.padGlyphs), "BACK"});
     } else {
-        if (adjustable) hints.push_back({"A / D", "CHANGE"});
-        hints.push_back({"ENTER", "SELECT"});
-        if (flow.depth() > 1 || flow.screen() == Screen::Paused) hints.push_back({"ESC", "BACK"});
+        if (adjustable) hints.push_back({view.driveKeys == DriveKeys::Arrows ? "LEFT / RIGHT" : "A / D", "CHANGE"});
+        hints.push_back({keyName(Key::Return, view.keyboard), "SELECT"});
+        if (flow.depth() > 1 || flow.screen() == Screen::Paused) hints.push_back({keyName(Key::Escape, view.keyboard), "BACK"});
     }
     float x = ds.x - std::max(0.05f * ds.x, 40.0f);
     const float y = H - 0.055f * H;
@@ -663,9 +1085,13 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     // Hints.
     const float fs = 0.018f * H;
     const bool modal = g.modal() != GarageModal::None;
-    const char* hint = modal ? (view.gamepad ? "A CONFIRM   B CANCEL" : "ENTER CONFIRM   ESC CANCEL")
-                       : view.gamepad ? "D-PAD CHANGE   A SELECT   B BACK"
-                                      : "ARROWS / W S A D CHANGE   ENTER SELECT   MOUSE CLICK / DRAG   ESC BACK";
+    const std::string south = padControlName(PadControl::South, view.padGlyphs);
+    const std::string east = padControlName(PadControl::East, view.padGlyphs);
+    const std::string ret = keyName(Key::Return, view.keyboard), esc = keyName(Key::Escape, view.keyboard);
+    const std::string hintText = modal ? (view.gamepad ? south + " CONFIRM   " + east + " CANCEL" : ret + " CONFIRM   " + esc + " CANCEL")
+                                 : view.gamepad ? "D-PAD CHANGE   " + south + " SELECT   " + east + " BACK"
+                                                : "ARROWS / W S A D CHANGE   " + ret + " SELECT   MOUSE CLICK / DRAG   " + esc + " BACK";
+    const char* hint = hintText.c_str();
     text(dl, m_body, fs, ImVec2(W - std::max(0.05f * W, 40.0f) - textWidth(m_body, fs, hint, 0.15f), H - 0.055f * H),
          col(kWhite, 0.75f), hint, 0.15f);
     char version[64];
@@ -685,8 +1111,8 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         s.text = g.renameText();
         s.selected = g.renameSelected();
         s.error = g.modalError();
-        s.hint = view.gamepad ? "TYPE WITH A KEYBOARD.  A KEEPS THE CURRENT NAME, B CANCELS"
-                              : "LETTERS, DIGITS, SPACE AND - _ . ( ) +, UP TO 32.  ENTER CONFIRM, ESC CANCEL";
+        s.hint = view.gamepad ? "TYPE WITH A KEYBOARD.  " + south + " KEEPS THE CURRENT NAME, " + east + " CANCELS"
+                              : "LETTERS, DIGITS, SPACE AND - _ . ( ) +, UP TO 32.  " + ret + " CONFIRM, " + esc + " CANCEL";
         s.confirm = "CONFIRM";
         break;
     case GarageModal::ConfirmDelete:

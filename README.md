@@ -208,7 +208,8 @@ One command per line, `#` starts a comment:
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
-| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `back` |
+| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `back` |
+| `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
 | `garage save` / `save_new` / `rename NAME` / `delete` / `select NAME\|factory` / `reset` / `kit ID\|none` / `vehicle ID` | setup operations of the garage model |
@@ -220,7 +221,9 @@ One command per line, `#` starts a comment:
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
 
-Other scenarios: `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
+Other scenarios: `tools/scenarios/controls.txt` (Controls page: drive keys, gamepad button names auto / override,
+no overlapping callouts, wheel scroll, values kept, then a drive with the arrow keys including the pedal ramp;
+`/tmp/trailforge_controls_*.png`), `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
 and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
@@ -251,7 +254,10 @@ simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P
 1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
-`abs`, `tc`, `diff`, `auto_reverse`), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
+`abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`), `settings_roundtrip` (1 if the settings file format
+keeps every current value), controls: `drive_keys` (applied to the input: 0 W A S D, 1 arrows), `kb_style` (0 Mac,
+1 PC), `pad_glyphs` (resolved: 0 Xbox, 1 PlayStation), `controls_callouts` / `controls_overlaps` (callouts on the
+Controls page and overlapping pairs of callouts, key caps and controller outline, measured with the real font), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
 `garage_factory`, `garage_renaming`, `garage_modal` (0 none, 1 rename, 2 delete, 3 reset), `garage_modal_error`,
 `garage_rename_len`, `garage_pending`, `garage_rate_front` / `garage_rate_rear` (wheel rate N/mm
 shown next to the spring frequency), `garage:<key>` (the garage's value of a setup parameter),
@@ -286,8 +292,8 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Throttle / brake (stopped: release S and press again for reverse; keys ramp, see below) | W / S | RT / LT |
-| Steering | A / D | left stick |
+| Throttle / brake (stopped: release S and press again for reverse; keys ramp, see below) | W / S (or ↑ / ↓) | RT / LT |
+| Steering | A / D (or ← / →) | left stick |
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L) | L | Y (North) |
@@ -314,15 +320,36 @@ directly bypass the ramp.
 | Pause menu (Resume, Reset vehicle, Garage, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
 | Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
-| Free camera | arrow keys, PgUp/PgDn, Shift — faster | — |
+| Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
+| Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac) | A (South) / B (East) |
+
+**Drive keys.** Settings → Controls → DRIVE KEYS chooses the driving cluster: W A S D (default) or the arrow keys. The
+other cluster moves the free camera; no other binding uses either cluster, so nothing clashes (CTest
+`controls_layout` checks that every key is bound once in both layouts). The keyboard pedal ramp applies to whichever
+keys drive. The HUD hint line follows the choice. The menus accept both clusters for navigation in either layout.
+The table above names the W A S D layout.
+
+**Controls page.** Below DRIVE KEYS a vector-drawn keyboard shows only the bound keys, in their ANSI positions (function
+row, letters, Space, Shift, Return, Backspace, PgUp / PgDn, the inverted-T arrows, and the mouse), each with a callout;
+the driving keys are drawn bold. Key cap wording follows the platform the game runs on (macOS: RETURN, DELETE, PAGE UP;
+Windows / Linux: ENTER, BACKSPACE, PG UP); there is no switch for it. Below GAMEPAD BUTTONS a drawn controller shows
+every bound control with a callout. Button names come from the connected pad (`SDL_GetGamepadType`: PS3 / PS4 / PS5 ->
+PlayStation names and shapes — cross, circle, square, triangle, L1 / R1 / L2 / R2, Create / Options; everything else,
+and no pad, -> Xbox names A / B / X / Y, LB / RB / LT / RT, View / Menu); AUTO can be overridden with XBOX or
+PLAYSTATION. Nintendo pads get Xbox names, which do not match their printed letters. No gamepad has been connected to
+this build: the pad diagram, the automatic choice with a real pad and the gamepad bindings are untested on hardware
+(CTest `pad_glyph_detect` covers the type mapping only). Bindings, key labels and glyph names live in
+`src/input/ControlLayout.h` (no SDL); `Input` maps them to SDL keys and buttons.
 
 **Menus.** The game starts with an intro (logo over `intro.mp3`; any key, click or gamepad button skips it), then
 the start menu: Start, Garage, Settings, Quit. Up / Down (arrows, W / S, D-pad or left stick) move, Enter / Space / gamepad A
 select, Left / Right (A / D, D-pad, stick) change a setting, Esc / Backspace / gamepad B go back; the mouse hovers and
 clicks rows (clicking the arrows of a setting steps it down / up). Esc during play opens the pause menu. Settings
 (shared by both menus): graphics preset, resolution scale, VSync, master / music / effects / UI volume, the driver
-aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and a controls overview.
-They are saved to `settings.cfg` in the user data directory (`trailforge --paths`) when a Settings page is closed and
+aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and the Controls page
+(drive keys W A S D / arrows, gamepad button names auto / Xbox / PlayStation, keyboard and gamepad diagrams).
+They are saved to `settings.cfg` (keys include `drive_keys` 0 / 1 and `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation)
+in the user data directory (`trailforge --paths`) when a Settings page is closed and
 loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
 the settings for the session; they are hidden while a menu is open.
 
@@ -363,7 +390,8 @@ src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pur
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
               GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
-src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
+src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions), ControlLayout (bindings, key cap
+              labels, gamepad glyph names; no SDL), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,
               pause and Settings menus drawn with ImGui draw lists)
 src/app/      Application (lifecycle and main loop), GameFlow (screen / menu state machine, no SDL: intro, start

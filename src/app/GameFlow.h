@@ -24,6 +24,7 @@ enum class MenuItem {
     Quality, RenderScale, VSync,                 // settings: graphics
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
+    DriveKeys, PadGlyphs,                        // controls page
     Controls, Back,
 };
 

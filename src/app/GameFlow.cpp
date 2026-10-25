@@ -1,5 +1,6 @@
 #include "app/GameFlow.h"
 
+#include "input/ControlLayout.h"
 #include "render/RenderSettings.h"
 
 #include <algorithm>
@@ -42,7 +43,7 @@ const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
                                                     M::Back};
-    static const std::vector<MenuItem> kControls = {M::Back};
+    static const std::vector<MenuItem> kControls = {M::DriveKeys, M::PadGlyphs, M::Back};
     switch (p) {
     case MenuPage::Main: return kMain;
     case MenuPage::Pause: return kPause;
@@ -236,6 +237,8 @@ const char* menuLabel(MenuItem item) {
     case M::Traction: return "TRACTION CONTROL";
     case M::DiffLocks: return "DIFFERENTIAL LOCKS";
     case M::AutoReverse: return "AUTO REVERSE";
+    case M::DriveKeys: return "DRIVE KEYS";
+    case M::PadGlyphs: return "GAMEPAD BUTTONS";
     case M::Controls: return "CONTROLS";
     case M::Back: return "BACK";
     }
@@ -261,7 +264,7 @@ const char* menuSection(MenuItem item) {
     }
 }
 
-bool menuAdjustable(MenuItem item) { return int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::AutoReverse); }
+bool menuAdjustable(MenuItem item) { return int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::PadGlyphs); }
 
 std::string menuValue(MenuItem item, const GameSettings& s) {
     using M = MenuItem;
@@ -290,6 +293,11 @@ std::string menuValue(MenuItem item, const GameSettings& s) {
         return kNames[std::clamp(s.diffLocks, 0, 3)];
     }
     case M::AutoReverse: return s.autoReverse ? "ON" : "OFF";
+    case M::DriveKeys: return driveKeysName(DriveKeys(std::clamp(s.driveKeys, 0, 1)));
+    case M::PadGlyphs: {
+        static const char* kNames[] = {"AUTO", "XBOX", "PLAYSTATION"};
+        return kNames[std::clamp(s.padGlyphs, 0, 2)];
+    }
     default: return {};
     }
 }
@@ -315,6 +323,8 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
     case M::Traction: s.traction = wrap(s.traction + dir, 3); break;
     case M::DiffLocks: s.diffLocks = wrap(s.diffLocks + dir, 4); break;
     case M::AutoReverse: s.autoReverse = !s.autoReverse; break;
+    case M::DriveKeys: s.driveKeys = wrap(s.driveKeys + dir, 2); break;
+    case M::PadGlyphs: s.padGlyphs = wrap(s.padGlyphs + dir, 3); break;
     default: return false;
     }
     return !(s == before);

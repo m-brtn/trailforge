@@ -16,6 +16,96 @@ float axisValue(SDL_Gamepad* pad, SDL_GamepadAxis axis, float deadzone) {
     return std::copysign(std::min(1.0f, (a - deadzone) / (1.0f - deadzone)), v);
 }
 
+// Held keys are positional (scancodes); discrete actions follow the key cap (keycodes), as before the tables.
+SDL_Scancode scancode(Key k) {
+    switch (k) {
+    case Key::Escape: return SDL_SCANCODE_ESCAPE;
+    case Key::F1: return SDL_SCANCODE_F1;
+    case Key::F2: return SDL_SCANCODE_F2;
+    case Key::F3: return SDL_SCANCODE_F3;
+    case Key::Backspace: return SDL_SCANCODE_BACKSPACE;
+    case Key::PageUp: return SDL_SCANCODE_PAGEUP;
+    case Key::PageDown: return SDL_SCANCODE_PAGEDOWN;
+    case Key::Q: return SDL_SCANCODE_Q;
+    case Key::W: return SDL_SCANCODE_W;
+    case Key::R: return SDL_SCANCODE_R;
+    case Key::T: return SDL_SCANCODE_T;
+    case Key::P: return SDL_SCANCODE_P;
+    case Key::A: return SDL_SCANCODE_A;
+    case Key::S: return SDL_SCANCODE_S;
+    case Key::D: return SDL_SCANCODE_D;
+    case Key::H: return SDL_SCANCODE_H;
+    case Key::L: return SDL_SCANCODE_L;
+    case Key::Return: return SDL_SCANCODE_RETURN;
+    case Key::LeftShift: return SDL_SCANCODE_LSHIFT;
+    case Key::X: return SDL_SCANCODE_X;
+    case Key::C: return SDL_SCANCODE_C;
+    case Key::V: return SDL_SCANCODE_V;
+    case Key::B: return SDL_SCANCODE_B;
+    case Key::N: return SDL_SCANCODE_N;
+    case Key::Up: return SDL_SCANCODE_UP;
+    case Key::Space: return SDL_SCANCODE_SPACE;
+    case Key::Left: return SDL_SCANCODE_LEFT;
+    case Key::Down: return SDL_SCANCODE_DOWN;
+    case Key::Right: return SDL_SCANCODE_RIGHT;
+    case Key::LeftCtrl: return SDL_SCANCODE_LCTRL;
+    case Key::LeftAlt: return SDL_SCANCODE_LALT;
+    case Key::LeftGui: return SDL_SCANCODE_LGUI;
+    case Key::Count: break;
+    }
+    return SDL_SCANCODE_UNKNOWN;
+}
+
+SDL_Keycode keycode(Key k) {
+    switch (k) {
+    case Key::Q: return SDLK_Q;
+    case Key::W: return SDLK_W;
+    case Key::R: return SDLK_R;
+    case Key::T: return SDLK_T;
+    case Key::P: return SDLK_P;
+    case Key::A: return SDLK_A;
+    case Key::S: return SDLK_S;
+    case Key::D: return SDLK_D;
+    case Key::H: return SDLK_H;
+    case Key::L: return SDLK_L;
+    case Key::X: return SDLK_X;
+    case Key::C: return SDLK_C;
+    case Key::V: return SDLK_V;
+    case Key::B: return SDLK_B;
+    case Key::N: return SDLK_N;
+    case Key::F1: return SDLK_F1;
+    case Key::F2: return SDLK_F2;
+    case Key::F3: return SDLK_F3;
+    default: return SDL_SCANCODE_TO_KEYCODE(scancode(k));
+    }
+}
+
+SDL_GamepadButton padButton(PadControl c) {
+    switch (c) {
+    case PadControl::South: return SDL_GAMEPAD_BUTTON_SOUTH;
+    case PadControl::East: return SDL_GAMEPAD_BUTTON_EAST;
+    case PadControl::West: return SDL_GAMEPAD_BUTTON_WEST;
+    case PadControl::North: return SDL_GAMEPAD_BUTTON_NORTH;
+    case PadControl::LeftShoulder: return SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
+    case PadControl::RightShoulder: return SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+    case PadControl::LeftStick: return SDL_GAMEPAD_BUTTON_LEFT_STICK;
+    case PadControl::RightStick: return SDL_GAMEPAD_BUTTON_RIGHT_STICK;
+    case PadControl::DpadUp: return SDL_GAMEPAD_BUTTON_DPAD_UP;
+    case PadControl::DpadDown: return SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+    case PadControl::DpadLeft: return SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+    case PadControl::DpadRight: return SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+    case PadControl::Back: return SDL_GAMEPAD_BUTTON_BACK;
+    case PadControl::Start: return SDL_GAMEPAD_BUTTON_START;
+    case PadControl::Guide: return SDL_GAMEPAD_BUTTON_GUIDE;
+    default: return SDL_GAMEPAD_BUTTON_INVALID; // triggers are axes
+    }
+}
+
+static_assert(int(PadType::Unknown) == SDL_GAMEPAD_TYPE_UNKNOWN && int(PadType::XboxOne) == SDL_GAMEPAD_TYPE_XBOXONE &&
+                  int(PadType::PS3) == SDL_GAMEPAD_TYPE_PS3 && int(PadType::PS5) == SDL_GAMEPAD_TYPE_PS5 &&
+                  int(PadType::Steam) == SDL_GAMEPAD_TYPE_STEAM && int(PadType::Steam) + 1 == SDL_GAMEPAD_TYPE_COUNT,
+              "PadType must mirror SDL_GamepadType");
+
 } // namespace
 
 Input::~Input() {
@@ -25,6 +115,8 @@ Input::~Input() {
 const char* Input::gamepadName() const {
     return m_gamepad ? SDL_GetGamepadName(m_gamepad) : "";
 }
+
+PadType Input::gamepadType() const { return m_gamepad ? PadType(SDL_GetGamepadType(m_gamepad)) : PadType::None; }
 
 void Input::beginFrame() {
     m_pressed.fill(false);
@@ -83,23 +175,12 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         }
         if (e.key.repeat) break;
         // F1-F3 always work; everything else only if the UI does not own the keyboard.
-        if (e.key.key == SDLK_F1) { press(Action::ToggleDebugUI); break; }
-        if (e.key.key == SDLK_F2) { press(Action::ToggleGraphicsUI); break; }
-        if (e.key.key == SDLK_F3) { press(Action::ToggleAudioUI); break; }
-        if (uiWantsKeyboard) break;
-        switch (e.key.key) {
-        case SDLK_Q: press(Action::ToggleDirection); break;
-        case SDLK_L: press(Action::ToggleLowRange); break;
-        case SDLK_R: press(Action::Reset); break;
-        case SDLK_C: press(Action::ToggleCamera); break;
-        case SDLK_N: press(Action::StepOnce); break;
-        case SDLK_P: press(Action::TogglePause); break;
-        case SDLK_H: press(Action::ToggleHeadlights); break;
-        case SDLK_B: press(Action::ToggleAbs); break;
-        case SDLK_T: press(Action::CycleTraction); break;
-        case SDLK_X: press(Action::CycleDiffLock); break;
-        case SDLK_V: press(Action::CycleTransfer); break;
-        default: break;
+        for (const KeyAction& a : keyActions()) {
+            if (e.key.key != keycode(a.key)) continue;
+            const bool panel = a.action == Action::ToggleDebugUI || a.action == Action::ToggleGraphicsUI ||
+                               a.action == Action::ToggleAudioUI;
+            if (panel || !uiWantsKeyboard) press(a.action);
+            break;
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -157,16 +238,10 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
             m_menu.pause = false;
             break;
         }
-        switch (e.gbutton.button) {
-        case SDL_GAMEPAD_BUTTON_WEST: press(Action::ToggleDirection); break;
-        case SDL_GAMEPAD_BUTTON_NORTH: press(Action::ToggleLowRange); break;
-        case SDL_GAMEPAD_BUTTON_BACK: press(Action::Reset); break;
-        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: press(Action::ToggleCamera); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_UP: press(Action::ToggleAbs); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: press(Action::CycleTraction); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: press(Action::CycleDiffLock); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: press(Action::CycleTransfer); break;
-        default: break;
+        for (const PadAction& a : padActions()) {
+            if (e.gbutton.button != padButton(a.control)) continue;
+            press(a.action);
+            break;
         }
         break;
     default: break;
@@ -201,18 +276,19 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
     DriverIntent in;
     m_freeMove = glm::vec3(0.0f);
     m_fast = false;
-    m_keyPedals.update(!uiWantsKeyboard && m_held[SDL_SCANCODE_W], !uiWantsKeyboard && m_held[SDL_SCANCODE_S], dt);
+    const auto keyHeld = [this](Key k) { return m_held[scancode(k)] ? 1.0f : 0.0f; };
+    const DriveKeyMap drive = driveKeyMap(m_driveKeys), cam = freeCameraKeyMap(m_driveKeys);
+    m_keyPedals.update(!uiWantsKeyboard && keyHeld(drive.forward) > 0.0f, !uiWantsKeyboard && keyHeld(drive.back) > 0.0f, dt);
     if (!uiWantsKeyboard) {
-        const auto& k = m_held;
         in.throttle = m_keyPedals.throttle();
         in.brake = m_keyPedals.brake();
-        in.steer = (k[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_A] ? 1.0f : 0.0f);
-        in.handBrake = k[SDL_SCANCODE_SPACE] ? 1.0f : 0.0f;
-        // Free camera: arrow keys, PageUp/PageDown, Shift for faster.
-        m_freeMove.z = (k[SDL_SCANCODE_UP] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_DOWN] ? 1.0f : 0.0f);
-        m_freeMove.x = (k[SDL_SCANCODE_RIGHT] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_LEFT] ? 1.0f : 0.0f);
-        m_freeMove.y = (k[SDL_SCANCODE_PAGEUP] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_PAGEDOWN] ? 1.0f : 0.0f);
-        m_fast = k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT];
+        in.steer = keyHeld(drive.right) - keyHeld(drive.left);
+        in.handBrake = keyHeld(Key::Space);
+        // Free camera: the cluster that does not drive, PageUp/PageDown, Shift for faster.
+        m_freeMove.z = keyHeld(cam.forward) - keyHeld(cam.back);
+        m_freeMove.x = keyHeld(cam.right) - keyHeld(cam.left);
+        m_freeMove.y = keyHeld(Key::PageUp) - keyHeld(Key::PageDown);
+        m_fast = m_held[SDL_SCANCODE_LSHIFT] || m_held[SDL_SCANCODE_RSHIFT];
     }
     if (m_gamepad) {
         // Gamepad: RT throttle, LT brake, left stick steering, A handbrake. Take the maximum with the keyboard.

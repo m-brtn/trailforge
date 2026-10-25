@@ -123,7 +123,8 @@ src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure ma
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
               materials, panels, lights, accessories, wheels), VehicleModel (named parts per model), Scenery,
               GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
-src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
+src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions), ControlLayout (bindings, key cap
+              labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
 src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), Garage (setup model, no SDL),
               GameSettings (settings.cfg),

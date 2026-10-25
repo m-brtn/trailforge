@@ -1,0 +1,137 @@
+# Settings > Controls: drive keys (W A S D / arrows), gamepad button names (auto / Xbox / PlayStation), the drawn
+# keyboard and gamepad diagrams, then a short drive with the arrows:
+#   ./build/release/trailforge --script tools/scenarios/controls.txt
+# Captures: /tmp/trailforge_controls_*.png. Key caps follow the running platform (macOS: RETURN / DELETE); `controls
+# keyboard pc` forces the PC wording for one capture. No gamepad is needed: `controls pad_type` stands in for the
+# connected pad of the automatic choice. Scenarios never write settings.cfg; `settings_roundtrip` checks that the file
+# format keeps the values.
+
+wait 1.0
+expect setting_drive_keys == 0
+expect setting_pad_glyphs == 0
+expect drive_keys == 0
+menu main
+wait 1.0
+
+# ---------------------------------------------------------------- open the page (keyboard), defaults
+menu settings
+menu select controls
+tap Return
+wait 0.6
+expect menu_page == 3
+expect menu_cursor == 0
+expect menu_scroll == 0
+expect controls_callouts > 40
+expect controls_overlaps == 0
+expect pad_glyphs == 0                  # no pad: Xbox names
+capture /tmp/trailforge_controls_01_wasd_keyboard.png
+wait 0.2
+
+# ---------------------------------------------------------------- gamepad diagram: the cursor scrolls it into view
+tap Down
+wait 0.8
+expect menu_cursor == 1
+expect menu_scroll > 100
+expect controls_overlaps == 0
+capture /tmp/trailforge_controls_02_xbox_auto.png
+wait 0.2
+
+# automatic choice follows the connected pad type
+controls pad_type ps5
+wait 0.5
+expect setting_pad_glyphs == 0
+expect pad_glyphs == 1
+expect controls_overlaps == 0
+capture /tmp/trailforge_controls_03_auto_ps5.png
+wait 0.2
+controls pad_type xbox
+wait 0.2
+expect pad_glyphs == 0
+
+# manual override: Xbox, then PlayStation (persists over the connected pad)
+tap Right
+wait 0.2
+expect setting_pad_glyphs == 1
+expect pad_glyphs == 0
+tap Right
+wait 0.6
+expect setting_pad_glyphs == 2
+expect pad_glyphs == 1
+expect settings_roundtrip == 1
+expect controls_overlaps == 0
+capture /tmp/trailforge_controls_04_playstation.png
+wait 0.2
+controls pad_type none
+
+# ---------------------------------------------------------------- drive keys: arrows (mouse click on the value arrow)
+tap Up
+wait 0.8
+expect menu_cursor == 0
+expect menu_scroll == 0
+tap Right
+wait 0.6
+expect setting_drive_keys == 1
+expect drive_keys == 1                  # applied to the input at once
+expect settings_roundtrip == 1
+expect controls_overlaps == 0
+capture /tmp/trailforge_controls_05_arrows_keyboard.png
+wait 0.2
+
+# the PC key cap wording (ENTER / BACKSPACE) for comparison; the game itself always shows the platform's own
+controls keyboard pc
+wait 0.4
+expect kb_style == 1
+expect controls_overlaps == 0
+capture /tmp/trailforge_controls_06_arrows_keyboard_pc.png
+wait 0.2
+controls keyboard native
+
+# mouse wheel scrolls the page, the cursor brings its row back
+wheel -6
+wait 0.6
+expect menu_scroll > 100
+wheel 20
+wait 0.6
+expect menu_scroll == 0
+
+# ---------------------------------------------------------------- leave and come back: the values stay
+tap Escape
+wait 0.2
+expect menu_page == 2
+click menu:controls
+wait 0.5
+expect menu_page == 3
+expect setting_drive_keys == 1
+expect setting_pad_glyphs == 2
+expect controls_overlaps == 0
+tap Escape
+wait 0.1
+tap Escape
+wait 0.2
+expect menu_page == 0
+
+# ---------------------------------------------------------------- drive with the arrows
+menu select start
+tap Return
+wait 1.5
+expect menu_screen == 2
+down W                                 # W now moves the free camera only (follow camera: nothing)
+wait 1.0
+expect fwd_kmh < 0.5
+up W
+down Up
+wait 0.3
+expect throttle > 0.3                  # keyboard pedal ramp: firm level first ...
+expect throttle < 0.9
+wait 1.5
+expect throttle > 0.99                 # ... then full
+expect fwd_kmh > 5
+down Left
+wait 0.4
+expect steer < -0.5
+up Left
+up Up
+down Down
+until speed_kmh < 0.5 8
+up Down
+log arrows_drive

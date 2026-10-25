@@ -5,6 +5,7 @@
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
+#include "input/ControlLayout.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 
@@ -48,6 +49,8 @@ void settingsRoundtrip() {
     s.traction = 2;
     s.diffLocks = 3;
     s.autoReverse = false;
+    s.driveKeys = 1;
+    s.padGlyphs = 2;
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
     const std::string path = (dir / "settings.cfg").string();
@@ -71,6 +74,8 @@ void settingsRoundtrip() {
                                            "render_scale = 0.2\n"
                                            "traction = 5\n"
                                            "diff_locks = 2\n"
+                                           "drive_keys = 7\n"
+                                           "pad_glyphs = -3\n"
                                            "vsync = banana\n"
                                            "no equals sign\n"
                                            "future_option = 1\n",
@@ -79,7 +84,8 @@ void settingsRoundtrip() {
                 odd.quality, double(odd.musicVolume), double(odd.uiVolume), double(odd.renderScale), odd.traction,
                 odd.diffLocks, odd.vsync, skipped);
     CHECK(odd.quality == 3 && odd.musicVolume == 1.0f && odd.uiVolume == 0.0f && odd.renderScale == 0.0f &&
-              odd.traction == 2 && odd.diffLocks == 2 && odd.vsync == defaults.vsync,
+              odd.traction == 2 && odd.diffLocks == 2 && odd.vsync == defaults.vsync && odd.driveKeys == 1 &&
+              odd.padGlyphs == 0,
           "damaged values not clamped as expected");
     CHECK(skipped == 3, "skipped lines %d (expected 3)", skipped);
     GameSettings untouched = s;
@@ -161,6 +167,25 @@ void menuNavigation() {
     flow.select(MenuItem::Controls);
     flow.handle(key(&MenuInput::accept), settings);
     CHECK(flow.page() == MenuPage::Controls && flow.depth() == 3, "controls page");
+    // Controls: drive keys W A S D <-> arrows, gamepad buttons auto -> Xbox -> PlayStation.
+    CHECK(flow.current() == MenuItem::DriveKeys && menuValue(MenuItem::DriveKeys, settings) == "W A S D",
+          "controls start on DRIVE KEYS = W A S D");
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.driveKeys == 1 && r.command == MenuCommand::SettingsChanged &&
+              menuValue(MenuItem::DriveKeys, settings) == "ARROWS",
+          "right switches to the arrows (%d)", settings.driveKeys);
+    flow.handle(key(&MenuInput::accept), settings);
+    CHECK(settings.driveKeys == 0, "accept switches back to W A S D");
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::PadGlyphs && menuValue(MenuItem::PadGlyphs, settings) == "AUTO", "pad glyphs row");
+    flow.handle(key(&MenuInput::right), settings);
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.padGlyphs == 2 && menuValue(MenuItem::PadGlyphs, settings) == "PLAYSTATION", "pad glyphs %d",
+          settings.padGlyphs);
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.padGlyphs == 0, "pad glyphs wrap to auto");
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::Back, "back row last");
     r = flow.handle(key(&MenuInput::back), settings);
     CHECK(flow.page() == MenuPage::Settings && r.command == MenuCommand::None && r.sound == MenuSound::Back,
           "back from controls");
@@ -413,12 +438,129 @@ void garageModel() {
 
 } // namespace
 
+// Bindings: every key / control once, the drive and free-camera clusters swap, labels per platform style.
+void controlsLayout() {
+    for (const DriveKeys layout : {DriveKeys::Wasd, DriveKeys::Arrows}) {
+        const std::vector<KeyBinding> b = keyboardBindings(layout);
+        for (std::size_t i = 0; i < b.size(); ++i)
+            for (std::size_t j = i + 1; j < b.size(); ++j)
+                CHECK(b[i].key != b[j].key, "key %s bound twice (%s / %s)", keyName(b[i].key, KeyboardStyle::Pc),
+                      b[i].label.c_str(), b[j].label.c_str());
+        const DriveKeyMap d = driveKeyMap(layout), c = freeCameraKeyMap(layout);
+        for (const Key k : {d.forward, d.back, d.left, d.right}) {
+            for (const Key m : {c.forward, c.back, c.left, c.right}) CHECK(k != m, "drive key also moves the camera");
+            for (const KeyAction& a : keyActions()) CHECK(k != a.key, "drive key %s also triggers an action", keyName(k, KeyboardStyle::Pc));
+        }
+        int drive = 0;
+        for (const KeyBinding& k : b) {
+            CHECK(!k.label.empty(), "key without a callout");
+            drive += k.group == BindingGroup::Drive;
+        }
+        CHECK(drive == 5, "drive keys + Space: %d", drive);
+        std::printf("    %s: %zu keys bound, drive %s / %s / %s / %s\n", driveKeysName(layout), b.size(),
+                    keyName(d.forward, KeyboardStyle::Pc), keyName(d.back, KeyboardStyle::Pc),
+                    keyName(d.left, KeyboardStyle::Pc), keyName(d.right, KeyboardStyle::Pc));
+    }
+    CHECK(driveKeyMap(DriveKeys::Wasd).forward == Key::W && driveKeyMap(DriveKeys::Arrows).forward == Key::Up &&
+              freeCameraKeyMap(DriveKeys::Wasd).forward == Key::Up && freeCameraKeyMap(DriveKeys::Arrows).left == Key::A,
+          "cluster mapping");
+    CHECK(driveHint(DriveKeys::Arrows, KeyboardStyle::Mac).rfind("UP gas / DOWN brake", 0) == 0, "arrows hint '%s'",
+          driveHint(DriveKeys::Arrows, KeyboardStyle::Mac).c_str());
+    CHECK(driveHint(DriveKeys::Wasd, KeyboardStyle::Pc).rfind("W gas / S brake", 0) == 0, "wasd hint");
+
+    // Key cap wording: Mac vs PC where keyboards differ, the same elsewhere.
+    struct Expect {
+        Key key;
+        const char* mac;
+        const char* pc;
+    };
+    for (const Expect& e : {Expect{Key::Return, "RETURN", "ENTER"}, Expect{Key::Backspace, "DELETE", "BACKSPACE"},
+                            Expect{Key::LeftAlt, "OPTION", "ALT"}, Expect{Key::LeftGui, "COMMAND", "WIN"},
+                            Expect{Key::LeftCtrl, "CONTROL", "CTRL"}, Expect{Key::PageUp, "PAGE UP", "PG UP"},
+                            Expect{Key::Escape, "ESC", "ESC"}, Expect{Key::Space, "SPACE", "SPACE"}, Expect{Key::W, "W", "W"}}) {
+        CHECK(std::strcmp(keyName(e.key, KeyboardStyle::Mac), e.mac) == 0, "mac name '%s'", keyName(e.key, KeyboardStyle::Mac));
+        CHECK(std::strcmp(keyName(e.key, KeyboardStyle::Pc), e.pc) == 0, "pc name '%s'", keyName(e.key, KeyboardStyle::Pc));
+    }
+    CHECK(keyLabel(Key::Up, KeyboardStyle::Mac)[0] == '\0', "arrow caps are drawn, not lettered");
+#if defined(__APPLE__)
+    CHECK(nativeKeyboardStyle() == KeyboardStyle::Mac, "macOS uses Mac key caps");
+#else
+    CHECK(nativeKeyboardStyle() == KeyboardStyle::Pc, "Windows / Linux use PC key caps");
+#endif
+    // Key positions keep the ANSI order inside a row and the inverted T of the arrows.
+    CHECK(keyRect(Key::Q).x < keyRect(Key::W).x && keyRect(Key::A).row == keyRect(Key::S).row &&
+              keyRect(Key::Up).x == keyRect(Key::Down).x && keyRect(Key::Up).row + 1 == keyRect(Key::Down).row &&
+              keyRect(Key::Left).x + 1.0f == keyRect(Key::Down).x,
+          "key geometry");
+
+    // Gamepad bindings: each control once; names per glyph style.
+    const std::vector<PadBinding> pad = padBindings();
+    for (std::size_t i = 0; i < pad.size(); ++i)
+        for (std::size_t j = i + 1; j < pad.size(); ++j)
+            CHECK(pad[i].control != pad[j].control, "pad control bound twice: %s", padControlName(pad[i].control, PadGlyphs::Xbox));
+    CHECK(std::strcmp(padControlName(PadControl::South, PadGlyphs::Xbox), "A") == 0 &&
+              std::strcmp(padControlName(PadControl::South, PadGlyphs::PlayStation), "CROSS") == 0 &&
+              std::strcmp(padControlName(PadControl::North, PadGlyphs::PlayStation), "TRIANGLE") == 0 &&
+              std::strcmp(padControlName(PadControl::RightTrigger, PadGlyphs::PlayStation), "R2") == 0 &&
+              std::strcmp(padControlName(PadControl::Back, PadGlyphs::Xbox), "VIEW") == 0 &&
+              std::strcmp(padControlName(PadControl::Start, PadGlyphs::PlayStation), "OPTIONS") == 0,
+          "pad control names");
+    std::printf("    gamepad: %zu controls bound\n", pad.size());
+}
+
+// Automatic glyphs from the connected pad type (the values mirror SDL_GamepadType; Input.cpp static_asserts that).
+void padGlyphDetect() {
+    struct Case {
+        PadType type;
+        PadGlyphs glyphs;
+    };
+    for (const Case& c : {Case{PadType::None, PadGlyphs::Xbox}, Case{PadType::Unknown, PadGlyphs::Xbox},
+                          Case{PadType::Standard, PadGlyphs::Xbox}, Case{PadType::Xbox360, PadGlyphs::Xbox},
+                          Case{PadType::XboxOne, PadGlyphs::Xbox}, Case{PadType::PS3, PadGlyphs::PlayStation},
+                          Case{PadType::PS4, PadGlyphs::PlayStation}, Case{PadType::PS5, PadGlyphs::PlayStation},
+                          Case{PadType::SwitchPro, PadGlyphs::Xbox}, Case{PadType::JoyConPair, PadGlyphs::Xbox},
+                          Case{PadType::GameCube, PadGlyphs::Xbox}, Case{PadType::Steam, PadGlyphs::Xbox}}) {
+        CHECK(glyphsForPadType(c.type) == c.glyphs, "%s -> %s", padTypeName(c.type), padGlyphsName(glyphsForPadType(c.type)));
+        CHECK(resolvePadGlyphs(PadGlyphSetting::Auto, c.type) == c.glyphs, "auto %s", padTypeName(c.type));
+        CHECK(resolvePadGlyphs(PadGlyphSetting::Xbox, c.type) == PadGlyphs::Xbox, "override Xbox for %s", padTypeName(c.type));
+        CHECK(resolvePadGlyphs(PadGlyphSetting::PlayStation, c.type) == PadGlyphs::PlayStation, "override PS for %s",
+              padTypeName(c.type));
+    }
+    CHECK(int(PadType::Unknown) == 0 && int(PadType::PS5) == 6 && int(PadType::Steam) == 12, "SDL_GamepadType order");
+}
+
+// Callout placement: no overlaps, least displacement, inside the bounds; label wrapping at word breaks.
+void calloutSpread() {
+    const std::vector<float> want = {10.0f, 12.0f, 13.0f, 40.0f, 41.0f};
+    const std::vector<float> size = {6.0f, 8.0f, 4.0f, 10.0f, 10.0f};
+    const std::vector<float> at = spreadLabels(want, size, 1.0f, 0.0f, 100.0f);
+    for (std::size_t i = 1; i < at.size(); ++i)
+        CHECK(at[i] - at[i - 1] >= 0.5f * (size[i] + size[i - 1]) + 1.0f - 1e-4f, "labels %zu / %zu overlap", i - 1, i);
+    CHECK(std::abs((at[0] + at[1] + at[2]) / 3.0f - (10.0f + 12.0f + 13.0f) / 3.0f) < 1e-3f, "group stays centred");
+    const std::vector<float> clamped = spreadLabels({1.0f, 2.0f}, {4.0f, 4.0f}, 0.0f, 0.0f, 100.0f);
+    CHECK(clamped[0] - 2.0f >= -1e-4f && clamped[1] - clamped[0] >= 4.0f - 1e-4f, "left bound %.2f %.2f", double(clamped[0]),
+          double(clamped[1]));
+    const std::vector<float> right = spreadLabels({99.0f}, {10.0f}, 0.0f, 0.0f, 100.0f);
+    CHECK(std::abs(right[0] - 95.0f) < 1e-4f, "right bound %.2f", double(right[0]));
+    CHECK(spreadLabels({}, {}, 1.0f, 0.0f, 1.0f).empty(), "empty");
+    std::printf("    spread: %.2f %.2f %.2f %.2f %.2f\n", double(at[0]), double(at[1]), double(at[2]), double(at[3]), double(at[4]));
+
+    const auto chars = [](const std::string& t) { return float(t.size()); };
+    CHECK(wrapLabel("ABS", 5.0f, chars) == std::vector<std::string>{"ABS"}, "short label stays");
+    CHECK((wrapLabel("BRAKE / REVERSE", 9.0f, chars) == std::vector<std::string>{"BRAKE /", "REVERSE"}), "slash split");
+    CHECK((wrapLabel("TRACTION CONTROL", 9.0f, chars) == std::vector<std::string>{"TRACTION", "CONTROL"}), "word split");
+    CHECK(wrapLabel("DIAGNOSTICS", 5.0f, chars) == std::vector<std::string>{"DIAGNOSTICS"}, "one word cannot split");
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
         {"settings_roundtrip", settingsRoundtrip},
         {"menu_navigation", menuNavigation},
         {"pause_freezes_ticks", pauseFreezesTicks},
         {"garage_model", garageModel},
+        {"controls_layout", controlsLayout},
+        {"pad_glyph_detect", padGlyphDetect},
+        {"callout_spread", calloutSpread},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
