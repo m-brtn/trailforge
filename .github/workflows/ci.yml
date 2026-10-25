@@ -1,0 +1,111 @@
+# Build + headless tests on Linux, Windows and macOS; Linux and Windows packages are uploaded as artifacts.
+# The Linux job also starts the packaged app for a few seconds on Mesa lavapipe (software Vulkan) under Xvfb.
+# None of this is a run on real Windows/Linux hardware.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x64 (gcc, Ninja)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build cmake g++ pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers xvfb xauth python3-pil
+      - name: Build, ctest and package (tools/release/package_linux.sh)
+        run: tools/release/package_linux.sh
+      # Starts the packaged app with the Khronos validation layer, fails on any validation error, and checks that
+      # the captured frame is not black (the 3D scene, not only the UI, must render).
+      - name: Smoke test on lavapipe (software Vulkan, Xvfb)
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/dist"
+          PKG="$(ls -d dist/TrailForge-*-linux-x64 | head -n 1)"
+          xvfb-run -a -s "-screen 0 1280x720x24" vulkaninfo --summary | grep -E "deviceName|driverName" || true
+          cd "$PKG"
+          VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation SDL_GPU_DRIVER=vulkan \
+            timeout 300 xvfb-run -a -s "-screen 0 1280x720x24" \
+            ./trailforge --no-audio --no-ui --quit-after 10 --capture "$OUT/lavapipe_smoke.png" --capture-at 7 \
+            > "$OUT/lavapipe_smoke.log" 2>&1
+          cat "$OUT/lavapipe_smoke.log"
+          grep -F "GPU driver 'vulkan', shaders: SPIR-V" "$OUT/lavapipe_smoke.log"
+          grep -F "auto-quit after" "$OUT/lavapipe_smoke.log"
+          if grep -F "Validation Error" "$OUT/lavapipe_smoke.log"; then echo "Vulkan validation errors"; exit 1; fi
+          python3 - "$OUT/lavapipe_smoke.png" <<'EOF'
+          import sys
+          from PIL import Image, ImageStat
+          img = Image.open(sys.argv[1]).convert("L")
+          w, h = img.size
+          mean = ImageStat.Stat(img.crop((w // 4, h // 4, 3 * w // 4, 3 * h // 4))).mean[0]
+          print(f"capture {w}x{h}, mean luminance of the centre {mean:.1f}")
+          sys.exit(0 if mean > 40 else 1)
+          EOF
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v7
+        with:
+          name: trailforge-linux-x64
+          path: dist/TrailForge-*-linux-x64.tar.gz
+          if-no-files-found: error
+      - name: Upload lavapipe smoke capture
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lavapipe-smoke
+          path: |
+            dist/lavapipe_smoke.png
+            dist/lavapipe_smoke.log
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows x64 (MSVC, Ninja)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build, ctest and package (tools/release/package_windows.ps1)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          cl 2>&1 | Select-Object -First 1
+          ninja --version
+          cmake --version
+          ./tools/release/package_windows.ps1
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: trailforge-windows-x64
+          path: dist/TrailForge-*-windows-x64.zip
+          if-no-files-found: error
+
+  macos-headless:
+    name: macOS arm64 (headless physics and audio tests)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure, build and test (headless preset)
+        run: |
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          cmake --preset headless
+          cmake --build --preset headless
+          ctest --preset headless
