@@ -9,12 +9,13 @@ set auto_reverse 0
 time Noon
 teleport 0
 wait 2.5
+expect wheel_radius_r > 0.435
 expect wheel_fit_err < 0.003
-expect wheel_visual_width_r > 0.2999
-expect wheel_visual_width_r < 0.3001
+expect wheel_visual_width_r > 0.3149
+expect wheel_visual_width_r < 0.3151
 camera vehicle three_quarter 6 42
 wait 0.4
-capture /tmp/trailforge_wheelfit_040.png
+capture /tmp/trailforge_wheelfit_0436.png
 wheels 0.45 0.30
 wait 2.5
 expect wheel_radius_r > 0.449
@@ -31,8 +32,8 @@ expect wheel_fit_err < 0.003
 camera vehicle three_quarter 6 42
 wait 0.4
 capture /tmp/trailforge_wheelfit_036.png
-wheels 0.40 0.30
+wheels 0.436 0.315
 wait 2.5
-expect wheel_radius_r > 0.399
-expect wheel_radius_r < 0.401
+expect wheel_radius_r > 0.435
+expect wheel_radius_r < 0.437
 expect wheel_fit_err < 0.003

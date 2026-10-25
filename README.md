@@ -394,9 +394,23 @@ vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 ## Vehicle
 
 The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format below); the C++ defaults of
-`VehicleConfig` are the same SUV with full-time AWD and no drag (the v0.7 vehicle, used by the physics tests).
+`VehicleConfig` are the v0.7 SUV (full-time AWD, no drag, 0.80 m tires, final drive 3.90), used by the physics tests.
 
-- Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares), wheels r = 0.4 m and 0.3 m wide (35 kg each).
+- Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares).
+- Tires (since v0.9.0): 315/70R17 mud-terrain on 17-inch rims, the 35-inch class of the concept sheet (Cars.png
+  car #1 scaled by its wheelbase suggests ~0.90 m; it was 0.80 m before). Real dimensions: 17 in rim = 431.8 mm,
+  sidewall 0.70 × 315 = 220.5 mm, diameter 872.8 mm, so `radius` 0.436 m, `width` 0.315 m (section width),
+  `rimRatio` 0.495. Mass 43 kg per wheel (estimate: LT315/70R17 mud-terrain tires are listed at roughly 28–32 kg,
+  17 × 8.5 in alloy wheels at 12–14 kg); rotational inertia 4.7 kg·m² (tread and belt 18 kg as a ring at 0.41 m,
+  sidewalls 12 kg as an annulus 0.216–0.40 m, rim barrel 8 kg at 0.20 m, wheel center 5 kg as a disc) instead of
+  the solid-disc default (2.8 kg·m² for the old 35 kg wheel). Jolt's wheels are virtual: the mass only enters the
+  rotational inertia, not the unsprung mass. The bigger tires lift the body by the radius difference (3.6 cm; the
+  suspension is unchanged).
+- Final drive 4.27 (was 3.90; a real ring-and-pinion ratio, e.g. Ford Bronco), re-geared for the 9 % taller tire
+  like a real 35-inch build: 4.27 / 0.436 = 9.79 vs 3.90 / 0.40 = 9.75 per meter of radius, so road speed per rpm
+  stays within 0.5 % (top gear 45.3 vs 45.5 km/h per 1000 rpm, first gear 9.17 vs 9.20). Without the re-gear
+  (3.90 on the new tires, probe `layouts`): 4H 0-30 km/h on concrete 1.59 s vs 1.53 s, 4L 2.33 s vs 2.40 s, the
+  4L 15° mud climb 6.16 s vs 7.04 s (taller, so it carries more speed onto the ramp).
 - Center of mass 0.10 m below the frame center.
 - The body collision is a compound of three boxes. The visible model is a procedural five-door expedition SUV
   (Cars.png car #1, ~16.6k triangles, 43 named parts) fitted around the physics wheels; see "Vehicle rendering".
@@ -406,7 +420,7 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 - Part-time 4WD (since v0.8.0; full-time AWD before): starts in 2H (rear-wheel drive), V engages 4H (front axle,
   center locked) and 4L; see "Drivetrain layouts".
   - engine 520 N·m, 800–4800 rpm;
-  - 5-speed automatic plus reverse −4.0, final drive 3.9;
+  - 5-speed automatic plus reverse −4.0, final drive 4.27 (3.90 before the v0.9.0 tires);
   - low range ×2.72 — a multiplier on the differential ratios, not a separate gearbox;
   - open front differential, rear and center are LSD (ratio 1.4); X locks rear, rear + center or all
     (see "Driver aids");
@@ -463,10 +477,11 @@ All vehicle geometry is procedural and visual only (collision stays the three bo
   wheel's sweep for the default wheels and 0.43 / 0.33, 0.45 / 0.30 and 0.36 / 0.26 m tires). The scenario
   `tools/scenarios/wheel_fit.txt` changes the tire size in the running app (`wheels R W`) and checks
   `wheel_fit_err` (measured mesh vs physics) after each rebuild.
-- **Fit to the concept**: known mismatches with the sheet and the collision (the physics was not changed):
-  - the tire is 0.80 m (physics radius 0.40; the sheet scaled by wheelbase suggests ~0.90 m), so the body looks
-    taller relative to the wheels: ground to roof 2.0 m vs ~1.75 m on the sheet. The visual wheel is not fitted
-    to the sheet; bigger tires are left to a later tire kit;
+- **Fit to the concept**: known mismatches with the sheet and the collision (the physics was not changed for
+  the model; the tires were enlarged to the 315/70R17 physics wheels above):
+  - the tire is 0.873 m (sheet ~0.90 m); ground to roof is 2.03 m (roof 1.245 m above the frame, frame 0.78 m
+    above the ground at rest) vs ~1.75 m on the sheet: the body sits on the physics suspension (0.40 m of travel,
+    hub 0.35 m below the frame at rest), so it rides higher than drawn;
   - at rest the tire top is 0.30 m below the arch top (0.25 m of bump travel plus margin; the sheet shows ~0.15 m);
   - the greenhouse is 0.72–0.80 m half width while the cab collision box is 0.85 m, and the visual roof (1.245 m)
     is 5 cm below the collision top; the windshield rakes back from z 0.92 to 0.40 while the box ends at z 0.80;

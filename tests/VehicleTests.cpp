@@ -460,16 +460,25 @@ void garageSetups() {
 // Migration check: the shipped SUV definition reproduces the v0.7 C++ configuration exactly.
 void suvDefinitionMatchesBuiltin() {
     const VehicleDefinition def = loadOne(kAssets, "trailforge_suv");
-    // The built-in configuration is the v0.7 SUV (full-time AWD, no drag); the definition differs from it only in
-    // the part-time transfer case and the drag area (v0.8.0), so every other value is still the migrated one.
+    // The built-in configuration is the v0.7 SUV (full-time AWD, no drag, 0.80 m tires); the definition differs
+    // from it only in the part-time transfer case and the drag area (v0.8.0) and in the 315/70R17 tires with the
+    // matching final drive (v0.9.0), so every other value is still the migrated one.
     VehicleConfig expected;
     expected.id = def.config.id;
     expected.name = def.config.name;
     expected.layout = DriveLayout::PartTime;
     expected.tuning.dragArea = 1.3f;
+    for (AxleConfig& a : expected.axles) {
+        a.wheelRadius = 0.436f;
+        a.wheelWidth = 0.315f;
+        a.wheelMass = 43.0f;
+        a.wheelInertia = 4.7f;
+        a.rimRatio = 0.495f;
+    }
+    expected.tuning.finalDrive = 4.27f;
     std::printf("    comForward %.9g vs %.9g, layout %s, drag area %.2f m^2\n", def.config.comForward,
                 expected.comForward, driveLayoutName(def.config.layout), double(def.config.tuning.dragArea));
-    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout and drag");
+    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires and final drive");
 }
 
 } // namespace

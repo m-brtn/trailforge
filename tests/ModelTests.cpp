@@ -61,7 +61,7 @@ void modelParts() {
 // Tire size changes a tire kit could make (the body is rebuilt around them).
 std::vector<VehicleConfig> wheelVariants() {
     std::vector<VehicleConfig> out(1);
-    for (const auto& [r, w] : {std::pair{0.43f, 0.33f}, std::pair{0.45f, 0.30f}, std::pair{0.36f, 0.26f}}) {
+    for (const auto& [r, w] : {std::pair{0.436f, 0.315f}, std::pair{0.43f, 0.33f}, std::pair{0.45f, 0.30f}, std::pair{0.36f, 0.26f}}) {
         VehicleConfig c;
         for (AxleConfig& ax : c.axles) {
             ax.wheelRadius = r;
