@@ -7,9 +7,13 @@ set auto_reverse 0
 time Noon
 quality High
 
-# Mud bath, full-throttle launch: the spray 1 s in, rear 3/4 view from the right.
+# Mud bath, full-throttle launch: the spray 1 s in, rear 3/4 view from the right. The SUV is part-time 4WD
+# and spawns in 2H; the launches use 4H so the front wheels spin and throw too.
 teleport 12
 wait 1.5
+tap V
+wait 0.1
+expect transfer == 1
 set mud 0
 set auto_mud 1
 set body_mud_clear 1
@@ -29,6 +33,9 @@ expect body_mud_behind_fl > 0.2
 # Second 2.5 s launch from the start of the mud bath (5 s of wheelspin in mud in total), then stop on the concrete.
 teleport 12
 wait 1.5
+tap V
+wait 0.1
+expect transfer == 1
 down W
 wait 2.5
 up W
