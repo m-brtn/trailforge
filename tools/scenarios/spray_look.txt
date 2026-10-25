@@ -1,0 +1,111 @@
+# Spray look and body mud (cosmetic): rear 3/4 views of wheelspin on mud, sand and grass, the body after 5 s of
+# wheelspin in the mud bath, wheel close-ups after sand and grass. Captures /tmp/trailforge_spray2_*_after.png.
+# Teleports: 10 sand area, 11 sand to concrete, 12 mud bath (faces -Z), 13 meadow.
+set ui 0
+set hud 0
+set auto_reverse 0
+time Noon
+quality High
+
+# Mud bath, full-throttle launch: the spray 1 s in, rear 3/4 view from the right.
+teleport 12
+wait 1.5
+set mud 0
+set auto_mud 1
+set body_mud_clear 1
+set spray_clear 1
+down W
+wait 1.0
+camera -38.8 1.2 48.6 -41.6 0.5 43.6
+capture /tmp/trailforge_spray2_mud_rear_after.png
+wait 0.1
+log mud_spin
+expect spray > 200
+expect spray_fine > 0.8
+wait 1.5
+up W
+expect body_mud_arch_rear_rl > 0.5
+expect body_mud_behind_fl > 0.2
+# Second 2.5 s launch from the start of the mud bath (5 s of wheelspin in mud in total), then stop on the concrete.
+teleport 12
+wait 1.5
+down W
+wait 2.5
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log body_mud
+expect body_mud_arch_rear_rr > 0.8
+expect body_mud_behind_fr > 0.5
+expect body_mud_rear_bumper > 0.5
+expect body_mud_front_bumper < 0.05
+camera follow
+wait 0.5
+capture /tmp/trailforge_spray2_body_follow_after.png
+wait 0.2
+camera -39.0 1.1 36.6 -41.5 0.4 31.6
+capture /tmp/trailforge_spray2_body_rear_after.png
+wait 0.2
+camera -37.3 0.8 31.0 -41.5 0.3 31.2
+capture /tmp/trailforge_spray2_body_side_after.png
+wait 0.2
+
+# Sand: wheelspin 1 s (fine grains and dust), then the wheel close-up after a short drive on the sand. The mud film
+# and the body mud of the mud runs are cleared first.
+set mud 0
+set auto_mud 1
+set body_mud_clear 1
+teleport 10
+wait 1.5
+set spray_clear 1
+down W
+wait 1.0
+camera 40.5 1.6 48.5 36.0 0.9 54.5
+capture /tmp/trailforge_spray2_sand_after.png
+wait 0.1
+log sand_spin
+expect spray > 150
+up W
+wait 0.2
+teleport 11
+wait 1.5
+down W
+until z < 58.5 6
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+log sand_wheel
+expect tread_soil_max > 0.1
+expect tread_soil_max < 0.2
+expect body_mud_max < 0.15
+camera 38.8 1.4 53.0 41.3 0.9 54.5
+capture /tmp/trailforge_spray2_wheel_sand_after.png
+wait 0.2
+
+# Grass (meadow): wheelspin 1 s, then the wheel close-up after a few seconds on the grass.
+set mud 0
+set auto_mud 1
+teleport 13
+wait 1.5
+set spray_clear 1
+down W
+wait 1.0
+camera 23.0 2.6 45.0 19.0 0.6 50.0
+capture /tmp/trailforge_spray2_grass_after.png
+wait 0.1
+log grass_spin
+expect spray > 50
+until z > 55 6
+up W
+down S
+until speed_kmh < 0.5 6
+up S
+log grass_wheel
+expect tread_soil_max > 0.2
+camera 22.1 1.6 65.8 20.1 1.0 63.8
+capture /tmp/trailforge_spray2_wheel_grass_after.png
+wait 0.2
+camera follow
+quit

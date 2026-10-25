@@ -65,24 +65,30 @@ float rubberSlide(const WheelContactSample& c);
 // sliding until the stop, while the squeal gate fades it out below ~5 m/s).
 float markSlide(const WheelContactSample& c);
 
-// Loose soil of a surface as the tread picks it up (visual and sound only, never friction).
+// Loose soil of a surface as the tread picks it up (visual and sound only, never friction). Adhesion follows the
+// soil: wet clay/mud sticks heavily, packed dirt and the earth under the grass moderately, dry sand barely (a light
+// dusting that falls off within a meter or two).
 struct SoilType {
     float pickup = 0.0f;       // amount the tread settles at on this ground (0 hard surfaces, 1 mud)
     float pickupLength = 1.0f; // m of tread travel to pick up ~63 % of it
     float wetness = 0.0f;      // 0 dry dust .. 1 wet mud
     float color[3] = {0, 0, 0}; // linear albedo of the soil
+    float stick = 0.0f;        // adhesion 0..1 (sand 0.1, dirt 0.55, mud 1): shedding distance, body coat
+    float flecks = 0.0f;       // fraction of torn grass blades stuck in it (grass only), drawn as sparse specks
 };
 SoilType soilType(SurfaceId id);
 float soilPickup(SurfaceId id); // soilType(id).pickup
 
-// Soil carried in the tread: picked up on loose ground (fast on mud, slower on dirt, sand and grass), the colour
-// mixes with the ground it rolls on; shed by distance on hard ground (~3 m e-folding for dry dust, ~7 m for wet
-// mud, faster while spinning or sliding); a puddle rinses it to a thin wet film within ~1 m. A dirty tread lays
-// no rubber and does not squeal; it never changes grip.
+// Soil carried in the tread: picked up on loose ground (fast on mud, slower on dirt and grass, very little on sand),
+// the colour mixes with the ground it rolls on; shed by distance on hard ground (e-folding ~1.2 m for dry sand,
+// ~2.5 m for dirt, ~6 m for wet mud, faster while spinning or sliding); a puddle rinses it to a thin wet film within
+// ~1 m. A dirty tread lays no rubber and does not squeal; it never changes grip.
 struct TreadSoil {
     float amount = 0.0f;   // 0 clean .. 1 caked with mud
     float wetness = 0.0f;  // 0 dry .. 1 wet
     float color[3] = {0, 0, 0};
+    float stick = 0.0f;    // adhesion of what the tread carries (SoilType::stick)
+    float flecks = 0.0f;   // grass blades stuck in the tread, 0..1
     void update(const WheelContactSample& c, float dt, bool inWater = false);
 };
 

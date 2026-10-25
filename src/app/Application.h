@@ -9,6 +9,7 @@
 #include "render/Renderer.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
+#include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 #include "ui/DebugUI.h"
 
@@ -93,6 +94,7 @@ private:
     std::unique_ptr<ImGuiContextGuard> m_imgui;
     Simulation m_sim;
     WheelSpray m_spray; // cosmetic particles thrown by the wheels (render-only)
+    BodyMud m_bodyMud;  // cosmetic spray mud on the body per region (render-only)
     Input m_input;
     Camera m_camera;
     DebugDraw m_debugDraw;

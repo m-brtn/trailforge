@@ -377,6 +377,7 @@ void Application::renderFrame(float frameTime) {
     frame.water = &m_waterMesh;
     frame.vehicleModel = bodyM;
     frame.vehicleMud = m_gfx.mud;
+    frame.bodyMud = &m_bodyMud;
     {
         const VehicleTelemetry& t = m_sim.vehicle().telemetry();
         frame.brakeLight = std::max(t.command.brake, t.command.handBrake) > 0.05f ? 1.0f : 0.0f;
@@ -500,6 +501,8 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         const TreadSoil& soil = m_sim.tireMarks().soil(std::size_t(i));
         m_draws.back().soil = glm::vec4(soil.color[0], soil.color[1], soil.color[2], soil.amount);
         m_draws.back().soilWetness = soil.wetness;
+        m_draws.back().soilFlecks = soil.flecks;
+        m_draws.back().soilStick = soil.stick;
         m_draws.back().wheelRadius = vc.wheelRadius;
 
         const SuspensionPose p = suspensionPose(hub, hub.z);
@@ -515,8 +518,13 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
 
 void Application::updateCosmetics(float dt) {
     if (!m_gfx.autoMud || m_paused) return;
-    // Cosmetic only: mud builds up while the wheels roll on the Mud surface or through the puddles
-    // and slowly dries/falls off elsewhere. It never feeds back into the simulation.
+    // Cosmetic only, never fed back into the simulation. Spray mud per body region from what each wheel throws, plus
+    // a slow even film that builds up while the wheels roll on the Mud surface or through the puddles.
+    {
+        std::array<TreadSoil, kWheelCount> soil;
+        for (std::size_t i = 0; i < kWheelCount; ++i) soil[i] = m_sim.tireMarks().soil(i);
+        m_bodyMud.update(m_sim.vehicle().contacts(), soil, std::min(dt, 0.05f));
+    }
     const VehicleTelemetry& t = m_sim.vehicle().telemetry();
     const WaterInfo water = TestTrack::water();
     float gain = 0.0f;
@@ -526,7 +534,7 @@ void Application::updateCosmetics(float dt) {
         const bool wet = w.contactPosition.GetY() < water.level - 0.02f && w.contactPosition.GetX() > water.x0 &&
                          w.contactPosition.GetX() < water.x1 && w.contactPosition.GetZ() > water.z0 &&
                          w.contactPosition.GetZ() < water.z1;
-        if (w.surface == SurfaceId::Mud || wet) gain += roll * (wet ? 0.010f : 0.006f);
+        if (w.surface == SurfaceId::Mud || wet) gain += roll * (wet ? 0.006f : 0.0025f);
     }
     m_gfx.mud = std::clamp(m_gfx.mud + (gain - 0.002f) * dt, 0.0f, 1.0f);
 }
@@ -807,6 +815,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "tod_run") m_gfx.timeLapse = v != 0.0f;
             else if (k == "mud") { m_gfx.mud = std::clamp(v, 0.0f, 1.0f); m_gfx.autoMud = false; }
             else if (k == "auto_mud") m_gfx.autoMud = v != 0.0f;
+            else if (k == "body_mud") m_bodyMud.setAll(v);
+            else if (k == "body_mud_clear") m_bodyMud.clear();
             else if (k == "headlights") m_gfx.headlights = v != 0.0f;
             else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
             else if (k == "ui") m_ui.visible = v != 0.0f;
@@ -968,6 +978,20 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "cpu_ms") return m_cpuMs;
     if (n == "gpu_ms") return m_renderer->stats().gpuMs;
     if (n == "mud") return m_gfx.mud;
+    if (n == "body_mud_max") return m_bodyMud.maxAmount();
+    if (n.rfind("body_mud_", 0) == 0) {
+        // body_mud_<region>: arch_rear_<w>, arch_front_<w>, behind_<w> (w: fl fr rl rr), rear_bumper, front_bumper.
+        static const char* kW[4] = {"fl", "fr", "rl", "rr"};
+        const std::string r = n.substr(9);
+        if (r == "rear_bumper") return m_bodyMud.coat(kMudRearBumper).amount;
+        if (r == "front_bumper") return m_bodyMud.coat(kMudFrontBumper).amount;
+        for (int w = 0; w < 4; ++w) {
+            if (r == std::string("arch_rear_") + kW[w]) return m_bodyMud.coat(kMudArchRear + w).amount;
+            if (r == std::string("arch_front_") + kW[w]) return m_bodyMud.coat(kMudArchFront + w).amount;
+            if (r == std::string("behind_") + kW[w]) return m_bodyMud.coat(kMudBehind + w).amount;
+        }
+    }
+    if (n == "spray_fine") return m_spray.fineShare();
     if (n == "tod") return m_gfx.settings.timeOfDay;
     if (n == "tod_run") return m_gfx.timeLapse ? 1.0 : 0.0;
     if (n == "sun_el" || n == "sun_az") {

@@ -3,6 +3,7 @@
 #include "render/GroundMaps.h"
 #include "render/TimeOfDay.h"
 #include "sim/TireMarks.h"
+#include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 
 #include <SDL3/SDL.h>
@@ -982,6 +983,14 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     computeCascades(frame, aspect, fu, lightViewProj);
     fu.groundRect = m_groundRect;
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
+    if (frame.bodyMud) {
+        for (int r = 0; r < kBodyMudRegions; ++r) {
+            const BodyMudCoat& c = frame.bodyMud->coat(r);
+            fu.bodyMudAmount[r / 4][r % 4] = c.amount;
+            fu.bodyMudFlecks[r / 4][r % 4] = c.flecks;
+            fu.bodyMudColor[r] = glm::vec4(c.color[0], c.color[1], c.color[2], c.wetness);
+        }
+    }
     fu.clipPlane = glm::vec4(0, 0, 0, 1);
     fu.options = glm::vec4(s.groundGrid ? 0.35f : 0.0f, exposure, 1.0f, s.clouds ? 1.0f : 0.0f);
 
@@ -1082,6 +1091,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         du.tint = d.tint;
         du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, d.soilWetness, d.wheelRadius);
         du.soil = d.soil;
+        du.soilExtra = glm::vec4(d.soilFlecks, d.soilStick, 0.0f, 0.0f);
         SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
         SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
@@ -1374,7 +1384,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         // headlights, fog), blended after the water.
         if (sprayCount > 0) {
             SDL_BindGPUGraphicsPipeline(pass, m_sprayPipe);
-            const glm::vec4 sprayInfo(float(sprayCount), 0, 0, 0);
+            // y: angular size of one render pixel (sub-pixel bits are drawn at >= ~0.7 px with less alpha instead).
+            const float pixelAngle = 2.0f * std::tan(0.5f * frame.fovYRadians) / float(std::max(m_stats.renderH, 1u));
+            const glm::vec4 sprayInfo(float(sprayCount), pixelAngle, 0, 0);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUVertexUniformData(cmd, 1, &sprayInfo, sizeof(sprayInfo));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));

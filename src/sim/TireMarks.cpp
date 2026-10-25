@@ -82,10 +82,11 @@ float markSlide(const WheelContactSample& c) {
 
 SoilType soilType(SurfaceId id) {
     switch (id) {
-    case SurfaceId::Mud: return {1.0f, 0.6f, 1.0f, {0.045f, 0.031f, 0.018f}};
-    case SurfaceId::PackedDirt: return {0.5f, 1.5f, 0.15f, {0.20f, 0.135f, 0.075f}};
-    case SurfaceId::Sand: return {0.45f, 1.0f, 0.0f, {0.42f, 0.34f, 0.22f}};
-    case SurfaceId::Grass: return {0.35f, 2.5f, 0.35f, {0.10f, 0.095f, 0.042f}};
+    // Dry sand: a light tan dusting at ~0.15 of the mud load; grass: the brown earth under the turf plus a few blades.
+    case SurfaceId::Mud: return {1.0f, 0.6f, 1.0f, {0.045f, 0.031f, 0.018f}, 1.0f, 0.0f};
+    case SurfaceId::PackedDirt: return {0.5f, 1.5f, 0.15f, {0.20f, 0.135f, 0.075f}, 0.55f, 0.0f};
+    case SurfaceId::Sand: return {0.15f, 1.0f, 0.0f, {0.30f, 0.255f, 0.185f}, 0.1f, 0.0f};
+    case SurfaceId::Grass: return {0.3f, 2.5f, 0.3f, {0.12f, 0.085f, 0.050f}, 0.5f, 0.35f};
     default: return {};
     }
 }
@@ -97,19 +98,23 @@ void TreadSoil::update(const WheelContactSample& c, float dt, bool inWater) {
     // Rolling and sliding both move tread over the ground; a sliding or spinning patch scrubs it off faster.
     const float d = (c.velocity.Length() + std::abs(c.rollingSpeed) * 0.25f + 3.0f * c.slipSpeed()) * dt;
     SoilType ground = soilType(c.surface);
-    if (inWater) ground = {0.2f, 0.8f, 1.0f, {0.05f, 0.036f, 0.022f}}; // rinsed to a thin film of muddy water
+    if (inWater) ground = {0.2f, 0.8f, 1.0f, {0.05f, 0.036f, 0.022f}, 0.6f, 0.0f}; // rinsed to a thin muddy film
     if (ground.pickup > 0.0f) {
         const float f = 1.0f - std::exp(-d / (ground.pickup > amount ? ground.pickupLength : 4.0f));
         const float before = amount;
         amount += (ground.pickup - amount) * f;
-        // The tread exchanges soil with the ground it rolls on: the colour and wetness move toward it.
+        // The tread exchanges soil with the ground it rolls on: colour, wetness, adhesion and blades move toward it.
         const float mixW = before <= 1e-4f ? 1.0f : std::max(f, (amount - before) / std::max(amount, 1e-4f));
         for (int k = 0; k < 3; ++k) color[k] += (ground.color[k] - color[k]) * mixW;
         wetness += (ground.wetness - wetness) * mixW;
+        stick += (ground.stick - stick) * mixW;
+        flecks += (ground.flecks - flecks) * mixW;
     } else {
-        // Hard ground: dry dust falls off within a few meters, wet mud sticks longer.
-        const float shed = 3.0f + 3.0f * wetness;
+        // Hard ground: dry sand falls off within a meter or two, dirt within a few meters, wet mud sticks longest;
+        // loose grass blades go first.
+        const float shed = 1.0f + 2.0f * stick + 3.0f * wetness;
         amount *= std::exp(-d / shed);
+        flecks *= std::exp(-d / 1.5f);
     }
 }
 

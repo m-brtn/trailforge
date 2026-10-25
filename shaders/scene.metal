@@ -30,6 +30,13 @@ constant int MAT_FOLIAGE = 13;
 constant int MAT_PAINT = 14;
 constant int MAT_SAND = 15;
 
+// BodyMudRegion (src/sim/BodyMud.h).
+constant int kMudArchRearShader = 0;
+constant int kMudArchFrontShader = 4;
+constant int kMudBehindShader = 8;
+constant int kMudRearBumperShader = 12;
+constant int kMudFrontBumperShader = 13;
+
 struct FrameUniforms {
     float4x4 viewProj;
     float4x4 invViewProj;
@@ -60,6 +67,9 @@ struct FrameUniforms {
     float4 headlightL;      // xyz: lamp position, w: intensity (0 = off)
     float4 headlightR;      // xyz: lamp position
     float4 headlightDir;    // xyz: beam axis, w: cos of the outer cone angle
+    float4 bodyMudAmount[4]; // BodyMud regions 0..13 (src/sim/BodyMud.h order), cosmetic
+    float4 bodyMudColor[16]; // rgb linear, w: wetness
+    float4 bodyMudFlecks[4]; // grass blades in the coat per region
 };
 
 struct DrawUniforms {
@@ -68,6 +78,7 @@ struct DrawUniforms {
     float4 tint;            // rgb multiplier
     float4 params;          // x: mud scale, y: mud mapping (0 body, 1 wheel), z: tread soil wetness, w: wheel radius
     float4 soil;            // wheels: soil in the tread, rgb linear colour, a amount 0..1
+    float4 soilExtra;       // wheels: x grass flecks in the tread, y soil adhesion (dry sand dusts, mud cakes)
 };
 
 // ---------------------------------------------------------------- common helpers
@@ -309,6 +320,7 @@ struct LitOut {
     float mudMode [[flat]]; // DrawUniforms.params.y
     float4 soil [[flat]];
     float2 soilParams [[flat]]; // x: wetness, y: wheel radius
+    float2 soilExtra [[flat]];  // x: grass flecks, y: adhesion
 };
 
 vertex LitOut lit_vs(LitIn in [[stage_in]], constant FrameUniforms& frame [[buffer(0)]],
@@ -325,6 +337,7 @@ vertex LitOut lit_vs(LitIn in [[stage_in]], constant FrameUniforms& frame [[buff
     out.mudMode = draw.params.y;
     out.soil = draw.soil;
     out.soilParams = draw.params.zw;
+    out.soilExtra = draw.soilExtra.xy;
     return out;
 }
 
@@ -451,7 +464,8 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
 
 // Soil carried in the tread (TreadSoil, cosmetic): the grooves and the tread face load first, then the outer
 // sidewall; the rim catches only a little. Wheel-local space: axle along X, radius in YZ.
-float treadSoilCover(float4 soil, float radius, float3 lp, float3 ln, texture2d<float> noise, sampler ns) {
+// Poorly sticking soil (dry sand, stick ~0.1) only fills the grooves and the sidewall base and stays a thin film.
+float treadSoilCover(float4 soil, float stick, float radius, float3 lp, float3 ln, texture2d<float> noise, sampler ns) {
     if (soil.a <= 0.002 || radius <= 0.0) return 0.0;
     const float r = length(lp.yz) / radius;
     const float radial = abs(dot(normalize(ln), float3(0.0, normalize(lp.yz + 1e-5))));
@@ -461,7 +475,10 @@ float treadSoilCover(float4 soil, float radius, float3 lp, float3 ln, texture2d<
     // Need: how much soil a spot needs before it is covered (0 = first to fill).
     const float face = smoothstep(0.90, 0.97, r) * smoothstep(0.35, 0.8, radial);
     const float groove = face * (1.0 - smoothstep(0.975, 0.995, r)); // recessed between the lugs
-    float need = mix(0.35 + 1.6 * saturate((0.97 - r) / 0.35), 0.12, face) - 0.12 * groove;
+    const float faceNeed = 0.12 + 0.3 * (1.0 - saturate(stick));       // lug tops: sand needs far more than mud
+    float side = 0.35 + 1.6 * saturate((0.97 - r) / 0.35);
+    side = min(side, 0.08 + 3.0 * max(0.95 - r, 0.0));                  // sidewall base next to the shoulder
+    float need = mix(side, faceNeed, face) - faceNeed * groove;
     need = r < 0.62 ? 0.92 : need; // rim
     const float t = soil.a - need + (n - 0.5) * 0.3 + (sp - 0.5) * 0.25;
     return smoothstep(0.0, 0.08, t) * (r < 0.62 ? 0.5 : 1.0);
@@ -485,6 +502,72 @@ float mudCover(float amount, float receptivity, float radial, float3 lp, float3 
     }
     const float t = amount * receptivity * 0.85 - height + (n - 0.5) * 0.35 + (sp - 0.5) * 0.45;
     return smoothstep(0.0, 0.06, t);
+}
+
+// Spray mud on the body (BodyMud regions, cosmetic). Body space: +X left, +Z forward; arches centered at y = -0.20,
+// z = +-1.40, radius 0.545, outer skin at |x| = 0.88. Each region has a "need" field (how much coat a spot needs
+// before it is covered, 0 = first): the rear part of an arch fills from the liner facing the tire, the panel behind a
+// wheel from the sill upward, bumpers from the bottom edge. Returns rgb + cover, the wetness and grass flecks.
+struct BodyMudAcc {
+    float k = 0.0, jitter = 0.0;
+    float best = 0.0, sum = 0.0, wet = 0.0, flecks = 0.0;
+    float3 col = float3(0.0);
+};
+
+void bodyMudAdd(constant FrameUniforms& f, thread BodyMudAcc& acc, int r, float need) {
+    const float a = f.bodyMudAmount[r / 4][r % 4];
+    if (a <= 0.002) return;
+    const float c = smoothstep(0.0, 0.07, a * acc.k - need + acc.jitter);
+    if (c <= 0.0) return;
+    acc.best = max(acc.best, c);
+    acc.sum += c;
+    acc.col += f.bodyMudColor[r].rgb * c;
+    acc.wet += f.bodyMudColor[r].w * c;
+    acc.flecks += f.bodyMudFlecks[r / 4][r % 4] * c;
+}
+
+float4 bodyMudCover(constant FrameUniforms& f, float3 P, float3 Nw, float receptivity, texture2d<float> noise,
+                   sampler ns, thread float& wet, thread float& flecks) {
+    if (receptivity <= 0.001) return float4(0.0);
+    const float3 p = (f.vehicleInv * float4(P, 1.0)).xyz;
+    if (abs(p.x) > 1.15 || p.y > 0.9 || abs(p.z) > 2.6) return float4(0.0);
+    const float3 nb = normalize((f.vehicleInv * float4(Nw, 0.0)).xyz);
+    const float3 w3 = abs(nb) / (abs(nb).x + abs(nb).y + abs(nb).z + 1e-4);
+    const float n = noise.sample(ns, float2(p.z * 1.9, p.y * 1.1)).g * w3.x + noise.sample(ns, p.xz * 1.9).g * w3.y +
+                    noise.sample(ns, float2(p.x * 1.9, p.y * 1.1)).g * w3.z;
+    const float sp = noise.sample(ns, p.zy * 9.1 + p.x).a * w3.x + noise.sample(ns, p.xz * 9.1).a * w3.y +
+                     noise.sample(ns, p.xy * 9.1).a * w3.z;
+    const float jitter = (n - 0.5) * 0.35 + (sp - 0.5) * 0.5;
+    BodyMudAcc acc;
+    acc.k = receptivity;
+    acc.jitter = jitter;
+    for (int w = 0; w < 4; ++w) {
+        const float sx = (w % 2 == 0) ? 1.0 : -1.0; // FL / RL on the left (+X)
+        const float zc = w < 2 ? 1.40 : -1.40;
+        if (p.x * sx < 0.30) continue;
+        const float2 d2 = float2(p.z - zc, p.y + 0.20);
+        const float d = length(d2);
+        const float facing = saturate(dot(nb, normalize(float3(sx * 0.90, -0.20, zc) - p)));
+        if (d > 0.38 && d < 1.0) {
+            // Arch: angle 0 straight behind (or ahead) of the axle, pi/2 at the top; spray hits ~25 deg up first.
+            const float ring = 1.8 * saturate((d - 0.60) / 0.45) + 0.35 * (1.0 - facing);
+            const float angR = atan2(d2.y, -d2.x), angF = atan2(d2.y, d2.x);
+            bodyMudAdd(f, acc, kMudArchRearShader + w, 0.04 + 0.8 * pow(saturate(abs(angR - 0.45) / 1.3), 1.5) + ring);
+            bodyMudAdd(f, acc, kMudArchFrontShader + w, 0.04 + 0.8 * pow(saturate(abs(angF - 0.45) / 1.3), 1.5) + ring);
+        }
+        // Panel behind the wheel: from the arch edge backward (front: sill and lower rear door; rear: rear quarter).
+        const float len = w < 2 ? 1.3 : 0.45;
+        const float t = ((zc - 0.50) - p.z) / len;
+        if (t > -0.15 && t < 1.2 && p.x * sx > 0.45)
+            bodyMudAdd(f, acc, kMudBehindShader + w, 0.08 + 1.3 * saturate((p.y + 0.12) / 0.75) + 0.5 * saturate(t) +
+                                          2.0 * saturate(t - 1.0));
+    }
+    if (p.z < -2.10) bodyMudAdd(f, acc, kMudRearBumperShader, 0.10 + 1.4 * saturate((p.y + 0.02) / 0.55) + (nb.z > -0.3 ? 0.15 : 0.0));
+    if (p.z > 2.15) bodyMudAdd(f, acc, kMudFrontBumperShader, 0.10 + 1.4 * saturate((p.y + 0.02) / 0.55) + (nb.z < 0.3 ? 0.15 : 0.0));
+    if (acc.best <= 0.0) return float4(0.0);
+    wet = acc.wet / acc.sum;
+    flecks = acc.flecks / acc.sum;
+    return float4(acc.col / acc.sum, acc.best);
 }
 
 fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], constant FrameUniforms& f [[buffer(0)]],
@@ -566,7 +649,10 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
             s.emissive *= 1.0 - 0.85 * mud;
         }
         if (in.mudMode > 0.5) {
-            const float soilC = treadSoilCover(in.soil, in.soilParams.y, in.localPos, in.localNormal, noise, noiseSampler);
+            const float stick = in.soilExtra.y;
+            // Dry, poorly sticking soil is a thin dusting: the black rubber shows through.
+            const float soilC = treadSoilCover(in.soil, stick, in.soilParams.y, in.localPos, in.localNormal, noise,
+                                               noiseSampler) * mix(0.45, 1.0, saturate(stick));
             if (soilC > 0.0) {
                 const float grain = noise.sample(noiseSampler, in.localPos.zy * 9.0 + in.localPos.x).a;
                 const float wetS = in.soilParams.x;
@@ -574,6 +660,33 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
                 s.roughness = mix(s.roughness, mix(0.95, 0.35, wetS), soilC);
                 s.metallic = mix(s.metallic, 0.0, soilC);
                 s.clearCoat *= 1.0 - soilC;
+            }
+            // A few torn grass blades stuck in the tread and on the shoulder (sparse specks, never a green tint).
+            const float r = length(in.localPos.yz) / max(in.soilParams.y, 1e-3);
+            if (in.soilExtra.x > 0.01 && r > 0.88 && r < 1.02) {
+                const float ang = atan2(in.localPos.y, in.localPos.z);
+                const float fn = noise.sample(noiseSampler, float2(ang * 13.0, in.localPos.x * 37.0)).a;
+                const float fleck = smoothstep(0.0, 0.02, fn - (1.0 - 0.09 * in.soilExtra.x));
+                s.albedo = mix(s.albedo, float3(0.05, 0.10, 0.02), fleck);
+                s.roughness = mix(s.roughness, 0.7, fleck);
+            }
+        } else {
+            // Spray mud per body region (BodyMud): builds up where the wheels throw it.
+            float wetB = 0.0, fleckB = 0.0;
+            const float4 bm = bodyMudCover(f, P, normalize(in.normal), in.material.w, noise, noiseSampler, wetB, fleckB);
+            if (bm.a > 0.0) {
+                // A coat on paint reads lighter than the soil in bulk (thin film, light scattered in it); dried lighter.
+                float3 c = min(bm.rgb * mix(4.0, 2.5, wetB), bm.rgb + 0.12);
+                if (fleckB > 0.01) {
+                    const float3 bp = (f.vehicleInv * float4(P, 1.0)).xyz;
+                    const float fn = noise.sample(noiseSampler, bp.zy * 21.0 + bp.x * 13.0).a;
+                    c = mix(c, float3(0.05, 0.10, 0.02), smoothstep(0.0, 0.02, fn - (1.0 - 0.07 * fleckB)));
+                }
+                s.albedo = mix(s.albedo, c, bm.a);
+                s.roughness = mix(s.roughness, mix(0.95, 0.3, wetB), bm.a);
+                s.metallic = mix(s.metallic, 0.0, bm.a);
+                s.clearCoat *= 1.0 - bm.a;
+                s.emissive *= 1.0 - 0.85 * bm.a;
             }
         }
         s.ao = 1.0;
@@ -641,6 +754,7 @@ vertex LitOut tree_vs(LitIn in [[stage_in]], uint iid [[instance_id]], constant 
     out.mudMode = 0.0;
     out.soil = float4(0.0);
     out.soilParams = float2(0.0);
+    out.soilExtra = float2(0.0);
     return out;
 }
 
@@ -1236,7 +1350,7 @@ fragment float4 mark_mask_fs(MarkMaskOut in [[stage_in]]) {
 struct SprayInstance {
     float4 posSize; // xyz, radius (m)
     float4 color;   // linear rgb, alpha
-    float4 velKind; // xyz velocity, w: kind (0 clod, 1 crumb, 2 dust, 3 grass, 4 water) + 0.5 when resting
+    float4 velKind; // xyz velocity (resting: ground normal), w: packSprayCode (kind * 2 + resting, 0.49 seed + 0.5 wet)
 };
 
 struct SprayOut {
@@ -1244,9 +1358,10 @@ struct SprayOut {
     float3 worldPos;
     float2 uv;            // -1..1 over the billboard
     float4 color;
-    float3 axisA [[flat]]; // world axes of the billboard (A: along the motion)
+    float3 axisA [[flat]]; // world axes of the billboard (A: along the motion) or of the splat on the ground
     float3 axisB [[flat]];
     int kind [[flat]];
+    int flags [[flat]];   // 1: resting splat, 2: wet
     float seed [[flat]];
     float3 dustBase [[flat]]; // dust only: lighting per puff (ambient + headlights, sunlight before shadow), fog
     float3 dustSun [[flat]];
@@ -1259,28 +1374,56 @@ vertex SprayOut spray_vs(uint vid [[vertex_id]], uint iid [[instance_id]], const
     const float2 c = kMarkCorners[vid % 6] * float2(2.0, 1.0) - float2(1.0, 0.0);
     const float3 P = p.posSize.xyz;
     const float3 toCam = normalize(f.cameraPos.xyz - P);
-    float3 right = cross(float3(0, 1, 0), toCam);
-    right = length_squared(right) > 1e-6 ? normalize(right) : float3(1, 0, 0);
-    const float3 up = cross(toCam, right);
-    const int kind = int(p.velKind.w);
-    // Solid bits are stretched along their screen-plane velocity (about 1/80 s of travel), dust is not.
-    const float3 v = p.velKind.xyz - toCam * dot(p.velKind.xyz, toCam);
-    const float vl = length(v);
-    const bool stretch = kind != 2 && vl > 0.5;
-    const float3 a = stretch ? v / vl : right;
-    const float3 b = stretch ? normalize(cross(toCam, a)) : up;
-    const float r = p.posSize.w;
-    const float along = r + (stretch ? vl * 0.0125 : 0.0);
-    const float3 world = P + a * (c.x * along) + b * (c.y * r);
+    const int code = int(p.velKind.w);
+    const float fr = fract(p.velKind.w);
+    const bool wet = fr >= 0.5;
+    const float seed = saturate((fr - (wet ? 0.5 : 0.0)) / 0.49);
+    const int kind = code / 2;
+    const bool resting = (code & 1) != 0;
+    float r = p.posSize.w;
+    float alpha = p.color.a;
+    float3 a, b, world;
+    if (resting) {
+        // Flat splat on the ground (normal in velKind.xyz), turned and stretched by the seed.
+        const float3 N = normalize(p.velKind.xyz);
+        const float ang = seed * 6.2832;
+        const float3 t0 = normalize(cross(N, abs(N.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0)));
+        const float3 t1 = cross(N, t0);
+        a = t0 * cos(ang) + t1 * sin(ang);
+        b = cross(N, a);
+        world = P + a * (c.x * r) + b * (c.y * r * mix(0.55, 1.0, fract(seed * 7.13)));
+    } else {
+        float3 right = cross(float3(0, 1, 0), toCam);
+        right = length_squared(right) > 1e-6 ? normalize(right) : float3(1, 0, 0);
+        const float3 up = cross(toCam, right);
+        // Sub-pixel bits keep at least ~0.7 px on screen with less alpha. One particle stands for a cluster of real
+        // droplets, so the alpha is not reduced all the way to the covered area.
+        const float minR = info.y * length(f.cameraPos.xyz - P);
+        if (kind != 2 && r < minR) {
+            alpha *= max(sqrt(r / minR), 0.75);
+            r = minR;
+        }
+        // Solid bits are stretched along their screen-plane velocity (1/40 s of travel, like a video camera shutter);
+        // a longer streak is somewhat fainter.
+        const float3 v = p.velKind.xyz - toCam * dot(p.velKind.xyz, toCam);
+        const float vl = length(v);
+        const bool stretch = kind != 2 && vl > 0.5;
+        a = stretch ? v / vl : right;
+        b = stretch ? normalize(cross(toCam, a)) : up;
+        const float along = r + (stretch ? vl / 40.0 : 0.0);
+        alpha *= max(mix(1.0, r / along, 0.5), 0.75);
+        world = P + a * (c.x * along) + b * (c.y * r);
+    }
     SprayOut out;
     out.position = f.viewProj * float4(world, 1.0);
     out.worldPos = world;
     out.uv = c;
-    out.color = p.color;
+    out.color = float4(p.color.rgb, alpha);
     out.axisA = a;
     out.axisB = b;
     out.kind = kind;
-    out.seed = fract(float(iid) * 0.6180339);
+    out.flags = (resting ? 1 : 0) | (wet ? 2 : 0);
+    out.seed = seed;
     out.dustBase = float3(0.0);
     out.dustSun = float3(0.0);
     out.dustFog = float4(0.0);
@@ -1293,7 +1436,6 @@ vertex SprayOut spray_vs(uint vid [[vertex_id]], uint iid [[instance_id]], const
         out.dustSun = albedo * f.sunColor.rgb * (saturate(dot(N, f.sunDir.xyz)) / PI + 0.15 + 0.45 * forward);
         out.dustFog = fogAt(f, P, f.cameraPos.xyz);
     }
-    (void)info;
     return out;
 }
 
@@ -1306,9 +1448,11 @@ fragment float4 spray_fs(SprayOut in [[stage_in]], constant FrameUniforms& f [[b
     const float2 uv = in.uv;
     const float r2 = dot(uv, uv);
     const float n = noise.sample(ns, uv * 0.35 + in.seed * 7.31).a;
+    const bool resting = (in.flags & 1) != 0, wet = (in.flags & 2) != 0;
     float alpha = in.color.a;
     float3 N;
     float rough = 0.9;
+    float3 albedo = in.color.rgb * (0.85 + 0.3 * n);
     if (in.kind == 2) {
         // Dust: soft, lumpy puff, lit per puff (vertex stage); only the shape and a one-tap shadow per pixel.
         alpha *= exp(-2.6 * r2) * (0.55 + 0.9 * n);
@@ -1316,32 +1460,43 @@ fragment float4 spray_fs(SprayOut in [[stage_in]], constant FrameUniforms& f [[b
         const float sh = shadowFactor(f, shadowMap, shadowSampler, P, float3(0, 1, 0), 0);
         const float3 c = in.dustBase + in.dustSun * sh;
         return float4(mix(c, in.dustFog.rgb, in.dustFog.a), saturate(alpha));
-    } else if (in.kind == 3) {
+    } else if (in.kind == 3 && !resting) {
         // Grass bit: a thin torn blade.
         if (abs(uv.y) > 0.35 + 0.25 * n || r2 > 1.0) discard_fragment();
         N = normalize(V + float3(0, 0.5, 0));
         rough = 0.8;
     } else {
-        // Clods, crumbs, grains, drops: lumpy round blobs with a spherical shading normal.
-        if (r2 > 0.75 + 0.5 * n) discard_fragment();
-        const float z = sqrt(saturate(1.0 - r2));
-        N = normalize(in.axisA * uv.x + in.axisB * uv.y + V * z);
-        rough = in.kind == 4 ? 0.08 : 0.85;
+        // Droplets, specks, grains, clods and splats: irregular soft outline (the radius varies around the bit).
+        const float rr = sqrt(r2);
+        const float edgeN = noise.sample(ns, uv * 0.42 + float2(in.seed * 17.0, in.seed * 5.3)).a;
+        const float edge = wet && in.kind != 0 ? 0.78 + 0.22 * edgeN : 0.58 + 0.42 * edgeN;
+        alpha *= 1.0 - smoothstep(edge - 0.2, edge, rr);
+        if (alpha < 0.01) discard_fragment();
+        if (resting) {
+            N = normalize(cross(in.axisA, in.axisB));
+            N = dot(N, V) < 0.0 ? -N : N;
+            albedo *= wet ? 0.75 : 1.0;  // a wet splat darkens the ground under it
+            rough = wet ? 0.2 : 0.9;
+        } else {
+            const float z = sqrt(saturate(1.0 - r2 / (edge * edge)));
+            N = normalize(in.axisA * uv.x + in.axisB * uv.y + V * (z + 0.15));
+            rough = in.kind == 4 ? 0.08 : wet ? mix(0.18, 0.42, in.seed) : mix(0.75, 0.95, in.seed);
+        }
     }
     ShadeInput s;
-    s.albedo = in.color.rgb * (in.kind == 2 ? 1.0 : (0.85 + 0.3 * n));
+    s.albedo = albedo;
     s.roughness = rough;
     s.metallic = 0.0;
     s.N = N;
     s.V = V;
     s.shadow = shadowFactor(f, shadowMap, shadowSampler, P, N);
     s.ao = 1.0;
-    s.specOcclusion = in.kind == 4 ? 1.0 : 0.5;
+    s.specOcclusion = wet ? 1.0 : 0.5;
     s.emissive = float3(0.0);
     s.clearCoat = 0.0;
     s.lamp = headlightIrradiance(f, P, N);
-    if (in.kind != 0) {
-        // Grains, drops, grass bits and dust are thin: they scatter sunlight through, strongest toward the sun.
+    if (!wet && in.kind != 0 && !resting) {
+        // Dry grains and grass bits are thin: they scatter sunlight through, strongest toward the sun.
         const float forward = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
         s.emissive = s.albedo * f.sunColor.rgb * s.shadow * (0.10 + 0.30 * forward);
     }

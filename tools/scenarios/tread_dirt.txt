@@ -76,7 +76,8 @@ down S
 until speed_kmh < 0.5 6
 up S
 log sand_wheel
-expect tread_soil_max > 0.3
+expect tread_soil_max > 0.08
+expect tread_soil_max < 0.2
 camera 38.8 1.4 53.0 41.3 0.9 54.5
 capture /tmp/trailforge_tread_wheel_sand.png
 wait 0.2

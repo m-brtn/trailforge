@@ -29,7 +29,8 @@ add_library(trailforge_sim STATIC
     src/sim/Simulation.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
-    src/sim/WheelSpray.cpp)
+    src/sim/WheelSpray.cpp
+    src/sim/BodyMud.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -115,7 +116,8 @@ if(TRAILFORGE_BUILD_TESTS)
             skid_mark_profile tire_marks_boundary wheel_spray
             abs_prevents_lock
             diff_locks_climb
-            traction_control_mud driving_aids_logic friction_ellipse)
+            traction_control_mud driving_aids_logic friction_ellipse
+            tread_soil_surfaces body_mud)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

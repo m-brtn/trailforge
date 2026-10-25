@@ -1,9 +1,11 @@
 // Headless TrailForge physics checks. Usage: trailforge_tests <test_name>
 // (CTest registers each test separately). Tolerances are engineering, not bitwise.
 
+#include "sim/BodyMud.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 #include "sim/WheelSpray.h"
+#include "track/TestTrack.h"
 
 #include <algorithm>
 #include <array>
@@ -609,7 +611,7 @@ void tireMarksBoundary() {
     const Drive drives[] = {{"rolling", 5.0f, 5.0f}, {"spinning", 4.0f, 9.0f}, {"locked", 5.0f, 0.0f}};
     const SurfaceId soils[] = {SurfaceId::Mud, SurfaceId::PackedDirt, SurfaceId::Sand};
     constexpr float kBoundary = 6.0f, kMin = 0.02f;
-    float mudEnd = 0.0f;
+    float mudEnd = 0.0f, dirtEnd = 0.0f;
     for (SurfaceId soft : soils) {
         const char* name = soft == SurfaceId::Mud ? "mud" : soft == SurfaceId::Sand ? "sand" : "dirt";
         for (const Drive& k : drives) {
@@ -669,11 +671,15 @@ void tireMarksBoundary() {
                     mudEnd = printLen;
                     CHECK(firstPrint > 0.6f, "mud print starts at %.2f", firstPrint);
                     CHECK(printLen > 10.0f && printLen < 22.0f, "mud print length %.1f m (want 10..20)", printLen);
-                } else {
-                    CHECK(firstPrint > 0.08f && firstPrint < 0.4f, "%s print starts at %.2f", name,
-                          firstPrint);
-                    CHECK(printLen > 2.0f && printLen < mudEnd, "%s print length %.1f m vs mud %.1f m",
-                          name, printLen, mudEnd);
+                } else if (soft == SurfaceId::PackedDirt) {
+                    dirtEnd = printLen;
+                    CHECK(firstPrint > 0.08f && firstPrint < 0.4f, "dirt print starts at %.2f", firstPrint);
+                    CHECK(printLen > 2.0f && printLen < mudEnd, "dirt print length %.1f m vs mud %.1f m", printLen,
+                          mudEnd);
+                } else { // dry sand barely sticks: a faint dusting gone within a meter or two
+                    CHECK(firstPrint > 0.02f && firstPrint < 0.08f, "sand print starts at %.2f", firstPrint);
+                    CHECK(printLen > 0.2f && printLen < 2.5f && printLen < dirtEnd,
+                          "sand print length %.1f m vs dirt %.1f m", printLen, dirtEnd);
                 }
             }
         }
@@ -794,6 +800,8 @@ void wheelSpray() {
         std::uint64_t emitted = 0, dropped = 0;
         float meanVz = 0.0f, meanVy = 0.0f;
         int dust = 0, resting = 0, below = 0;
+        int solids = 0, fine = 0; // mud/dirt bits airborne at the end of the drive, those under 1.5 cm radius
+        float maxSolid = 0.0f;
     };
     auto drive = [](SurfaceId surface, float v, float roll, double seconds, WheelSpraySettings st = {},
                     double coast = 0.0) {
@@ -822,6 +830,12 @@ void wheelSpray() {
                     if (p.kind != SprayKind::Dust && p.age < 0.1f) r.meanVz += p.vel.GetZ(), r.meanVy += p.vel.GetY(), ++n;
                 if (n) r.meanVz /= float(n), r.meanVy /= float(n);
             }
+        }
+        for (const SprayParticle& p : spray.particles()) {
+            if (p.resting || (p.kind != SprayKind::Clod && p.kind != SprayKind::Crumb)) continue;
+            ++r.solids;
+            r.fine += p.size < 0.015f ? 1 : 0;
+            r.maxSolid = std::max(r.maxSolid, p.size);
         }
         c.contact = false;
         for (int i = 0; i < int(coast / dt); ++i) {
@@ -859,6 +873,11 @@ void wheelSpray() {
                 "dropped; sand dust %d, without dust %d\n",
                 land.resting, land.live, land.below, cap.live, (unsigned long long)cap.dropped, sand.dust,
                 sandNoDust.dust);
+    std::printf("  mud spin sizes: %d airborne bits, %.0f %% under 1.5 cm radius, largest %.3f m\n", spin.solids,
+                spin.solids ? 100.0f * float(spin.fine) / float(spin.solids) : 0.0f, spin.maxSolid);
+    CHECK(spin.solids > 0 && spin.fine >= int(0.85f * float(spin.solids)) && spin.maxSolid <= 0.03f,
+          "spray sizes: %d of %d fine, largest radius %.3f m (want mostly fine, no clod above 6 cm across)", spin.fine,
+          spin.solids, spin.maxSolid);
     CHECK(calm.emitted <= 3, "calm roll emitted %llu", (unsigned long long)calm.emitted);
     CHECK(spin.emitted > 100, "mud wheelspin emitted only %llu", (unsigned long long)spin.emitted);
     CHECK(spin.meanVz < -1.0f && spin.meanVy > 1.0f, "wheelspin throw vz %.2f vy %.2f (want backward and up)",
@@ -1128,6 +1147,133 @@ void frictionEllipse() {
           corner[1], corner[0]);
 }
 
+WheelContactSample syntheticWheel(SurfaceId surface, float v, float roll, JPH::Vec3 at) {
+    WheelContactSample c;
+    c.contact = true;
+    c.surface = surface;
+    c.patchCenter = at;
+    c.velocity = JPH::Vec3(0.0f, 0.0f, v);
+    c.load = 4900.0f;
+    c.rollingSpeed = roll;
+    c.longitudinalSlipSpeed = roll - v;
+    c.width = 0.3f;
+    c.radius = 0.4f;
+    return c;
+}
+
+// Tread soil per surface (cosmetic): mud loads the most and stays longest, dirt in between, dry sand a light tan
+// dusting capped at ~0.15 of mud that sheds within a meter or two, grass the brown earth under the turf with a few
+// blades (no green coat).
+void treadSoilSurfaces() {
+    struct Result {
+        TreadSoil soil;
+        float shed = 0.0f; // m of concrete to 1/e
+    };
+    auto drive = [](SurfaceId s) {
+        Result r;
+        constexpr float dt = 1.0f / 120.0f, v = 5.0f;
+        WheelContactSample c = syntheticWheel(s, v, v, JPH::Vec3(-300.0f, 0.0f, 0.0f));
+        for (int i = 0; i < int(8.0f / dt); ++i) r.soil.update(c, dt); // 40 m
+        TreadSoil t = r.soil;
+        c.surface = SurfaceId::Concrete;
+        float d = 0.0f;
+        while (t.amount > r.soil.amount / 2.718f && d < 100.0f) {
+            t.update(c, dt);
+            d += v * dt;
+        }
+        r.shed = d;
+        return r;
+    };
+    const Result mud = drive(SurfaceId::Mud), dirt = drive(SurfaceId::PackedDirt), sand = drive(SurfaceId::Sand),
+                 grass = drive(SurfaceId::Grass);
+    auto print = [](const char* n, const Result& r) {
+        std::printf("  %-5s amount %.3f wet %.2f stick %.2f flecks %.2f colour %.3f %.3f %.3f, sheds to 1/e in %.1f m\n",
+                    n, r.soil.amount, r.soil.wetness, r.soil.stick, r.soil.flecks, r.soil.color[0], r.soil.color[1],
+                    r.soil.color[2], r.shed);
+    };
+    print("mud", mud);
+    print("dirt", dirt);
+    print("sand", sand);
+    print("grass", grass);
+    CHECK(mud.soil.amount > 0.9f && mud.soil.amount > dirt.soil.amount && dirt.soil.amount > sand.soil.amount,
+          "pickup order mud %.2f > dirt %.2f > sand %.2f", mud.soil.amount, dirt.soil.amount, sand.soil.amount);
+    CHECK(sand.soil.amount <= 0.2f * mud.soil.amount, "sand coverage %.3f above 0.2 of mud %.3f", sand.soil.amount,
+          mud.soil.amount);
+    CHECK(mud.shed > dirt.shed && dirt.shed > sand.shed && sand.shed < 2.0f,
+          "shedding mud %.1f > dirt %.1f > sand %.1f m (sand < 2 m)", mud.shed, dirt.shed, sand.shed);
+    const float* sc = sand.soil.color;
+    const float sandMax = std::max({sc[0], sc[1], sc[2]}), sandMin = std::min({sc[0], sc[1], sc[2]});
+    CHECK(sandMax < 0.35f && sandMin > 0.4f * sandMax, "sand colour %.3f %.3f %.3f is not a muted tan", sc[0], sc[1],
+          sc[2]);
+    const float* gc = grass.soil.color;
+    CHECK(gc[0] > gc[1] && gc[1] > gc[2], "grass soil colour %.3f %.3f %.3f is not brown earth", gc[0], gc[1], gc[2]);
+    CHECK(grass.soil.flecks > 0.05f && grass.soil.flecks < 0.5f, "grass blade flecks %.2f (want sparse)",
+          grass.soil.flecks);
+    CHECK(grass.soil.amount < 0.5f * mud.soil.amount, "grass load %.2f vs mud %.2f (want modest)", grass.soil.amount,
+          mud.soil.amount);
+    CHECK(mud.soil.flecks == 0.0f && sand.soil.flecks == 0.0f, "flecks off grass: mud %.2f sand %.2f",
+          mud.soil.flecks, sand.soil.flecks);
+}
+
+// Cosmetic body mud from four synthetic wheels: rear wheelspin in mud coats the rear arches, the rear quarters and
+// the rear bumper within seconds, the slowly rolling front wheels leave the front clean, concrete adds nothing, dry
+// sand stays a thin dust film, grass leaves brown earth with sparse blades, and a puddle washes the wet regions.
+void bodyMud() {
+    auto run = [](BodyMud& mud, SurfaceId s, float frontRoll, float rearRoll, float seconds, JPH::Vec3 at,
+                  std::array<TreadSoil, 4> soil = {}) {
+        constexpr float dt = 1.0f / 60.0f;
+        std::array<WheelContactSample, 4> w;
+        for (int i = 0; i < 4; ++i)
+            w[std::size_t(i)] = syntheticWheel(s, 1.0f, i < 2 ? frontRoll : rearRoll,
+                                               at + JPH::Vec3(i % 2 ? -0.8f : 0.8f, 0.0f, i < 2 ? 1.4f : -1.4f));
+        for (int i = 0; i < int(seconds / dt); ++i) mud.update(w, soil, dt);
+    };
+    const JPH::Vec3 dry(-300.0f, 0.0f, 0.0f);
+    BodyMud m;
+    run(m, SurfaceId::Mud, 1.0f, 9.0f, 1.0f, dry);
+    const float arch1 = m.coat(kMudArchRear + 2).amount;
+    run(m, SurfaceId::Mud, 1.0f, 9.0f, 2.0f, dry);
+    const BodyMudCoat& arch = m.coat(kMudArchRear + 2);
+    const float quarter = m.coat(kMudBehind + 3).amount, bumper = m.coat(kMudRearBumper).amount;
+    const float front = std::max({m.coat(kMudArchRear + 0).amount, m.coat(kMudBehind + 0).amount,
+                                  m.coat(kMudFrontBumper).amount, m.coat(kMudArchFront + 2).amount});
+    std::printf("  mud rear wheelspin: rear arch %.2f after 1 s, %.2f after 3 s (wet %.2f), rear quarter %.2f, "
+                "rear bumper %.2f, front regions max %.2f\n",
+                arch1, arch.amount, arch.wetness, quarter, bumper, front);
+    CHECK(arch1 > 0.3f && arch.amount > 0.7f, "rear arch builds %.2f / %.2f (want fast)", arch1, arch.amount);
+    CHECK(quarter > 0.3f && bumper > 0.2f && quarter < arch.amount, "rear quarter %.2f bumper %.2f", quarter, bumper);
+    CHECK(front < 0.5f * quarter, "front regions %.2f while only the rear wheels spin", front);
+
+    BodyMud concrete;
+    run(concrete, SurfaceId::Concrete, 9.0f, 9.0f, 3.0f, dry);
+    CHECK(concrete.maxAmount() == 0.0f, "clean tread on concrete coats %.3f", concrete.maxAmount());
+
+    BodyMud sand;
+    run(sand, SurfaceId::Sand, 9.0f, 9.0f, 10.0f, dry);
+    BodyMud grass;
+    run(grass, SurfaceId::Grass, 9.0f, 9.0f, 10.0f, dry);
+    const BodyMudCoat& g = grass.coat(kMudArchRear + 2);
+    std::printf("  10 s wheelspin: sand max %.3f, grass arch %.2f colour %.3f %.3f %.3f flecks %.2f\n",
+                sand.maxAmount(), g.amount, g.color[0], g.color[1], g.color[2], g.flecks);
+    CHECK(sand.maxAmount() < 0.15f, "sand coat %.3f (want a light dust film)", sand.maxAmount());
+    CHECK(g.amount > 0.1f && g.amount < 0.5f, "grass coat %.2f", g.amount);
+    CHECK(g.color[0] > g.color[1] && g.color[1] > g.color[2], "grass coat colour %.3f %.3f %.3f is not brown",
+          g.color[0], g.color[1], g.color[2]);
+    CHECK(g.flecks > 0.0f && g.flecks < 0.5f, "grass coat flecks %.2f (want sparse)", g.flecks);
+
+    const WaterInfo water = TestTrack::water();
+    const JPH::Vec3 puddle(0.5f * (water.x0 + water.x1), water.level - 0.3f, 0.5f * (water.z0 + water.z1));
+    const float before = m.coat(kMudArchRear + 2).amount;
+    std::array<WheelContactSample, 4> w;
+    for (int i = 0; i < 4; ++i) {
+        w[std::size_t(i)] = syntheticWheel(SurfaceId::Concrete, 3.0f, 3.0f, puddle);
+    }
+    for (int i = 0; i < 300; ++i) m.update(w, std::array<TreadSoil, 4>{}, 1.0f / 60.0f);
+    const float after = m.coat(kMudArchRear + 2).amount;
+    std::printf("  puddle 5 s at 3 m/s: rear arch %.2f -> %.2f\n", before, after);
+    CHECK(after < 0.4f * before, "puddle wash %.2f -> %.2f", before, after);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1151,6 +1297,8 @@ int main(int argc, char** argv) {
         {"traction_control_mud", tractionControlMud},
         {"driving_aids_logic", drivingAidsLogic},
         {"friction_ellipse", frictionEllipse},
+        {"tread_soil_surfaces", treadSoilSurfaces},
+        {"body_mud", bodyMud},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

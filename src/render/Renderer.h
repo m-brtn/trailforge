@@ -20,6 +20,7 @@ namespace tf {
 struct GroundMaps;
 class TireMarks;
 class WheelSpray;
+class BodyMud;
 
 // Uniform block layouts; must match the structs of the same name in shaders/scene.metal.
 struct FrameUniforms {
@@ -52,6 +53,9 @@ struct FrameUniforms {
     glm::vec4 headlightL;   // xyz: lamp position, w: intensity (0 = off)
     glm::vec4 headlightR;   // xyz: lamp position
     glm::vec4 headlightDir; // xyz: beam axis, w: cos of the outer cone angle
+    glm::vec4 bodyMudAmount[4]; // BodyMud regions 0..13 (BodyMudRegion order), cosmetic
+    glm::vec4 bodyMudColor[16]; // rgb linear, w: wetness
+    glm::vec4 bodyMudFlecks[4]; // grass blades in the coat per region
 };
 
 struct DrawUniforms {
@@ -60,6 +64,7 @@ struct DrawUniforms {
     glm::vec4 tint;
     glm::vec4 params;
     glm::vec4 soil;
+    glm::vec4 soilExtra; // x: grass flecks in the tread, y: soil adhesion
 };
 
 struct GrassUniforms {
@@ -126,6 +131,8 @@ struct DrawItem {
     bool wheelMud = false;     // map the mud radially (wheel) instead of by height (body)
     glm::vec4 soil{0.0f};      // wheels: soil in the tread (rgb linear colour, a amount 0..1), cosmetic
     float soilWetness = 0.0f;
+    float soilFlecks = 0.0f;   // grass blades stuck in the tread
+    float soilStick = 1.0f;    // adhesion of the tread soil (dry sand dusts, mud cakes)
     float wheelRadius = 0.0f;
     bool castsShadow = true;
     bool inReflection = true;  // drawn into the puddle reflection
@@ -148,6 +155,7 @@ struct FrameDesc {
     // Vehicle state for shading only (cosmetic): body transform, mud amount and lamps.
     glm::mat4 vehicleModel{1.0f};
     float vehicleMud = 0.0f;
+    const BodyMud* bodyMud = nullptr;            // per-region spray mud on the body (cosmetic)
     float brakeLight = 0.0f;
     float reverseLight = 0.0f;
     float headlights = 1.0f;
