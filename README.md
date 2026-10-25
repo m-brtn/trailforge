@@ -200,7 +200,7 @@ One command per line, `#` starts a comment:
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
-| `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
+| `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
 | `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `back` |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
@@ -413,7 +413,7 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
   4L 15° mud climb 6.16 s vs 7.04 s (taller, so it carries more speed onto the ramp).
 - Center of mass 0.10 m below the frame center.
 - The body collision is a compound of three boxes. The visible model is a procedural five-door expedition SUV
-  (Cars.png car #1, ~16.6k triangles, 43 named parts) fitted around the physics wheels; see "Vehicle rendering".
+  (Cars.png car #1, ~18.5k triangles, 42 named parts) fitted around the physics wheels; see "Vehicle rendering".
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
@@ -442,7 +442,7 @@ All vehicle geometry is procedural and visual only (collision stays the three bo
     38 degrees, so chamfers and creases stay hard edges that catch the light and curved parts shade smooth;
     `roundedRect` builds rounded footprints (body sides, greenhouse) with matching stations between rings;
     `grid`, `prism`, `face`, `panelGap` (panel gaps and decal stripes).
-  - Lights: LED rings (DRL outline), strips, round lamps. Accessories: roof rack, light bar, winch, bow shackles,
+  - Lights: LED rings (DRL outline), strips, round lamps. Accessories: low roof rails with crossbars, cargo straps, light bar, winch, bow shackles,
     snorkel, slim fender flares over any arch outline (rounded lip, chamfered band), profile sweeps (bumpers),
     jerry cans, cargo cases, ladder, rock sliders, mirrors, spare carrier. No mud flaps (the concept has none).
     No antennas: they were left out on purpose (the concept sheet has them).
@@ -461,8 +461,9 @@ All vehicle geometry is procedural and visual only (collision stays the three bo
   and a nose dropping to the grille; olive paint, orange fender tops, side stripe, rear quarter panel and roof band,
   white roof, black pillars, flares, bumpers. Parts include doors, hood, tailgate, windshield, fenders, flares,
   bumpers (the rear one swept around the body corners with chamfers, a groove and lamp pockets), winch, tow hooks,
-  lights, mirrors, rack, light bar, cases, jerry cans, ladder, snorkel, rock sliders and two spare mounts (roof
-  rack, tailgate).
+  lights, mirrors, roof rails, light bar, strapped cases and a jerry can on the crossbars, rear jerry cans, ladder,
+  snorkel, rock sliders and one spare mount (tailgate). The concept's roof spare is left out: with the 315/70R17
+  tire it would cover two thirds of the rail spacing and stand 0.32 m tall.
 - **Wheels follow the physics**: the wheel meshes are built per axle from the active configuration (definition,
   kit, setup): `wheel.radius` and `wheel.width` give the tire size, the optional visual keys `wheel.rimRatio` and
   `wheel.tread` the rim and the tread. The arches, the flares and the wheel-house clearance are derived from

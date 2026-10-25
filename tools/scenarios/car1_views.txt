@@ -33,6 +33,10 @@ camera vehicle three_quarter_rear 9 45
 wait 0.4
 capture /tmp/trailforge_car1_34rear_noon.png
 wait 0.3
+camera vehicle roof 4.5 40
+wait 0.4
+capture /tmp/trailforge_car1_roof.png
+wait 0.3
 camera vehicle three_quarter 5.5 42
 wait 0.4
 capture /tmp/trailforge_car1_34_closeup.png

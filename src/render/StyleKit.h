@@ -110,7 +110,13 @@ void roundLamp(MeshData& m, const glm::vec3& center, const glm::vec3& axis, floa
                const Material& bezel, const Material& lens);
 
 // ---- Accessories
-void roofRack(MeshData& m, float halfW, float z0, float z1, float yBase, float height, const Material& steel);
+// Low-profile roof rails along the roof edges (x = +-halfW, z0..z1) on three feet, with crossbars at `crossZ`.
+// Returns the height of the crossbar tops (where cargo rests).
+float roofRails(MeshData& m, float halfW, float z0, float z1, float yBase, const std::vector<float>& crossZ,
+                const Material& rail, const Material& feet);
+// Ratchet strap over cargo: a thin band from one side of the load down to the crossbar on the other side.
+void cargoStrap(MeshData& m, const glm::vec3& a, const glm::vec3& top0, const glm::vec3& top1, const glm::vec3& b,
+                const Material& strap);
 void lightBar(MeshData& m, const glm::vec3& center, float halfLen, const Material& housing, const Material& ledMat);
 // Winch: drum along X centered at `center`, fairlead plate in front (+Z).
 void winch(MeshData& m, const glm::vec3& center, const Material& drum, const Material& fairlead, const Material& dark);

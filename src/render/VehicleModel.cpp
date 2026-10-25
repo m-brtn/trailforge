@@ -545,24 +545,38 @@ void buildSuv(VehicleVisual& v, const VehicleConfig& cfg) {
     style::snorkel(P.add("snorkel", "fender_front_right", {-0.93f, 0.32f, 0.86f}, true, true), -1.0f,
                    {-0.93f, 0.32f, 0.86f}, {-0.93f, 0.66f, 0.86f}, {-0.80f, 1.22f, 0.42f}, L.trim, L.liner);
 
-    // ---- Roof rack with light bar, pods, cases (the spare wheel is drawn separately)
+    // ---- Roof rails with crossbars, light bar, pods and strapped cargo. No roof spare: a 0.87 m tire lying flat
+    // would cover two thirds of the rail spacing and stand 0.32 m tall; the spare rides on the tailgate.
     {
-        const float rackY = kRoofTop + 0.08f;
-        MeshData& rack = P.add("roof_rack", "body_shell", {0, kRoofTop, -0.92f}, true, true);
-        style::roofRack(rack, 0.66f, -2.00f, 0.16f, kRoofTop, 0.08f, L.steel);
+        constexpr float kRailX = 0.64f, kRail0 = -2.00f, kRail1 = 0.16f;
+        MeshData& rails = P.add("roof_rails", "body_shell", {0, kRoofTop, -0.92f}, true, true);
+        const float top = style::roofRails(rails, kRailX, kRail0, kRail1, kRoofTop, {0.04f, -0.85f, -1.70f}, L.trim,
+                                           L.liner);
+        const Material strap{MatId::Generic, {0.03f, 0.03f, 0.035f}, 0.7f, 0.0f, 0.8f};
+        MeshData& lb = P.add("light_bar", "roof_rails", {0, top, 0.04f}, false, true);
+        style::lightBar(lb, {0.0f, top + 0.07f, 0.09f}, 0.48f, L.trim, barLed);
         for (float sx : {1.0f, -1.0f})
-            for (float z : {0.16f, -2.00f})
-                rack.addBeveledBox({sx * 0.66f, rackY, z}, {0.028f, 0.028f, 0.028f}, 0.008f, L.accent); // rack end caps
-        MeshData& lb = P.add("light_bar", "roof_rack", {0, rackY, 0.22f}, false, true);
-        style::lightBar(lb, {0.0f, rackY + 0.06f, 0.22f}, 0.48f, L.trim, barLed);
-        for (float sx : {1.0f, -1.0f})
-            style::roundLamp(lb, {sx * 0.62f, rackY + 0.06f, 0.26f}, fwd, 0.05f, 0.06f, L.trim, barLed);
-        style::cargoCase(P.add("case_front", "roof_rack", {-0.36f, rackY, -0.12f}, false, true),
-                         {-0.36f, rackY + 0.07f, -0.12f}, {0.22f, 0.07f, 0.15f}, L.accent, L.trim);
-        style::cargoCase(P.add("case_rear", "roof_rack", {0.34f, rackY, -1.62f}, false, true),
-                         {0.34f, rackY + 0.08f, -1.62f}, {0.24f, 0.08f, 0.22f}, olive, L.trim);
-        v.spares.insert(v.spares.begin(), {"spare_roof", "roof_rack", {0.0f, rackY + 0.004f, -0.86f}, {0, 1, 0}, true});
+            style::roundLamp(lb, {sx * 0.60f, top + 0.05f, 0.10f}, fwd, 0.045f, 0.05f, L.trim, barLed);
+        auto strapOver = [&](MeshData& m, float x0, float x1, float y, float z) {
+            style::cargoStrap(m, {x0 - 0.012f, top, z}, {x0 - 0.012f, y + 0.004f, z}, {x1 + 0.012f, y + 0.004f, z},
+                              {x1 + 0.012f, top, z}, strap);
+        };
+        MeshData& cf = P.add("case_front", "roof_rails", {-0.28f, top, -0.85f}, false, true);
+        style::cargoCase(cf, {-0.28f, top + 0.07f, -0.85f}, {0.24f, 0.07f, 0.20f}, L.accent, L.trim);
+        strapOver(cf, -0.52f, -0.04f, top + 0.14f, -0.85f);
+        MeshData& cr = P.add("case_rear", "roof_rails", {0.0f, top, -1.70f}, false, true);
+        style::cargoCase(cr, {0.0f, top + 0.08f, -1.70f}, {0.34f, 0.08f, 0.22f}, olive, L.trim);
+        strapOver(cr, -0.34f, 0.34f, top + 0.16f, -1.70f);
+        // Jerry can lying flat along the vehicle, strapped to the middle crossbar.
+        MeshData& jc = P.add("jerry_can_roof", "roof_rails", {0.30f, top, -0.85f}, false, true);
+        const glm::mat4 saved = jc.xf;
+        jc.xf = glm::rotate(glm::translate(glm::mat4(1.0f), {0.30f, top + 0.062f, -0.85f}), 0.5f * kPi, {1, 0, 0});
+        style::jerryCan(jc, glm::vec3(0.0f), {0, 0, -1}, red, L.trim);
+        jc.xf = saved;
+        strapOver(jc, 0.205f, 0.395f, top + 0.124f, -0.85f);
     }
+    // The ladder top hooks onto the rear end of the right rail.
+    P["ladder"].addBar({-0.70f, 1.30f, -2.17f}, {-0.64f, kRoofTop + 0.03f, -2.00f}, 0.010f, 0.010f, {0, 1, 0}, L.steel);
 
     P.finish(v);
     v.wheel.spokes = 8;
