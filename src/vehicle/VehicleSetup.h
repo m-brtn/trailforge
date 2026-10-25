@@ -53,6 +53,16 @@ bool buildSetupConfig(const VehicleDefinition& def, const VehicleSetup& setup, V
 // Current value of a parameter in a configuration built from base.
 float setupValue(const SetupParamInfo& p, const VehicleConfig& config, const VehicleConfig& base);
 
+// Textbook equivalents of the suspension values for one corner of an axle, shown next to them in the garage.
+// The springs are tuned by natural frequency f (mass independent); with the static sprung corner mass m
+// (body mass x axle weight fraction / 2) the wheel rate is k = (2 pi f)^2 m and the critical damping 2 sqrt(k m).
+// Jolt applies f and the damping ratio to the effective mass of the wheel constraint, which also contains the body's
+// rotational inertia, so the rate in the simulation is close to but not exactly this estimate.
+float sprungCornerMass(const VehicleConfig& c, int axle);        // kg
+float wheelRateFromFrequency(float frequencyHz, float cornerMass); // N/m
+float frequencyFromWheelRate(float rateNPerM, float cornerMass);   // Hz
+float criticalDamping(float frequencyHz, float cornerMass);        // N*s/m
+
 // All setups of one vehicle, persisted as JSON (setups/<vehicle id>.json in the user data directory).
 struct SetupFile {
     std::string vehicleId;

@@ -562,6 +562,12 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
             dl->AddCircleFilled(ImVec2(barX0 + (barX1 - barX0) * f, byc), sel ? 6.0f : 4.5f, col(kWhite, alpha));
             const std::string v = g.valueText(r);
             text(dl, m_body, textSize, ImVec2(valueX, ty), col(kWhite, alpha), v.c_str(), 0.04f);
+            if (const std::string note = g.valueNote(r); !note.empty()) {
+                const float ns = textSize * 0.72f;
+                text(dl, m_body, ns, ImVec2(valueX + textWidth(m_body, textSize, v.c_str(), 0.04f) + 0.4f * textSize,
+                                            ty + (textSize - ns) * 0.7f),
+                     col(kOrange, 0.85f * alpha), note.c_str(), 0.04f);
+            }
             hit.bar0 = barX0 - 8.0f;
             hit.bar1 = barX1 + 8.0f;
         } else if (r.kind != GarageRowKind::Action) {
@@ -610,6 +616,8 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
             d = g.dirty() ? "UNSAVED CHANGES (*)" : "SETUPS ARE SAVED PER VEHICLE";
         }
         if (!d.empty()) text(dl, m_body, 0.018f * H, ImVec2(x0, listBottom + 0.012f * H), col(kWhite, 0.6f), d.c_str(), 0.08f);
+        if (const std::string help = g.helpText(r); !help.empty())
+            text(dl, m_body, 0.017f * H, ImVec2(x0, listBottom + 0.036f * H), col(kOrange, 0.8f), help.c_str(), 0.06f);
     }
     // Last message (save, rename, refusals) for a few seconds.
     if (g.messageSerial() != m_garageMsgSerial) {
@@ -618,7 +626,7 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     }
     if (!g.message().empty() && ImGui::GetTime() - m_garageMsgTime < 4.0) {
         const float a = float(std::clamp(4.0 - (ImGui::GetTime() - m_garageMsgTime), 0.0, 1.0));
-        text(dl, m_body, 0.021f * H, ImVec2(x0, listBottom + 0.042f * H), col(kOrange, a), g.message().c_str(), 0.06f);
+        text(dl, m_body, 0.021f * H, ImVec2(x0, listBottom + 0.064f * H), col(kOrange, a), g.message().c_str(), 0.06f);
     }
 
     // Live numbers, bottom right: configuration and what the running vehicle does.

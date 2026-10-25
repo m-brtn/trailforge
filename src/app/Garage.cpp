@@ -334,6 +334,48 @@ std::string Garage::valueText(const GarageRow& row) const {
     return {};
 }
 
+namespace {
+// Suspension rows: axle index and whether the row is a spring (frequency) or a damping ratio; -1 = other row.
+int suspensionAxle(const SetupParamInfo& p, bool& spring) {
+    const std::string k = p.key;
+    spring = k.ends_with(".frequency");
+    if (!spring && !k.ends_with(".compression") && !k.ends_with(".rebound")) return -1;
+    if (k.starts_with("suspension.front.")) return kFrontAxle;
+    if (k.starts_with("suspension.rear.")) return kRearAxle;
+    return -1;
+}
+} // namespace
+
+std::string Garage::valueNote(const GarageRow& row) const {
+    if (row.kind != GarageRowKind::Param) return {};
+    bool spring = false;
+    const int a = suspensionAxle(*row.param, spring);
+    if (a < 0) return {};
+    const float m = sprungCornerMass(m_config, a);
+    const float f = m_config.tuning.axles[std::size_t(a)].springFrequency;
+    char buf[48];
+    if (spring) std::snprintf(buf, sizeof(buf), "%.0f N/mm", double(wheelRateFromFrequency(f, m) / 1000.0f));
+    else std::snprintf(buf, sizeof(buf), "%.1f kNs/m", double(value(*row.param) * criticalDamping(f, m) / 1000.0f));
+    return buf;
+}
+
+std::string Garage::helpText(const GarageRow& row) const {
+    if (row.kind != GarageRowKind::Param) return {};
+    bool spring = false;
+    const int a = suspensionAxle(*row.param, spring);
+    if (a < 0) return {};
+    char buf[200];
+    if (spring)
+        std::snprintf(buf, sizeof(buf),
+                      "NATURAL FREQUENCY: ~1-1.5 HZ SOFT OFF-ROAD, 2-3 HZ STIFF ROAD / RACE. N/MM: WHEEL RATE PER "
+                      "CORNER FOR %.0f KG SPRUNG",
+                      double(sprungCornerMass(m_config, a)));
+    else
+        std::snprintf(buf, sizeof(buf), "DAMPING RATIO (1 = CRITICAL): 0.2-0.4 COMFORT, 0.5-0.7 SPORTY. KNS/M: "
+                                        "EQUIVALENT DAMPER COEFFICIENT PER CORNER");
+    return buf;
+}
+
 std::string Garage::rangeText(const SetupParamInfo& p) const {
     if (p.kind == SetupParamKind::Choice) return {};
     const ParamRange r = range(p);

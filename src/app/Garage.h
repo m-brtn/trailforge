@@ -88,6 +88,10 @@ public:
     float fraction(const SetupParamInfo& p) const;      // 0..1 position within the range
     std::string valueText(const GarageRow& row) const;
     std::string rangeText(const SetupParamInfo& p) const;
+    // Equivalent shown next to a value (spring: wheel rate per corner in N/mm; damping: coefficient in kN*s/m),
+    // empty for other rows; and a one-line explanation for the selected row.
+    std::string valueNote(const GarageRow& row) const;
+    std::string helpText(const GarageRow& row) const;
     static const char* actionLabel(GarageAction a);
     const char* groupTitle(int row) const; // section heading above this row, or nullptr
 

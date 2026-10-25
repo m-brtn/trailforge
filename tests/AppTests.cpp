@@ -265,6 +265,26 @@ void garageModel() {
     CHECK(g.vehicle().id == "trailforge_suv" && g.factoryActive() && !g.dirty(), "starts on the SUV factory setup");
     CHECK(g.config() == catalog[0].config, "factory config == definition");
 
+    // Spring / damper equivalents: SUV front corner 2000 kg x 0.518 / 2 = 518 kg, 1.35 Hz -> 37.3 N/mm.
+    {
+        const VehicleConfig& c = g.config();
+        const float m = sprungCornerMass(c, kFrontAxle), mr = sprungCornerMass(c, kRearAxle);
+        const float k = wheelRateFromFrequency(c.tuning.axles[kFrontAxle].springFrequency, m);
+        std::printf("    front corner %.0f kg, rear %.0f kg, front wheel rate %.1f N/mm\n", double(m), double(mr),
+                    double(k / 1000.0f));
+        CHECK(std::abs(m + mr - 0.5f * c.mass) < 1e-3f && std::abs(m - 517.86f) < 0.5f, "corner masses");
+        CHECK(std::abs(k / 1000.0f - 37.26f) < 0.1f, "wheel rate %.2f N/mm", double(k / 1000.0f));
+        CHECK(std::abs(frequencyFromWheelRate(k, m) - 1.35f) < 1e-4f, "N/m -> Hz round trip");
+        CHECK(std::abs(criticalDamping(1.35f, m) - 2.0f * std::sqrt(k * m)) < 1.0f, "critical damping 2 sqrt(k m)");
+        CHECK(g.selectRow(GarageRowKind::Param, "suspension.front.frequency") &&
+                  g.valueNote(g.rows()[std::size_t(g.cursor())]) == "37 N/mm",
+              "spring row note '%s'", g.valueNote(g.rows()[std::size_t(g.cursor())]).c_str());
+        CHECK(g.selectRow(GarageRowKind::Param, "suspension.front.compression") &&
+                  !g.helpText(g.rows()[std::size_t(g.cursor())]).empty(),
+              "damping row help");
+        CHECK(g.selectRow(GarageRowKind::Vehicle) && g.valueNote(g.rows()[0]).empty(), "no note on other rows");
+    }
+
     // Keyboard: cursor to the front spring, right steps it; the range clamps.
     CHECK(g.selectRow(GarageRowKind::Param, "suspension.front.frequency"), "front spring row");
     const SetupParamInfo& spring = *findSetupParam("suspension.front.frequency");

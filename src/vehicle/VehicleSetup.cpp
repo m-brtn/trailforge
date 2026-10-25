@@ -25,6 +25,8 @@ void setBrakes(C& c, float total, float bias) {
     axle(c, kRearAxle).brakeTorque = total * (1.0f - bias);
 }
 
+constexpr float kTwoPi = 6.28318530718f;
+
 std::vector<SetupParamInfo> buildParams() {
     using K = SetupParamKind;
     std::vector<SetupParamInfo> p;
@@ -168,6 +170,22 @@ std::string fmt(double v) {
 }
 
 } // namespace
+
+float sprungCornerMass(const VehicleConfig& c, int axleIndex) {
+    const float front = c.wheelBase > 0.0f ? std::clamp(0.5f + c.comForward / c.wheelBase, 0.0f, 1.0f) : 0.5f;
+    return 0.5f * c.mass * (axleIndex == kFrontAxle ? front : 1.0f - front);
+}
+
+float wheelRateFromFrequency(float frequencyHz, float cornerMass) {
+    const float w = kTwoPi * frequencyHz;
+    return w * w * cornerMass;
+}
+
+float frequencyFromWheelRate(float rateNPerM, float cornerMass) {
+    return cornerMass > 0.0f && rateNPerM > 0.0f ? std::sqrt(rateNPerM / cornerMass) / kTwoPi : 0.0f;
+}
+
+float criticalDamping(float frequencyHz, float cornerMass) { return 2.0f * kTwoPi * frequencyHz * cornerMass; }
 
 const std::vector<SetupParamInfo>& setupParams() {
     static const std::vector<SetupParamInfo> kParams = buildParams();
