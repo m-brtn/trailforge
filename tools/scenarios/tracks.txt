@@ -29,7 +29,7 @@ wait 0.6
 capture /tmp/trailforge_tracks_concrete_brake.png
 wait 0.3
 
-# ---------------------------------------------------------------- off the strip: concrete -> dirt -> meadow grass
+# ---------------------------------------------------------------- off the strip: concrete -> sand area
 camera follow
 down W
 until z > 36 12
@@ -38,8 +38,27 @@ until z > 58 10
 down S
 until speed_kmh < 0.5 8
 up S
+log sand
+expect marks_s6 > 4              # rolling imprint in the sand area (x 28-45, z 48-84) north of the strip
+camera 45.6 1.7 36.0 41.6 0.0 50.0
+wait 0.6
+capture /tmp/trailforge_tracks_strip_to_meadow.png
+wait 0.3
+
+# ---------------------------------------------------------------- meadow grass west of the sand area (x 8-28)
+# The strip route above stays on sand up to the berm at the north edge (the grass east of the sand ends at the
+# boundary berm), so pressed grass gets its own run straight north from the meadow teleport (x 19, z 50).
+camera follow
+teleport 13
+wait 1.5
+down W
+until speed_kmh > 30 8
+up W
+until z > 68 10
+down S
+until speed_kmh < 0.5 8
+up S
 log meadow
-expect marks_s6 > 4              # rolling imprint in the sand area (x 28-45, z 48-84) between the strip and the meadow
 expect marks_s5 > 40             # pressed grass
 # A low-range power turn tears the turf (the unloaded inner wheels spin).
 tap L
@@ -56,13 +75,13 @@ until speed_kmh < 0.5 8
 up S
 tap L
 wait 0.3
-camera 45.6 1.7 36.0 41.6 0.0 50.0
-wait 0.6
-capture /tmp/trailforge_tracks_strip_to_meadow.png
-wait 0.3
-camera 44.6 2.2 56.0 41.8 0.0 66.0
+camera 18.0 1.8 52.0 20.5 0.0 66.0
 wait 0.6
 capture /tmp/trailforge_tracks_grass.png
+wait 0.3
+camera 17.0 6.0 71.0 21.5 0.0 80.0
+wait 0.6
+capture /tmp/trailforge_tracks_grass_turn.png
 wait 0.3
 
 # ---------------------------------------------------------------- mud path: launch churn, rolling ruts
