@@ -56,7 +56,9 @@ step "assemble dist/TrailForge.app"
 mkdir -p "$DIST"
 rm -rf "$APP" "$ZIP"
 ditto "$BUILD/TrailForge.app" "$APP"
-[[ -f "$APP/Contents/Resources/assets/audio/manifest.json" ]] || fail "assets missing in the bundle"
+for f in audio/manifest.json music/intro.mp3 fonts/Rajdhani-SemiBold.ttf fonts/OFL.txt images/logo.png; do
+    [[ -f "$APP/Contents/Resources/assets/$f" ]] || fail "assets/$f missing in the bundle"
+done
 [[ -f "$APP/Contents/Resources/TrailForge.icns" ]] || fail "icns missing in the bundle"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$VERSION" ]] ||
     fail "Info.plist version mismatch"
@@ -90,6 +92,9 @@ smoke() {
         { cat "$log"; fail "smoke run of $app failed"; }
     grep -F "sounds loaded from $app/Contents/Resources/assets/audio" "$log" | grep -F "0 missing" ||
         { cat "$log"; fail "assets did not resolve from $app"; }
+    grep -F "Audio: music $app/Contents/Resources/assets/music/intro.mp3" "$log" || { cat "$log"; fail "music missing"; }
+    grep -F "Menu: font $app/Contents/Resources/assets/fonts/" "$log" || { cat "$log"; fail "menu font missing"; }
+    grep -F "Menu: logo $app/Contents/Resources/assets/images/logo.png" "$log" || { cat "$log"; fail "logo missing"; }
     grep -E "auto-quit after" "$log"
     rm -f "$log" "$log.wav" "$log.wav.csv"
 }
