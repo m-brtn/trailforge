@@ -49,6 +49,9 @@ constexpr float kMarkLift = 0.012f; // m: tire marks are drawn this far above th
 constexpr float kGrassChunk = 2.4f;
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
 constexpr int kGrassSegs[3] = {4, 2, 1};
+constexpr float kGrassNearCanopy[4] = {0.6f, 0.5f, 0.35f, 0.3f};
+// Full quads per segment, so cut shapes (ears, seed heads, flower heads) get a wide top; the far LOD is one triangle.
+constexpr int grassTriangles(int lod) { return lod >= 2 ? 1 : 2 * kGrassSegs[lod]; }
 constexpr int kBloomLevels = 5;
 
 SDL_GPUSampleCount sampleCount(int n) {
@@ -204,7 +207,8 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         m_mask = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         m_height = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R16_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         uploadTexture(m_noise.tex, px, 1, 1, 4);
-        uploadTexture(m_mask.tex, px, 1, 1, 4);
+        const std::uint8_t noWheat[4] = {128, 128, 128, 0};
+        uploadTexture(m_mask.tex, noWheat, 1, 1, 4);
         uploadTexture(m_height.tex, &h, 1, 1, 2);
         m_trample = makeTexture(1, 1, kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
         clearTrample();
@@ -272,6 +276,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.reflectionScale = std::clamp(s.reflectionScale, 0.2f, 1.0f);
     s.grassLevel = std::clamp(s.grassLevel, 0, 4);
     s.grassDistance = std::clamp(s.grassDistance, 5.0f, 120.0f);
+    s.flowerDensity = std::clamp(s.flowerDensity, 0.0f, 1.0f);
     s.exposure = std::clamp(s.exposure, 0.1f, 8.0f);
     s.timeOfDay = std::fmod(std::fmod(s.timeOfDay, 24.0f) + 24.0f, 24.0f);
     s.sunHeadingDeg = std::fmod(std::fmod(s.sunHeadingDeg, 360.0f) + 360.0f, 360.0f);
@@ -438,7 +443,7 @@ void Renderer::createScenePipelines() {
                                SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, sc, true, false,
                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 3, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
+    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 4, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 2, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
@@ -628,7 +633,7 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
                     maxY = std::max(maxY, y);
                 }
             }
-            if (maxGrass > 0.03f) m_grassChunks.push_back({x0, z0, minY - 0.1f, maxY + 0.7f});
+            if (maxGrass > 0.03f) m_grassChunks.push_back({x0, z0, minY - 0.1f, maxY + 1.3f});
         }
     }
     SDL_Log("TrailForge: ground maps %dx%d, %zu grass chunks", maps.width, maps.height, m_grassChunks.size());
@@ -993,6 +998,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     }
     fu.clipPlane = glm::vec4(0, 0, 0, 1);
     fu.options = glm::vec4(s.groundGrid ? 0.35f : 0.0f, exposure, 1.0f, s.clouds ? 1.0f : 0.0f);
+    // Sparser blade grids show more ground between the blades: give it more of the canopy colour.
+    fu.grassParams = glm::vec4(s.grassLevel > 0 ? s.grassDistance : 0.0f,
+                               s.grassLevel > 0 ? kGrassNearCanopy[s.grassLevel - 1] : 1.0f, 0.0f, 0.0f);
 
     // Puddle reflection only when the camera is above the water and near enough to see it.
     const bool wantRefl = s.reflections && m_reflColor.tex && frame.water && frame.water->vertexCount() > 0 &&
@@ -1324,10 +1332,11 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_grassPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding vtex[3] = {{m_height.tex, m_clampSampler},
+            SDL_GPUTextureSamplerBinding vtex[4] = {{m_height.tex, m_clampSampler},
                                                     {m_mask.tex, m_clampSampler},
-                                                    {m_trample.tex, m_clampSampler}};
-            SDL_BindGPUVertexSamplers(pass, 0, vtex, 3);
+                                                    {m_trample.tex, m_clampSampler},
+                                                    {m_noise.tex, m_repeatSampler}};
+            SDL_BindGPUVertexSamplers(pass, 0, vtex, 4);
             SDL_BindGPUVertexStorageBuffers(pass, 0, &m_grassBuffer, 1);
             SDL_GPUTextureSamplerBinding ftex{m_shadow.tex, m_cmpSampler};
             SDL_BindGPUFragmentSamplers(pass, 0, &ftex, 1);
@@ -1335,6 +1344,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             const int perSide0 = int(std::lround(kGrassChunk / fine));
             const float D = s.grassDistance;
             const float radii[3] = {D * 0.3f, D * 0.6f, D};
+            const float grassPixel = 2.0f * std::tan(0.5f * frame.fovYRadians) / float(std::max(m_stats.renderH, 1u));
             std::uint32_t first = 0;
             for (int l = 0; l < 3; ++l) {
                 const std::uint32_t count = grassCounts[l];
@@ -1344,11 +1354,13 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                     gu.lod = glm::vec4(fine, float(l), float(perSide), float(first));
                     gu.fade = glm::vec4(radii[l], radii[l] * 0.18f, D, float(kGrassSegs[l]));
                     gu.blade = glm::vec4(1.0f, 0.6f * fine, 0.22f, kGrassChunk);
+                    gu.extra = glm::vec4(grassPixel, s.flowerDensity, s.grassDetail ? 1.0f : 0.0f, 0.0f);
+                    gu.wind = glm::vec4(0.85f, 0.53f, 3.2f, 1.0f);
                     for (int i = 0; i < 4; ++i) gu.wheels[i] = glm::vec4(glm::vec3(frame.wheelContacts[i]),
                                                                          frame.wheelContacts[i].w > 0 ? 0.32f : 0.0f);
                     SDL_PushGPUVertexUniformData(cmd, 1, &gu, sizeof(gu));
                     const std::uint32_t instances = count * std::uint32_t(perSide * perSide);
-                    SDL_DrawGPUPrimitives(pass, std::uint32_t(3 * (2 * kGrassSegs[l] - 1)), instances, 0, 0);
+                    SDL_DrawGPUPrimitives(pass, std::uint32_t(grassTriangles(l) * 3), instances, 0, 0);
                     m_stats.grassBlades += instances;
                     ++m_stats.drawCalls;
                 }

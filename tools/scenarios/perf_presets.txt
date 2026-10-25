@@ -50,6 +50,28 @@ wait 1.5
 perf_begin ultra_overview
 wait 4
 perf_end
+# West meadow with the wheat test patch: tall grass, flowers and wheat fill the view (before v0.5.0: plain grass).
+camera -24 3.5 52 -37 0.4 68
+quality Low
+wait 1.5
+perf_begin low_meadow
+wait 4
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_meadow
+wait 4
+perf_end
+quality High
+wait 1.5
+perf_begin high_meadow
+wait 4
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_meadow
+wait 4
+perf_end
 camera follow
 # Wheel spray at the preset cap around the vehicle (synthetic fill, worst case: every particle on screen).
 quality Low

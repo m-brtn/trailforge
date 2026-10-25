@@ -103,7 +103,8 @@ float fbm2(float x, float z, int octaves, std::uint32_t seed) {
 float GroundMaps::grassAt(float x, float z) const {
     const int i = int(std::lround((x - x0) / texel)), j = int(std::lround((z - z0) / texel));
     if (i < 0 || j < 0 || i >= width || j >= height) return 0.0f;
-    return float(mask[(std::size_t(j) * width + i) * 4]) / 255.0f;
+    const std::uint8_t* px = &mask[(std::size_t(j) * width + i) * 4];
+    return float(std::max(px[0], px[3])) / 255.0f;
 }
 
 float GroundMaps::heightAt(float x, float z) const {
@@ -147,6 +148,7 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
     }
 
     const auto& rocks = track.rocks();
+    const TrackBounds wp = TestTrack::wheatPatch();
     for (int j = 0; j < g.height; ++j) {
         for (int i = 0; i < g.width; ++i) {
             const float x = g.x0 + float(i) * g.texel, z = g.z0 + float(j) * g.texel;
@@ -172,6 +174,14 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
                 const float dr = std::hypot(x - r.x, z - r.z);
                 if (dr < r.radius * 1.4f) grass *= smooth(r.radius * 0.85f, r.radius * 1.4f, dr);
             }
+            // Wheat: a sown rectangle with a ragged 0.6 m edge; a few weeds stay between the stalks.
+            float wheat = 0.0f;
+            if (s == SurfaceId::Grass) {
+                const float edge = std::min(std::min(x - wp.xMin, wp.xMax - x), std::min(z - wp.zMin, wp.zMax - z));
+                wheat = smooth(-0.3f, 0.6f, edge + (fbm2(x * 0.7f, z * 0.7f, 2, 29u) - 0.5f) * 0.8f) *
+                        (1.0f - smooth(0.15f, 0.45f, mudW));
+                grass *= 1.0f - 0.8f * wheat;
+            }
             float wet = 0.0f;
             if (z > 46.0f)
                 wet = std::clamp(blurMud * (1.0f - smooth(water.level, water.level + 0.15f, h)) + 0.35f * mudW, 0.0f, 1.0f);
@@ -181,7 +191,7 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
             px[0] = std::uint8_t(std::lround(std::clamp(grass, 0.0f, 1.0f) * 255.0f));
             px[1] = std::uint8_t(std::lround(std::clamp(mudW, 0.0f, 1.0f) * 255.0f));
             px[2] = std::uint8_t(std::lround(wet * 255.0f));
-            px[3] = 255;
+            px[3] = std::uint8_t(std::lround(wheat * 255.0f));
         }
     }
 

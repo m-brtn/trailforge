@@ -56,6 +56,7 @@ struct FrameUniforms {
     glm::vec4 bodyMudAmount[4]; // BodyMud regions 0..13 (BodyMudRegion order), cosmetic
     glm::vec4 bodyMudColor[16]; // rgb linear, w: wetness
     glm::vec4 bodyMudFlecks[4]; // grass blades in the coat per region
+    glm::vec4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
 };
 
 struct DrawUniforms {
@@ -71,6 +72,8 @@ struct GrassUniforms {
     glm::vec4 lod;
     glm::vec4 fade;
     glm::vec4 blade;
+    glm::vec4 extra; // x: radians per pixel, y: flower density, z: fine detail (0/1)
+    glm::vec4 wind;  // xy: wind direction, z: gust speed (m/s), w: gust strength
     glm::vec4 wheels[4];
 };
 

@@ -228,6 +228,8 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
         edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 90.0f, "%.0f");
+        edited |= ImGui::SliderFloat("Flowers", &s.flowerDensity, 0.0f, 1.0f, "%.2f");
+        edited |= ImGui::Checkbox("Grass detail (awns, seed heads)", &s.grassDetail);
         edited |= ImGui::Checkbox("Bloom", &s.bloom);
         ImGui::SameLine();
         edited |= ImGui::Checkbox("Clouds", &s.clouds);

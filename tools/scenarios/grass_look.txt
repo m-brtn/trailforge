@@ -1,0 +1,112 @@
+# Grass, flowers and wheat look (screenshots to /tmp/trailforge_grass_*_after.png):
+#   ./build/release/trailforge --script tools/scenarios/grass_look.txt
+# Meadow close-up and wide views at noon and sunset, a low backlit view toward the sunset, the wheat test patch
+# (wide, close-up, sunset) and flattened lanes after driving through the meadow and through the wheat.
+# Grass is render-only: blades never touch the physics; the ground under them is the Grass surface.
+set ui 0
+set hud 0
+set auto_reverse 0
+quality High
+teleport 8
+wait 2.0
+
+# ---------------------------------------------------------------- meadow, noon
+time Noon
+camera 13.0 0.9 55.0 17.0 0.25 62.0
+wait 0.6
+capture /tmp/trailforge_grass_meadow_close_noon_after.png
+wait 0.3
+camera 6.0 2.6 50.0 14.0 0.2 70.0
+wait 0.6
+capture /tmp/trailforge_grass_meadow_mid_noon_after.png
+wait 0.3
+camera -4 6 40 -6 0 70
+wait 0.6
+capture /tmp/trailforge_grass_overview_noon_after.png
+wait 0.3
+
+# ---------------------------------------------------------------- meadow, sunset (sun toward +Z)
+time Sunset
+camera 9.0 0.8 71.0 8.0 0.4 85.0
+wait 0.6
+capture /tmp/trailforge_grass_meadow_backlit_sunset_after.png
+wait 0.3
+camera 1.0 3.4 39.5 0.0 4.4 70.0
+wait 0.6
+capture /tmp/trailforge_grass_banner_sunset_after.png
+wait 0.3
+camera -4 6 40 -6 0 70
+wait 0.6
+capture /tmp/trailforge_grass_overview_sunset_after.png
+wait 0.3
+
+# ---------------------------------------------------------------- wheat test patch (x -46..-28, z 56..76)
+time Noon
+camera -22.0 2.4 50.0 -36.0 0.4 66.0
+wait 0.6
+capture /tmp/trailforge_grass_wheat_wide_noon_after.png
+wait 0.3
+camera -29.5 1.3 56.0 -33.0 0.7 61.0
+wait 0.6
+capture /tmp/trailforge_grass_wheat_close_noon_after.png
+wait 0.3
+time Sunset
+camera -37.0 1.6 50.5 -37.0 1.0 70.0
+wait 0.6
+capture /tmp/trailforge_grass_wheat_sunset_after.png
+wait 0.3
+
+# ---------------------------------------------------------------- flattened lanes: meadow
+time 16.5
+camera follow
+teleport 13
+wait 1.5
+set marks_clear 1
+down W
+wait 3.0
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+expect marks_s5 > 20
+camera 19.0 2.2 47.5 19.0 0.0 58.0
+wait 0.8
+capture /tmp/trailforge_grass_lanes_meadow_after.png
+wait 0.3
+
+# ---------------------------------------------------------------- flattened lane: wheat patch
+camera follow
+teleport 15
+wait 1.5
+down W
+wait 3.0
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+expect marks_s5 > 20
+camera -37.0 2.6 51.0 -37.0 0.0 64.0
+wait 0.8
+capture /tmp/trailforge_grass_lanes_wheat_after.png
+wait 0.3
+
+# ---------------------------------------------------------------- distance falloff per preset (no LOD ring)
+camera -4 6 40 -6 0 70
+quality Low
+wait 0.8
+capture /tmp/trailforge_grass_overview_low_after.png
+wait 0.3
+quality Medium
+wait 0.8
+capture /tmp/trailforge_grass_overview_medium_after.png
+wait 0.3
+quality Ultra
+wait 0.8
+capture /tmp/trailforge_grass_overview_ultra_after.png
+wait 0.3
+quality Low
+camera -29.5 1.3 56.0 -33.0 0.7 61.0
+wait 0.8
+capture /tmp/trailforge_grass_wheat_close_low_after.png
+wait 0.3
+quality High

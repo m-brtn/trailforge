@@ -29,6 +29,8 @@ struct RenderSettings {
     bool bloom = true;
     int grassLevel = 3;            // 0 = off, 1..4: density levels (fine cell 0.2 / 0.15 / 0.1 / 0.075 m)
     float grassDistance = 45.0f;   // m
+    float flowerDensity = 1.0f;    // 0..1: share of the flower clusters that bloom
+    bool grassDetail = true;       // wheat awns, seed-head spikelets, clover leaf marks (alpha-cut shapes)
     bool clouds = true;
     int sprayMax = 3000;           // wheel spray particle cap (cosmetic)
     bool sprayDust = true;         // dust puffs / clouds in the spray
@@ -58,12 +60,12 @@ inline RenderSettings presetSettings(QualityPreset p) {
     case QualityPreset::Low:
         s.renderScale = 0.67f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 1; s.shadowMapSize = 1024;
         s.shadowDistance = 40.0f; s.shadowFilter = 0; s.reflections = false; s.bloom = false; s.grassLevel = 1;
-        s.grassDistance = 22.0f; s.sprayMax = 600; s.sprayDust = false;
+        s.grassDistance = 22.0f; s.flowerDensity = 0.5f; s.grassDetail = false; s.sprayMax = 600; s.sprayDust = false;
         break;
     case QualityPreset::Medium:
         s.renderScale = 0.85f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 2; s.shadowMapSize = 1536;
         s.shadowDistance = 60.0f; s.shadowFilter = 1; s.reflections = true; s.reflectionScale = 0.35f; s.bloom = true;
-        s.grassLevel = 2; s.grassDistance = 32.0f; s.sprayMax = 1500;
+        s.grassLevel = 2; s.grassDistance = 32.0f; s.flowerDensity = 0.8f; s.sprayMax = 1500;
         break;
     case QualityPreset::High:
         break; // defaults above

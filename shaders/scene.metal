@@ -70,6 +70,7 @@ struct FrameUniforms {
     float4 bodyMudAmount[4]; // BodyMud regions 0..13 (src/sim/BodyMud.h order), cosmetic
     float4 bodyMudColor[16]; // rgb linear, w: wetness
     float4 bodyMudFlecks[4]; // grass blades in the coat per region
+    float4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
 };
 
 struct DrawUniforms {
@@ -206,7 +207,7 @@ float2 groundUV(constant FrameUniforms& f, float2 xz) { return (xz - f.groundRec
 
 float4 sampleMask(constant FrameUniforms& f, texture2d<float> mask, sampler s, float2 xz) {
     const float2 uv = groundUV(f, xz);
-    if (any(uv < 0.0) || any(uv > 1.0)) return float4(0.55, 0.0, 0.0, 1.0); // backdrop outside the walls
+    if (any(uv < 0.0) || any(uv > 1.0)) return float4(0.55, 0.0, 0.0, 0.0); // backdrop outside the walls
     return mask.sample(s, uv, level(0));
 }
 
@@ -218,6 +219,35 @@ float vehicleAO(constant FrameUniforms& f, float3 P) {
     const float foot = 1.0 - smoothstep(-0.3, 1.1, d);
     const float h = saturate(1.0 - abs(lp.y + 0.78) / 1.0);
     return 1.0 - 0.65 * foot * h;
+}
+
+// Grass species zones, shared by the blades and the ground under them (so the far ground matches the blades).
+struct GrassZones {
+    float tall;   // tall wild grass with seed heads
+    float clover; // low clover leaves
+    float dry;    // straw-coloured blades: slopes and sparse margins (near rocks, tufts in the dirt)
+    float patch;  // density multiplier: dense clumps and sparse spots
+};
+
+// slope: tangent of the ground slope angle.
+GrassZones grassZones(texture2d<float> noise, sampler ns, float2 p, float density, float slope) {
+    const float4 a = noise.sample(ns, p * 0.019, level(0));
+    const float4 b = noise.sample(ns, p * 0.087 + 0.31, level(0));
+    GrassZones z;
+    z.tall = smoothstep(0.47, 0.60, a.r);
+    z.clover = smoothstep(0.50, 0.62, b.g) * (1.0 - z.tall);
+    z.dry = saturate(smoothstep(0.54, 0.68, a.g) * 0.55 + smoothstep(0.12, 0.32, slope) * 0.7 +
+                     (1.0 - smoothstep(0.35, 0.75, density)) * 0.6);
+    z.patch = mix(0.55, 1.20, smoothstep(0.28, 0.42, b.r));
+    return z;
+}
+
+// Mean albedo of the blade canopy seen from afar, for the ground under distant grass and wheat.
+float3 grassCanopyAlbedo(GrassZones z, float wheat) {
+    float3 c = mix(float3(0.080, 0.110, 0.022), float3(0.110, 0.115, 0.034), z.tall);
+    c = mix(c, float3(0.050, 0.085, 0.026), z.clover * 0.6);
+    c = mix(c, float3(0.22, 0.16, 0.065), z.dry * 0.5);
+    return mix(c, float3(0.36, 0.26, 0.09), wheat);
 }
 
 // GGX specular + Lambert diffuse under the sun, plus sky ambient and an environment lobe.
@@ -348,7 +378,15 @@ struct GroundSurface {
     float bump;
 };
 
-GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d<float> noise, sampler ns) {
+// How much of the blade canopy colour the ground under grass takes: some near the camera (seen between the blades),
+// all of it where the blades have thinned out with distance, and all of it with grass off.
+float grassFar(constant FrameUniforms& f, float3 P) {
+    const float D = f.grassParams.x;
+    if (D <= 0.0) return 1.0;
+    return mix(f.grassParams.y, 1.0, smoothstep(0.40 * D, 0.92 * D, length(P.xz - f.cameraPos.xz)));
+}
+
+GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d<float> noise, sampler ns, float far) {
     GroundSurface g;
     const float2 uv = P.xz;
     const float3 nA = sampleNoise(noise, ns, uv * 0.045);
@@ -365,11 +403,17 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, texture2d
         const float stone = 1.0 - smoothstep(0.18, 0.30, nC.b);
         dirt = mix(dirt, float3(0.25, 0.20, 0.155) * (0.7 + 0.6 * nC.r), stone * 0.5);
         float h = nC.r * 0.5 + fine * 0.35 + stone * 0.6;
-        const float grassAmt = saturate(mask.r * 1.2);
-        const float3 under = mix(float3(0.042, 0.048, 0.012), float3(0.100, 0.094, 0.028), nB.r) * (0.8 + 0.4 * fine);
+        const float slope = sqrt(max(1.0 - N.y * N.y, 0.0)) / max(N.y, 0.1);
+        const GrassZones zones = grassZones(noise, ns, P.xz, mask.r, slope);
+        const float grassAmt = saturate(mask.r * zones.patch * 1.2);
+        float3 under = mix(float3(0.030, 0.046, 0.011), float3(0.070, 0.088, 0.022), nB.r) * (0.8 + 0.4 * fine);
+        under = mix(under, float3(0.115, 0.085, 0.040), zones.dry * 0.5);
         float3 albedo = mix(dirt, under, grassAmt * (0.8 + 0.2 * nA.g));
+        // Sown wheat: light tilled soil with straw between the rows.
+        albedo = mix(albedo, mix(dirt * 1.15, float3(0.20, 0.155, 0.075), 0.45 + 0.3 * nC.r), mask.a);
+        albedo = mix(albedo, grassCanopyAlbedo(zones, mask.a), max(grassAmt, mask.a) * far);
         float rough = 0.92;
-        h = mix(h, fine * 0.6, grassAmt);
+        h = mix(h, fine * 0.6, max(grassAmt, mask.a));
 
         // Mud: blended by the smooth mask (not per triangle), edges broken up with noise.
         const float mudBlend = smoothstep(0.30, 0.55, mask.g + (nB.r - 0.5) * 0.30 + (fine - 0.5) * 0.08);
@@ -592,7 +636,7 @@ fragment float4 lit_fs(LitOut in [[stage_in]], bool front [[front_facing]], cons
     const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND;
     if (ground) {
         const float4 m = sampleMask(f, mask, maskSampler, P.xz);
-        GroundSurface g = groundMaterial(mat, P, N, m, noise, noiseSampler);
+        GroundSurface g = groundMaterial(mat, P, N, m, noise, noiseSampler, grassFar(f, P));
         s.albedo = g.albedo;
         s.roughness = g.roughness;
         s.metallic = 0.0;
@@ -958,38 +1002,89 @@ struct GrassUniforms {
     float4 lod;      // x: fine cell (m), y: LOD level, z: blades per chunk side, w: first chunk index
     float4 fade;     // x: this LOD's outer radius, y: fade band, z: max distance, w: blade segments
     float4 blade;    // x: height scale, y: width (m), z: wind, w: chunk size (m)
+    float4 extra;    // x: radians per pixel, y: flower density, z: fine detail (0/1)
+    float4 wind;     // xy: wind direction, z: gust speed (m/s), w: gust strength
     float4 wheels[4]; // xyz: wheel contact point, w: flatten radius (0 = none)
 };
+
+// Species. The cut kinds (seed head, clover, flower, wheat) get their outline in the fragment shader; their strip
+// is a conservative envelope. The far LOD (one triangle) draws every kind as a plain blade.
+enum GrassKind : uint {
+    GK_LAWN = 0,
+    GK_TALL = 1,
+    GK_SEED = 2,
+    GK_CLOVER = 3,
+    GK_FLOWER = 4,
+    GK_WHEAT = 5,
+    GK_CUT = 16,    // flag: the fragment shader cuts the outline
+    GK_DETAIL = 32, // flag: awns, spikelets, leaf marks
+};
+
+// Flower kinds: 0 daisy, 1 buttercup, 2 bellflower, 3 poppy, 4 clover head.
+float3 flowerPetal(uint sub, float r) {
+    switch (sub) {
+    case 0: return mix(float3(0.78, 0.78, 0.72), float3(0.80, 0.70, 0.74), r * 0.4);
+    case 1: return mix(float3(0.86, 0.58, 0.015), float3(0.92, 0.70, 0.04), r);
+    case 2: return mix(float3(0.26, 0.14, 0.62), float3(0.16, 0.22, 0.70), r);
+    case 3: return mix(float3(0.62, 0.035, 0.02), float3(0.75, 0.08, 0.03), r);
+    default: return mix(float3(0.50, 0.20, 0.42), float3(0.68, 0.60, 0.62), step(0.7, r));
+    }
+}
+
+// Travelling gusts (0..1): bands moving downwind with wobbly fronts, modulated by a slower swell.
+float windGust(float2 p, float time, float2 wd, float speed) {
+    const float a = dot(p, wd), b = dot(p, float2(-wd.y, wd.x));
+    const float front = sin((a - speed * time) * 0.42 + sin(b * 0.19 + time * 0.11) * 1.8) * 0.5 + 0.5;
+    const float swell = sin((a - speed * 0.8 * time) * 0.13 + b * 0.07 + 1.3) * 0.5 + 0.5;
+    const float ripple = sin((a * 0.7 + b * 0.7 - speed * 1.1 * time) * 0.8) * 0.5 + 0.5;
+    return saturate(front * front * (0.45 + 0.75 * swell) + 0.2 * ripple * swell);
+}
 
 struct GrassOut {
     float4 position [[position]];
     float3 worldPos;
-    float3 normal;
+    float3 normal;   // blade face normal (two-sided)
+    float3 across;   // world direction across the blade (rounded normal, flower head basis)
     float3 color;
-    float t; // 0 at the root, 1 at the tip
+    float4 shape;    // x: side -1..1, y: t (0 root .. 1 tip, 2 flower head), z: offset from the axis (m), w: gust
+    float2 uv;       // flower head coordinates (-1..1)
+    float2 widths [[flat]]; // half widths (m): stem, ear / head / leaf
+    uint kind [[flat]];     // GK_* | flags | (flower kind << 8)
+    float ao [[flat]];      // root occlusion of this clump (0 none .. 1 dense)
 };
 
 vertex GrassOut grass_vs(uint vid [[vertex_id]], uint iid [[instance_id]], constant FrameUniforms& f [[buffer(0)]],
                          constant GrassUniforms& g [[buffer(1)]], const device float4* chunks [[buffer(2)]],
                          texture2d<float> heightTex [[texture(0)]], texture2d<float> mask [[texture(1)]],
-                         texture2d<float> trample [[texture(2)]], sampler cs [[sampler(0)]], sampler ms [[sampler(1)]],
-                         sampler ts [[sampler(2)]]) {
+                         texture2d<float> trample [[texture(2)]], texture2d<float> noise [[texture(3)]],
+                         sampler cs [[sampler(0)]], sampler ms [[sampler(1)]], sampler ts [[sampler(2)]],
+                         sampler ns [[sampler(3)]]) {
     GrassOut out;
     const int perSide = int(g.lod.z);
     const int perChunk = perSide * perSide;
     const int chunk = int(g.lod.w) + int(iid) / perChunk;
     const int cell = int(iid) % perChunk;
     const int ci = cell % perSide, cj = cell / perSide;
+    const int lod = int(g.lod.y);
     const float levelScale = exp2(g.lod.y);
     const float fine = g.lod.x;
     const float4 ch = chunks[chunk];
     // Blade identity on the finest grid, so coarser LODs keep a subset of the same blades.
     const float2 gi = floor(ch.xy / fine + 0.5) + float2(ci, cj) * levelScale;
     const float r1 = hash12(gi), r2 = hash12(gi + 17.31), r3 = hash12(gi + 41.7), r4 = hash12(gi + 73.1);
-    float2 root = (gi + 0.5 + (float2(r1, r2) - 0.5) * 0.9) * fine;
+    const float r5 = hash12(gi + 93.7), r6 = hash12(gi + 121.3), r7 = hash12(gi + 151.9);
+    const float2 cellRoot = (gi + 0.5) * fine;
+    const float2 jitter = float2(r1, r2) - 0.5;
 
-    const float4 m = mask.sample(ms, groundUV(f, root), level(0));
-    const float density = m.r;
+    const float4 m = mask.sample(ms, groundUV(f, cellRoot), level(0));
+    const bool wheat = r6 < m.a * 1.1 - 0.05;
+    // Grass grows in clumps (0.55 m cells): blades lean out of the clump centre and share a height; wheat is sown in
+    // rows along x (small jitter across the rows).
+    const float2 clumpCell = floor(cellRoot / 0.55);
+    const float2 clumpC = (clumpCell + 0.25 + 0.5 * float2(hash12(clumpCell + 5.1), hash12(clumpCell + 9.7))) * 0.55;
+    float2 root = cellRoot + jitter * (wheat ? float2(0.9, 0.2) : float2(0.9)) * fine;
+    if (!wheat) root = mix(root, clumpC, 0.2);
+
     const float dist = length(root - f.cameraPos.xz);
     // Blades that do not exist in the next (coarser) LOD fade out before its boundary; the others widen.
     const bool inNext = (ci % 2 == 0) && (cj % 2 == 0);
@@ -997,24 +1092,102 @@ vertex GrassOut grass_vs(uint vid [[vertex_id]], uint iid [[instance_id]], const
     float scale = inNext ? 1.0 : 1.0 - edgeT;
     const float widen = inNext ? mix(1.0, 1.6, edgeT) : 1.0;
     scale *= 1.0 - smoothstep(g.fade.z * 0.8, g.fade.z, dist);
+
+    const float2 uvRoot = groundUV(f, root);
+    const float hC = heightTex.sample(cs, uvRoot, level(0)).r;
+    const float hX = heightTex.sample(cs, groundUV(f, root + float2(0.5, 0.0)), level(0)).r;
+    const float hZ = heightTex.sample(cs, groundUV(f, root + float2(0.0, 0.5)), level(0)).r;
+    const float slope = length(float2(hX - hC, hZ - hC)) * 2.0;
+    const GrassZones zones = grassZones(noise, ns, root, m.r, slope);
     // Tire marks: R = flattened by a rolling wheel, G = torn out by a spinning or sliding wheel.
-    const float2 trampled = trample.sample(ts, groundUV(f, root), level(0)).rg;
-    const bool alive = r3 < density * 1.15 && scale > 0.02 && r2 >= trampled.g * 1.3 - 0.2;
+    const float2 trampled = trample.sample(ts, uvRoot, level(0)).rg;
+    const bool alive = (wheat || r3 < m.r * zones.patch * 1.15) && scale > 0.02 && r2 >= trampled.g * 1.3 - 0.2;
 
-    const int segs = int(g.fade.w);
-    const int tri = int(vid) / 3, k = int(vid) % 3;
-    const int sv = tri + k; // strip vertex index: 0..2*segs
-    const int row = sv / 2;
-    const float side = (sv % 2 == 0) ? -1.0 : 1.0;
-    const float t = min(float(row) / float(segs), 1.0);
-    const bool tip = sv >= 2 * segs;
+    // ---- species
+    uint kind = GK_LAWN, sub = 0;
+    if (wheat) {
+        kind = GK_WHEAT;
+    } else {
+        // Flower clusters: at most one per 3.2 m cell, plus rare lone flowers.
+        const float2 fc = floor(root / 3.2);
+        const float2 fCentre = (fc + 0.3 + 0.4 * float2(hash12(fc + 7.3), hash12(fc + 13.9))) * 3.2;
+        const float fRad = 0.45 + 0.5 * hash12(fc + 31.1);
+        const bool cluster = hash12(fc + 211.0) < 0.55 * g.extra.y;
+        float flowerP = cluster ? saturate(1.0 - length(root - fCentre) / fRad) * 0.65 : 0.0;
+        flowerP = (flowerP + 0.006 * g.extra.y) * (1.0 - 0.6 * zones.dry);
+        if (r5 < flowerP) {
+            kind = GK_FLOWER;
+            const float fs = cluster && flowerP > 0.01 ? hash12(fc + 57.7) : r4;
+            sub = fs < 0.36 ? 0u : fs < 0.66 ? 1u : fs < 0.90 ? (zones.clover > 0.4 ? 4u : 2u) : 3u;
+        } else if (r7 < zones.clover * 0.75) {
+            kind = GK_CLOVER;
+        } else if (r7 < zones.clover * 0.75 + zones.tall * 0.7) {
+            kind = r2 < 0.35 ? GK_SEED : GK_TALL;
+        }
+    }
 
-    const float terrain = heightTex.sample(cs, groundUV(f, root), level(0)).r - 0.03;
+    // ---- size and lean
+    const float clumpH = 0.75 + 0.5 * hash12(clumpCell + 3.3);
+    const float dryBlade = saturate(zones.dry * 1.4 - 0.3 + (r4 - 0.5) * 0.6);
+    const float wpx = dist * g.extra.x; // one pixel at this distance (m)
+    const float bladeW = max(0.30 * fine * sqrt(fine / 0.1) * (0.7 + 0.6 * r3), 0.012) * levelScale * widen;
+    float height, halfW, headW = 0.0, baseLean, flex;
+    switch (kind) {
+    case GK_WHEAT:
+        height = (0.78 + 0.22 * r1) * (0.85 + 0.15 * m.a);
+        halfW = max(0.0035, wpx * 0.4) * widen;
+        headW = max(0.0075, wpx * 0.5) * widen;
+        baseLean = 0.04 + 0.10 * r2;
+        flex = 0.75;
+        break;
+    case GK_SEED:
+        height = (0.50 + 0.40 * r1) * clumpH;
+        halfW = max(bladeW * 0.12, wpx * 0.4);
+        headW = max(0.012 + 0.008 * r3, wpx * 0.6) * widen;
+        baseLean = 0.10 + 0.30 * r2;
+        flex = 1.2;
+        break;
+    case GK_TALL:
+        height = (0.38 + 0.42 * r1) * clumpH;
+        halfW = bladeW * 0.40;
+        baseLean = 0.15 + 0.40 * r2;
+        flex = 1.0;
+        break;
+    case GK_CLOVER:
+        height = 0.06 + 0.06 * r1;
+        halfW = max(0.002, wpx * 0.4);
+        headW = max(0.016 + 0.008 * r3, wpx * 0.6) * levelScale * widen;
+        baseLean = 0.9 + 0.3 * r2;
+        flex = 0.2;
+        break;
+    case GK_FLOWER:
+        height = (sub == 3 ? 0.36 + 0.2 * r1 : sub == 4 ? 0.10 + 0.06 * r1 : 0.18 + 0.24 * r1) * (0.8 + 0.2 * clumpH);
+        halfW = max(0.003, wpx * 0.4);
+        headW = (sub == 3 ? 0.046 : sub == 1 ? 0.027 : sub == 4 ? 0.024 : 0.030) * (0.85 + 0.3 * r3);
+        headW = max(headW, wpx * 1.2) * widen;
+        baseLean = 0.05 + 0.2 * r2;
+        flex = 0.6;
+        break;
+    default: // lawn
+        height = (0.18 + 0.24 * r1) * (0.5 + 0.5 * m.r) * (1.0 + 0.5 * zones.tall) * clumpH;
+        halfW = bladeW * 0.5;
+        baseLean = 0.30 + 0.55 * r2;
+        flex = 0.6;
+        break;
+    }
+    if (kind != GK_WHEAT) {
+        height *= 1.0 - 0.2 * dryBlade;
+        baseLean += 0.25 * dryBlade;
+    }
+    height *= g.blade.x * scale;
+
     const float yaw = r4 * 2.0 * PI;
     const float2 facing = float2(cos(yaw), sin(yaw));
-    const float2 across = float2(-facing.y, facing.x);
-    float height = (0.22 + 0.33 * r1) * (0.55 + 0.45 * density) * g.blade.x * scale;
-    // Wheels flatten the grass they stand on (only when the contact is near this ground height).
+    const float2 fromClump = root - clumpC;
+    const float2 leanDir = wheat ? facing : normalize(fromClump + facing * 0.25 + 1e-4);
+
+    // Wheels flatten what they stand on (only when the contact is near this ground height).
+    const float terrain = hC - 0.03;
     float2 push = float2(0.0);
     float flatten = 0.0;
     for (int w = 0; w < 4; ++w) {
@@ -1027,36 +1200,135 @@ vertex GrassOut grass_vs(uint vid [[vertex_id]], uint iid [[instance_id]], const
         push += dd > 1e-3 ? dlt / dd * infl : float2(0.0);
     }
     flatten = max(flatten, trampled.r * 0.95);
-    height *= 1.0 - 0.75 * flatten;
-    const float time = f.cameraPos.w;
-    const float wind = g.blade.z * (sin(time * 1.7 + root.x * 0.35 + root.y * 0.22) * 0.5 +
-                                    sin(time * 3.1 + root.x * 1.3 - root.y * 0.7) * 0.18);
-    const float bendAmt = (0.25 + 0.35 * r2) + wind;
-    const float2 bendDir = normalize(facing * 0.6 + float2(0.7, 0.3) + push * 2.5);
-    const float width = g.blade.y * levelScale * 0.6 * widen * (0.75 + 0.5 * r3);
+    const float2 flatDir = length(push) > 0.01 ? normalize(push) : leanDir;
 
-    const float tt = tip ? 1.0 : t;
-    float3 p = float3(root.x, terrain, root.y);
-    p.y += height * tt * (1.0 - 0.35 * bendAmt * tt);
-    p.xz += bendDir * (bendAmt * tt * tt * height * (1.0 + flatten * 2.0));
-    if (!tip) p.xz += across * side * width * 0.5 * (1.0 - t * 0.85);
+    // Wind: travelling gusts bend everything downwind; a small flutter across the wind.
+    const float time = f.cameraPos.w;
+    const float2 wd = g.wind.xy, wp = float2(-wd.y, wd.x);
+    const float gust = windGust(root, time, wd, g.wind.z);
+    const float windAmt = flex * g.wind.w * f.options.z * (0.08 + 0.55 * gust);
+    const float flutter = sin(time * (5.0 + 4.0 * r3) + r1 * 30.0) * 0.07 * flex * (0.3 + gust);
+    const float2 leanVec = leanDir * baseLean + wd * windAmt + wp * flutter + flatDir * flatten * 1.4;
+    const float phi = min(length(leanVec), 1.45);
+    const float2 dir = leanVec / max(length(leanVec), 1e-4);
+    const float L = height * (1.0 - 0.2 * flatten);
+    // Quadratic Bezier: the base leaves the ground at a fraction of the tip angle, so blades curve toward the tip.
+    const float stiff = kind == GK_WHEAT ? 0.6 : 0.35;
+    const float3 P1 = float3(dir.x * sin(phi * stiff), cos(phi * stiff), dir.y * sin(phi * stiff)) * (L * 0.5);
+    const float3 P2 = float3(dir.x * sin(phi), cos(phi), dir.y * sin(phi)) * L;
+    const float3 base = float3(root.x, terrain, root.y);
+
+    // ---- vertex on the strip (or on the flower head quad)
+    const bool cut = lod < 2 && (kind == GK_SEED || kind == GK_CLOVER || kind == GK_FLOWER || kind == GK_WHEAT);
+    const int segs = int(g.fade.w);
+    const int triCount = lod >= 2 ? 1 : 2 * segs;
+    const int tri = int(vid) / 3, k = int(vid) % 3;
+    const bool head = kind == GK_FLOWER && lod < 2 && tri >= triCount - 2;
+    float t, side;
+    if (lod >= 2) {
+        t = k == 2 ? 1.0 : 0.0;
+        side = k == 0 ? -1.0 : k == 1 ? 1.0 : 0.0;
+    } else {
+        const int sv = tri + k;
+        const int stemSegs = kind == GK_FLOWER ? segs - 1 : segs;
+        const int row = min(sv / 2, stemSegs);
+        side = (sv % 2 == 0) ? -1.0 : 1.0;
+        t = float(row) / float(stemSegs);
+        if (kind == GK_SEED || kind == GK_WHEAT) {
+            const float rows4[5] = {0.0, 0.45, 0.76, 0.88, 1.0};
+            t = segs >= 4 ? rows4[row] : (row == 0 ? 0.0 : row == 1 ? 0.68 : 1.0);
+        }
+    }
+
+    float3 p, T, across3;
+    float hw = halfW;
+    float2 uv = float2(0.0);
+    if (head) {
+        // Flower head: a quad facing up and toward the camera, swaying with the stem tip.
+        const float3 C = base + P2;
+        float2 toCam = f.cameraPos.xz - C.xz;
+        toCam = length(toCam) > 1e-3 ? normalize(toCam) : float2(1.0, 0.0);
+        const float3 Nh = normalize(float3(toCam.x * 0.65 + dir.x * phi * 0.5, 0.75, toCam.y * 0.65 + dir.y * phi * 0.5));
+        const float3 U = normalize(cross(Nh, float3(0.0, 0.0, 1.0)) + float3(1e-4, 0.0, 0.0));
+        const float3 W = cross(Nh, U);
+        const int hk = (tri == triCount - 2) ? k : (k == 0 ? 0 : k + 1);
+        uv = float2(hk == 1 || hk == 2 ? 1.0 : -1.0, hk >= 2 ? 1.0 : -1.0);
+        p = C + (U * uv.x + W * uv.y) * headW;
+        T = W;
+        across3 = U;
+        t = 2.0;
+        side = uv.x;
+        out.normal = Nh;
+    } else {
+        p = base + 2.0 * t * (1.0 - t) * P1 + t * t * P2;
+        T = normalize(2.0 * (1.0 - t) * P1 + 2.0 * t * (P2 - P1) + float3(0.0, 1e-4, 0.0));
+        if (kind == GK_CLOVER) {
+            across3 = float3(-dir.y, 0.0, dir.x);
+        } else if (kind == GK_LAWN || kind == GK_TALL) {
+            across3 = float3(-facing.y, 0.0, facing.x);
+        } else {
+            // Thin stems, ears and heads turn their wide side to the camera.
+            across3 = cross(T, f.cameraPos.xyz - p);
+            across3 = length(across3) > 1e-5 ? normalize(across3) : float3(1.0, 0.0, 0.0);
+        }
+        across3 = normalize(across3 - T * dot(across3, T) + 1e-5);
+        // Width profile: blades widest near the base with a pointed tip; cut kinds use an envelope.
+        if (!cut) {
+            hw = halfW * (1.0 - pow(t, 1.5)) * (1.0 + 0.25 * sin(PI * t));
+        } else if (kind == GK_FLOWER) {
+            hw = halfW;
+        } else if (kind == GK_CLOVER) {
+            hw = t < 0.4 ? halfW : headW;
+        } else {
+            hw = t < 0.6 ? halfW : max(headW, halfW) * (kind == GK_WHEAT ? 1.9 : 1.1);
+        }
+        p += across3 * side * hw;
+        out.normal = normalize(cross(across3, T));
+    }
 
     if (!alive) p = float3(0.0, -1000.0, 0.0);
     out.position = f.viewProj * float4(p, 1.0);
     out.worldPos = p;
-    const float3 bladeN = normalize(float3(bendDir.x, 0.0, bendDir.y) * -1.0 + float3(0, 0.6, 0));
-    out.normal = normalize(mix(bladeN, float3(0, 1, 0), 0.55));
-    // Color: dark root, lighter yellow-green tips, per-blade hue variation and dry patches.
-    const float dry = smoothstep(0.55, 0.85, hash12(floor(root * 0.5)) * 0.6 + r2 * 0.4);
-    const float patchHue = hash12(floor(root * 0.25) + 3.7);
-    const float3 base = mix(float3(0.022, 0.030, 0.006), float3(0.048, 0.050, 0.012), r3);
-    const float3 green = mix(float3(0.085, 0.118, 0.018), float3(0.140, 0.150, 0.030), r1);
-    const float3 tipC = mix(mix(green, float3(0.110, 0.125, 0.032), patchHue * 0.6), float3(0.24, 0.17, 0.06), dry * 0.8);
-    out.color = mix(base, tipC, tt);
+    out.across = across3;
+    out.shape = float4(side, t, side * hw, gust);
+    out.uv = uv;
+    out.widths = float2(halfW, headW);
+    out.kind = kind | (cut ? GK_CUT : 0u) | (g.extra.z > 0.5 ? GK_DETAIL : 0u) | (sub << 8);
+    out.ao = wheat ? 0.8 : saturate(m.r * zones.patch);
+
+    // ---- colour: dark root, lighter tips, per-blade hue and value, per-clump tint, dry straw, golden wheat
+    const float tc = min(t, 1.0);
+    const float clumpTint = hash12(clumpCell + 23.9);
+    float3 green = mix(float3(0.060, 0.100, 0.016), float3(0.110, 0.128, 0.022), r1);
+    green = mix(green, green * float3(0.80, 1.02, 1.45), r4 * 0.6);  // blue-green to yellow-green
+    green *= (0.80 + 0.40 * r3) * (0.9 + 0.2 * clumpTint);
+    const float3 straw = mix(float3(0.25, 0.18, 0.075), float3(0.38, 0.29, 0.13), r1);
+    float3 rootC, tipC;
+    if (kind == GK_WHEAT) {
+        const float ripe = saturate(smoothstep(0.38, 0.60, noise.sample(ns, root * 0.045 + 0.7, level(0)).g) * 0.85 +
+                                    (r1 - 0.5) * 0.4);
+        const float3 gold = mix(float3(0.24, 0.26, 0.06), float3(0.50, 0.32, 0.08), ripe) * (0.85 + 0.3 * r3);
+        rootC = mix(float3(0.04, 0.06, 0.012), gold * 0.3, ripe);
+        tipC = gold * (t >= 0.76 ? 1.12 : 0.95);
+        // Bent stalks show their lighter sides: the gusts read as bright waves rolling over the field.
+        tipC *= 1.0 + 0.30 * gust;
+    } else if (kind == GK_FLOWER) {
+        rootC = green * 0.4;
+        tipC = head ? flowerPetal(sub, r3) : (lod >= 2 ? flowerPetal(sub, r3) : green * 1.1);
+    } else if (kind == GK_CLOVER) {
+        rootC = float3(0.020, 0.040, 0.012);
+        tipC = float3(0.036, 0.082, 0.024) * (0.85 + 0.3 * r3);
+    } else {
+        rootC = green * 0.32;
+        tipC = mix(green * 1.35 + float3(0.020, 0.018, 0.0), straw, dryBlade * 0.85);
+        if (kind == GK_TALL || kind == GK_SEED) tipC = mix(tipC, float3(0.14, 0.135, 0.045), 0.3);
+        if (kind == GK_SEED && t >= 0.7)
+            tipC = mix(mix(float3(0.32, 0.25, 0.12), float3(0.26, 0.16, 0.13), r3 * r3), straw, dryBlade * 0.5);
+    }
+    out.color = head ? tipC : mix(rootC, tipC, smoothstep(0.0, 0.85, tc));
     // Flattened blades show their lighter, bruised sides; blades left standing in torn ground are soiled.
     out.color = mix(out.color, out.color * 1.1 + float3(0.010, 0.008, 0.0), trampled.r * 0.6);
     out.color = mix(out.color, float3(0.070, 0.050, 0.025), trampled.g * 0.6);
-    out.t = tt;
     return out;
 }
 
@@ -1064,17 +1336,99 @@ fragment float4 grass_fs(GrassOut in [[stage_in]], constant FrameUniforms& f [[b
                          depth2d_array<float> shadowMap [[texture(0)]], sampler shadowSampler [[sampler(0)]]) {
     const float3 P = in.worldPos;
     const float3 V = normalize(f.cameraPos.xyz - P);
-    const float3 N = normalize(in.normal);
+    const uint kind = in.kind & 15u, sub = in.kind >> 8;
+    const bool detail = (in.kind & GK_DETAIL) != 0u;
+    const float t = in.shape.y, off = abs(in.shape.z);
+    float3 albedo = in.color;
+    float3 N = normalize(in.normal);
+    float thin = 1.0;  // light passing through
+    float gloss = 0.0;
+    if ((in.kind & GK_CUT) != 0u) {
+        if (kind == GK_FLOWER && t > 1.5) {
+            const float2 uv = in.uv;
+            const float r = length(uv), a = atan2(uv.y, uv.x);
+            float edge;
+            float3 centre;
+            float centreR;
+            switch (sub) {
+            case 0: edge = 0.60 + 0.40 * pow(abs(cos(a * 6.0)), 0.5); centre = float3(0.85, 0.52, 0.03); centreR = 0.30; break;
+            case 1: edge = 0.74 + 0.26 * cos(a * 5.0); centre = float3(0.55, 0.50, 0.04); centreR = 0.18; break;
+            case 2: edge = 0.60 + 0.40 * pow(abs(cos(a * 2.5)), 3.0); centre = float3(0.60, 0.55, 0.70); centreR = 0.15; break;
+            case 3: edge = 0.84 + 0.16 * cos(a * 4.0); centre = float3(0.03, 0.02, 0.02); centreR = 0.20; break;
+            default: edge = 0.80 + 0.20 * sin(a * 9.0) * sin(r * 13.0); centre = albedo; centreR = 0.0; break;
+            }
+            if (r > edge) discard_fragment();
+            albedo = r < centreR ? centre : albedo * (0.75 + 0.3 * r);
+            // A shallow dome so the petals catch the light unevenly.
+            N = normalize(N + (in.across * uv.x + cross(N, in.across) * uv.y) * 0.35);
+            thin = 0.8;
+            gloss = sub == 1 ? 1.0 : 0.2;
+        } else if (kind == GK_SEED) {
+            if (t < 0.62) {
+                if (off > in.widths.x) discard_fragment();
+            } else {
+                const float u = saturate((t - 0.62) / 0.38);
+                float prof = in.widths.y * sqrt(sin(PI * u)) * (1.0 - 0.35 * u);
+                if (detail) prof *= 0.62 + 0.38 * smoothstep(0.0, 0.6, fract(u * 15.0));
+                if (off > max(prof, in.widths.x)) discard_fragment();
+                thin = 0.6;
+            }
+        } else if (kind == GK_CLOVER) {
+            if (t < 0.4) {
+                if (off > in.widths.x) discard_fragment();
+            } else {
+                const float u = saturate((t - 0.4) / 0.6);
+                const float prof = in.widths.y * sqrt(saturate(sin(PI * min(u * 1.1, 1.0))));
+                if (off > prof || (u > 0.82 && off < in.widths.y * 0.3 * (u - 0.82) / 0.18)) discard_fragment();
+                // The pale chevron of white clover.
+                if (detail && abs(off / in.widths.y * 0.7 - (u - 0.35)) < 0.07) albedo = albedo * 1.8 + float3(0.03, 0.035, 0.02);
+                gloss = 0.4;
+            }
+        } else if (kind == GK_WHEAT) {
+            const float earEnd = detail ? 0.92 : 0.97;
+            if (t < 0.80) {
+                if (off > in.widths.x) discard_fragment();
+            } else if (t < earEnd) {
+                const float u = (t - 0.80) / (earEnd - 0.80);
+                const float zig = abs(sin(u * PI * 9.0 + sign(in.shape.z) * PI * 0.5));
+                const float prof = in.widths.y * sqrt(saturate(1.0 - pow(2.0 * u - 1.0, 4.0))) * (0.78 + 0.22 * zig);
+                if (off > max(prof, in.widths.x)) discard_fragment();
+                albedo *= 0.85 + 0.3 * zig;
+                thin = 0.5;
+            } else {
+                // Awns: a few hairs fanning out above the ear.
+                const float u = (t - earEnd) / (1.0 - earEnd);
+                const float spacing = in.widths.y * (0.35 + 0.75 * u) * 0.5;
+                const float q = in.shape.z / spacing;
+                const float lw = max(0.0010, fwidth(in.shape.z) * 0.6);
+                if (abs(q) > 2.4 || abs(q - round(q)) * spacing > lw) discard_fragment();
+                albedo *= 1.15;
+            }
+        } else if (off > in.widths.x * 1.05) { // flower stem
+            discard_fragment();
+        }
+    }
+
+    // Two-sided, rounded across the blade so a blade reads as a volume, softened toward the sky.
+    if (dot(N, V) < 0.0) N = -N;
+    if (t <= 1.0) N = normalize(N + in.across * in.shape.x * 0.6);
+    const float3 Nl = normalize(mix(N, float3(0.0, 1.0, 0.0), 0.3));
+    const float3 L = f.sunDir.xyz;
     const float shadow = shadowFactor(f, shadowMap, shadowSampler, P, float3(0, 1, 0));
-    const float NdotL = saturate(dot(N, f.sunDir.xyz) * 0.6 + 0.4); // wrapped diffuse
-    const float ao = mix(0.3, 1.0, in.t) * vehicleAO(f, P);
-    float3 c = in.color * ((f.sunColor.rgb * NdotL * shadow + headlightIrradiance(f, P, N)) / PI + ambientLight(f, 1.0) * ao);
-    // Translucency when looking toward the sun.
-    const float back = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
-    c += in.color * f.sunColor.rgb * back * 0.25 * shadow * in.t;
-    // Sheen on the tips.
-    const float3 H = normalize(f.sunDir.xyz + V);
-    c += f.sunColor.rgb * 0.015 * pow(saturate(dot(N, H)), 24.0) * shadow * in.t;
+    const float NdotL = saturate(dot(Nl, L) * 0.6 + 0.4); // wrapped diffuse
+    // Root occlusion: the base of a dense clump sees little sky and little sun.
+    const float rootAO = mix(1.0 - 0.75 * in.ao, 1.0, smoothstep(0.0, 0.7, min(t, 1.0)));
+    const float vao = vehicleAO(f, P);
+    float3 c = albedo * ((f.sunColor.rgb * NdotL * shadow * mix(0.5, 1.0, rootAO) + headlightIrradiance(f, P, Nl)) / PI +
+                         ambientLight(f, Nl.y) * rootAO * vao);
+    // Translucency: sunlight through the blades when looking toward the sun or at their shaded side (warm at sunset).
+    const float toward = pow(saturate(dot(-V, L)), 3.0);
+    const float through = saturate(-dot(N, L));
+    const float trans = (toward * 0.9 + through * 0.4) * shadow * thin * smoothstep(0.05, 0.6, min(t, 1.0));
+    c += albedo * float3(1.05, 1.1, 0.55) * f.sunColor.rgb * trans * 0.75 / PI;
+    // Sheen on the tips (glossy buttercups and clover).
+    const float3 H = normalize(L + V);
+    c += f.sunColor.rgb * (0.015 + 0.06 * gloss) * pow(saturate(dot(N, H)), 24.0 + 40.0 * gloss) * shadow * min(t, 1.0);
     c = applyFog(f, c, P, f.cameraPos.xyz);
     return float4(c, 1.0);
 }
@@ -1218,8 +1572,8 @@ fragment float4 mark_fs(MarkOut in [[stage_in]], constant FrameUniforms& f [[buf
     float cavity = 0.0;
     if (softSurface(surface)) {
         const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : surface == SURF_SAND ? MAT_SAND : MAT_DIRT;
-        const GroundSurface ground = groundMaterial(mat, P, N0, m, noise, ns);
-        const GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, m.a), noise, ns);
+        const GroundSurface ground = groundMaterial(mat, P, N0, m, noise, ns, grassFar(f, P));
+        const GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, 0.0), noise, ns, 0.0);
         const float under = 1.0 - smoothstep(0.82, 0.98, atv);
         const float lugs = treadLugs(u, tv) * lugAA * (1.0 - smoothstep(0.2, 0.7, slip));
         const float churn = smoothstep(0.05, 0.6, slip);
@@ -1276,7 +1630,7 @@ fragment float4 mark_fs(MarkOut in [[stage_in]], constant FrameUniforms& f [[buf
         // Hard ground: rubber laid down by the sliding patch, streaky along the travel direction; the
         // circumferential grooves leave lighter lines.
         const int mat = surface == SURF_CONCRETE ? MAT_CONCRETE : surface == SURF_ROCK ? MAT_ROCK : 4;
-        const GroundSurface ground = groundMaterial(mat, P, N0, m, noise, ns);
+        const GroundSurface ground = groundMaterial(mat, P, N0, m, noise, ns, grassFar(f, P));
         const float grooves = 1.0 - 0.6 * (1.0 - smoothstep(0.03, 0.08, abs(atv - 0.38))) -
                               0.6 * (1.0 - smoothstep(0.03, 0.08, atv));
         h = ground.height * 0.035 * ground.bump;

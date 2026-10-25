@@ -9,7 +9,7 @@ class TestTrack;
 
 // Render-side maps baked once from the procedural track (no collision role):
 // - height: terrain height (m) on a regular grid, used by grass and water;
-// - mask (RGBA8): R grass density, G mud weight, B wetness, A unused;
+// - mask (RGBA8): R grass density, G mud weight, B wetness, A wheat (sown patch);
 // - noise (RGBA8, tileable): R/G fbm, B cellular, A fine noise for procedural materials.
 struct GroundMaps {
     float x0 = 0, z0 = 0;   // world position of texel (0, 0)
@@ -23,7 +23,7 @@ struct GroundMaps {
 
     float sizeX() const { return float(width - 1) * texel; }
     float sizeZ() const { return float(height - 1) * texel; }
-    float grassAt(float x, float z) const;  // bilinear-free lookup (nearest), 0..1
+    float grassAt(float x, float z) const;  // grass or wheat cover, bilinear-free lookup (nearest), 0..1
     float heightAt(float x, float z) const; // nearest, m
 };
 

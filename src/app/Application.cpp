@@ -801,6 +801,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "bloom") s.bloom = v != 0.0f;
         else if (k == "grass") s.grassLevel = int(v);
         else if (k == "grass_dist") s.grassDistance = v;
+        else if (k == "flowers") s.flowerDensity = v;
+        else if (k == "grass_detail") s.grassDetail = v != 0.0f;
         else if (k == "clouds") s.clouds = v != 0.0f;
         else if (k == "spray_max") s.sprayMax = int(v);
         else if (k == "spray_dust") s.sprayDust = v != 0.0f;
