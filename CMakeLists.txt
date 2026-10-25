@@ -127,6 +127,7 @@ if(TRAILFORGE_BUILD_TESTS)
     enable_testing()
     add_executable(trailforge_tests tests/SimTests.cpp)
     target_link_libraries(trailforge_tests PRIVATE trailforge_sim)
+    target_compile_definitions(trailforge_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     foreach(test_name
             settles_on_flat_ground
             throttle_moves_vehicle
@@ -139,7 +140,7 @@ if(TRAILFORGE_BUILD_TESTS)
             tire_marks_surfaces
             auto_reverse
             surface_launch_grip
-            skid_mark_profile tire_marks_boundary wheel_spray
+            skid_mark_profile suv_marks_keyboard tire_marks_boundary wheel_spray
             abs_prevents_lock
             diff_locks_climb
             traction_control_mud driving_aids_logic friction_ellipse
@@ -172,6 +173,8 @@ if(TRAILFORGE_BUILD_TESTS)
             audio_manifest
             audio_feed_and_mixer
             audio_skid_gating
+            audio_squeal_release
+            audio_tire_profiles
             audio_music)
         add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)

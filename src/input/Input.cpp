@@ -201,10 +201,11 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
     DriverIntent in;
     m_freeMove = glm::vec3(0.0f);
     m_fast = false;
+    m_keyPedals.update(!uiWantsKeyboard && m_held[SDL_SCANCODE_W], !uiWantsKeyboard && m_held[SDL_SCANCODE_S], dt);
     if (!uiWantsKeyboard) {
         const auto& k = m_held;
-        in.throttle = k[SDL_SCANCODE_W] ? 1.0f : 0.0f;
-        in.brake = k[SDL_SCANCODE_S] ? 1.0f : 0.0f;
+        in.throttle = m_keyPedals.throttle();
+        in.brake = m_keyPedals.brake();
         in.steer = (k[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_A] ? 1.0f : 0.0f);
         in.handBrake = k[SDL_SCANCODE_SPACE] ? 1.0f : 0.0f;
         // Free camera: arrow keys, PageUp/PageDown, Shift for faster.

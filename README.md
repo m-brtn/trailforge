@@ -160,7 +160,13 @@ Command-line options:
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
-  on a scripted drive around the mud showcase;
+  on a scripted drive around the mud showcase; `squeal` — squeal peak, output level, length and tail after the slide
+  for gentle / full launches, light, moderate, tapped, full and ABS braking and handbrake / power slides on concrete,
+  dirt and the flat pad (the mixer has only the two squeal sounds, as sines of the real lengths; `PROBE_TRACE=<case>`
+  prints the per-wheel slip); `skid` also lists the wheel-seconds of squeal per surface under the wheel;
+  `keyboard` — instant W / S (1.0 at once) against the keyboard pedal ramp (`src/input/KeyboardPedals.h`): held W
+  launch, 0.15 / 0.25 / 0.4 s S taps and a held S at 50 km/h on the concrete lane and the flat pad (slip, sliding
+  time, marks, 0-30 km/h, stopping time and distance);
 - `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
   flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
   headless only); `climb [lane]` — the force balance of one ramp climb;
@@ -237,8 +243,8 @@ puddle crossing, a locked-wheel slide, the cap; `/tmp/trailforge_spray_*.png`),
 spray and wheel close-ups; `/tmp/trailforge_spray2_*.png`),
 `tools/scenarios/skid_profile.txt` (a 65 km/h locked-wheel stop on the skid strip, top-down
 `/tmp/trailforge_skid_profile*.png`),
-`tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, audible for
-lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
+`tools/scenarios/skid_check.txt` (tire squeal gating: silent for normal launches and turns on concrete, short for a
+brake tap, audible for lock-up and handbrake slides, never while the mud layer is active; needs the mixer, i.e. a device or `--audio-capture`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
@@ -280,13 +286,23 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Throttle / brake (stopped: release S and press again for reverse) | W / S | RT / LT |
+| Throttle / brake (stopped: release S and press again for reverse; keys ramp, see below) | W / S | RT / LT |
 | Steering | A / D | left stick |
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
 | Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L) | L | Y (North) |
 | Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s) | V | D-pad left |
 | Reset to the last start point | R | Back / View |
+
+Keyboard pedals are a driver-input model (`src/input/KeyboardPedals.h`, the constants are in `KeyboardPedalSettings`),
+not a force: a held W goes to 0.5 within 0.15 s and to 1.0 after 0.8 s, a held S to 0.4 within 0.1 s and to 1.0
+after 0.7 s; releasing the key drops the pedal at once. A key is on/off, so without a ramp every tap was a full
+pedal: the 2H SUV spun its rear wheels on every keyboard launch and locked them on every short brake tap. Measured
+(`trailforge_probe keyboard`, concrete lane, instant → ramp): held W max slip 4.80 → 0.92 m/s, sliding 2.23 → 0 s,
+marks 0.77 → 0, 0-30 km/h 1.90 → 1.73 s; a 0.25 s S tap at 50 km/h 7.57 → 1.17 m/s, marks 0.77 → 0; a held S stops in
+1.83 s / 14.5 m instead of 1.75 s / 13.5 m and still locks the rear wheels (equal front / rear brake torque); a
+0.4 s tap (pedal 0.66) still locks them. Gamepad triggers are analog and not ramped; scenarios that set pedal values
+directly bypass the ramp.
 | Camera: follow ↔ free | C | RB |
 | ABS on / off | B | D-pad up |
 | Traction control: off → on → off-road | T | D-pad right |
@@ -504,7 +520,8 @@ documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` 
 
 | Section | Keys |
 |---|---|
-| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`) |
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`, `sporty`; also selects the tire sound preset) |
+| `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping` |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
 | `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
@@ -870,8 +887,9 @@ time, and two intensities per end:
   2nd gear at full throttle (≈ 1.7 m/s) leaves nothing on concrete, while lock-up, handbrake slides and wheelspin on
   loose ground do.
 
-Rubber marks and tire squeal share one per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio
-0.2..0.55, sideways sliding 2.5..7 m/s at 0.4..0.8. Only concrete, rock and the low-grip patch squeal; loose surfaces
+Rubber marks use a per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio 0.2..0.55, sideways
+sliding 2.5..7 m/s at 0.4..0.8. Tire squeal has its own, stricter gate (`squealSlip`, see "Audio"), so a launch with
+some wheelspin leaves marks but stays silent. Only concrete, rock and the low-grip patch squeal; loose surfaces
 drive their own layers. Soil in the tread suppresses both. Rubber marks additionally follow a patch "heat" that
 builds up over ~0.35 s of sliding and drops within ~0.1 s when the slide ends, and scale with √load, so a locked
 stop starts faint, stays even and does not darken toward the end (the front wheels lock later than the rears and
@@ -973,8 +991,20 @@ parameter set, and the offline capture must run the exact same code without a de
   loops after it catches (or at once when the throttle opens); gear clunks when a gear engages; a quiet
   synthesized transmission whine at the propeller-shaft mesh frequency.
 - **Tires.** From the per-wheel contact samples (surface, load, slip ratio, slip speed, rolling speed): squeal on
-  concrete / low grip / rock through the shared `rubberSlide` gate (see "Tire marks"), one voice per wheel (random
-  loop start and pitch per slide, pitch from sliding speed and load, an onset chirp), gravel and dirt roll and scrub on packed dirt and rock, mud slosh plus
+  concrete / low grip / rock, proportional to `squealSlip` — the longitudinal and lateral slip ratios combined on an
+  ellipse (onset 0.55 longitudinal / 0.40 lateral, full at 1.7× that) times the sliding speed (2.5..9 m/s), gated by
+  ground speed (1..2.5 m/s) and wheel load — so pulling away (the SUV's 2H full-throttle launch spins its rear
+  wheels at ~5 m/s, ratio ~0.5), braking up to ~0.3 pedal, ABS stops and normal turns are silent, while lock-up,
+  handbrake and power slides squeal. Envelope per wheel: attack 0.03 s, release 0.04 s, so a squeal stops within
+  ~0.2 s of the slide. One voice per wheel (random loop start and pitch per slide, pitch from sliding speed and
+  load, an onset chirp that fades out with the slide instead of playing its 1.7 s file to the end). The vehicle's
+  `audioProfile` sets the tire sound (`src/vehicle/TireSound.h`): `sporty` plays the recordings as they are (a road
+  tire); `trailforge_suv` plays them at 0.78× pitch, 0.7× level and a darker low-pass (1.1–3.2 kHz instead of
+  2.5–12 kHz) and adds a synthesized scrub per wheel — white noise band-limited to 120–900 Hz, amplitude-modulated at
+  the rate the tread blocks pass the patch (sliding speed / 0.07 m), with the same gate and envelope as the squeal.
+  Test `audio_tire_profiles` (real recordings, one wheel at 6 m/s, full squeal): sporty −26.0 dBFS, spectral centroid
+  1473 Hz, 27.9 % of the energy below 1 kHz, 6.7 % above 3 kHz; SUV −26.6 dBFS, 1048 Hz, 44.3 %, 0.8 %. Gravel and
+  dirt roll and scrub on packed dirt and rock, mud slosh plus
   random squelches, grass rustle and swishes, a water splash when a wheel drops into a puddle (contact below the
   puddle's water level inside its rectangle).
 - **Body.** Suspension thump on load steps, bump-stop hits, chassis creak at large articulation, metal impacts from a
@@ -1169,7 +1199,9 @@ Everything below was actually run on macOS 27 / M-series.
 | Audio: tire layers | Concrete lock-up skid 1.0, 12 % traction slip 0.0; rolling dirt 0.75 / mud 0.62 / grass 0.62; wheels in the air 0 |
 | Audio: manifest | All 55 sounds present at 48 kHz, 12 engine loops with recorded rpm and level, licenses 54 CC0 + 1 other |
 | Audio: feed and mixer | Simulated launch: 3 gear events, source rpm up to 3028; concrete skid 0.000 cruising vs 1.00 braking; mud lane mud 0.66; pause RMS 0.1486 → 0.0497; peak 0.660, 0 clipped |
-| Audio: skid gating | At 60/120/240 Hz on concrete: squeal ≤ 0.022 for launches (0 at 120/240 Hz) and full-lock / half-lock turns 0; handbrake 0.63–0.64, full brake 1.00–1.01 (with μ 0.95 the front wheels lock too, ~0.4 s after the rears), power slide 0.27–0.43, 6–7 onset chirps; mud lane: skid 0, mud 1.00 |
+| Audio: skid gating | Built-in vehicle at 60/120/240 Hz on concrete: launches and full-lock / half-lock turns 0; handbrake 0.64, full brake 1.00, full-lock power slide (front plow) 0.18–0.19, 4–5 onset chirps. Shipped SUV (2H, ABS off) on the pad: full-throttle launch 0.000 although the rears spin until 2.18 s, half-throttle launch, 0.3 brake and a 0.25 s full brake tap 0.000; 0.5 s full brake tap 0.55, silent 0.19 s after the slide; full brake 0.50, handbrake turn 0.63, both silent before the slide ends; mud lane: skid 0, mud 1.00 |
+| Audio: tire profiles | Real squeal recordings, one wheel at 6 m/s, full squeal, 1.6 s window: sporty −26.0 dBFS, centroid 1473 Hz, <1 kHz 27.9 %, >3 kHz 6.7 %; trailforge_suv −26.6 dBFS, 1048 Hz, 44.3 %, 0.8 % (without scrub −28.5 dBFS, 1242 Hz); output below −60 dBFS ≤ 0.150 s after the slide |
+| Audio: squeal release | Mixer with squeal sounds of their real length: 0.3 s at squeal 1.0 → peak −26.2 dBFS, one onset chirp, output below −60 dBFS 0.150 s after the slide (the 1.7 s chirp fades with it); at 0.25: −37.0 dBFS, no chirp, tail 0.092 s |
 | Surface launch grip | Full-throttle high-range launch at 60/120/240 Hz: concrete v(1 s) 5.1 m/s, max slip 0.27 / 0.11 m/s at 120 / 240 Hz (3.3 m/s for 0.03 s at 60 Hz); grass and mud spin (max slip 7.2–9.5 m/s for 1.7–1.8 s), v(1 s) 3.4 / 2.4 m/s stays below μ·g; v(2 s) orders concrete > dirt > grass > mud |
 
 - **Step cost** (`trailforge_probe bench`, Release, 20 s course drive):

@@ -226,6 +226,34 @@ void vehicleDefinitionValidation() {
            "tires.surfaceGrip.ice: unknown key");
     expect("unknown visual model", [](V& d) { d.object["visualModel"] = V::makeString("truck"); },
            "visualModel: unknown model 'truck'");
+    expect("unknown audio profile", [](V& d) { d.object["audioProfile"] = V::makeString("truck"); },
+           "audioProfile: unknown profile 'truck'");
+    expect("tire sound out of range",
+           [](V& d) {
+               d.object["tireSound"] = V::makeObject();
+               d.object["tireSound"].object["squealPitch"] = V::makeNumber(3);
+           },
+           "tireSound.squealPitch: = 3 is out of range");
+    expect("tire sound band inverted",
+           [](V& d) {
+               d.object["tireSound"] = V::makeObject();
+               d.object["tireSound"].object["scrubLowHz"] = V::makeNumber(1000);
+               d.object["tireSound"].object["scrubHighHz"] = V::makeNumber(500);
+           },
+           "tireSound.scrubHighHz: must exceed scrubLowHz");
+    {
+        json::Value d = doc;
+        d.object["audioProfile"] = V::makeString("sporty");
+        d.object["tireSound"] = V::makeObject();
+        d.object["tireSound"].object["scrubGain"] = V::makeNumber(0.5);
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        const bool ok = parseVehicleDefinition(json::write(d), "case.json", def, errors);
+        TireSoundProfile want = tireSoundPreset("sporty");
+        want.scrubGain = 0.5f;
+        CHECK(ok && def.config.tireSound == want, "sporty profile with a scrubGain override: %s",
+              errors.empty() ? "wrong values" : errors.front().c_str());
+    }
     expect("unknown garage key",
            [](V& d) {
                V r = V::makeArray();

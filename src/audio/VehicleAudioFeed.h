@@ -23,11 +23,12 @@ struct AudioFeedSettings {
     float impactInterval = 0.08f;    // s
     float creakInterval = 2.5f;      // s
     // Rubber squeal per wheel: the drive (wheelSquealDrive) is followed with attack/release time constants and
-    // gated with hysteresis, so single-tick slip spikes and steady small slip stay silent.
-    float squealAttack = 0.05f;      // s
-    float squealRelease = 0.15f;     // s, still on a hard surface
-    float squealReleaseLoose = 0.04f; // s, after the wheel left the hard surface or lost contact
-    float squealOn = 0.12f;          // gate opens above this smoothed drive
+    // gated with hysteresis, so single-tick slip spikes stay silent. The release ends a full squeal within ~0.1 s
+    // of the slide ending.
+    float squealAttack = 0.03f;      // s
+    float squealRelease = 0.04f;     // s, still on a hard surface
+    float squealReleaseLoose = 0.03f; // s, after the wheel left the hard surface or lost contact
+    float squealOn = 0.15f;          // gate opens above this smoothed drive
     float squealOff = 0.05f;         // and closes below this one
 };
 

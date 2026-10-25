@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <mutex>
 
+#include "vehicle/TireSound.h"
+
 namespace tf {
 
 inline constexpr int kAudioWheels = 4;
@@ -42,8 +44,9 @@ struct WheelAudio {
     float load = 0.0f;          // N
     float slipSpeed = 0.0f;     // m/s, patch sliding speed over the ground
     float slipRatio = 0.0f;     // sliding speed / max(patch speed, rolling speed, 1 m/s)
+    float longRatio = 0.0f;     // |longitudinal sliding speed| / the same reference (wheelspin, lock-up)
+    float latRatio = 0.0f;      // |lateral sliding speed| / the same reference (scrub, drift)
     float rollSpeed = 0.0f;     // m/s, |patch speed over the ground|
-    float slide = 0.0f;         // 0..1, rubberSlide() of the contact (the same gate as the rubber marks)
     float soil = 0.0f;          // 0..1, soil in the tread (TreadSoil): a dirty tread does not squeal
     float squeal = 0.0f;        // 0..~1.2, rubber squeal of this wheel: smoothed, gated per tick in VehicleAudioFeed
     AudioVec3 position;         // world, contact patch
@@ -66,6 +69,7 @@ struct AudioFrame {
     float driveshaftHz = 0.0f; // propeller shaft revolutions per second (|mean wheel speed| x final drive)
     float referenceLoad = 4905.0f; // N, static load of one wheel
     std::array<WheelAudio, kAudioWheels> wheels;
+    TireSoundProfile tireSound;  // the vehicle's tire sound (VehicleConfig::tireSound); default = "sporty"
     float dayAmount = 1.0f;    // 0 = night, 1 = day (from the sun elevation)
     bool paused = false;
     bool menuAmbience = false; // menu drone loop (loaded, not used by the menus: they keep the world sound)
@@ -108,6 +112,7 @@ struct AudioStats {
     float skid = 0.0f, gravel = 0.0f, dirt = 0.0f, mud = 0.0f, grass = 0.0f; // tire layer intensities (0..~1)
     std::array<float, kAudioWheels> skidWheel{}; // per-wheel squeal voice gains (skid = RMS of these)
     int skidChirps = 0;            // short squeal one-shots started at slide onsets
+    float scrub = 0.0f;            // synthesized tire scrub level (RMS over the wheels, before the volume settings)
     float wind = 0.0f;
     float day = 0.0f, night = 0.0f; // ambience weights
     float whineHz = 0.0f;

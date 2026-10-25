@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "input/KeyboardPedals.h"
 #include "sim/Simulation.h"
 
 #include <SDL3/SDL_events.h>
@@ -88,6 +89,7 @@ private:
     // Held keys come from KEY_DOWN/KEY_UP events (not SDL_GetKeyboardState) so that
     // scenario events (SDL_PushEvent) take the same path. On focus loss SDL sends KEY_UP itself.
     std::array<bool, SDL_SCANCODE_COUNT> m_held{};
+    KeyboardPedals m_keyPedals; // W / S: progressive pedals (KeyboardPedals.h)
     DriverIntent m_intent;
     glm::vec2 m_mouseDelta{0.0f};
     float m_wheel = 0.0f;

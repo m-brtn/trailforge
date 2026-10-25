@@ -18,6 +18,9 @@ constexpr float kWindGain = 0.35f;
 constexpr float kDayGain = 0.30f, kNightGain = 0.24f;
 constexpr float kStarterFadeStart = 2.3f, kStarterFadeEnd = 4.3f; // s in engine_start.wav: catch, then idle
 constexpr float kStarterGain = 0.65f;
+// Scrub noise level at scrubGain 1 and full squeal: band-limited noise of RMS ~0.1 per wheel (four uncorrelated
+// wheels add in power), comparable to one squeal loop voice.
+constexpr float kScrubLevel = 0.6f;
 constexpr float kPinionTeeth = 10.0f; // whine = propeller shaft speed x pinion teeth
 
 float smoothstep(float a, float b, float x) {
@@ -62,6 +65,7 @@ AudioMixer::AudioMixer(const SoundBank& bank, int sampleRate, std::uint32_t seed
     for (SkidVoice& s : m_skid) {
         loopVoice(s.voice, SoundId::TireSkidLoop, Bus::Tires, true);
         s.wobblePhase = 6.2831853f * rand01();
+        s.noise = 0x9E3779B9u * std::uint32_t(&s - m_skid.data() + 1);
     }
     loopVoice(m_wind, SoundId::WindLoop, Bus::Ambience, true);
     loopVoice(m_day, SoundId::AmbienceDayLoop, Bus::Ambience, false);
@@ -135,6 +139,7 @@ AudioMixer::Voice* AudioMixer::startOneShot(SoundId id, float gain, Bus bus, con
     v.positional = position != nullptr;
     if (position) v.position = *position;
     v.gain = gain;
+    v.serial = ++m_shotSerial;
     // Start at the target gain (no fade-in: the files have their own 2 ms fade).
     StereoGain g = v.positional ? place(v.position) : StereoGain{1.0f, 1.0f};
     setLoop(v, v.gain, g);
@@ -270,8 +275,13 @@ void AudioMixer::controlUpdate(float dt) {
     // Rubber squeal: one voice per wheel, driven by that wheel's gated squeal (hard surfaces only, see
     // VehicleAudioFeed). Every slide starts at a random point of the loop with its own pitch; pitch follows the
     // sliding speed and load, brightness the intensity, and a slow wobble keeps a held slide from sounding static.
-    // A fresh slide starts with the short squeal; the loop is ducked under it and takes over as it decays.
-    float skidPower = 0.0f;
+    // A fresh slide starts with the short squeal; the loop is ducked under it and takes over as it decays. The short
+    // squeal follows the wheel's squeal level, so it ends with the slide instead of playing its 1.7 s to the end.
+    // The vehicle's TireSoundProfile sets pitch, level and brightness and the synthesized scrub (mixScrub).
+    const TireSoundProfile& ts = f.tireSound;
+    m_scrubHp = std::exp(-6.2831853f * ts.scrubLowHz / float(m_rate));
+    m_scrubLp = 1.0f - std::exp(-6.2831853f * ts.scrubHighHz / float(m_rate));
+    float skidPower = 0.0f, scrubPower = 0.0f;
     for (int i = 0; i < kAudioWheels; ++i) {
         SkidVoice& sv = m_skid[std::size_t(i)];
         const WheelAudio& wa = f.wheels[std::size_t(i)];
@@ -285,32 +295,54 @@ void AudioMixer::controlUpdate(float dt) {
             const bool onset = target > 0.3f && sv.prevTarget <= 0.3f;
             if (onset && m_time - sv.lastChirp > 0.8 && m_time - m_lastChirp > 0.25) {
                 const AudioVec3 p = wa.position;
-                startOneShot(SoundId::TireSkidShort, 0.32f * std::min(1.0f, target) * (0.85f + 0.3f * rand01()),
-                             Bus::Tires, &p, sv.jitter * (0.92f + 0.16f * rand01()));
+                sv.chirpLevel = 0.32f * ts.squealGain * (0.85f + 0.3f * rand01());
+                sv.chirpGain = sv.chirpLevel * std::min(1.0f, target);
+                sv.chirp = startOneShot(SoundId::TireSkidShort, sv.chirpGain, Bus::Tires, &p,
+                                        ts.squealPitch * sv.jitter * (0.92f + 0.16f * rand01()));
+                sv.chirpSerial = sv.chirp ? sv.chirp->serial : 0;
                 sv.lastChirp = m_time;
                 sv.sinceChirp = 0.0;
                 m_lastChirp = m_time;
                 ++m_stats.skidChirps;
             }
+            if (sv.chirp && (!sv.chirp->active || sv.chirp->serial != sv.chirpSerial)) sv.chirp = nullptr;
+            if (sv.chirp) {
+                const float chirpTarget = sv.chirpLevel * std::min(1.0f, target);
+                sv.chirpGain = approach(sv.chirpGain, chirpTarget, chirpTarget > sv.chirpGain ? 0.03f : 0.04f, dt);
+                sv.chirp->gain = sv.chirpGain;
+                if (target == 0.0f && sv.chirpGain < 1e-4f) {
+                    sv.chirp->active = false;
+                    sv.chirp = nullptr;
+                }
+            }
             sv.prevTarget = target;
             sv.sinceChirp += dt;
             sv.wobblePhase = std::fmod(sv.wobblePhase + 6.2831853f * sv.wobbleHz * dt, 6.2831853f * 100.0f);
         }
-        sv.gain = approach(sv.gain, target, target > sv.gain ? 0.06f : 0.10f, dt);
+        sv.gain = approach(sv.gain, target, target > sv.gain ? 0.03f : 0.04f, dt);
         if (sv.gain < 1e-4f && target == 0.0f) sv.gain = 0.0f;
         const float slide = smoothstep(1.0f, 12.0f, wa.slipSpeed);
         const float load = std::clamp(wa.load / std::max(f.referenceLoad, 1.0f), 0.0f, 1.6f);
-        sv.voice.rate = sv.jitter * (0.90f + 0.14f * slide) * (1.04f - 0.05f * load) *
+        sv.voice.rate = ts.squealPitch * sv.jitter * (0.90f + 0.14f * slide) * (1.04f - 0.05f * load) *
                         (1.0f + 0.012f * std::sin(sv.wobblePhase));
-        const float cutoff = 2500.0f + 9500.0f * std::min(1.0f, sv.gain);
+        const float cutoff = ts.lowpassMinHz + (ts.lowpassMaxHz - ts.lowpassMinHz) * std::min(1.0f, sv.gain);
         sv.voice.lowpass = 1.0f - std::exp(-6.2831853f * cutoff / float(m_rate));
         const float wobble = 1.0f + 0.12f * std::sin(0.73f * sv.wobblePhase + 1.3f);
         const float duck = 0.4f + 0.6f * smoothstep(0.15f, 0.8f, float(sv.sinceChirp));
         // 0.5: four uncorrelated voices add up in power like the RMS of the four wheels.
-        setLoop(sv.voice, 0.5f * kTireGain[0] * sv.gain * wobble * duck, place(wa.position));
+        const StereoGain pan = place(wa.position);
+        setLoop(sv.voice, 0.5f * kTireGain[0] * ts.squealGain * sv.gain * wobble * duck, pan);
         m_stats.skidWheel[std::size_t(i)] = sv.gain;
         skidPower += sv.gain * sv.gain;
+        // Scrub: rises with the squeal (same gates), modulated by the tread blocks passing the patch.
+        const float scrub = ts.scrubGain * sv.gain * (0.6f + 0.4f * smoothstep(1.0f, 8.0f, wa.slipSpeed));
+        sv.blockHz = std::min(wa.slipSpeed / std::max(ts.treadPitch, 0.01f), 400.0f);
+        const float bus = m_bus[std::size_t(Bus::Tires)] * m_master * m_gameplay;
+        sv.scrubTl = pan.l * kScrubLevel * scrub * bus;
+        sv.scrubTr = pan.r * kScrubLevel * scrub * bus;
+        scrubPower += scrub * scrub;
     }
+    m_stats.scrub = std::sqrt(0.25f * scrubPower);
     m_tireGain[std::size_t(TireLayer::Skid)] = std::sqrt(0.25f * skidPower);
     m_stats.skid = m_tireGain[0];
     m_stats.gravel = m_tireGain[1];
@@ -416,6 +448,39 @@ void AudioMixer::mixVoice(Voice& v, float* acc, int frames) {
     }
 }
 
+void AudioMixer::mixScrub(float* acc, int frames) {
+    const float invN = 1.0f / float(frames);
+    const float hp = m_scrubHp, lp = m_scrubLp;
+    for (SkidVoice& sv : m_skid) {
+        if (sv.scrubTl < 1e-6f && sv.scrubTr < 1e-6f && sv.scrubL < 1e-6f && sv.scrubR < 1e-6f) {
+            sv.scrubL = sv.scrubR = 0.0f;
+            continue;
+        }
+        const float inc = 6.2831853f * sv.blockHz / float(m_rate);
+        for (int i = 0; i < frames; ++i) {
+            // xorshift32 white noise in [-1, 1)
+            sv.noise ^= sv.noise << 13;
+            sv.noise ^= sv.noise >> 17;
+            sv.noise ^= sv.noise << 5;
+            const float x = float(sv.noise) * (2.0f / 4294967296.0f) - 1.0f;
+            sv.hpOut = hp * (sv.hpOut + x - sv.hpIn);
+            sv.hpIn = x;
+            sv.lp1 += lp * (sv.hpOut - sv.lp1);
+            sv.lp2 += lp * (sv.lp1 - sv.lp2);
+            // Tread blocks: a raised-cosine pulse per block, never fully silent between blocks.
+            const float block = 0.45f + 0.55f * (0.5f - 0.5f * std::cos(sv.blockPhase));
+            sv.blockPhase += inc;
+            if (sv.blockPhase > 6.2831853f) sv.blockPhase -= 6.2831853f;
+            const float s = sv.lp2 * block;
+            const float t = float(i) * invN;
+            acc[2 * i] += s * (sv.scrubL + (sv.scrubTl - sv.scrubL) * t);
+            acc[2 * i + 1] += s * (sv.scrubR + (sv.scrubTr - sv.scrubR) * t);
+        }
+        sv.scrubL = sv.scrubTl;
+        sv.scrubR = sv.scrubTr;
+    }
+}
+
 void AudioMixer::renderBlock(float* out, int frames) {
     const float dt = float(frames) / float(m_rate);
     controlUpdate(dt);
@@ -458,6 +523,7 @@ void AudioMixer::renderBlock(float* out, int frames) {
     }
     m_whineL = m_whineTl;
     m_whineR = m_whineTr;
+    if (!frozen) mixScrub(acc, frames);
 
     // Look-ahead limiter: the output is delayed by kLookahead frames; the gain follows the largest peak inside the
     // window, reaching ~99 % of the needed reduction before the peak leaves the delay line.

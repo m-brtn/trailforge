@@ -38,6 +38,7 @@ expect audio_skid < 0.05
 # ---------------------------------------------------------------- mud path, puddle, meadow
 teleport 8
 wait 2.5
+transfer 4h                      # the 2H SUV (v0.9.0) bogs down in the mud before the puddle
 log mud_begin
 down W
 down A
@@ -52,6 +53,7 @@ down S
 until speed_kmh < 0.5 8
 up S
 log mud_end
+transfer 2h
 down D
 down W
 until audio_grass > 0.3 8

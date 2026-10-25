@@ -53,16 +53,16 @@ struct SurfaceMarkResponse {
 };
 SurfaceMarkResponse surfaceMarkResponse(SurfaceId id);
 
-// How much a patch on hard ground really slides, 0..1. Shared by the rubber marks and the tire squeal so that what
-// is drawn and what is heard agree. Longitudinal (wheelspin, lock-up) and lateral sliding are gated separately, each
+// How much a patch on hard ground really slides, 0..1, for the rubber marks (the tire squeal uses the stricter
+// squealSlip in audio/AudioMapping). Longitudinal (wheelspin, lock-up) and lateral sliding are gated separately, each
 // by its sliding speed (m/s) and its ratio to max(patch speed, rolling speed, 1 m/s). Dead zones from
 // `trailforge_probe skid` on concrete: a full-lock turn at 30 km/h scrubs sideways at 3.7 m/s / 0.39, a turn at
-// 50 km/h at 3.8 m/s / 0.26, traction slip in 2nd gear stays below 2 m/s / 0.15 (all silent); the inner wheels of a
-// full-throttle full-lock launch spin at 7-10 m/s / 0.6-0.75, lock-up and handbrake reach 11-13 m/s at 1.0 (squeal).
+// 50 km/h at 3.8 m/s / 0.26, traction slip in 2nd gear stays below 2 m/s / 0.15 (all unmarked); the inner wheels of a
+// full-throttle full-lock launch spin at 7-10 m/s / 0.6-0.75, lock-up and handbrake reach 11-13 m/s at 1.0 (marks).
 float rubberSlide(const WheelContactSample& c);
 
 // Sliding that lays rubber marks, 0..1: rubberSlide() plus a locked wheel down to ~1 m/s (a locked tire keeps
-// sliding until the stop, while the squeal gate fades it out below ~5 m/s).
+// sliding until the stop, while the rubberSlide gate fades out below ~5 m/s).
 float markSlide(const WheelContactSample& c);
 
 // Loose soil of a surface as the tread picks it up (visual and sound only, never friction). Adhesion follows the

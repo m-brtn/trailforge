@@ -1,11 +1,13 @@
 // Headless TrailForge physics checks. Usage: trailforge_tests <test_name>
 // (CTest registers each test separately). Tolerances are engineering, not bitwise.
 
+#include "input/KeyboardPedals.h"
 #include "sim/BodyMud.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 #include "sim/WheelSpray.h"
 #include "track/TestTrack.h"
+#include "vehicle/VehicleDefinition.h"
 
 #include <algorithm>
 #include <array>
@@ -686,6 +688,94 @@ void tireMarksBoundary() {
     }
 }
 
+// The shipped SUV (2H part-time transfer case, ABS off) on the flat concrete pad: rubber marks for rolling, a full
+// brake and an instant full-throttle launch, and the keyboard pedals (KeyboardPedals): a held W pulls away without
+// wheelspin or marks and still reaches full throttle; a 0.25 s S tap does not lock; a held S reaches full brake.
+void suvMarksKeyboard() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    CHECK(loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json", def, errors),
+          "SUV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    SimulationSettings st = settingsFor(TrackLayout::Flat);
+    st.vehicle = def.config;
+    Simulation sim(st);
+    TireMarks& marks = sim.tireMarks();
+    struct Drive {
+        MarkStats marks;
+        float maxSlip = 0.0f, maxPedal = 0.0f;
+        double t30 = -1.0, stop = -1.0;
+    };
+    // keyboard: the pedal comes from KeyboardPedals with the key held for `hold` s; otherwise intent is used as is.
+    auto drive = [&](double seconds, const DriverIntent& intent, bool keyboard, bool brakeKey, double hold) {
+        Drive d;
+        KeyboardPedals pedals;
+        const std::uint64_t w0 = marks.written();
+        const float dt = float(sim.fixedStep());
+        for (int i = 0; i < int(std::lround(seconds / sim.fixedStep())); ++i) {
+            const double t = i * sim.fixedStep();
+            DriverIntent in = intent;
+            if (keyboard) {
+                pedals.update(t < hold && !brakeKey, t < hold && brakeKey, dt);
+                in.throttle = pedals.throttle();
+                in.brake = pedals.brake();
+                d.maxPedal = std::max(d.maxPedal, brakeKey ? in.brake : in.throttle);
+            }
+            run(sim, sim.fixedStep(), in);
+            for (const WheelContactSample& c : sim.vehicle().contacts())
+                if (c.contact) d.maxSlip = std::max(d.maxSlip, c.slipSpeed());
+            const float v = sim.vehicle().telemetry().speed;
+            if (d.t30 < 0.0 && v * 3.6f >= 30.0f) d.t30 = t;
+            if (d.stop < 0.0 && v < 0.5f) d.stop = t;
+        }
+        d.marks = marksSince(marks, w0);
+        return d;
+    };
+    auto spawn = [&](float kmh) {
+        sim.requestReset();
+        run(sim, 1.0);
+        if (kmh > 0.0f) cruise(sim, 8.0, kmh);
+    };
+    auto report = [&](const char* what, const Drive& d) {
+        printMarks(what, d.marks, sim);
+        std::printf("      max slip %.2f m/s, pedal max %.2f, 0-30 km/h %.2f s, stop %.2f s\n", d.maxSlip, d.maxPedal,
+                    d.t30, d.stop);
+    };
+
+    spawn(30.0f);
+    const Drive rolling = drive(3.0, {}, false, false, 0.0);
+    report("SUV coasting from 30 km/h:", rolling);
+    spawn(0.0f);
+    const Drive instant = drive(4.0, {.throttle = 1.0f}, false, false, 0.0);
+    report("SUV instant full throttle (2H):", instant);
+    spawn(0.0f);
+    const Drive keyW = drive(4.0, {}, true, false, 4.0);
+    report("SUV keyboard W held 4 s:", keyW);
+    spawn(50.0f);
+    const Drive keyTap = drive(2.0, {}, true, true, 0.25);
+    report("SUV keyboard S tap 0.25 s at 50 km/h:", keyTap);
+    spawn(50.0f);
+    const Drive keyHold = drive(5.0, {}, true, true, 5.0);
+    report("SUV keyboard S held at 50 km/h:", keyHold);
+    spawn(50.0f);
+    const Drive full = drive(5.0, {.brake = 1.0f}, false, false, 0.0);
+    report("SUV full brake at 50 km/h:", full);
+
+    CHECK(rolling.marks.maxSlip < 0.05f, "SUV rolling left rubber: %.2f", rolling.marks.maxSlip);
+    CHECK(instant.maxSlip > 2.0f && instant.marks.maxSlip > 0.3f,
+          "instant full throttle no longer spins the 2H rears (%.2f m/s, mark %.2f): update KeyboardPedals' notes",
+          instant.maxSlip, instant.marks.maxSlip);
+    CHECK(keyW.maxPedal > 0.99f && keyW.maxSlip < 1.5f && keyW.marks.maxSlip < 0.05f,
+          "keyboard launch: pedal %.2f, slip %.2f m/s, mark %.2f", keyW.maxPedal, keyW.maxSlip, keyW.marks.maxSlip);
+    CHECK(keyW.t30 > 0.0 && keyW.t30 <= instant.t30 + 0.2, "keyboard 0-30 km/h %.2f s vs instant %.2f s", keyW.t30,
+          instant.t30);
+    CHECK(keyTap.maxSlip < 2.0f && keyTap.marks.maxSlip < 0.05f, "keyboard tap locks: %.2f m/s, mark %.2f",
+          keyTap.maxSlip, keyTap.marks.maxSlip);
+    CHECK(keyHold.maxPedal > 0.99f && keyHold.stop > 0.0 && keyHold.stop < full.stop + 0.3,
+          "keyboard brake hold: pedal %.2f, stop %.2f s vs %.2f s", keyHold.maxPedal, keyHold.stop, full.stop);
+    CHECK(full.marks.segments >= 20 && full.marks.maxSlip > 0.5f, "SUV lock-up marks: %d segments, %.2f",
+          full.marks.segments, full.marks.maxSlip);
+}
+
 void skidMarkProfile() {
     for (double hz : {60.0, 120.0, 240.0}) {
         SimulationSettings st = settingsFor(TrackLayout::Flat);
@@ -1290,6 +1380,7 @@ int main(int argc, char** argv) {
         {"auto_reverse", autoReverse},
         {"surface_launch_grip", surfaceLaunchGrip},
         {"skid_mark_profile", skidMarkProfile},
+        {"suv_marks_keyboard", suvMarksKeyboard},
         {"tire_marks_boundary", tireMarksBoundary},
         {"wheel_spray", wheelSpray},
         {"abs_prevents_lock", absPreventsLock},
