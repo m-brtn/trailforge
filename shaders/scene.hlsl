@@ -724,8 +724,10 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND || mat == MAT_SNOW || mat == MAT_TERRAIN;
     if (ground) {
         const float4 m = sampleMask(mask, maskSampler, P.xz);
-        GroundSurface g = mat == MAT_TERRAIN ? terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, grassFar(P))
-                                             : groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
+        // if / else, not ?: — DXC rejects a conditional operator with a struct result.
+        GroundSurface g;
+        if (mat == MAT_TERRAIN) g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, grassFar(P));
+        else g = groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
         s.albedo = g.albedo;
         s.roughness = g.roughness;
         s.metallic = 0.0;
