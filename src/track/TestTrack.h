@@ -86,6 +86,8 @@ public:
     static float showcaseMudWeight(float x, float z);
     static TrackBounds bounds();
     static WaterInfo water();
+    // Wheat test patch in the west meadow: render-only stalks, the ground under them is the Grass surface.
+    static TrackBounds wheatPatch();
 
 private:
     void buildProvingGround();

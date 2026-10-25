@@ -153,6 +153,8 @@ float TestTrack::showcaseMudWeight(float x, float z) {
 
 TrackBounds TestTrack::bounds() { return {kXMin, kXMax, kZMin, kZMax}; }
 
+TrackBounds TestTrack::wheatPatch() { return {-46.0f, -28.0f, 56.0f, 76.0f}; }
+
 WaterInfo TestTrack::water() {
     int n = 0;
     const Puddle* p = puddles(n);
@@ -444,6 +446,7 @@ void TestTrack::buildProvingGround() {
     m_features.push_back({"Mud bath to concrete", Vec3(0.5f * (kWestX0 + kWestX1), 0.0f, kMudBathZ1 - 1.5f), kPi});
     feature("Meadow (grass)", 19.0f, 50.0f);
     feature("Puddle (splash)", pathCenterX(57.0f), 49.5f); // the first path puddle is 4-5 m ahead
+    feature("Wheat patch (visual)", -37.0f, 52.5f);           // the patch starts 3.5 m ahead
 }
 
 void TestTrack::buildFlat(bool withPit) {
