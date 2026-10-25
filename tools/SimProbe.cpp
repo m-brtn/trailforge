@@ -13,6 +13,7 @@
 //   trailforge_probe squeal           - squeal peak, length and release tail: launches, brakes, slides per surface
 //   trailforge_probe keyboard         - keyboard W / S as instant keys vs. the progressive KeyboardPedals
 //   trailforge_probe compare          - launches, stops, lift-off, cornering, climbs, articulation (+ EV energy)
+//   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 // Every mode drives the vehicle of TRAILFORGE_VEHICLE (path to a vehicle.json), by default
 // assets/vehicles/trailforge_suv/vehicle.json; TRAILFORGE_VEHICLE=builtin uses the C++ defaults of VehicleConfig.
 
@@ -20,6 +21,7 @@
 #include "audio/VehicleAudioFeed.h"
 #include "input/KeyboardPedals.h"
 #include "sim/Simulation.h"
+#include "track/Level.h"
 #include "vehicle/VehicleDefinition.h"
 
 #include <algorithm>
@@ -1615,8 +1617,101 @@ void compareProbe() {
     }
 }
 
+// Bakes a level and writes a shaded top view (PPM, 2 m per pixel): surfaces, water, roads, trees, POIs.
+void levelMap(const char* path, const char* out) {
+    std::string err;
+    const auto level = Level::load(path, &err);
+    if (!level) {
+        std::printf("levelmap: %s\n", err.c_str());
+        return;
+    }
+    const LevelBakeStats& st = level->bakeStats();
+    std::printf("levelmap %s: bake %.0f ms, %d x %d samples, height %.1f .. %.1f m, %zu trees, %zu rocks, %zu prop "
+                "triangles, %zu roads, %zu rivers\n",
+                level->id().c_str(), st.totalMs, st.samples, st.samples, st.minHeight, st.maxHeight, st.trees, st.rocks,
+                st.propTriangles, level->roads().size(), level->rivers().size());
+    int surfaceCount[kSurfaceCount] = {};
+    for (SurfaceId s : level->cellSurfaces()) ++surfaceCount[std::size_t(s)];
+    const JoltRuntime runtime; // SurfaceTable creates Jolt materials
+    const SurfaceTable table;
+    for (std::size_t i = 0; i < kSurfaceCount; ++i)
+        std::printf("levelmap surface %-28s %5.1f %%\n", table.get(SurfaceId(i)).name,
+                    100.0 * surfaceCount[i] / double(level->cellSurfaces().size()));
+    for (const LevelRoad& r : level->roads()) {
+        float maxGrade = 0.0f;
+        int fords = 0;
+        for (std::size_t i = 1; i < r.samples.size(); ++i) {
+            const float ds = r.samples[i].s - r.samples[i - 1].s;
+            if (ds > 0.1f) maxGrade = std::max(maxGrade, std::abs(r.samples[i].y - r.samples[i - 1].y) / ds);
+            fords += r.samples[i].ford && !r.samples[i - 1].ford;
+        }
+        std::printf("levelmap road %-18s %6.0f m, max grade %4.1f %% (limit %4.1f %%), %d fords\n", r.name.c_str(),
+                    r.samples.back().s, 100.0f * maxGrade, 100.0f * r.maxGrade, fords);
+    }
+    const int W = (level->samples() - 1) / 2;
+    std::vector<unsigned char> img(std::size_t(W) * W * 3);
+    auto put = [&](int x, int y, float r, float g, float b) {
+        if (x < 0 || y < 0 || x >= W || y >= W) return;
+        unsigned char* p = &img[(std::size_t(y) * W + x) * 3];
+        p[0] = (unsigned char)std::clamp(r * 255.0f, 0.0f, 255.0f);
+        p[1] = (unsigned char)std::clamp(g * 255.0f, 0.0f, 255.0f);
+        p[2] = (unsigned char)std::clamp(b * 255.0f, 0.0f, 255.0f);
+    };
+    const float o = level->origin();
+    for (int py = 0; py < W; ++py)
+        for (int px = 0; px < W; ++px) {
+            const float x = o + 2.0f * px + 1.0f, z = o + 2.0f * py + 1.0f;
+            const float h = level->heightAt(x, z);
+            const float hx = level->heightAt(x + 1.0f, z) - level->heightAt(x - 1.0f, z);
+            const float hz = level->heightAt(x, z + 1.0f) - level->heightAt(x, z - 1.0f);
+            const float shade = std::clamp(0.75f + 0.35f * (-hx + hz) * 0.5f, 0.35f, 1.25f);
+            const SurfaceProperties& sp = table.get(level->surfaceAt(x, z));
+            float c[3] = {sp.color[0], sp.color[1], sp.color[2]};
+            if (auto w = level->waterAt(x, z)) {
+                const float depth = std::clamp((*w - h) / 6.0f, 0.0f, 1.0f);
+                c[0] = 0.15f - 0.1f * depth;
+                c[1] = 0.45f - 0.2f * depth;
+                c[2] = 0.65f - 0.15f * depth;
+            }
+            const float tint = 0.85f + 0.25f * std::clamp(h / 300.0f, 0.0f, 1.0f);
+            put(px, py, c[0] * shade * tint, c[1] * shade * tint, c[2] * shade * tint);
+        }
+    for (const LevelTree& t : level->trees()) {
+        const int px = int((t.x - o) / 2.0f), py = int((t.z - o) / 2.0f);
+        put(px, py, 0.05f, 0.18f, 0.06f);
+    }
+    for (const LevelBridge& b : level->bridges())
+        for (int k = 0; k <= 100; ++k) {
+            const float t = k / 100.0f;
+            put(int((b.x0 + (b.x1 - b.x0) * t - o) / 2.0f), int((b.z0 + (b.z1 - b.z0) * t - o) / 2.0f), 0.9f, 0.6f, 0.2f);
+        }
+    for (const LevelPoi& p : level->pois()) {
+        const int px = int((p.x - o) / 2.0f), py = int((p.z - o) / 2.0f);
+        for (int dy = -5; dy <= 5; ++dy)
+            for (int dx = -5; dx <= 5; ++dx)
+                if (dx * dx + dy * dy <= 25) put(px + dx, py + dy, dx * dx + dy * dy > 12 ? 1.0f : 0.55f, 0.1f, 0.1f);
+    }
+    const int pl = int((-level->playHalfExtent() - o) / 2.0f), ph = int((level->playHalfExtent() - o) / 2.0f);
+    for (int k = pl; k <= ph; ++k) {
+        put(k, pl, 1, 1, 1);
+        put(k, ph, 1, 1, 1);
+        put(pl, k, 1, 1, 1);
+        put(ph, k, 1, 1, 1);
+    }
+    FILE* f = std::fopen(out, "wb");
+    if (!f) return;
+    std::fprintf(f, "P6\n%d %d\n255\n", W, W);
+    std::fwrite(img.data(), 1, img.size(), f);
+    std::fclose(f);
+    std::printf("levelmap wrote %s (%d x %d, 2 m per pixel)\n", out, W, W);
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
+    if (mode == "levelmap") {
+        levelMap(argc > 2 ? argv[2] : "assets/levels/exploration_peaks/level.json", argc > 3 ? argv[3] : "/tmp/trailforge_levelmap.ppm");
+        return 0;
+    }
     if (mode == "brake") brake();
     else if (mode == "course") course(argc > 2 ? std::atof(argv[2]) : 120.0);
     else if (mode == "demo") demoLoads();

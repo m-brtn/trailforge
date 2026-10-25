@@ -139,7 +139,7 @@ struct VehicleTuning {
     float tirePeakSlipAngleDeg = 6.0f;  // degrees
     // Per-surface multiplier of this tire on top of the surface table (e.g. a mud tread > 1 on mud). 1 = surface
     // table only.
-    std::array<float, kSurfaceCount> tireSurfaceGrip{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, kSurfaceCount> tireSurfaceGrip{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     // A tire below the peak slip ratio may transmit up to the peak longitudinal friction before it breaks away,
     // instead of mu(slip of the previous step), which is 0 for a wheel that just gripped. false = plain Jolt curve.
     bool tireStaticGrip = true;

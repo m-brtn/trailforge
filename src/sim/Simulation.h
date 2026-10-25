@@ -3,7 +3,10 @@
 #include "physics/PhysicsWorld.h"
 #include "sim/BodyImpacts.h"
 #include "sim/TireMarks.h"
+#include "sim/WaterQuery.h"
+#include "track/Level.h"
 #include "track/SurfaceProperties.h"
+#include "track/TerrainTiles.h"
 #include "track/TestTrack.h"
 #include "vehicle/Vehicle.h"
 #include "vehicle/VehicleConfig.h"
@@ -59,6 +62,12 @@ struct RenderSnapshot {
 
 struct SimulationSettings {
     TrackLayout layout = TrackLayout::ProvingGround;
+    // Set: an open-world level (streamed heightfield tiles, its props and points of interest); layout is ignored.
+    std::shared_ptr<const Level> level;
+    TerrainTiles::Settings terrain;
+    // Open-world recovery: the body origin (about the center of mass) below the water surface this long, or the
+    // vehicle outside the play area, puts it back on the nearest road. There is no buoyancy or water drag.
+    float deepWaterTime = 1.0f; // s
     double fixedStep = 1.0 / 120.0; // s
     int collisionSteps = 1;
     PhysicsWorld::Settings physics;
@@ -102,6 +111,11 @@ public:
     // Electric vehicles: battery state of charge 0..1 (scenario / test command; no effect on a combustion vehicle).
     void requestStateOfCharge(float soc) { m_pendingSoC = soc; }
     void requestTeleport(int featureIndex) { m_pendingTeleport = featureIndex; }
+    // Teleport to an arbitrary ground point (tests and the scenario `place` command); R still resets as usual.
+    void requestPlace(const TrackFeature& at) { m_pendingPlace = at; }
+    // Switches the world: a baked level, or nullptr for the proving ground (SimulationSettings::layout). The vehicle
+    // keeps its configuration and driver aid switches and starts at the new spawn point.
+    void requestLevel(std::shared_ptr<const Level> level) { m_pendingLevel = std::move(level); }
     // Driver aid switches: B (ABS on/off), T (TC Off -> On -> Off-road), X (lockers none -> rear -> rear + center ->
     // all), or a direct setting (UI, scenarios). ABS and TC survive a reset/rebuild; the lockers reset like low range.
     void requestToggleAbs() { m_pendingAbsToggle = true; }
@@ -127,6 +141,15 @@ public:
     PhysicsWorld& world() { return *m_world; }
     SurfaceTable& surfaces() { return m_surfaces; }
     const TestTrack& track() const { return *m_track; }
+    // The open-world level and its physics tiles (nullptr on the proving ground and the test layouts).
+    const Level* level() const { return m_settings.level.get(); }
+    const std::shared_ptr<const Level>& levelPtr() const { return m_settings.level; }
+    const TerrainTiles* terrain() const { return m_terrain.get(); }
+    // Render-only water of the current world (proving ground puddles or the level's sea, lakes and rivers).
+    const WaterSurface& waterSurface() const { return m_water; }
+    // Water surface height above the body origin (m, <= 0 when dry) and the deep-water recoveries so far.
+    float vehicleSubmersion() const { return m_submersion; }
+    int recoveries() const { return m_recoveries; }
     const Vehicle& vehicle() const { return *m_vehicle; }
     const VehicleConfig& vehicleConfig() const { return m_vehicle->config(); }
     const StepTiming& timing() const { return m_timing; }
@@ -153,6 +176,9 @@ public:
 private:
     // config by value: the old vehicle (and its config) is destroyed inside.
     void spawnVehicle(VehicleConfig config, const TrackFeature& at);
+    void buildWorld();
+    void checkRecovery(float dt);
+    TrackFeature roadRecoveryPoint() const;
     void respawnInPlace(VehicleConfig config);
     RenderSnapshot captureSnapshot() const;
     void processCommands();
@@ -166,7 +192,12 @@ private:
     BodyImpactListener m_impactListener; // before m_world: registered with its PhysicsSystem
     std::unique_ptr<PhysicsWorld> m_world;
     std::unique_ptr<TestTrack> m_track;
-    std::unique_ptr<Vehicle> m_vehicle;
+    std::unique_ptr<TerrainTiles> m_terrain;
+    std::unique_ptr<Vehicle> m_vehicle; // after the track and tiles: destroyed first
+    WaterSurface m_water;
+    float m_submersion = 0.0f, m_submergedTime = 0.0f;
+    int m_recoveries = 0;
+    std::optional<std::shared_ptr<const Level>> m_pendingLevel;
     int m_spawnFeature = 0;
     unsigned m_spawnCount = 0;
 
@@ -187,6 +218,7 @@ private:
     std::optional<TransferMode> m_pendingTransfer;
     std::optional<float> m_pendingSoC;
     std::optional<int> m_pendingTeleport;
+    std::optional<TrackFeature> m_pendingPlace;
     bool m_pendingAbsToggle = false;
     bool m_pendingTractionCycle = false;
     bool m_pendingDefaultTraction = false;

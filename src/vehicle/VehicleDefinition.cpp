@@ -14,7 +14,7 @@ namespace tf {
 namespace {
 
 constexpr const char* kSurfaceKeys[kSurfaceCount] = {"concrete", "packed_dirt", "rock", "low_grip",
-                                                     "mud",      "grass",       "sand"};
+                                                     "mud",      "grass",       "sand",     "snow"};
 
 std::string fmt(double v) {
     char buf[32];

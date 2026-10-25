@@ -34,6 +34,7 @@ Recipe recipe(SurfaceId s) {
     case SurfaceId::PackedDirt:
         return {0.8f, 0.004f, 70.0f, 0.08f, 4.0f, 0.5f, 0.0f, 0.009f, 0.022f, 0.0012f, 0.009f, 0.5f};
     case SurfaceId::Sand: return {0.0f, 0.0f, 130.0f, 0.12f, 6.0f, 0.8f, 0.0f, 0.0f, 0.0f, 0.0008f, 0.0040f, 0.7f};
+    case SurfaceId::Snow: return {0.3f, 0.0f, 150.0f, 0.10f, 0.0f, 0.0f, 0.0f, 0.008f, 0.02f, 0.0010f, 0.0050f, 0.6f};
     case SurfaceId::Grass: return {0.6f, 0.004f, 35.0f, 0.0f, 0.0f, 0.0f, 24.0f, 0.009f, 0.022f, 0.0012f, 0.008f, 0.45f};
     default: return {};
     }
@@ -101,14 +102,12 @@ void WheelSpray::emit(SprayParticle p) {
 
 void WheelSpray::update(std::span<const WheelContactSample> wheels, std::span<const TreadSoil> soil, float dt) {
     if (dt <= 0.0f) return;
-    const WaterInfo water = TestTrack::water();
     if (m_settings.enabled) {
         for (std::size_t w = 0; w < wheels.size() && w < 4; ++w) {
             const WheelContactSample& c = wheels[w];
             if (!c.contact) continue;
             const JPH::Vec3 pc = c.patchCenter;
-            const bool inWater = pc.GetY() < water.level - 0.03f && pc.GetX() > water.x0 && pc.GetX() < water.x1 &&
-                                 pc.GetZ() > water.z0 && pc.GetZ() < water.z1;
+            const bool inWater = underWater(m_water, pc);
             const Recipe r = recipe(c.surface);
             const SoilType ground = soilType(c.surface);
             const float slip = c.slipSpeed(), speed = c.velocity.Length();

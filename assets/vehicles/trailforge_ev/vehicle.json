@@ -44,7 +44,7 @@
     "staticGrip": true,
     "slipSpeedFloor": 1.0,
     "frictionEllipse": true,
-    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 1, "grass": 1, "sand": 1}
+    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 1, "grass": 1, "sand": 1, "snow": 1}
   },
   "steering": {"maxAngleDeg": 35, "rate": 2.2, "returnRate": 3.5, "ackermann": 0.0},
   "engine": {

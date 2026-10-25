@@ -44,6 +44,7 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id) {
     case SurfaceId::Mud: return {1.0f, 1.0f, 1.3f};
     case SurfaceId::Grass: return {0.9f, 1.0f, 1.1f};
     case SurfaceId::Sand: return {0.9f, 1.0f, 1.2f};
+    case SurfaceId::Snow: return {0.9f, 1.0f, 1.1f};
     default: return {0.5f, 1.0f, 1.0f};
     }
 }
@@ -104,6 +105,7 @@ SoilType soilType(SurfaceId id) {
     case SurfaceId::Mud: return {1.0f, 0.6f, 1.0f, {0.045f, 0.031f, 0.018f}, 1.0f, 0.0f};
     case SurfaceId::PackedDirt: return {0.5f, 1.5f, 0.15f, {0.20f, 0.135f, 0.075f}, 0.55f, 0.0f};
     case SurfaceId::Sand: return {0.15f, 1.0f, 0.0f, {0.30f, 0.255f, 0.185f}, 0.1f, 0.0f};
+    case SurfaceId::Snow: return {0.12f, 1.0f, 0.6f, {0.62f, 0.64f, 0.68f}, 0.2f, 0.0f};
     case SurfaceId::Grass: return {0.3f, 2.5f, 0.3f, {0.12f, 0.085f, 0.050f}, 0.5f, 0.35f};
     default: return {};
     }
@@ -265,7 +267,6 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
         return;
     }
     const float segLen = m_settings.segmentLength;
-    const WaterInfo water = TestTrack::water();
     for (std::size_t i = 0; i < wheels.size() && i < m_trails.size(); ++i) {
         const WheelContactSample& c = wheels[i];
         Trail& t = m_trails[i];
@@ -276,8 +277,7 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
             continue;
         }
         const JPH::Vec3 pc = c.patchCenter;
-        const bool inWater = pc.GetY() < water.level - 0.03f && pc.GetX() > water.x0 && pc.GetX() < water.x1 &&
-                             pc.GetZ() > water.z0 && pc.GetZ() < water.z1;
+        const bool inWater = underWater(m_water, pc);
         t.soil.update(c, dt, inWater);
         // Lock-up, braking slip and sideways sliding: rubber builds up over the first ~0.35 s of sliding and fades as
         // soon as the slide ends. Driven wheelspin heats the tread with the distance it slides (spinning speed x

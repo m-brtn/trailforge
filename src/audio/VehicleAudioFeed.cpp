@@ -50,7 +50,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     }
     f.vehicleValid = true;
 
-    const WaterInfo water = TestTrack::water();
+    const WaterSurface& water = sim.waterSurface();
     const bool newSpawn = !m_seen || sim.spawnCount() != m_spawnCount;
     const float dt = float(sim.fixedStep());
     for (int i = 0; i < kAudioWheels; ++i) {
@@ -68,8 +68,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         w.latRatio = c.contact ? c.latSlipRatio() : 0.0f;
         w.position = toAudio(c.contact ? c.patchCenter : wt.suspensionTop + wt.suspensionDir * wt.suspensionLength);
         const JPH::Vec3 p = c.patchCenter;
-        w.inWater = c.contact && p.GetY() < water.level - 0.02f && p.GetX() > water.x0 && p.GetX() < water.x1 &&
-                    p.GetZ() > water.z0 && p.GetZ() < water.z1;
+        w.inWater = c.contact && underWater(water, p, 0.02f);
 
         const std::size_t k = std::size_t(i);
         if (newSpawn) {

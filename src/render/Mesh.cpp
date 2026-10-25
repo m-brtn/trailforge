@@ -277,6 +277,7 @@ MeshData buildTrackMesh(const TrackGeometry& g, const SurfaceTable& surfaces) {
         case SurfaceId::Mud: mat.id = MatId::Mud; break;
         case SurfaceId::Grass: mat.id = MatId::Grass; break;
         case SurfaceId::Sand: mat.id = MatId::Sand; break;
+        case SurfaceId::Snow: mat.id = MatId::Snow; break;
         default: mat.id = MatId::Dirt; break;
         }
         m.addTri(pos(t, 0), pos(t, 1), pos(t, 2), vn[0], vn[1], vn[2], mat);

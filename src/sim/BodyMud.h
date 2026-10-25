@@ -37,6 +37,7 @@ public:
     void update(std::span<const WheelContactSample> wheels, std::span<const TreadSoil> soil, float dt);
     void clear() { m_coat = {}; }
     void setAll(float amount); // wet dark mud on every region (scenario / UI)
+    void setWater(WaterSurface water) { m_water = std::move(water); }
 
     const BodyMudCoat& coat(int region) const { return m_coat[std::size_t(region)]; }
     const std::array<BodyMudCoat, kBodyMudRegions>& coats() const { return m_coat; }
@@ -45,6 +46,7 @@ public:
 private:
     void deposit(int region, float exposure, const SoilType& soil, float target);
     std::array<BodyMudCoat, kBodyMudRegions> m_coat{};
+    WaterSurface m_water = provingGroundWater();
 };
 
 } // namespace tf

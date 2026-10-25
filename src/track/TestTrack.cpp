@@ -1,6 +1,7 @@
 #include "track/TestTrack.h"
 
 #include "physics/PhysicsWorld.h"
+#include "track/Level.h"
 
 #include <Jolt/Geometry/Triangle.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -317,8 +318,19 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     case TrackLayout::SurfaceLanes: buildSurfaceLanes(); break;
     case TrackLayout::SurfaceRamps: buildSurfaceRamps(); break;
     case TrackLayout::SlopeWithWheelPit: buildSlopeWithWheelPit(); break;
+    case TrackLayout::Level: throw std::runtime_error("TestTrack: the Level layout needs a Level");
     }
+    createBody(surfaces);
+}
 
+TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level)
+    : m_world(world), m_layout(TrackLayout::Level) {
+    m_geometry = level.props().geometry;
+    m_features = level.features();
+    createBody(surfaces);
+}
+
+void TestTrack::createBody(const SurfaceTable& surfaces) {
     JPH::TriangleList tris;
     tris.reserve(m_geometry.triangleCount());
     for (std::size_t i = 0; i < m_geometry.triangleCount(); ++i) {
@@ -337,8 +349,8 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     JPH::BodyCreationSettings bcs(result.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
                                   JPH::EMotionType::Static, Layers::Static);
     bcs.mFriction = 0.8f; // body-ground friction (not tires; tires are handled by VehicleConstraint)
-    m_body = world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
-    world.optimizeBroadPhase();
+    m_body = m_world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    m_world.optimizeBroadPhase();
 }
 
 TestTrack::~TestTrack() {

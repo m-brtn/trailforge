@@ -12,6 +12,7 @@
 namespace tf {
 
 class PhysicsWorld;
+class Level;
 
 // Procedural static geometry: the same triangles go
 // to rendering (mesh) and to the Jolt MeshShape (collision), so they match by construction.
@@ -39,6 +40,7 @@ enum class TrackLayout {
     SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass, rock, low grip, sand
     SurfaceRamps,     // 15 and 20 degree ramps per surface, 10 m lanes, 22 m long (climb measurements)
     SlopeWithWheelPit, // 15 degree concrete slope, hole under the front left wheel (differential tests)
+    Level,            // open-world level: props of a baked Level (bridges, blockouts); terrain in TerrainTiles
 };
 
 struct TrackFeature {
@@ -66,6 +68,9 @@ struct WaterInfo {
 class TestTrack {
 public:
     TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout);
+    // Static props of an open-world level (the heightfield tiles are streamed separately); features: the level spawn
+    // and its points of interest.
+    TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level);
     ~TestTrack();
     TestTrack(const TestTrack&) = delete;
     TestTrack& operator=(const TestTrack&) = delete;
@@ -95,6 +100,7 @@ private:
     void buildSurfaceLanes();
     void buildSurfaceRamps();
     void buildSlopeWithWheelPit();
+    void createBody(const SurfaceTable& surfaces);
 
     PhysicsWorld& m_world;
     TrackLayout m_layout;

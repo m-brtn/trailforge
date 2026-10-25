@@ -59,15 +59,13 @@ void BodyMud::update(std::span<const WheelContactSample> wheels, std::span<const
         c.wetness *= dry;
         c.amount *= fall;
     }
-    const WaterInfo water = TestTrack::water();
     for (std::size_t i = 0; i < wheels.size() && i < 4; ++i) {
         const WheelContactSample& c = wheels[i];
         if (!c.contact) continue;
         const int w = int(i);
         const bool rear = w >= 2;
         const JPH::Vec3 pc = c.patchCenter;
-        const bool inWater = pc.GetY() < water.level - 0.03f && pc.GetX() > water.x0 && pc.GetX() < water.x1 &&
-                             pc.GetZ() > water.z0 && pc.GetZ() < water.z1;
+        const bool inWater = underWater(m_water, pc);
         const float speed = c.velocity.Length();
         if (inWater) {
             const float wash = std::exp(-dt * kWashRate * saturate(speed / 2.0f));

@@ -22,12 +22,13 @@ float approach(float current, float target, float rate, float dt) {
 Simulation::Simulation(const SimulationSettings& settings) : m_settings(settings), m_tireMarks(settings.tireMarks) {
     m_world = std::make_unique<PhysicsWorld>(settings.physics);
     m_world->system().SetContactListener(&m_impactListener);
-    m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, settings.layout);
+    buildWorld();
     spawnVehicle(settings.vehicle, m_track->spawn());
 }
 
 Simulation::~Simulation() {
     m_vehicle.reset();
+    m_terrain.reset();
     m_track.reset();
     m_world.reset();
 }
@@ -41,8 +42,59 @@ float spawnHeight(const VehicleConfig& config) {
 }
 } // namespace
 
+void Simulation::buildWorld() {
+    m_terrain.reset();
+    m_track.reset();
+    if (m_settings.level) {
+        m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, *m_settings.level);
+        m_terrain = std::make_unique<TerrainTiles>(*m_world, m_surfaces, m_settings.level, m_settings.terrain);
+        std::shared_ptr<const Level> level = m_settings.level;
+        m_water = [level](float x, float z) { return level->waterAt(x, z); };
+    } else {
+        m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, m_settings.layout);
+        m_water = provingGroundWater();
+    }
+    m_tireMarks.setWater(m_water);
+    m_tireMarks.clear();
+    m_spawnFeature = 0;
+    m_submersion = m_submergedTime = 0.0f;
+}
+
+TrackFeature Simulation::roadRecoveryPoint() const {
+    const JPH::RMat44 xf = m_vehicle->bodyTransform();
+    const JPH::Vec3 p(xf.GetTranslation());
+    TrackFeature at = m_settings.level->nearestRoadPoint(p.GetX(), p.GetZ());
+    // Keep the travel direction along the road closest to the current heading.
+    const JPH::Vec3 fwd = xf.GetAxisZ();
+    if (fwd.GetX() * std::sin(at.yaw) + fwd.GetZ() * std::cos(at.yaw) < 0.0f) at.yaw += 3.14159265f;
+    return at;
+}
+
+void Simulation::checkRecovery(float dt) {
+    if (!m_settings.level) return;
+    const Level& level = *m_settings.level;
+    const JPH::Vec3 p(m_vehicle->bodyTransform().GetTranslation());
+    const std::optional<float> water = level.waterAt(p.GetX(), p.GetZ());
+    m_submersion = water ? *water - p.GetY() : 0.0f;
+    m_submergedTime = m_submersion > 0.0f ? m_submergedTime + dt : 0.0f;
+    const char* message = nullptr;
+    if (!level.insidePlayArea(p.GetX(), p.GetZ(), -8.0f) || p.GetY() < level.bakeStats().minHeight - 30.0f)
+        message = "Left the map: vehicle recovered to the nearest road";
+    else if (m_submergedTime > m_settings.deepWaterTime)
+        message = "Deep water: vehicle recovered to the nearest road (no buoyancy or water simulated)";
+    if (!message) return;
+    const TrackFeature at = roadRecoveryPoint();
+    const AidControls controls = m_vehicle->aidControls();
+    spawnVehicle(m_vehicle->config(), at);
+    m_vehicle->setAidControls(controls);
+    m_submersion = m_submergedTime = 0.0f;
+    ++m_recoveries;
+    setMessage(message);
+}
+
 void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_vehicle.reset(); // delete the old body/constraint first
+    if (m_terrain) m_terrain->ensureLoaded(at.position.GetX(), at.position.GetZ(), m_settings.terrain.requiredRadius);
     const float y = at.position.GetY() + spawnHeight(config);
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
@@ -105,6 +157,19 @@ RenderSnapshot Simulation::captureSnapshot() const {
 }
 
 void Simulation::processCommands() {
+    if (m_pendingLevel) {
+        VehicleConfig config = m_vehicle->config();
+        m_vehicle.reset();
+        m_settings.level = std::move(*m_pendingLevel);
+        m_pendingLevel.reset();
+        buildWorld();
+        spawnVehicle(std::move(config), m_track->spawn());
+        m_pendingReset = false;
+        m_pendingTeleport.reset();
+        m_pendingPlace.reset();
+        setMessage(m_settings.level ? "Level loaded" : "Proving ground loaded");
+    }
+    bool teleported = false;
     if (m_pendingRebuild) {
         spawnVehicle(*m_pendingRebuild, m_track->features()[m_spawnFeature]);
         m_pendingRebuild.reset();
@@ -116,12 +181,26 @@ void Simulation::processCommands() {
         m_spawnFeature = idx;
         m_pendingTeleport.reset();
         m_pendingReset = true;
+        teleported = true;
+    }
+    if (m_pendingPlace) {
+        spawnVehicle(m_vehicle->config(), *m_pendingPlace);
+        m_pendingPlace.reset();
+        m_pendingReset = false;
+        teleported = false;
+        setMessage("Vehicle placed");
     }
     if (m_pendingReset) {
-        // Recreation resets the body, wheels, engine and gearbox to the initial state.
-        spawnVehicle(m_vehicle->config(), m_track->features()[m_spawnFeature]);
+        // Recreation resets the body, wheels, engine and gearbox to the initial state. On an open-world level the R
+        // reset puts the vehicle on the nearest road point instead of the far-away spawn.
+        if (m_settings.level && !teleported) {
+            spawnVehicle(m_vehicle->config(), roadRecoveryPoint());
+            setMessage("Vehicle reset to the nearest road");
+        } else {
+            spawnVehicle(m_vehicle->config(), m_track->features()[m_spawnFeature]);
+            setMessage("Vehicle reset to spawn point");
+        }
         m_pendingReset = false;
-        setMessage("Vehicle reset to spawn point");
     }
     if (m_pendingConfig) {
         if (Vehicle::needsRebuild(m_vehicle->config(), *m_pendingConfig)) {
@@ -263,6 +342,10 @@ void Simulation::tick() {
     const float dt = float(m_settings.fixedStep);
 
     processCommands();
+    if (m_terrain) {
+        const JPH::Vec3 p(m_vehicle->bodyTransform().GetTranslation());
+        m_terrain->update(p.GetX(), p.GetZ());
+    }
     resolvePedals(dt);
     smoothInput(dt);
 
@@ -282,6 +365,7 @@ void Simulation::tick() {
 
     m_prev = m_curr;
     m_curr = captureSnapshot();
+    checkRecovery(dt);
 
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     m_timing.lastStepMs = ms;

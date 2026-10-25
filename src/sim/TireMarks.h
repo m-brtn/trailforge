@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sim/WaterQuery.h"
 #include "track/SurfaceProperties.h"
 #include "vehicle/WheelContact.h"
 
@@ -124,6 +125,8 @@ public:
 
     // Once per physics tick, after the step. `time` is the simulation time in seconds.
     void update(std::span<const WheelContactSample> wheels, double time);
+    // Water of the current level (wet tread, no marks under water). Default: the proving ground puddles.
+    void setWater(WaterSurface water) { m_water = std::move(water); }
     // The next contact starts a new ribbon (after a reset or teleport).
     void breakRibbons();
     void clear();
@@ -166,6 +169,7 @@ private:
     void expire(double time);
 
     TireMarkSettings m_settings;
+    WaterSurface m_water = provingGroundWater();
     std::vector<TireMarkSegment> m_ring;
     std::size_t m_head = 0, m_count = 0;
     std::uint64_t m_written = 0, m_generation = 0;

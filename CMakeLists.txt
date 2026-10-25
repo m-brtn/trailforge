@@ -29,6 +29,8 @@ add_library(trailforge_sim STATIC
     src/physics/PhysicsWorld.cpp
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
+    src/track/Level.cpp
+    src/track/TerrainTiles.cpp
     src/vehicle/Vehicle.cpp
     src/vehicle/DrivingAids.cpp
     src/vehicle/ElectricDrive.cpp
@@ -168,6 +170,20 @@ if(TRAILFORGE_BUILD_TESTS)
             ev_battery
             ev_simulation)
         add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
+    endforeach()
+
+    # Open-world level: bake, physics tiles and streaming, roads, water, both vehicles on Exploration Peaks.
+    add_executable(trailforge_level_tests tests/LevelTests.cpp)
+    target_link_libraries(trailforge_level_tests PRIVATE trailforge_sim)
+    target_compile_definitions(trailforge_level_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name
+            level_heightfield_sampling
+            level_tile_streaming
+            level_road_carving
+            level_surfaces_water
+            level_vehicles)
+        add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
 

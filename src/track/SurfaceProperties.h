@@ -16,6 +16,7 @@ enum class SurfaceId : std::uint8_t {
     Mud,          // showcase mud path: rigid, only lower mu (no sinkage; visuals are separate)
     Grass,        // showcase meadow: rigid, only mu
     Sand,         // sand area: rigid, only a lower mu (no sinkage, no ruts that change the ground)
+    Snow,         // level snowfields: rigid, only a low mu (no sinkage, no compaction, no melting)
     Count
 };
 

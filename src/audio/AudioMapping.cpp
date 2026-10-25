@@ -84,6 +84,10 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
         roll(L::Dirt, 0.6f); // soft hiss, no stones
         slip(L::Dirt, 0.8f);
         break;
+    case SurfaceId::Snow:
+        roll(L::Dirt, 0.4f); // crunch approximated by the soft dirt layer (no snow recording)
+        slip(L::Dirt, 0.6f);
+        break;
     default:
         break;
     }

@@ -72,6 +72,7 @@ public:
     void setSettings(const WheelSpraySettings& s);
     const WheelSpraySettings& settings() const { return m_settings; }
     void setGround(GroundHeight ground) { m_ground = std::move(ground); }
+    void setWater(WaterSurface water) { m_water = std::move(water); }
 
     // One step: emit from the wheels (soil gives the colour of what the tread carries), then move all particles.
     void update(std::span<const WheelContactSample> wheels, std::span<const TreadSoil> soil, float dt);
@@ -99,6 +100,7 @@ private:
 
     WheelSpraySettings m_settings;
     GroundHeight m_ground;
+    WaterSurface m_water = provingGroundWater();
     std::vector<SprayParticle> m_particles;
     float m_accum[4][5] = {}; // fractional emission per wheel and kind
     std::uint32_t m_rng = 0x9e3779b9u;
