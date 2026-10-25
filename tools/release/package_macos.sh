@@ -57,9 +57,13 @@ mkdir -p "$DIST"
 rm -rf "$APP" "$ZIP"
 ditto "$BUILD/TrailForge.app" "$APP"
 for f in audio/manifest.json music/intro.mp3 fonts/Rajdhani-SemiBold.ttf fonts/OFL.txt images/logo.png \
-         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json; do
+         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json textures/terrain/terrain.json \
+         textures/terrain/grass_albedo.ktx2; do
     [[ -f "$APP/Contents/Resources/assets/$f" ]] || fail "assets/$f missing in the bundle"
 done
+# A Git LFS pointer instead of the texture (clone without `git lfs pull`) is ~130 bytes.
+[[ "$(stat -f %z "$APP/Contents/Resources/assets/textures/terrain/grass_albedo.ktx2")" -gt 1000000 ]] ||
+    fail "terrain textures are Git LFS pointers (run git lfs pull)"
 [[ -f "$APP/Contents/Resources/TrailForge.icns" ]] || fail "icns missing in the bundle"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$VERSION" ]] ||
     fail "Info.plist version mismatch"
@@ -99,6 +103,8 @@ smoke() {
     grep -F "definition(s) from $app/Contents/Resources/assets/vehicles" "$log" ||
         { cat "$log"; fail "vehicle definitions missing"; }
     grep -F "level(s) from $app/Contents/Resources/assets/levels" "$log" || { cat "$log"; fail "levels missing"; }
+    grep -F "Textures: terrain materials from $app/Contents/Resources/assets/textures" "$log" ||
+        { cat "$log"; fail "terrain textures missing"; }
     grep -E "auto-quit after" "$log"
     rm -f "$log" "$log.wav" "$log.wav.csv"
 }

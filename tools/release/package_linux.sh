@@ -68,9 +68,13 @@ Run:  ./trailforge          (needs a Vulkan driver: Mesa RADV/ANV/NVK, NVIDIA, o
 Keep the assets/ directory next to the executable.
 EOF
 for f in audio/manifest.json music/intro.mp3 fonts/Rajdhani-SemiBold.ttf fonts/OFL.txt images/logo.png \
-         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json; do
+         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json textures/terrain/terrain.json \
+         textures/terrain/grass_albedo.ktx2; do
     [[ -f "$PKG/assets/$f" ]] || fail "assets/$f missing in the package"
 done
+# A Git LFS pointer instead of the texture (checkout without `git lfs pull`) is ~130 bytes.
+[[ "$(stat -c %s "$PKG/assets/textures/terrain/grass_albedo.ktx2")" -gt 1000000 ]] ||
+    fail "terrain textures are Git LFS pointers (run git lfs pull)"
 
 step "shared library dependencies"
 ldd "$PKG/trailforge" || true
@@ -105,6 +109,7 @@ if [[ $SMOKE_WINDOW -eq 1 ]]; then
     grep -F "Audio: music $MUSIC_DIR/intro.mp3" "$LOG" || { cat "$LOG"; fail "music did not load"; }
     grep -E "^Menu: (font|logo) " "$LOG" || { cat "$LOG"; fail "menu font / logo did not load"; }
     grep -E "^Levels: [1-9]" "$LOG" || { cat "$LOG"; fail "levels did not load"; }
+    grep -E "^Textures: terrain materials from " "$LOG" || { cat "$LOG"; fail "terrain textures not found"; }
     rm -f "$LOG" "$LOG.wav" "$LOG.wav.csv"
 fi
 rm -rf "$EXTRACT"

@@ -20,6 +20,20 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      # Terrain textures are Git LFS objects (~170 MB). They come from a cache shared by all jobs (keyed by the
+      # object ids), so the LFS bandwidth quota is only used when the textures change.
+      - name: List LFS objects
+        shell: bash
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
+      - name: Restore LFS cache
+        uses: actions/cache@v6
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+          enableCrossOsArchive: true
+      - name: Fetch LFS objects
+        shell: bash
+        run: git lfs pull && git lfs ls-files
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -48,6 +62,7 @@ jobs:
           grep -F "GPU driver 'vulkan', shaders: SPIR-V" "$OUT/lavapipe_smoke.log"
           grep -F "auto-quit after" "$OUT/lavapipe_smoke.log"
           grep -E "^Levels: [1-9][0-9]* level\(s\) from " "$OUT/lavapipe_smoke.log"
+          grep -E "^Textures: terrain materials from " "$OUT/lavapipe_smoke.log"
           if grep -F "Validation Error" "$OUT/lavapipe_smoke.log"; then echo "Vulkan validation errors"; exit 1; fi
           python3 - "$OUT/lavapipe_smoke.png" <<'EOF'
           import sys
@@ -80,6 +95,20 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+      # Terrain textures are Git LFS objects (~170 MB). They come from a cache shared by all jobs (keyed by the
+      # object ids), so the LFS bandwidth quota is only used when the textures change.
+      - name: List LFS objects
+        shell: bash
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
+      - name: Restore LFS cache
+        uses: actions/cache@v6
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+          enableCrossOsArchive: true
+      - name: Fetch LFS objects
+        shell: bash
+        run: git lfs pull && git lfs ls-files
       - name: Build, ctest and package (tools/release/package_windows.ps1)
         shell: pwsh
         run: |
@@ -104,6 +133,20 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+      # Terrain textures are Git LFS objects (~170 MB). They come from a cache shared by all jobs (keyed by the
+      # object ids), so the LFS bandwidth quota is only used when the textures change.
+      - name: List LFS objects
+        shell: bash
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
+      - name: Restore LFS cache
+        uses: actions/cache@v6
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+          enableCrossOsArchive: true
+      - name: Fetch LFS objects
+        shell: bash
+        run: git lfs pull && git lfs ls-files
       - name: Configure, build and test (headless preset)
         run: |
           brew list ninja >/dev/null 2>&1 || brew install ninja

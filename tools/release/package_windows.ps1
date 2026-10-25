@@ -72,8 +72,13 @@ Keep the assets folder next to the executable. The executable is not code-signed
 may warn on first start ("More info" -> "Run anyway").
 "@ | Set-Content -Encoding ascii (Join-Path $Pkg 'README.txt')
 foreach ($f in 'audio\manifest.json', 'music\intro.mp3', 'fonts\Rajdhani-SemiBold.ttf', 'fonts\OFL.txt', 'images\logo.png',
-            'vehicles\trailforge_suv\vehicle.json', 'levels\exploration_peaks\level.json') {
+            'vehicles\trailforge_suv\vehicle.json', 'levels\exploration_peaks\level.json',
+            'textures\terrain\terrain.json', 'textures\terrain\grass_albedo.ktx2') {
     if (-not (Test-Path (Join-Path $Pkg "assets\$f"))) { Fail "assets\$f missing in the package" }
+}
+# A Git LFS pointer instead of the texture (checkout without `git lfs pull`) is ~130 bytes.
+if ((Get-Item (Join-Path $Pkg 'assets\textures\terrain\grass_albedo.ktx2')).Length -lt 1000000) {
+    Fail 'terrain textures are Git LFS pointers (run git lfs pull)'
 }
 if (Select-String -Path (Join-Path $Pkg 'trailforge.exe') -SimpleMatch -Quiet -Pattern (Join-Path $Root 'assets')) {
     Fail 'the packaged executable still references the source tree assets'
