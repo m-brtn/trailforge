@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -513,7 +514,7 @@ void terrainTexturesKtx2() {
               skipped.levels.back().width == 1,
           "skip 2: width %u, %zu levels", skipped.width, skipped.levels.size());
 
-    const std::string path = "/tmp/trailforge_test_texture.ktx2";
+    const std::string path = (std::filesystem::temp_directory_path() / "trailforge_test_texture.ktx2").string();
     {
         std::FILE* fp = std::fopen(path.c_str(), "wb");
         CHECK(fp != nullptr, "cannot write %s", path.c_str());
