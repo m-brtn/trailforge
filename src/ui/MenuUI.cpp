@@ -670,7 +670,7 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
         float w = 0.0f, h = 0.0f, at = 0.0f;
         // Side columns: the leader drops straight down from the anchor to this row (g units) and runs across to the
         // column there, so it passes below the buttons between the anchor and the column instead of across them.
-        std::optional<float> dropRow;
+        std::optional<float> dropRow = std::nullopt;
     };
     const float gapName = 0.45f * lf;
     const auto lineWidth = [&](const Line& l) {
