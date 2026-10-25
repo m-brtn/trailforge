@@ -44,6 +44,7 @@ struct MenuKeys {
     bool mouseDown = false; // left button held (slider drags)
     bool mouseMoved = false;
     bool click = false;   // left mouse button pressed (not over an ImGui window)
+    float wheel = 0.0f;   // mouse wheel / trackpad scroll this frame (not over an ImGui window), + = up
     float mouseX = 0.0f, mouseY = 0.0f; // window coordinates (the same as ImGui's)
 };
 

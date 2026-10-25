@@ -240,7 +240,7 @@ lock-up and handbrake slides, never while the mud layer is active; needs the mix
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
 1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
-`menu_cursor`, `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
+`menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
 `abs`, `tc`, `diff`, `auto_reverse`), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
 `garage_factory`, `garage_renaming`, `garage_pending`, `garage:<key>` (the garage's value of a setup parameter),

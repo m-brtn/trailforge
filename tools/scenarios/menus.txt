@@ -77,6 +77,26 @@ capture /tmp/trailforge_menu_05_controls.png
 tap Escape
 wait 0.1
 expect menu_page == 2
+# mouse wheel: the Settings rows overflow the window; wheel down / up scrolls, keys keep the cursor in view
+menu select music
+wheel 10
+wait 0.5
+expect menu_scroll == 0
+wheel -3
+wait 0.5
+log menu_wheel_down
+expect menu_scroll > 20         # to the end of the list (it overflows by a few rows at 16:10)
+capture /tmp/trailforge_menu_05b_settings_scrolled.png
+wait 0.1
+wheel 10
+wait 0.5
+expect menu_scroll == 0
+menu select back
+wait 0.5
+expect menu_scroll > 0          # the last Settings row was scrolled into view by the cursor
+wheel 20
+wait 0.5
+expect menu_scroll == 0
 tap Escape
 wait 0.1
 expect menu_page == 0

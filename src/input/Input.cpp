@@ -114,7 +114,12 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         if (e.text.text) m_menu.text += e.text.text;
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        if (!uiWantsMouse) m_wheel += e.wheel.y;
+        if (!uiWantsMouse) {
+            m_wheel += e.wheel.y;
+            m_menu.wheel += e.wheel.y; // already in the user's scroll direction (natural scrolling included)
+            m_menu.mouseX = m_mouseX = e.wheel.mouse_x;
+            m_menu.mouseY = m_mouseY = e.wheel.mouse_y;
+        }
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (!m_gamepad) m_gamepad = SDL_OpenGamepad(e.gdevice.which);

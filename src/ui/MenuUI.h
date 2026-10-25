@@ -48,6 +48,12 @@ public:
     int hitTest(float x, float y, int* dir) const;
     // Screen rectangle (ImGui coordinates) of a row drawn in the last frame; false if it is not on screen.
     bool itemRect(MenuItem item, float& x0, float& y0, float& x1, float& y1) const;
+    // Mouse wheel / trackpad steps (+ = up) for the list drawn next (menu page or garage). Keyboard / gamepad cursor
+    // moves still scroll the selected row into view; a cursor set by the pointer (notePointerCursor) does not.
+    void scroll(float steps) { m_wheel += steps; }
+    void notePointerCursor() { m_pointerCursor = true; }
+    float menuScroll() const { return m_menuScrollTarget; }   // px, list offset of the menu page
+    float garageScroll() const { return m_garageScrollTarget; } // px, list offset of the garage
     bool fontsLoaded() const { return m_body != nullptr; }
     bool logoLoaded() const { return m_logo != nullptr; }
 
@@ -61,6 +67,9 @@ private:
     void drawMenu(const GameFlow& flow, const GameSettings& settings, const MenuView& view, float alpha);
     void drawControls(float x, float y, float w, float rowH, float alpha);
     void drawHints(const GameFlow& flow, const MenuView& view, float alpha);
+    void updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
+                      float viewH, bool follow);
+    void drawScrollMarks(float x0, float x1, float top, float bottom, float scroll, float maxScroll, float alpha);
 
     Renderer* m_renderer = nullptr;
     ImFont* m_body = nullptr;    // Rajdhani Medium
@@ -81,8 +90,13 @@ private:
     float m_garageSelectAnim = 0.0f;  // eased highlight position (px)
     int m_garageMsgSerial = 0;
     double m_garageMsgTime = -100.0;  // ImGui time when the shown message appeared
+    int m_garageLastCursor = -1;
     float m_selectAnim = 0.0f;          // highlight bar position (row index, eased)
     int m_lastPage = -1;
+    int m_lastCursor = -1;
+    float m_menuScroll = 0.0f, m_menuScrollTarget = 0.0f; // menu page list offset (px), eased / target
+    float m_wheel = 0.0f;               // pending wheel steps
+    bool m_pointerCursor = false;       // the cursor of this frame was set by the mouse
 };
 
 } // namespace tf

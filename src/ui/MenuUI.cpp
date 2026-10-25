@@ -238,9 +238,11 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
 
     const std::vector<MenuItem>& items = flow.items();
     const int cursor = flow.cursor();
-    if (int(page) != m_lastPage) {
+    const bool newPage = int(page) != m_lastPage;
+    if (newPage) {
         m_selectAnim = float(cursor);
         m_lastPage = int(page);
+        m_menuScroll = m_menuScrollTarget = 0.0f;
     }
     m_selectAnim += (float(cursor) - m_selectAnim) * std::min(1.0f, ImGui::GetIO().DeltaTime * 18.0f);
 
@@ -250,19 +252,30 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     const float valueX = x0 + 0.36f * W; // centre of the value column (Settings)
     const float arrowDx = 0.075f * W;
 
-    if (page == MenuPage::Controls) {
-        drawControls(x0, y, barW, 0.034f * H, alpha);
-        y += 0.034f * H * float(std::size(kControls) + 1) + 0.02f * H;
-    }
-
-    // Row positions first (section headings take space), then the highlight bar under them.
+    // Everything below the title scrolls when it does not fit above the footer: the Controls table, then the rows
+    // (section headings take space). Positions are relative to the top of the list.
+    const float listTop = y, listBottom = 0.88f * H;
+    float cy = 0.0f;
+    if (page == MenuPage::Controls) cy += 0.034f * H * float(std::size(kControls) + 1) + 0.02f * H;
     std::vector<float> rowY(items.size());
     for (std::size_t i = 0; i < items.size(); ++i) {
-        if (page == MenuPage::Settings && menuSection(items[i])) y += 0.020f * H + (i > 0 ? 0.014f * H : 0.0f);
-        if (items[i] == MenuItem::Controls) y += 0.016f * H;
-        rowY[i] = y;
-        y += rowH;
+        if (page == MenuPage::Settings && menuSection(items[i])) cy += 0.020f * H + (i > 0 ? 0.014f * H : 0.0f);
+        if (items[i] == MenuItem::Controls) cy += 0.016f * H;
+        rowY[i] = cy;
+        cy += rowH;
     }
+    const float viewH = listBottom - listTop;
+    const bool follow = (newPage || cursor != m_lastCursor) && !m_pointerCursor;
+    // The first heading of Settings sits above its row: keep it in view with the row.
+    const float cursorTop = rowY[std::size_t(cursor)] - (cursor == 0 ? rowY[0] : 0.0f);
+    updateScroll(m_menuScroll, m_menuScrollTarget, cursorTop, rowY[std::size_t(cursor)] + rowH - cursorTop, rowH, cy,
+                 viewH, follow);
+    if (newPage) m_menuScroll = m_menuScrollTarget;
+    m_lastCursor = cursor;
+    for (float& r : rowY) r += listTop - m_menuScroll;
+    dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
+
+    if (page == MenuPage::Controls) drawControls(x0, listTop - m_menuScroll, barW, 0.034f * H, alpha);
     // Highlight bar eased between rows: soft fill fading to the right, orange edge on the left.
     {
         const float f = std::clamp(m_selectAnim, 0.0f, float(items.size() - 1));
@@ -311,8 +324,13 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
             row.arrowR0 = rx - textSize;
             row.arrowR1 = rx + textSize;
         }
-        m_rows.push_back(row);
+        // Only the visible part of a row can be hit.
+        row.y0 = std::max(row.y0, listTop);
+        row.y1 = std::min(row.y1, listBottom);
+        if (row.y1 > row.y0) m_rows.push_back(row);
     }
+    dl->PopClipRect();
+    drawScrollMarks(x0 - 0.012f * W, x0 + barW, listTop, listBottom, m_menuScroll, cy - viewH, alpha);
 
     // Footer: version bottom-left, input hints bottom-right.
     const float fs = 0.018f * H;
@@ -383,6 +401,33 @@ void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) 
     }
 }
 
+void MenuUI::updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
+                          float viewH, bool follow) {
+    // Keyboard / gamepad moves keep the cursor a few rows away from the edges; a row picked with the pointer is on
+    // screen already and never scrolls the list away from it. The wheel moves the list freely.
+    if (follow) {
+        const float margin = std::min(2.5f * rowH, std::max(0.0f, 0.5f * (viewH - cursorH)));
+        if (cursorY - margin < target) target = cursorY - margin;
+        if (cursorY + cursorH + margin > target + viewH) target = cursorY + cursorH + margin - viewH;
+    }
+    target -= m_wheel * 2.0f * rowH;
+    m_wheel = 0.0f;
+    m_pointerCursor = false;
+    target = std::clamp(target, 0.0f, std::max(0.0f, contentH - viewH));
+    scroll += (target - scroll) * std::min(1.0f, ImGui::GetIO().DeltaTime * 14.0f);
+    if (std::abs(target - scroll) < 0.5f) scroll = target;
+}
+
+void MenuUI::drawScrollMarks(float x0, float x1, float top, float bottom, float scroll, float maxScroll, float alpha) {
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (scroll > 1.0f)
+        dl->AddRectFilledMultiColor(ImVec2(x0, top), ImVec2(x1, top + 10.0f), col(kOrange, 0.5f * alpha),
+                                    col(kOrange, 0.5f * alpha), 0, 0);
+    if (scroll < maxScroll - 1.0f)
+        dl->AddRectFilledMultiColor(ImVec2(x0, bottom - 10.0f), ImVec2(x1, bottom), 0, 0, col(kOrange, 0.5f * alpha),
+                                    col(kOrange, 0.5f * alpha));
+}
+
 int MenuUI::hitTest(float x, float y, int* dir) const {
     if (dir) *dir = 0;
     for (std::size_t i = 0; i < m_rows.size(); ++i) {
@@ -447,14 +492,9 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     }
     const float contentH = cy, viewH = listBottom - listTop;
     const float cursorY = rowY[std::size_t(g.cursor())];
-    // Scroll only when the cursor nears an edge: a row under the mouse is visible already, so hovering never scrolls
-    // the list away from the pointer.
-    const float margin = 2.5f * rowH;
-    float& target = m_garageScrollTarget;
-    if (cursorY - margin < target) target = cursorY - margin;
-    if (cursorY + rowH + margin > target + viewH) target = cursorY + rowH + margin - viewH;
-    target = std::clamp(target, 0.0f, std::max(0.0f, contentH - viewH));
-    m_garageScroll += (target - m_garageScroll) * std::min(1.0f, dt * 12.0f);
+    const bool follow = g.cursor() != m_garageLastCursor && !m_pointerCursor;
+    m_garageLastCursor = g.cursor();
+    updateScroll(m_garageScroll, m_garageScrollTarget, cursorY, rowH, rowH, contentH, viewH, follow);
     m_garageSelectAnim += (cursorY - m_garageSelectAnim) * std::min(1.0f, dt * 18.0f);
 
     const float labelX = x0 + 0.006f * W;
@@ -554,13 +594,7 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         if (hit.y1 > hit.y0) m_garageRows.push_back(hit);
     }
     dl->PopClipRect();
-    // Scroll indicators.
-    if (m_garageScroll > 1.0f)
-        dl->AddRectFilledMultiColor(ImVec2(x0, listTop), ImVec2(x0 + panelW, listTop + 10.0f), col(kOrange, 0.5f),
-                                    col(kOrange, 0.5f), 0, 0);
-    if (m_garageScroll < contentH - viewH - 1.0f)
-        dl->AddRectFilledMultiColor(ImVec2(x0, listBottom - 10.0f), ImVec2(x0 + panelW, listBottom), 0, 0,
-                                    col(kOrange, 0.5f), col(kOrange, 0.5f));
+    drawScrollMarks(x0, x0 + panelW, listTop, listBottom, m_garageScroll, contentH - viewH, 1.0f);
 
     // Description of the selected row: range and how it is applied.
     {

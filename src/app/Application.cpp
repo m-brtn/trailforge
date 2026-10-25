@@ -312,6 +312,8 @@ void Application::handleMenu() {
             in.click = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
             in.clickDir = dir;
         }
+        if (in.hover >= 0 || in.click >= 0) m_menu.notePointerCursor();
+        if (k.wheel != 0.0f) m_menu.scroll(k.wheel);
     }
     const Screen before = m_flow.screen();
     const MenuResult r = m_flow.handle(in, m_settings);
@@ -386,6 +388,8 @@ void Application::handleGarage() {
                 in.clickFraction = fraction;
             }
         }
+        if (in.hover >= 0 || in.click >= 0) m_menu.notePointerCursor();
+        if (k.wheel != 0.0f) m_menu.scroll(k.wheel);
     }
     const bool wasRenaming = m_garage->renaming();
     const GarageResult r = m_garage->handle(in);
@@ -1481,6 +1485,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls
     if (n == "menu_depth") return m_flow.depth();
     if (n == "menu_cursor") return m_flow.cursor();
+    if (n == "menu_scroll") return m_menu.menuScroll();
+    if (n == "garage_scroll") return m_menu.garageScroll();
     if (n == "menu_fade") return m_flow.menuFade();
     if (n == "menu_blur") return m_menuBlur;
     if (n == "menu_font") return m_menu.fontsLoaded() ? 1.0 : 0.0;

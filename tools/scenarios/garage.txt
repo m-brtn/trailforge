@@ -150,6 +150,21 @@ garage row vehicle
 wait 1.5
 capture /tmp/trailforge_garage_05_start_menu.png
 wait 0.1
+# mouse wheel over the long parameter list: scrolls without moving the cursor, back up to the top
+expect garage_scroll == 0
+wheel -4
+wait 0.5
+log garage_wheel_down
+expect garage_scroll > 100
+expect garage_cursor == 0
+capture /tmp/trailforge_garage_06_wheel.png
+wait 0.1
+wheel 20
+wait 0.5
+expect garage_scroll == 0
+tap Down                       # a keyboard move after the wheel still works
+wait 0.2
+expect garage_cursor == 1
 tap Escape
 wait 0.3
 expect menu_screen == 1
