@@ -1,6 +1,7 @@
 #include "app/Application.h"
 
 #include "app/AppIcon.h"
+#include "app/Paths.h"
 
 #include "render/GroundMaps.h"
 #include "render/MathConvert.h"
@@ -116,16 +117,7 @@ Application::Application(const AppOptions& options)
     AudioOptions audio;
     audio.device = options.audio;
     audio.capturePath = options.audioCapturePath;
-    // SDL_GetBasePath(): Contents/Resources/ inside TrailForge.app, the executable's directory otherwise.
-    if (const char* base = SDL_GetBasePath()) {
-        audio.assetDirs.push_back(std::string(base) + "assets/audio");
-#if !defined(TRAILFORGE_PACKAGED)
-        audio.assetDirs.push_back(std::string(base) + "../../assets/audio"); // build/<preset>/trailforge
-#endif
-    }
-#if !defined(TRAILFORGE_PACKAGED)
-    audio.assetDirs.push_back(std::string(TRAILFORGE_SOURCE_DIR) + "/assets/audio");
-#endif
+    audio.assetDirs = assetDirs("audio");
     m_audio = std::make_unique<AudioSystem>(audio);
 }
 

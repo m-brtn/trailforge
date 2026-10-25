@@ -1,4 +1,5 @@
 #include "app/Application.h"
+#include "app/Paths.h"
 
 #include <SDL3/SDL_main.h>
 
@@ -11,7 +12,7 @@ namespace {
 
 void printUsage() {
     std::printf("Usage: trailforge [--quit-after <seconds>] [--demo] [--no-ui] [--capture <file.bmp>] [--capture-at <seconds>] [--script <file>]\n"
-                "                  [--no-audio] [--audio-capture <file.wav>] [--version]\n"
+                "                  [--no-audio] [--audio-capture <file.wav>] [--paths] [--version]\n"
                 "  --quit-after N  exit automatically after N seconds (smoke test)\n"
                 "  --demo          scripted throttle/steering without user input\n"
                 "  --no-ui         start with the F1 diagnostics hidden\n"
@@ -21,6 +22,7 @@ void printUsage() {
                 "  --no-audio      do not open an audio device or load sounds\n"
                 "  --audio-capture F  render the mix offline to WAV file F (no device; one physics tick of\n"
                 "                  audio per tick) and the mix parameters to F.csv\n"
+                "  --paths         print the asset lookup directories and the user data directory, then exit\n"
                 "  --version       print the version and exit\n");
 }
 
@@ -38,6 +40,11 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--no-audio") == 0) options.audio = false;
         else if (std::strcmp(argv[i], "--audio-capture") == 0 && i + 1 < argc) options.audioCapturePath = argv[++i];
         else if (std::strcmp(argv[i], "--version") == 0) { std::printf("TrailForge %s\n", TRAILFORGE_VERSION); return 0; }
+        else if (std::strcmp(argv[i], "--paths") == 0) {
+            for (const std::string& d : tf::assetDirs("audio")) std::printf("assets: %s\n", d.c_str());
+            std::printf("user data: %s\n", tf::userDataDir().c_str());
+            return 0;
+        }
         else if (std::strncmp(argv[i], "-psn_", 5) == 0) continue; // process serial number from older Finder launches
         else { printUsage(); return std::strcmp(argv[i], "--help") == 0 ? 0 : 2; }
     }

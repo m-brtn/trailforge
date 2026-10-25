@@ -64,6 +64,7 @@ if(TRAILFORGE_BUILD_APP)
         src/app/Application.cpp
         src/app/Scenario.cpp
         src/app/AppIcon.cpp
+        src/app/Paths.cpp
         src/audio/AudioSystem.cpp
         src/input/Input.cpp
         src/render/Renderer.cpp

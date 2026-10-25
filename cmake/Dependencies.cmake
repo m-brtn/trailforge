@@ -90,6 +90,9 @@ if(TRAILFORGE_BUILD_APP)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(miniaudio_lib PRIVATE -w)
     endif()
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(miniaudio_lib PUBLIC ${CMAKE_DL_LIBS} pthread m)
+    endif()
 
     add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp
