@@ -4,8 +4,10 @@
 //   trailforge_probe bench            - step cost and stability at 60/120/240 Hz
 //   trailforge_probe susp [feature throttle low secs steer] - per-wheel suspension travel over a track feature
 //   trailforge_probe surfaces         - launches, braking, 15/20 degree climbs per surface
-//   trailforge_probe abs              - 50 km/h stops per surface, straight and with full lock, ABS off / on
+//   trailforge_probe abs [ellipse]    - 50 / 100 km/h stops per surface, straight and steered, ABS off / on
+//   trailforge_probe ellipse          - cornering and launches with the friction ellipse off / on
 //   trailforge_probe tc               - hill starts on the ramps with traction control off / on / off-road
+//   trailforge_probe tcmud            - 15 degree mud hill start sweep (60/120/240 Hz x 3 creep points) per TC mode
 //   trailforge_probe diff             - differential modes with a wheel in the air (pit, diagonal twister)
 
 #include "audio/AudioMixer.h"
@@ -693,21 +695,25 @@ void setAids(Simulation& sim, bool abs, TractionMode tc, int locks) {
 
 const char* tcName(TractionMode m) { return m == TractionMode::Off ? "off" : m == TractionMode::On ? "on " : "off-road"; }
 
-// ABS: full stops from 50 km/h per surface lane (straight, and with full right lock applied with the brake),
-// ABS off / on. Lock time = wheel-seconds with a wheel in contact turning below 20 % of its ground speed.
-void absProbe() {
-    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
-    for (int lane : {0, 4, 1, 3, 2, 5}) {
+// ABS: full stops from 50 and 100 km/h per surface lane (straight, and with 40 % right steer applied with the
+// brake), ABS off / on. Lock time = wheel-seconds with a wheel in contact turning below 20 % of its ground speed.
+// Heading after 1 s = steering response under full braking before the vehicle can leave its 12 m lane.
+// ellipse: 0/1 friction ellipse (tireFrictionEllipse), -1 = default tuning.
+void absProbe(int ellipse) {
+    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand"};
+    for (float kmh : {50.0f, 100.0f})
+    for (int lane : {0, 4, 1, 6, 3, 2}) {
         for (int steer = 0; steer < 2; ++steer) {
             for (int abs = 0; abs < 2; ++abs) {
                 SimulationSettings s;
                 s.layout = TrackLayout::SurfaceLanes;
+                if (ellipse >= 0) s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
                 Simulation sim(s);
                 sim.requestTeleport(lane);
                 for (int i = 0; i < 120; ++i) sim.tick();
                 setAids(sim, abs != 0, TractionMode::Off, 0);
-                for (int i = 0; i < int(12.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 50.0f; ++i) {
-                    sim.setIntent({.throttle = 0.6f});
+                for (int i = 0; i < int(60.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < kmh; ++i) {
+                    sim.setIntent({.throttle = 1.0f});
                     sim.tick();
                 }
                 const float v0 = sim.vehicle().telemetry().speed;
@@ -718,11 +724,20 @@ void absProbe() {
                 int releases = 0;
                 std::array<float, kWheelCount> prevP{1, 1, 1, 1};
                 std::array<bool, kWheelCount> releasing{};
-                float path = 0;
-                while (sim.vehicle().telemetry().speed > 0.05f && t < 15.0) {
+                float path = 0, heading1 = 0;
+                bool leftLane = false;
+                while (sim.vehicle().telemetry().speed > 0.05f && t < 20.0) {
+                    if (std::abs(sim.currentSnapshot().body.position.GetX() - p0.GetX()) > 5.0f) {
+                        leftLane = true;
+                        break;
+                    }
                     sim.setIntent({.brake = 1.0f, .steer = steer ? 0.4f : 0.0f});
                     sim.tick();
                     t += sim.fixedStep();
+                    if (std::abs(t - 1.0) < 0.5 * sim.fixedStep()) {
+                        const auto f = sim.currentSnapshot().body.rotation.RotateAxisZ();
+                        heading1 = (std::atan2(f.GetX(), f.GetZ()) - yaw0) * 57.2958f;
+                    }
                     const auto& tel = sim.vehicle().telemetry();
                     path += tel.speed * float(sim.fixedStep());
                     bool any = false;
@@ -743,11 +758,13 @@ void absProbe() {
                 const auto p1 = sim.currentSnapshot().body.position;
                 const float yaw1 = std::atan2(sim.currentSnapshot().body.rotation.RotateAxisZ().GetX(),
                                               sim.currentSnapshot().body.rotation.RotateAxisZ().GetZ());
-                std::printf("abs %-8s %s ABS %s: from %4.1f km/h %5.2f m path (dz %5.2f, dx %+5.2f) in %.2f s, heading %+6.1f deg, "
-                            "lock %.2f wheel-s (front %.2f), ABS active %.2f s, %d releases (%.1f Hz per wheel)\n",
-                            names[lane], steer ? "turn    " : "straight", abs ? "on " : "off", v0 * 3.6f, path,
-                            p1.GetZ() - p0.GetZ(), p1.GetX() - p0.GetX(), t, (yaw1 - yaw0) * 57.2958f, lock, frontLock,
-                            absTime, releases, absTime > 0 ? releases / (4.0 * absTime) : 0.0);
+                std::printf("abs %-8s %3.0f %s ABS %s: from %5.1f km/h %6.2f m path (dz %6.2f, dx %+6.2f) in %5.2f s, "
+                            "heading 1 s %+6.1f deg, end %+6.1f deg, lock %5.2f wheel-s (front %.2f), ABS active %.2f s, "
+                            "%d releases (%.1f Hz per wheel)%s\n",
+                            names[lane], kmh, steer ? "turn    " : "straight", abs ? "on " : "off", v0 * 3.6f, path,
+                            p1.GetZ() - p0.GetZ(), p1.GetX() - p0.GetX(), t, heading1, (yaw1 - yaw0) * 57.2958f, lock,
+                            frontLock, absTime, releases, absTime > 0 ? releases / (4.0 * absTime) : 0.0,
+                            leftLane ? " LEFT THE LANE (|dx| > 5 m, run cut)" : "");
             }
         }
     }
@@ -839,6 +856,64 @@ void tcProbe() {
     }
 }
 
+// The 15 degree mud hill start is close to the grip limit, so one run says little: the same start at 60/120/240 Hz
+// and three creep points (7, 8, 9 m up the ramp), TC off / on / off-road. Time to the plateau (15 s limit).
+void tcMudSweep() {
+    for (TractionMode tc : {TractionMode::Off, TractionMode::On, TractionMode::OffRoad}) {
+        int tops = 0, runs = 0;
+        double sum = 0, worst = 0;
+        std::printf("tcmud TC %-8s:", tcName(tc));
+        for (double hz : {60.0, 120.0, 240.0}) {
+            for (float creepZ : {7.0f, 8.0f, 9.0f}) {
+                SimulationSettings s;
+                s.layout = TrackLayout::SurfaceRamps;
+                s.fixedStep = 1.0 / hz;
+                Simulation sim(s);
+                sim.requestTeleport(8);
+                for (int i = 0; i < int(1.0 / sim.fixedStep()); ++i) sim.tick();
+                sim.requestToggleLowRange();
+                setAids(sim, false, tc, 0);
+                auto z = [&] { return sim.currentSnapshot().body.position.GetZ(); };
+                for (int i = 0; i < int(10.0 / sim.fixedStep()) && z() < creepZ; ++i) {
+                    sim.setIntent({.throttle = 0.4f});
+                    sim.tick();
+                }
+                for (int i = 0; i < int(5.0 / sim.fixedStep()); ++i) {
+                    sim.setIntent({.brake = 1.0f});
+                    sim.tick();
+                }
+                const float z0 = z();
+                double t = 0, top = -1;
+                while (t < 15.0 && top < 0) {
+                    sim.setIntent({.throttle = 1.0f});
+                    sim.tick();
+                    t += sim.fixedStep();
+                    if (z() > 24.0f) top = t;
+                    const auto& tel = sim.vehicle().telemetry();
+                    if (std::getenv("TF_TC_TRACE") && hz == std::atof(std::getenv("TF_TC_TRACE")) && creepZ == 8.0f &&
+                        sim.timing().ticks % int(hz / 4) == 0) {
+                        std::printf("\n  t=%.2f z=%.2f v=%+.2f f=%.2f rpm=%.0f g=%d |", t, z(), tel.forwardSpeed,
+                                    tel.throttleFactor, tel.engineRPM, tel.gear);
+                        for (const auto& w : tel.wheels)
+                            std::printf(" %c v%+.2f r%+.2f tb%4.0f F%+5.0f", w.contact ? 'C' : '-', w.groundSpeed,
+                                        w.rollingSpeed, w.tcBrake, w.longitudinalForce);
+                    }
+                }
+                ++runs;
+                if (top >= 0) {
+                    ++tops;
+                    sum += top;
+                    worst = std::max(worst, top);
+                    std::printf(" %.1f", top);
+                } else {
+                    std::printf(" no(%+.1fm)", z() - z0);
+                }
+            }
+        }
+        std::printf(" | top %d/%d, mean %.2f s, worst %.2f s\n", tops, runs, tops ? sum / tops : 0.0, worst);
+    }
+}
+
 // Differentials: one wheel without support. Pad with a bottomless pit under the front-left wheel and the
 // proving ground diagonal twister, low range, full throttle.
 void diffProbe() {
@@ -863,6 +938,7 @@ void diffProbe() {
             s.vehicle.tuning.frontDiff = su.f;
             s.vehicle.tuning.rearDiff = su.r;
             s.vehicle.tuning.centerDiff = su.c;
+            if (const char* hz = std::getenv("PROBE_HZ")) s.fixedStep = 1.0 / std::atof(hz);
             Simulation sim(s);
             if (track == 1) sim.requestTeleport(2);
             sim.setIntent({.brake = 1.0f});
@@ -882,12 +958,92 @@ void diffProbe() {
                 for (const auto& w : sim.vehicle().telemetry().wheels)
                     if (!w.contact) maxAirSpin = std::max(maxAirSpin, std::abs(w.rollingSpeed));
                 if ((track == 0 ? z() - z0 : z()) > goal) done = t;
-                if (std::getenv("TF_DIFF_TRACE") && sim.timing().ticks % 12 == 0) printRow(sim, t);
+                if (std::getenv("TF_DIFF_TRACE") && sim.timing().ticks % int(0.1 / sim.fixedStep()) == 0) printRow(sim, t);
             }
             std::printf("diff %-12s %s: ", track == 0 ? "slope pit" : "twister", su.name);
             if (done >= 0) std::printf("out (%.0f m) in %5.2f s", goal, done);
             else std::printf("stuck: %5.2f m in %.0f s", z() - z0, secs);
             std::printf(", max rim speed of a wheel in the air %5.1f m/s\n", maxAirSpin);
+        }
+    }
+}
+
+// Friction ellipse off / on: steady cornering on the flat pad (concrete, and the pad set to dirt and mud friction),
+// full-throttle launches per lane. Braking distances and locked-wheel steering: `abs 0` / `abs 1`.
+void ellipseProbe() {
+    struct Mu {
+        const char* name;
+        float lon, lat, kmh;
+    } mus[] = {{"concrete", 0.95f, 0.95f, 40.0f}, {"dirt", 0.70f, 0.68f, 40.0f}, {"mud", 0.35f, 0.32f, 25.0f}};
+    for (int ellipse = 0; ellipse < 2; ++ellipse) {
+        for (const Mu& mu : mus) {
+            for (float steer : {0.3f, 0.6f, 1.0f}) {
+                SimulationSettings s;
+                s.layout = TrackLayout::Flat;
+                s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
+                Simulation sim(s);
+                SurfaceProperties& pad = sim.surfaces().get(SurfaceId::Concrete);
+                pad.longitudinalFriction = mu.lon;
+                pad.lateralFriction = mu.lat;
+                const JPH::BodyID id = sim.vehicle().bodyId();
+                double t = 0, sumA = 0, sumV = 0, sumSlip = 0, maxA = 0;
+                int n = 0;
+                JPH::Vec3 prevV = sim.world().bodies().GetLinearVelocity(id);
+                while (t < 12.0) {
+                    const auto& tel = sim.vehicle().telemetry();
+                    const float err = mu.kmh / 3.6f - tel.speed;
+                    sim.setIntent({.throttle = std::clamp(0.3f + 0.4f * err, 0.0f, 1.0f), .steer = t > 2.5 ? -steer : 0.0f});
+                    sim.tick();
+                    t += sim.fixedStep();
+                    // Centripetal acceleration of the body: horizontal acceleration perpendicular to the velocity.
+                    JPH::Vec3 v = sim.world().bodies().GetLinearVelocity(id);
+                    JPH::Vec3 acc = (v - prevV) / float(sim.fixedStep());
+                    prevV = v;
+                    if (t < 8.0) continue;
+                    v.SetY(0.0f);
+                    acc.SetY(0.0f);
+                    const float a = v.Length() > 0.5f ? std::abs(v.Cross(acc).GetY()) / v.Length() : 0.0f;
+                    float slip = 0;
+                    for (const auto& w : tel.wheels) slip = std::max(slip, std::abs(w.lateralSlipDeg));
+                    sumA += a;
+                    sumV += tel.speed;
+                    sumSlip += slip;
+                    maxA = std::max(maxA, double(a));
+                    ++n;
+                }
+                std::printf("ellipse %s corner %-8s steer %.1f: mean speed %5.1f km/h, lateral accel mean %.2f m/s^2 "
+                            "(%.2f g, max %.2f), max wheel slip angle mean %4.1f deg\n",
+                            ellipse ? "on " : "off", mu.name, steer, sumV / n * 3.6, sumA / n, sumA / n / 9.81, maxA,
+                            sumSlip / n);
+            }
+        }
+        const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand"};
+        for (int lane : {0, 1, 6, 3, 2}) {
+            SimulationSettings s;
+            s.layout = TrackLayout::SurfaceLanes;
+            s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
+            Simulation sim(s);
+            sim.requestTeleport(lane);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            double t = 0, spin = 0;
+            float maxSlip = 0, v1 = 0, v2 = 0;
+            while (t < 3.0) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                float slip = 0;
+                for (const WheelContactSample& c : sim.vehicle().contacts())
+                    if (c.contact) slip = std::max(slip, std::abs(c.longitudinalSlipSpeed));
+                maxSlip = std::max(maxSlip, slip);
+                if (slip > 1.0f) spin += sim.fixedStep();
+                if (std::abs(t - 1.0) < 0.5 * sim.fixedStep()) v1 = sim.vehicle().telemetry().speed;
+                if (std::abs(t - 2.0) < 0.5 * sim.fixedStep()) v2 = sim.vehicle().telemetry().speed;
+            }
+            const auto p = sim.currentSnapshot().body.position;
+            std::printf("ellipse %s launch %-8s: v(1 s) %5.2f m/s, v(2 s) %5.2f m/s, max slip %5.2f m/s, wheelspin "
+                        "(>1 m/s) %.2f s, lateral drift %+.2f m\n",
+                        ellipse ? "on " : "off", names[lane], v1, v2, maxSlip, spin,
+                        p.GetX() - sim.track().features()[lane].position.GetX());
         }
     }
 }
@@ -908,8 +1064,10 @@ int main(int argc, char** argv) {
     else if (mode == "skid") skid();
     else if (mode == "showcase") showcase();
     else if (mode == "surfaces") surfaces();
-    else if (mode == "abs") absProbe();
+    else if (mode == "abs") absProbe(argc > 2 ? std::atoi(argv[2]) : -1);
+    else if (mode == "ellipse") ellipseProbe();
     else if (mode == "tc") tcProbe();
+    else if (mode == "tcmud") tcMudSweep();
     else if (mode == "diff") diffProbe();
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);

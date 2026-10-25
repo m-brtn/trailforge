@@ -501,10 +501,10 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Slip ratio for the friction curve = |w*r - v| / max(|v|, floor).\n"
                               "0: Jolt's own ratio, where any wheel turn at a standstill reads as full slip.");
-        changed |= ImGui::Checkbox("Combined slip (friction circle)", &m_tuning.tireCombinedSlip);
-        remember("combined_slip");
+        changed |= ImGui::Checkbox("Friction ellipse (combined slip)", &m_tuning.tireFrictionEllipse);
+        remember("friction_ellipse");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Scales the longitudinal and lateral limits so their combined slip shares one budget.\n"
+            ImGui::SetTooltip("Beyond the peak the longitudinal and lateral limits share one budget (ellipse).\n"
                               "Off: Jolt's independent limits, a locked wheel still steers.");
     }
     if (ImGui::CollapsingHeader("Surfaces (live)", ImGuiTreeNodeFlags_DefaultOpen)) {

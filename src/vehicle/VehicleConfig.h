@@ -39,6 +39,8 @@ struct DrivingAidTuning {
     float tcRecoverRate = 0.6f;           // 1/s, throttle factor recovery rate at zero slip
     float tcMinThrottle = 0.05f;          // throttle factor floor, On
     float tcOffRoadMinThrottle = 0.10f;   // throttle factor floor, OffRoad
+    float tcSpinSpeed = 0.3f;             // m/s, rim speed below which a wheel counts as not spinning (TC brake off)
+    float tcRollbackSpeed = 0.3f;         // m/s against the selected direction: no throttle cut while rolling back
 };
 
 // Parameters applied to the running vehicle between physics steps
@@ -89,10 +91,11 @@ struct VehicleTuning {
     float centerLimitedSlipRatio = 1.4f; // center LSD: the same between the axles (average axle speeds)
     float lockedSlipRatio = 1.05f;       // "Locked": the same model with a ratio close to 1 (Jolt requires > 1)
 
-    // Tire friction circle: beyond the peak, the longitudinal and lateral limits share one budget in proportion to
-    // the normalized slips (slip ratio / peak, slip angle / peak). A locked or spinning wheel then has little side
-    // grip. false = Jolt's independent limits (a locked wheel keeps full side grip).
-    bool tireCombinedSlip = true;
+    // Tire friction ellipse (combined slip, WheeledVehicleController::SetTireMaxImpulseCallback): beyond the peak,
+    // the longitudinal and lateral impulse limits share one budget in proportion to the normalized slips (slip ratio /
+    // peak, slip angle / peak). A locked or spinning wheel then has little side grip. false = Jolt's independent
+    // limits (a locked wheel keeps full side grip and steers).
+    bool tireFrictionEllipse = true;
 
     DrivingAidTuning aids;
 };

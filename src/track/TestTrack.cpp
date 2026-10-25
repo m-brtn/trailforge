@@ -484,16 +484,24 @@ void TestTrack::buildSlopeWithWheelPit() {
 }
 
 void TestTrack::buildSurfaceLanes() {
-    // Lanes along Z, 12 m wide, centered at x = 0, 12, ..., 60; spawn points at the start of each lane.
+    // Lanes along Z, 12 m wide, centered at x = 0, 12, ..., 72; spawn points at the start of each lane. 1.1 km long
+    // so that a run-up to 100 km/h on mud and the stop fit (trailforge_probe abs).
     auto& g = m_geometry;
-    const SurfaceId lanes[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Mud,
-                               SurfaceId::Grass,    SurfaceId::Rock,       SurfaceId::LowGrip};
-    const char* names[] = {"Concrete lane", "Packed dirt lane", "Mud lane", "Grass lane", "Rock lane", "Low grip lane"};
+    const SurfaceId lanes[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Mud,    SurfaceId::Grass,
+                               SurfaceId::Rock,     SurfaceId::LowGrip,    SurfaceId::Sand};
+    const char* names[] = {"Concrete lane", "Packed dirt lane", "Mud lane", "Grass lane", "Rock lane", "Low grip lane",
+                           "Sand lane"};
     const float z0 = -100.0f, z1 = 200.0f;
-    for (int k = 0; k < 6; ++k) {
+    for (int k = 0; k < 7; ++k) {
         const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
         g.addQuad(Vec3(x0, 0, z0), Vec3(x0, 0, z1), Vec3(x1, 0, z1), Vec3(x1, 0, z0), lanes[k]);
         m_features.push_back({names[k], Vec3(x0 + 6.0f, 0, -90.0f), 0.0f});
+    }
+    // Extension to z = 1000 as separate quads, so the contacts on the first 300 m stay those of the original lanes.
+    const float z2 = 1000.0f;
+    for (int k = 0; k < 7; ++k) {
+        const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
+        g.addQuad(Vec3(x0, 0, z1), Vec3(x0, 0, z2), Vec3(x1, 0, z2), Vec3(x1, 0, z1), lanes[k]);
     }
 }
 

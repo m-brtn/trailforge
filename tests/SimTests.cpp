@@ -996,10 +996,136 @@ void tractionControlMud() {
                     hz, maxSlip[0], spin[0], v3[0], maxSlip[1], spin[1], v3[1], active[1], maxSlip[2], spin[2], v3[2]);
         CHECK(active[0] == 0.0, "TC active while off");
         CHECK(active[1] > 0.5, "%.0f Hz: TC never engaged", hz);
-        CHECK(maxSlip[1] < 0.7f * maxSlip[0] && spin[1] < spin[0], "%.0f Hz: TC on did not cut wheelspin", hz);
+        // The peak is a single tick; at 60 Hz Jolt's wheel speeds alternate near the grip limit, so the peak there
+        // only has to drop by 20 %. The spin time must drop by 30 % at every rate.
+        CHECK(maxSlip[1] < (hz < 100.0 ? 0.8f : 0.7f) * maxSlip[0] && spin[1] < 0.7 * spin[0],
+              "%.0f Hz: TC on did not cut wheelspin", hz);
         CHECK(maxSlip[2] < 0.8f * maxSlip[0], "%.0f Hz: TC off-road did not cut wheelspin", hz);
         CHECK(v3[1] > 0.8f * v3[0], "%.0f Hz: TC on bogged down (v %.2f vs %.2f)", hz, v3[1], v3[0]);
     }
+}
+
+// DrivingAids alone, on synthetic wheel states (no Jolt): ABS dumps a locked wheel to zero torque and builds up again
+// once it rolls; TC brakes only the wheel that spins ahead of the others, cuts the throttle when all spin, and lets
+// the throttle recover while the vehicle rolls back against the selected direction.
+void drivingAidsLogic() {
+    const DrivingAidTuning t;
+    const float dt = 1.0f / 120.0f;
+    auto wheels = [](float ground, std::array<float, 4> rolling) {
+        AidInput in;
+        for (int i = 0; i < 4; ++i) in.wheels[i] = {true, ground, rolling[i]};
+        return in;
+    };
+    {
+        DrivingAids aids;
+        AidInput in = wheels(10.0f, {0.0f, 10.0f, 10.0f, 10.0f});
+        in.brake = 1.0f;
+        in.maxBrakeTorque = 3000.0f;
+        in.dt = dt;
+        const AidOutput off = aids.update(t, {false, TractionMode::Off, 0}, in);
+        CHECK(off.brakeTorque[0] == 3000.0f && !off.absActive, "ABS off: torque %.0f", off.brakeTorque[0]);
+        double dumpTime = -1.0;
+        AidOutput out;
+        for (int i = 0; i < 30 && dumpTime < 0.0; ++i) {
+            out = aids.update(t, {true, TractionMode::Off, 0}, in);
+            if (out.brakeTorque[0] == 0.0f) dumpTime = (i + 1) * dt;
+        }
+        std::printf("    ABS: locked wheel dumped to 0 N*m after %.3f s; rolling wheels %.0f N*m\n", dumpTime,
+                    out.brakeTorque[1]);
+        CHECK(dumpTime > 0.0 && dumpTime <= 0.05, "ABS did not dump the locked wheel to zero (%.3f s)", dumpTime);
+        CHECK(out.brakeTorque[1] == 3000.0f && out.absActive, "ABS touched the rolling wheels (%.0f)", out.brakeTorque[1]);
+        in.wheels[0].rollingSpeed = 9.5f; // slip 0.05 < absApplySlip
+        double fullTime = -1.0;
+        for (int i = 0; i < 60 && fullTime < 0.0; ++i)
+            if (aids.update(t, {true, TractionMode::Off, 0}, in).absPressure[0] >= 1.0f) fullTime = (i + 1) * dt;
+        std::printf("    ABS: full pressure again %.3f s after the wheel rolls\n", fullTime);
+        CHECK(fullTime > 0.05 && fullTime < 0.2, "ABS pressure build-up %.3f s", fullTime);
+    }
+    {
+        DrivingAids aids;
+        AidInput in = wheels(1.0f, {8.0f, 1.0f, 1.0f, 1.0f});
+        in.throttle = 1.0f;
+        in.dt = dt;
+        AidOutput out;
+        for (int i = 0; i < 60; ++i) out = aids.update(t, {false, TractionMode::On, 0}, in);
+        std::printf("    TC: one wheel spinning: brake %.0f / %.0f / %.0f / %.0f N*m, throttle factor %.2f\n",
+                    out.tcBrake[0], out.tcBrake[1], out.tcBrake[2], out.tcBrake[3], out.throttleFactor);
+        CHECK(out.tcBrake[0] > 500.0f && out.tcBrake[1] == 0.0f && out.tcBrake[2] == 0.0f && out.tcBrake[3] == 0.0f,
+              "TC must brake only the spinning wheel");
+        CHECK(out.throttleFactor > 0.99f, "TC cut the throttle with three wheels gripping (%.2f)", out.throttleFactor);
+        in = wheels(1.0f, {8.0f, 8.0f, 8.0f, 8.0f});
+        in.throttle = 1.0f;
+        in.dt = dt;
+        for (int i = 0; i < 120; ++i) out = aids.update(t, {false, TractionMode::On, 0}, in);
+        std::printf("    TC: all wheels spinning: throttle factor %.2f after 1 s, engine throttle %.2f\n",
+                    out.throttleFactor, out.throttle);
+        CHECK(out.throttleFactor < 0.2f && out.tcActive, "TC did not cut the throttle (%.2f)", out.throttleFactor);
+        const float cut = out.throttleFactor;
+        in = wheels(-1.0f, {8.0f, 8.0f, 8.0f, 8.0f}); // rolling back with the wheels spinning forward
+        in.throttle = 1.0f;
+        in.dt = dt;
+        for (int i = 0; i < 60; ++i) out = aids.update(t, {false, TractionMode::On, 0}, in);
+        std::printf("    TC: rolling back: throttle factor %.2f -> %.2f in 0.5 s\n", cut, out.throttleFactor);
+        CHECK(out.throttleFactor > cut + 0.2f, "TC kept cutting while rolling back (%.2f)", out.throttleFactor);
+        const AidOutput off = aids.update(t, {false, TractionMode::Off, 0}, in);
+        CHECK(off.throttle == 1.0f && off.tcBrake[0] == 0.0f && !off.tcActive, "TC off still acts");
+    }
+}
+
+// Friction ellipse: a full brake with 40 % steer from 50 km/h on concrete without ABS. With Jolt's independent limits
+// the locked wheels still steer; with the ellipse they lose side grip and the vehicle keeps going straighter. The
+// straight stop and moderate cornering stay the same.
+void frictionEllipse() {
+    float heading[2] = {}, offset[2] = {}, straight[2] = {}, corner[2] = {};
+    for (int ellipse = 0; ellipse < 2; ++ellipse) {
+        for (int steer = 0; steer < 2; ++steer) {
+            SimulationSettings s = settingsFor(TrackLayout::Flat);
+            s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
+            Simulation sim(s);
+            run(sim, 0.5);
+            sim.setIntent({.throttle = 0.6f});
+            for (int i = 0; i < int(12.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed < 50.0f / 3.6f; ++i)
+                sim.tick();
+            const JPH::Vec3 p0 = position(sim);
+            const float yaw0 = yawDeg(sim);
+            const JPH::Vec3 fwd = sim.currentSnapshot().body.rotation.RotateAxisZ();
+            run(sim, 1.0, {.brake = 1.0f, .steer = steer ? 0.4f : 0.0f});
+            if (steer) {
+                heading[ellipse] = yawDeg(sim) - yaw0;
+                const JPH::Vec3 d = position(sim) - p0;
+                offset[ellipse] = (d - fwd * d.Dot(fwd)).Length();
+            }
+            run(sim, 8.0, {.brake = 1.0f, .steer = steer ? 0.4f : 0.0f});
+            if (!steer) straight[ellipse] = (position(sim) - p0).Length();
+        }
+        // Steady circle at ~40 km/h with 30 % steer (below the limit).
+        SimulationSettings s = settingsFor(TrackLayout::Flat);
+        s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
+        Simulation sim(s);
+        const JPH::BodyID id = sim.vehicle().bodyId();
+        double t = 0, sum = 0;
+        int n = 0;
+        while (t < 10.0) {
+            const auto& tel = sim.vehicle().telemetry();
+            sim.setIntent({.throttle = std::clamp(0.3f + 0.4f * (40.0f / 3.6f - tel.speed), 0.0f, 1.0f),
+                           .steer = t > 2.5 ? 0.3f : 0.0f});
+            sim.tick();
+            t += sim.fixedStep();
+            if (t < 7.0) continue;
+            sum += std::abs(tel.forwardSpeed * sim.world().bodies().GetAngularVelocity(id).GetY());
+            ++n;
+        }
+        corner[ellipse] = float(sum / n);
+    }
+    std::printf("    locked wheels, 1 s after a steered full brake: heading %.1f -> %.1f deg, sideways %.2f -> %.2f m "
+                "(ellipse off -> on); straight stop %.2f -> %.2f m; 30 %% steer circle %.2f -> %.2f m/s^2\n",
+                heading[0], heading[1], offset[0], offset[1], straight[0], straight[1], corner[0], corner[1]);
+    CHECK(std::abs(heading[1]) < 0.75f * std::abs(heading[0]) && offset[1] < 0.75f * offset[0],
+          "ellipse: locked wheels still steer (heading %.1f vs %.1f deg)", heading[1], heading[0]);
+    CHECK(std::abs(straight[1] - straight[0]) < 0.02f * straight[0], "ellipse changed the straight stop %.2f vs %.2f m",
+          straight[1], straight[0]);
+    CHECK(std::abs(corner[1] - corner[0]) < 0.03f * corner[0], "ellipse changed moderate cornering %.2f vs %.2f",
+          corner[1], corner[0]);
 }
 
 } // namespace
@@ -1023,6 +1149,8 @@ int main(int argc, char** argv) {
         {"abs_prevents_lock", absPreventsLock},
         {"diff_locks_climb", diffLocksClimb},
         {"traction_control_mud", tractionControlMud},
+        {"driving_aids_logic", drivingAidsLogic},
+        {"friction_ellipse", frictionEllipse},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

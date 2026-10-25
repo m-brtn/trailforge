@@ -29,6 +29,7 @@ struct AidInput {
     float throttle = 0.0f; // 0..1, smoothed pedal
     float brake = 0.0f;    // 0..1, smoothed pedal
     float maxBrakeTorque = 0.0f; // N*m per wheel at full pedal
+    float driveSign = 1.0f;      // +1 forward selected, -1 reverse
     float dt = 0.0f;
 };
 

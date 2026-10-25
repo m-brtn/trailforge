@@ -139,16 +139,22 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         [this](uint wheel, float& ioLong, float& ioLat, const Body& body, const SubShapeID& subShape) {
             const SurfaceId id = m_surfaces.lookup(body.GetShape()->GetMaterial(subShape));
             const SurfaceProperties& s = m_surfaces.get(id);
-            float slip = 0.0f;
             if (wheel < kWheelCount) {
-                slip = curveSlip(wheel);
-                ioLong = staticGripFriction(wheel, m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip);
+                const float slip = curveSlip(wheel);
+                ioLong = staticGripFriction(m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip);
                 m_contactSurface[wheel] = id;
+                updateEllipseSlip(wheel, slip);
             }
             ioLong *= s.longitudinalFriction;
             ioLat *= s.lateralFriction;
-            if (wheel < kWheelCount) combinedSlip(wheel, slip, ioLong, ioLat);
         });
+    // Max tire impulses = friction x suspension impulse (Jolt's default), then the friction ellipse.
+    m_controller->SetTireMaxImpulseCallback([this](uint wheel, float& outLong, float& outLat, float suspensionImpulse,
+                                                   float longFriction, float latFriction, float, float, float) {
+        outLong = longFriction * suspensionImpulse;
+        outLat = latFriction * suspensionImpulse;
+        if (wheel < kWheelCount) frictionEllipse(wheel, outLong, outLat);
+    });
 
     world.system().AddConstraint(m_constraint);
     world.system().AddStepListener(m_constraint);
@@ -191,7 +197,7 @@ void Vehicle::buildTireCurves(const VehicleTuning& t) {
 // under drive torque (a 1st-gear wheel gains ~3 m/s of slip in one 1/120 s step), slides, grips again: a period-2
 // cycle that reads as wheelspin on every launch, from rest up to ~8 m/s. A tire that has not broken away (slip
 // below the peak) may therefore pass up to the peak friction; sliding wheels keep the curve value.
-float Vehicle::staticGripFriction(JPH::uint wheel, float curveFriction, float slip) const {
+float Vehicle::staticGripFriction(float curveFriction, float slip) const {
     const VehicleTuning& t = m_config.tuning;
     if (!t.tireStaticGrip) return curveFriction;
     if (slip >= t.tirePeakSlipRatio) return curveFriction;
@@ -211,23 +217,31 @@ float Vehicle::curveSlip(JPH::uint wheel) const {
     return std::abs(rolling - vLong) / std::max(std::abs(vLong), t.tireSlipSpeedFloor);
 }
 
-// Jolt limits the longitudinal and lateral tire impulses independently, so a locked wheel keeps its full side grip
-// and steers as well as a rolling one. Beyond the peak (normalized slip > 1) the two limits are scaled by the share
-// of each normalized slip, so the friction force points along the combined slip like a sliding contact patch.
-// Blended in above 1-3 m/s: at a crawl Jolt's slip angle and slip ratio are numerically undefined.
-void Vehicle::combinedSlip(JPH::uint wheel, float slip, float& ioLong, float& ioLat) const {
+// Slips for the friction ellipse, from the same contact state Jolt uses for the step: slip ratio (with the speed
+// floor) over its peak, slip angle over its peak. The blend fades the ellipse in between 1 and 3 m/s of contact
+// patch speed: at a crawl Jolt's slip angle and slip ratio are numerically undefined.
+void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip) {
     const VehicleTuning& t = m_config.tuning;
-    if (!t.tireCombinedSlip) return;
     const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
-    const float sx = slip / std::max(t.tirePeakSlipRatio, 1e-3f);
-    const float sy = w->mLateralSlip * kRadToDeg / std::max(t.tirePeakSlipAngleDeg, 0.1f);
-    const float s = std::sqrt(sx * sx + sy * sy);
-    if (s <= 1.0f) return;
+    EllipseSlip& e = m_ellipseSlip[wheel];
+    e.sx = slip / std::max(t.tirePeakSlipRatio, 1e-3f);
+    e.sy = w->mLateralSlip * kRadToDeg / std::max(t.tirePeakSlipAngleDeg, 0.1f);
     JPH::Vec3 v = m_body->GetPointVelocity(w->GetContactPosition()) - w->GetContactPointVelocity();
     v -= w->GetContactNormal() * v.Dot(w->GetContactNormal());
-    const float blend = std::clamp((v.Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
-    ioLong *= 1.0f + blend * (sx / s - 1.0f);
-    ioLat *= 1.0f + blend * (sy / s - 1.0f);
+    e.blend = std::clamp((v.Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
+}
+
+// Jolt limits the longitudinal and lateral tire impulses independently (a friction rectangle), so a locked wheel
+// keeps its full side grip and steers as well as a rolling one. Beyond the peak (normalized slip s > 1) each limit is
+// scaled by its share of the normalized slip (sx / s, sy / s): the force lies on an ellipse with the two limits as
+// semi-axes and points along the combined slip, like a sliding contact patch. Below the peak nothing changes.
+void Vehicle::frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const {
+    if (!m_config.tuning.tireFrictionEllipse) return;
+    const EllipseSlip& e = m_ellipseSlip[wheel];
+    const float s = std::sqrt(e.sx * e.sx + e.sy * e.sy);
+    if (s <= 1.0f) return;
+    ioLongImpulse *= 1.0f + e.blend * (e.sx / s - 1.0f);
+    ioLatImpulse *= 1.0f + e.blend * (e.sy / s - 1.0f);
 }
 
 void Vehicle::applyTuning(const VehicleTuning& t) {
@@ -331,6 +345,7 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     in.throttle = cmd.throttle;
     in.brake = cmd.brake;
     in.maxBrakeTorque = m_config.tuning.maxBrakeTorque;
+    in.driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
     in.dt = dt;
     m_aidOut = m_aids.update(m_config.tuning.aids, m_controls, in);
     float maxTorque = 0.0f;

@@ -36,7 +36,7 @@ enum class TrackLayout {
     ProvingGround,    // full proving ground, ~100x100 m
     Flat,             // flat pad (for tests)
     FlatWithWheelPit, // flat pad with a pit under the front left wheel (wheel lift test)
-    SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass, rock, low grip
+    SurfaceLanes,     // flat pad of parallel 12 m lanes: concrete, packed dirt, mud, grass, rock, low grip, sand
     SurfaceRamps,     // 15 and 20 degree ramps per surface, 10 m lanes, 22 m long (climb measurements)
     SlopeWithWheelPit, // 15 degree concrete slope, hole under the front left wheel (differential tests)
 };

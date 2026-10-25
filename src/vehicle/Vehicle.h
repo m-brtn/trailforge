@@ -124,9 +124,10 @@ public:
 
 private:
     void buildTireCurves(const VehicleTuning& t);
-    float staticGripFriction(JPH::uint wheel, float curveFriction, float slip) const;
+    float staticGripFriction(float curveFriction, float slip) const;
     float curveSlip(JPH::uint wheel) const;
-    void combinedSlip(JPH::uint wheel, float slip, float& ioLong, float& ioLat) const;
+    void updateEllipseSlip(JPH::uint wheel, float slip);
+    void frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const;
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
     float clutchStrength(float throttle) const;
     void applyDifferentials();
@@ -142,6 +143,12 @@ private:
     std::array<JPH::Ref<JPH::WheelSettingsWV>, kWheelCount> m_wheelSettings;
     // Written from CombineFriction (inside the physics step), read after the step.
     std::array<SurfaceId, kWheelCount> m_contactSurface{};
+    // Friction ellipse input per wheel, written in CombineFriction and read by the tire max impulse callback of the
+    // same step: normalized slip ratio, normalized slip angle, low-speed blend (0..1).
+    struct EllipseSlip {
+        float sx = 0.0f, sy = 0.0f, blend = 0.0f;
+    };
+    std::array<EllipseSlip, kWheelCount> m_ellipseSlip{};
 
     DriveDirection m_direction = DriveDirection::Forward;
     bool m_lowRange = false;

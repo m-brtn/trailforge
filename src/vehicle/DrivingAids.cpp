@@ -48,18 +48,29 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
     const bool driving = tcOn && in.throttle > 0.05f && in.brake < 0.05f;
     // Jolt's wheel speeds alternate from tick to tick while a tire is at its grip limit; the controller works on a
     // low-passed slip.
-    const float k = std::min(1.0f, dt / std::max(t.tcSlipFilterTime, 1e-4f));
+    const float k = std::min(1.0f, dt / std::max(t.tcSlipFilterTime, 6.0f * dt));
     float minSlip = 1e9f;
+    std::array<bool, kAidWheels> spinning{};
+    float groundSum = 0.0f;
+    int inContact = 0;
     for (int i = 0; i < kAidWheels; ++i) {
         const AidWheelInput& w = in.wheels[i];
         // Positive when the wheel turns faster than the ground in its own rolling direction (also while the vehicle
         // slides backwards with the wheels driving forwards).
         const float dv = w.rollingSpeed - w.groundSpeed;
         const float slip = (dv * w.rollingSpeed > 0.0f ? std::abs(dv) : 0.0f) / std::max(std::abs(w.groundSpeed), t.tcMinSpeed);
+        spinning[i] = slip > 0.0f && std::abs(w.rollingSpeed) > t.tcSpinSpeed;
         m_slip[i] += (slip - m_slip[i]) * k;
         out.driveSlip[i] = m_slip[i];
-        if (w.contact) minSlip = std::min(minSlip, m_slip[i]);
+        if (w.contact) {
+            minSlip = std::min(minSlip, m_slip[i]);
+            groundSum += w.groundSpeed;
+            ++inContact;
+        }
     }
+    // Rolling back against the selected direction (a hill start that is losing): cutting the throttle only makes it
+    // roll back faster, so the throttle cut recovers instead.
+    const bool rollingBack = inContact > 0 && in.driveSign * groundSum / float(inContact) < -t.tcRollbackSpeed;
     if (minSlip > 1e8f) minSlip = 0.0f; // all wheels in the air
     // Brake a wheel that spins faster than the slowest wheel in contact: through the open differentials the brake
     // reaction drives the other wheels. Uniform spin of all wheels is the throttle's job.
@@ -69,12 +80,15 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
         float& b = m_tcBrake[i];
         const float step = t.tcBrakeRate * dt;
         b = driving ? b + std::clamp(target - b, -step, step) : 0.0f;
+        // Released at once when the wheel no longer spins ahead of the ground: Jolt keeps a wheel at w = 0 locked
+        // under any brake torque, so a slowly decaying TC brake would hold it locked instead of letting it drive.
+        if (!spinning[i]) b = 0.0f;
         if (b > 1.0f) out.tcActive = true;
     }
     // Throttle: integral control of the slowest wheel's slip toward the threshold (error normalized by the threshold;
     // a faster cut than recovery).
     if (driving) {
-        const float e = (minSlip - threshold) / threshold;
+        const float e = rollingBack ? -1.0f : (minSlip - threshold) / threshold;
         const float rate = e > 0.0f ? -t.tcCutRate * std::min(e, 2.0f) : t.tcRecoverRate * std::min(-e, 1.0f);
         m_throttleFactor = std::clamp(m_throttleFactor + rate * dt, offRoad ? t.tcOffRoadMinThrottle : t.tcMinThrottle, 1.0f);
     } else {

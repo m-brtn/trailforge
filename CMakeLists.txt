@@ -115,7 +115,7 @@ if(TRAILFORGE_BUILD_TESTS)
             skid_mark_profile tire_marks_boundary wheel_spray
             abs_prevents_lock
             diff_locks_climb
-            traction_control_mud)
+            traction_control_mud driving_aids_logic friction_ellipse)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
