@@ -97,6 +97,12 @@ private:
         std::uint32_t chirpSerial = 0;
         float chirpLevel = 0.0f;    // chirp gain at full squeal
         float chirpGain = 0.0f;     // smoothed
+        // Synthesized scrub (TireSoundProfile::scrubGain > 0): band-limited noise, amplitude-modulated at the
+        // tread block rate; gains ramp across a block like the whine.
+        std::uint32_t noise = 1;
+        float hpIn = 0.0f, hpOut = 0.0f, lp1 = 0.0f, lp2 = 0.0f;
+        float blockPhase = 0.0f, blockHz = 0.0f;
+        float scrubL = 0.0f, scrubR = 0.0f, scrubTl = 0.0f, scrubTr = 0.0f;
     };
 
     void controlUpdate(float dt);
@@ -137,6 +143,9 @@ private:
     double m_time = 0.0;         // rendered time, s
     double m_lastChirp = -1e9;
     std::uint32_t m_shotSerial = 0;
+    float m_scrubHp = 0.0f, m_scrubLp = 0.0f; // scrub filter coefficients per sample
+    void mixScrub(float* acc, int frames);
+
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;
     float m_whineHz = 0.0f, m_whineGain = 0.0f, m_whineL = 0.0f, m_whineR = 0.0f, m_whineTl = 0.0f, m_whineTr = 0.0f;

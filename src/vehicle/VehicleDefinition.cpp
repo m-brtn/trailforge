@@ -212,7 +212,10 @@ bool readRanges(const json::Value* v, const std::string& path, const std::string
 } // namespace
 
 bool knownVisualModel(const std::string& id) { return id == "trailforge_suv"; }
-bool knownAudioProfile(const std::string& id) { return id == "trailforge_suv"; }
+bool knownAudioProfile(const std::string& id) {
+    TireSoundProfile p;
+    return tireSoundPreset(id, p);
+}
 
 const VehicleKit* VehicleDefinition::findKit(const std::string& kitId) const {
     for (const VehicleKit& k : kits)
@@ -241,7 +244,22 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         if (!c.visualModel.empty() && !knownVisualModel(c.visualModel))
             root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv)");
         if (!c.audioProfile.empty() && !knownAudioProfile(c.audioProfile))
-            root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv)");
+            root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv, sporty)");
+        c.tireSound = tireSoundPreset(c.audioProfile);
+        if (root.member("tireSound", false)) {
+            TireSoundProfile& ts = c.tireSound;
+            Obj s(root.member("tireSound", false), "tireSound", source, errors);
+            s.num("squealPitch", ts.squealPitch, 0.5, 1.5, "(playback rate factor)", false);
+            s.num("squealGain", ts.squealGain, 0.0, 2.0, "", false);
+            s.num("lowpassMinHz", ts.lowpassMinHz, 300.0, 20000.0, "Hz", false);
+            s.num("lowpassMaxHz", ts.lowpassMaxHz, 300.0, 20000.0, "Hz", false);
+            s.num("scrubGain", ts.scrubGain, 0.0, 2.0, "", false);
+            s.num("scrubLowHz", ts.scrubLowHz, 20.0, 2000.0, "Hz", false);
+            s.num("scrubHighHz", ts.scrubHighHz, 100.0, 8000.0, "Hz", false);
+            s.num("treadPitch", ts.treadPitch, 0.01, 0.3, "m", false);
+            if (ts.lowpassMaxHz < ts.lowpassMinHz) s.error(s.child("lowpassMaxHz"), "must not be below lowpassMinHz");
+            if (ts.scrubHighHz <= ts.scrubLowHz) s.error(s.child("scrubHighHz"), "must exceed scrubLowHz");
+        }
         root.member("garage", false); // read by parseVehicleDefinition
         root.member("kits", false);
 

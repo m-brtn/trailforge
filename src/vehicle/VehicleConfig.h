@@ -1,6 +1,7 @@
 #pragma once
 
 #include "track/SurfaceProperties.h"
+#include "vehicle/TireSound.h"
 
 #include <array>
 #include <string>
@@ -188,7 +189,8 @@ struct VehicleConfig {
     std::string id = "default";
     std::string name = "Default off-roader";
     std::string visualModel = "trailforge_suv"; // procedural body model (src/render/VehicleModel)
-    std::string audioProfile = "trailforge_suv"; // sound set (assets/audio/manifest.json)
+    std::string audioProfile = "trailforge_suv"; // sound set (assets/audio/manifest.json) and tire sound preset
+    TireSoundProfile tireSound = tireSoundPreset("trailforge_suv"); // audioProfile preset + vehicle.json `tireSound`
 
     // Mass and inertia
     float mass = 2000.0f;          // kg (body; Jolt wheels are virtual, their mass only counts as rotational inertia)

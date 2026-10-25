@@ -33,6 +33,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     f.clutch = t.clutchFriction;
     f.gear = t.gear;
     f.referenceLoad = 0.25f * cfg.mass * 9.81f;
+    f.tireSound = cfg.tireSound;
     float wheelOmega = 0.0f;
     for (const auto& w : t.wheels) wheelOmega += 0.25f * w.angularVelocity;
     const float finalDrive = cfg.tuning.finalDrive * (t.lowRange ? cfg.lowRangeRatio : 1.0f);

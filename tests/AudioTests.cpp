@@ -674,6 +674,156 @@ void squealRelease() {
     CHECK(fullDb - lowDb > 9.0f, "squeal level not proportional: %.1f vs %.1f dBFS", fullDb, lowDb);
 }
 
+// 16-bit PCM mono WAV (the shipped tire recordings); returns false for anything else.
+bool readPcm16Mono(const std::string& path, SoundData& d) {
+    std::FILE* fp = std::fopen(path.c_str(), "rb");
+    if (fp == nullptr) return false;
+    std::vector<unsigned char> b;
+    unsigned char buf[65536];
+    for (std::size_t n; (n = std::fread(buf, 1, sizeof(buf), fp)) > 0;) b.insert(b.end(), buf, buf + n);
+    std::fclose(fp);
+    auto u32 = [&](std::size_t o) { return std::uint32_t(b[o]) | std::uint32_t(b[o + 1]) << 8 | std::uint32_t(b[o + 2]) << 16 | std::uint32_t(b[o + 3]) << 24; };
+    auto u16 = [&](std::size_t o) { return unsigned(b[o]) | unsigned(b[o + 1]) << 8; };
+    if (b.size() < 12 || std::memcmp(b.data(), "RIFF", 4) != 0 || std::memcmp(b.data() + 8, "WAVE", 4) != 0) return false;
+    bool fmtOk = false;
+    for (std::size_t o = 12; o + 8 <= b.size();) {
+        const std::uint32_t size = u32(o + 4);
+        if (std::memcmp(b.data() + o, "fmt ", 4) == 0)
+            fmtOk = u16(o + 8) == 1 && u16(o + 10) == 1 && u32(o + 12) == 48000 && u16(o + 22) == 16;
+        if (std::memcmp(b.data() + o, "data", 4) == 0 && fmtOk) {
+            d.channels = 1;
+            d.frames = std::min<std::size_t>(size, b.size() - o - 8) / 2;
+            d.pcm.resize(d.frames);
+            for (std::size_t k = 0; k < d.frames; ++k)
+                d.pcm[k] = float(std::int16_t(u16(o + 8 + 2 * k))) / 32768.0f;
+            return true;
+        }
+        o += 8 + size + (size & 1u);
+    }
+    return false;
+}
+
+// Power spectrum of a mono signal: Hann-windowed 4096-point FFTs with 50 % overlap, averaged.
+std::vector<double> powerSpectrum(const std::vector<float>& x) {
+    constexpr std::size_t N = 4096;
+    std::vector<double> acc(N / 2, 0.0);
+    std::vector<double> re(N), im(N);
+    int frames = 0;
+    for (std::size_t start = 0; start + N <= x.size(); start += N / 2, ++frames) {
+        for (std::size_t i = 0; i < N; ++i) {
+            re[i] = double(x[start + i]) * (0.5 - 0.5 * std::cos(6.283185307179586 * double(i) / double(N)));
+            im[i] = 0.0;
+        }
+        for (std::size_t i = 1, j = 0; i < N; ++i) {
+            std::size_t bit = N >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) std::swap(re[i], re[j]), std::swap(im[i], im[j]);
+        }
+        for (std::size_t len = 2; len <= N; len <<= 1) {
+            const double a = -6.283185307179586 / double(len);
+            for (std::size_t i = 0; i < N; i += len)
+                for (std::size_t k = 0; k < len / 2; ++k) {
+                    const double wr = std::cos(a * double(k)), wi = std::sin(a * double(k));
+                    const std::size_t p = i + k, q = p + len / 2;
+                    const double tr = re[q] * wr - im[q] * wi, ti = re[q] * wi + im[q] * wr;
+                    re[q] = re[p] - tr, im[q] = im[p] - ti;
+                    re[p] += tr, im[p] += ti;
+                }
+        }
+        for (std::size_t i = 0; i < N / 2; ++i) acc[i] += re[i] * re[i] + im[i] * im[i];
+    }
+    for (double& v : acc) v /= std::max(frames, 1);
+    return acc;
+}
+
+// Tire sound profiles on the real squeal recordings: one rear wheel slides at a steady 6 m/s at full squeal for 2 s.
+// The off-road profile (trailforge_suv) must be darker (lower spectral centroid, more energy below 1 kHz, less above
+// 3 kHz) at a comparable level; its scrub must follow the squeal and stop with it; "sporty" has no scrub.
+void tireProfiles() {
+    SoundBank bank;
+    std::string error;
+    loadAudioManifest(kManifest, bank.manifest, &error);
+    for (SoundId id : {SoundId::TireSkidLoop, SoundId::TireSkidShort}) {
+        SoundData& d = bank.sounds[std::size_t(id)];
+        const std::string path = std::string(TRAILFORGE_SOURCE_DIR) + "/assets/audio/" + bank.manifest[id].file;
+        CHECK(readPcm16Mono(path, d), "cannot read %s", path.c_str());
+        d.loop = bank.manifest[id].loop;
+    }
+    struct Result {
+        double rmsDb = 0, centroid = 0, below1k = 0, above3k = 0, tail = 0;
+        float scrub = 0;
+    };
+    auto run = [&](const TireSoundProfile& profile, float squeal) {
+        AudioMixer mixer(bank, 48000, 7u);
+        AudioFrame f;
+        f.vehicleValid = true;
+        f.settings.whine = 0.0f;
+        f.tireSound = profile;
+        f.listenerPos = {0.0f, 1.5f, -6.0f};
+        std::vector<float> buf(2 * 400), mono;
+        Result r;
+        double lastLoud = -1.0;
+        for (int i = 0; i < 3 * 120; ++i) {
+            const double t = i / 120.0;
+            WheelAudio& w = f.wheels[2];
+            w.contact = true;
+            w.position = {0.8f, 0.0f, -1.4f};
+            const bool on = t >= 0.2 && t < 2.2;
+            w.squeal = on ? squeal : 0.0f;
+            w.slipSpeed = on ? 6.0f : 0.0f;
+            w.load = f.referenceLoad;
+            mixer.setFrame(f);
+            mixer.render(buf.data(), 400);
+            double p = 0.0;
+            for (float x : buf) p += double(x) * double(x);
+            if (gainToDb(float(std::sqrt(p / double(buf.size())))) > -60.0f) lastLoud = t;
+            if (t >= 0.6 && t < 2.2) {
+                for (int k = 0; k < 400; ++k) mono.push_back(0.5f * (buf[std::size_t(2 * k)] + buf[std::size_t(2 * k + 1)]));
+                r.scrub = std::max(r.scrub, mixer.stats().scrub);
+            }
+        }
+        r.tail = lastLoud < 0.0 ? 0.0 : lastLoud - 2.2;
+        double e = 0.0;
+        for (float x : mono) e += double(x) * double(x);
+        r.rmsDb = 10.0 * std::log10(std::max(e / double(std::max<std::size_t>(mono.size(), 1)), 1e-12));
+        const std::vector<double> ps = powerSpectrum(mono);
+        double total = 0.0, moment = 0.0;
+        for (std::size_t k = 1; k < ps.size(); ++k) {
+            const double hz = double(k) * 48000.0 / 4096.0;
+            total += ps[k];
+            moment += ps[k] * hz;
+            if (hz < 1000.0) r.below1k += ps[k];
+            if (hz >= 3000.0) r.above3k += ps[k];
+        }
+        r.centroid = moment / std::max(total, 1e-30);
+        r.below1k /= std::max(total, 1e-30);
+        r.above3k /= std::max(total, 1e-30);
+        return r;
+    };
+    const TireSoundProfile sporty = tireSoundPreset("sporty");
+    const TireSoundProfile suv = tireSoundPreset("trailforge_suv");
+    TireSoundProfile suvNoScrub = suv;
+    suvNoScrub.scrubGain = 0.0f;
+    const Result a = run(sporty, 1.0f), b = run(suv, 1.0f), c = run(suvNoScrub, 1.0f), d = run(suv, 0.3f);
+    auto print = [](const char* name, const Result& r) {
+        std::printf("    %-26s rms %6.1f dBFS  centroid %5.0f Hz  <1 kHz %4.1f %%  >3 kHz %4.1f %%  scrub %.2f  tail %.3f s\n",
+                    name, r.rmsDb, r.centroid, 100.0 * r.below1k, 100.0 * r.above3k, r.scrub, r.tail);
+    };
+    print("sporty, squeal 1.0", a);
+    print("trailforge_suv, squeal 1.0", b);
+    print("  same without scrub", c);
+    print("trailforge_suv, squeal 0.3", d);
+    CHECK(b.centroid < 0.8 * a.centroid, "SUV centroid %.0f Hz vs sporty %.0f Hz", b.centroid, a.centroid);
+    CHECK(b.below1k > 1.4 * a.below1k, "SUV energy below 1 kHz %.3f vs sporty %.3f", b.below1k, a.below1k);
+    CHECK(b.above3k < 0.25 * a.above3k, "SUV energy above 3 kHz %.3f vs sporty %.3f", b.above3k, a.above3k);
+    CHECK(std::abs(b.rmsDb - a.rmsDb) < 3.0, "SUV level %.1f vs sporty %.1f dBFS", b.rmsDb, a.rmsDb);
+    CHECK(b.below1k > c.below1k + 0.05, "scrub adds low-band energy: %.3f vs %.3f", b.below1k, c.below1k);
+    CHECK(a.scrub == 0.0f && b.scrub > 0.3f, "scrub level sporty %.2f / SUV %.2f", a.scrub, b.scrub);
+    CHECK(b.rmsDb - d.rmsDb > 6.0, "SUV level not proportional to the squeal: %.1f vs %.1f dBFS", b.rmsDb, d.rmsDb);
+    CHECK(a.tail < 0.2 && b.tail < 0.2 && d.tail < 0.2, "tails %.3f / %.3f / %.3f s", a.tail, b.tail, d.tail);
+}
+
 // Music bus with a synthetic streamed track: fades, volume, loop, restart, and no change while the game is paused.
 void music() {
     struct Sine : MusicSource {
@@ -757,6 +907,7 @@ int main(int argc, char** argv) {
         {"audio_feed_and_mixer", feedAndMixer},
         {"audio_skid_gating", skidGating},
         {"audio_squeal_release", squealRelease},
+        {"audio_tire_profiles", tireProfiles},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
