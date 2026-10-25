@@ -7,6 +7,7 @@
 #include "audio/VehicleAudioFeed.h"
 #include "sim/Simulation.h"
 #include "sim/TireMarks.h"
+#include "vehicle/VehicleDefinition.h"
 
 #include <algorithm>
 #include <cmath>
@@ -94,7 +95,14 @@ WheelAudio wheel(SurfaceId s, float roll, float slip, float ratio, float load = 
     w.rollSpeed = roll;
     w.slipSpeed = slip;
     w.slipRatio = ratio;
+    w.longRatio = ratio; // longitudinal unless set otherwise
     w.load = load;
+    return w;
+}
+WheelAudio sideways(SurfaceId s, float roll, float slip, float longRatio, float latRatio) {
+    WheelAudio w = wheel(s, roll, slip, std::sqrt(longRatio * longRatio + latRatio * latRatio));
+    w.longRatio = longRatio;
+    w.latRatio = latRatio;
     return w;
 }
 
@@ -110,14 +118,13 @@ void tireLayers() {
     auto g = [](const TireLayerMix& m, L l) { return m.gain[std::size_t(l)]; };
 
     // The skid layer only follows the per-wheel squeal the feed computed (gated, smoothed); here it is set directly.
-    auto squealing = [&](WheelAudio w, float slide) {
-        w.slide = slide;
+    auto squealing = [&](WheelAudio w) {
         w.squeal = wheelSquealDrive(w, ref);
         return w;
     };
     const TireLayerMix concreteRoll = tireLayerMix(all(wheel(SurfaceId::Concrete, 10, 0.3f, 0.03f)), ref);
-    const TireLayerMix concreteLock = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 8, 1.0f), 1.0f)), ref);
-    const TireLayerMix tractionSlip = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 1.7f, 0.12f), 0.0f)), ref);
+    const TireLayerMix concreteLock = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 8, 1.0f))), ref);
+    const TireLayerMix tractionSlip = tireLayerMix(all(squealing(wheel(SurfaceId::Concrete, 8, 1.7f, 0.12f))), ref);
     const TireLayerMix dirtRoll = tireLayerMix(all(wheel(SurfaceId::PackedDirt, 8, 0.2f, 0.02f)), ref);
     const TireLayerMix dirtSpin = tireLayerMix(all(wheel(SurfaceId::PackedDirt, 2, 4, 0.8f)), ref);
     const TireLayerMix mudRoll = tireLayerMix(all(wheel(SurfaceId::Mud, 6, 0.3f, 0.05f)), ref);
@@ -152,8 +159,8 @@ void tireLayers() {
     const float light = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 1000), ref);
     const float heavy = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 6000), ref);
     CHECK(light < heavy, "slip x load: %.2f vs %.2f", light, heavy);
-    const float lightSq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 1000), 1.0f), ref);
-    const float heavySq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 6000), 1.0f), ref);
+    const float lightSq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 1000)), ref);
+    const float heavySq = wheelSquealDrive(squealing(wheel(SurfaceId::Concrete, 8, 8, 1, 6000)), ref);
     CHECK(lightSq < heavySq, "squeal x load: %.2f vs %.2f", lightSq, heavySq);
 
     // Squeal surface gate: rubber on hard ground only; a full slide on soft ground never squeals.
@@ -161,7 +168,7 @@ void tireLayers() {
     const SurfaceId surfaces[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Rock,
                                   SurfaceId::LowGrip,  SurfaceId::Mud,        SurfaceId::Grass};
     for (SurfaceId s : surfaces) {
-        const float d = wheelSquealDrive(squealing(wheel(s, 8, 8, 1.0f), 1.0f), ref);
+        const float d = wheelSquealDrive(squealing(wheel(s, 8, 8, 1.0f)), ref);
         std::printf(" %d:%.2f", int(s), d);
         const bool hard = s == SurfaceId::Concrete || s == SurfaceId::Rock || s == SurfaceId::LowGrip;
         CHECK(hard ? d > 0.3f : d == 0.0f, "surface %d squeal drive %.2f", int(s), d);
@@ -169,7 +176,7 @@ void tireLayers() {
     std::printf("\n");
     WheelAudio dirty = wheel(SurfaceId::Concrete, 8, 8, 1.0f);
     dirty.soil = 1.0f;
-    CHECK(wheelSquealDrive(squealing(dirty, 1.0f), ref) == 0.0f, "a tread full of soil squeals");
+    CHECK(wheelSquealDrive(squealing(dirty), ref) == 0.0f, "a tread full of soil squeals");
 
     // rubberSlide dead zones (shared with the rubber marks), from measured concrete maneuvers.
     auto patch = [](float speed, float rolling, float lateral) {
@@ -192,6 +199,37 @@ void tireLayers() {
     CHECK(traction == 0.0f && fullLock < 0.05f && launch < 0.25f, "normal driving slides: %.2f %.2f %.2f", traction,
           fullLock, launch);
     CHECK(lowRange > 0.3f && lockup > 0.99f && drift > 0.5f, "real slides: %.2f %.2f %.2f", lowRange, lockup, drift);
+
+    // Squeal slip (stricter than the marks), from SUV maneuvers measured with `trailforge_probe squeal` on concrete:
+    // patch ground speed, combined sliding speed, slip ratio.
+    const float sLaunch = squealSlip(wheel(SurfaceId::Concrete, 4.0f, 5.0f, 0.50f), ref);     // 2H full throttle
+    const float sLaunchSpike = squealSlip(wheel(SurfaceId::Concrete, 1.2f, 3.1f, 0.74f), ref); // first 0.2 s of it
+    const float sTurn = squealSlip(sideways(SurfaceId::Concrete, 8.4f, 4.1f, 0.01f, 0.45f), ref); // 30 km/h full lock
+    const float sAbs = squealSlip(wheel(SurfaceId::Concrete, 10.0f, 3.75f, 0.30f), ref);      // ABS stop
+    const float sStopEnd = squealSlip(wheel(SurfaceId::Concrete, 1.5f, 1.5f, 1.0f), ref);     // locked, nearly stopped
+    const float sLock = squealSlip(wheel(SurfaceId::Concrete, 12.6f, 12.6f, 1.0f), ref);      // locked at 45 km/h
+    const float sDrift = squealSlip(sideways(SurfaceId::Concrete, 11.0f, 11.0f, 0.7f, 0.7f), ref); // handbrake turn
+    const float sPlow = squealSlip(sideways(SurfaceId::Concrete, 12.0f, 6.7f, 0.09f, 0.53f), ref);  // full-lock plow
+    const float sUnloaded = squealSlip(wheel(SurfaceId::Concrete, 12.6f, 12.6f, 1.0f, 500.0f), ref);
+    std::printf("    squealSlip: launch %.3f spike %.3f full-lock turn %.3f ABS %.3f stop end %.3f | lock-up %.2f "
+                "drift %.2f plow %.2f unloaded %.2f | ratio 0.6/0.7/0.8/0.9 at 8 m/s:",
+                sLaunch, sLaunchSpike, sTurn, sAbs, sStopEnd, sLock, sDrift, sPlow, sUnloaded);
+    float prev = 0.0f;
+    bool rising = true;
+    for (float r : {0.6f, 0.7f, 0.8f, 0.9f}) {
+        const float s = squealSlip(wheel(SurfaceId::Concrete, 8.0f, 8.0f, r), ref);
+        std::printf(" %.2f", s);
+        rising = rising && s > prev;
+        prev = s;
+    }
+    std::printf("\n");
+    // Below 0.05: far under the gate of the per-tick squeal envelope (AudioFeedSettings::squealOn).
+    CHECK(sLaunch < 0.05f && sTurn < 0.05f && sAbs < 0.05f && sStopEnd < 0.05f && sLaunchSpike < 0.05f,
+          "everyday slip squeals: %.3f %.3f %.3f %.3f %.3f", sLaunch, sTurn, sAbs, sStopEnd, sLaunchSpike);
+    CHECK(sLock > 0.95f && sDrift > 0.9f, "slides: lock-up %.2f drift %.2f", sLock, sDrift);
+    CHECK(sPlow > 0.1f && sPlow < 0.7f, "plow %.2f", sPlow);
+    CHECK(sUnloaded == 0.0f, "unloaded wheel %.2f", sUnloaded);
+    CHECK(rising && prev < sLock, "squeal not proportional to slip ratio");
 
     // Tread soil: picked up within ~1 m of mud, shed over ~10 m of clean ground.
     TreadSoil soil;
@@ -275,12 +313,24 @@ SoundBank syntheticBank() {
     return b;
 }
 
+// The shipped SUV (assets/vehicles/trailforge_suv): 2H part-time transfer case, ABS off by default.
+VehicleConfig suvConfig() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    const bool ok = loadVehicleDefinition(std::string(TRAILFORGE_SOURCE_DIR) + "/assets/vehicles/trailforge_suv/vehicle.json",
+                                          def, errors);
+    CHECK(ok, "SUV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    return def.config;
+}
+
 struct Driver {
-    explicit Driver(TrackLayout layout = TrackLayout::SurfaceLanes, double fixedStep = 1.0 / 120.0)
+    explicit Driver(TrackLayout layout = TrackLayout::SurfaceLanes, double fixedStep = 1.0 / 120.0,
+                    const VehicleConfig* vehicle = nullptr)
         : sim([&] {
               SimulationSettings s;
               s.layout = layout;
               s.fixedStep = fixedStep;
+              if (vehicle) s.vehicle = *vehicle;
               return s;
           }()),
           framesPerTick(int(std::lround(48000.0 * fixedStep))) {}
@@ -485,6 +535,67 @@ void skidGating() {
           "step dependence 120/240 Hz: brake %.2f / %.2f, power slide %.2f / %.2f", rs[1].brake, rs[2].brake,
           rs[1].powerSlide, rs[2].powerSlide);
 
+    // The shipped SUV (2H, ABS off) on the flat pad: a full-throttle launch (the keyboard start: ~5 m/s rear wheelspin
+    // at slip ratio ~0.5), light braking and a 0.25 s brake tap (a brief partial rear lock) stay silent; a 0.5 s tap at
+    // full pedal locks the rears for ~0.3 s and gives a short squeal that ends within 0.2 s of the slide; lock-up and
+    // handbrake slides squeal.
+    {
+        const VehicleConfig suv = suvConfig();
+        Driver d(TrackLayout::Flat, 1.0 / 120.0, &suv);
+        struct Run {
+            float peak = 0.0f;
+            double lastSlide = -1.0, lastSkid = -1.0;
+            double tail() const { return lastSkid < 0.0 ? 0.0 : lastSkid - lastSlide; }
+        };
+        auto drive = [&](double seconds, double hold, const DriverIntent& in) {
+            Run r;
+            for (int i = 0; i < d.ticks(seconds); ++i) {
+                const double t = i * d.sim.fixedStep();
+                d.tick(t < hold ? in : DriverIntent{});
+                const float skid = d.mixer.stats().skid;
+                r.peak = std::max(r.peak, skid);
+                if (skid > 0.01f) r.lastSkid = t;
+                for (const WheelContactSample& c : d.sim.vehicle().contacts())
+                    if (c.contact && c.slipSpeed() > 2.0f) r.lastSlide = t;
+            }
+            return r;
+        };
+        auto spawn = [&](float kmh) {
+            d.sim.requestReset();
+            d.run(1.0);
+            if (kmh > 0.0f) d.cruise(8.0, kmh);
+        };
+        spawn(0);
+        const Run launch = drive(5.0, 5.0, {.throttle = 1.0f});
+        spawn(0);
+        const Run launchHalf = drive(4.0, 4.0, {.throttle = 0.5f});
+        spawn(50);
+        const Run light = drive(5.0, 5.0, {.brake = 0.3f});
+        spawn(50);
+        const Run tapShort = drive(2.5, 0.25, {.brake = 1.0f});
+        spawn(50);
+        const Run tap = drive(2.5, 0.5, {.brake = 1.0f});
+        spawn(50);
+        const Run full = drive(5.0, 5.0, {.brake = 1.0f});
+        spawn(40);
+        const Run handbrake = drive(3.0, 3.0, {.steer = 0.6f, .handBrake = 1.0f});
+        std::printf("    SUV pad skid peak: launch full %.3f (slid until %.2f s), half %.3f, light brake %.3f, 0.25 s brake "
+                    "tap %.3f | 0.5 s brake tap %.2f (slid until %.2f s, tail %.2f s), full brake %.2f (tail %.2f s), "
+                    "handbrake turn %.2f (tail %.2f s)\n",
+                    launch.peak, launch.lastSlide, launchHalf.peak, light.peak, tapShort.peak, tap.peak, tap.lastSlide,
+                    tap.tail(), full.peak, full.tail(), handbrake.peak, handbrake.tail());
+        CHECK(launch.lastSlide > 0.5 && launch.peak < 0.05f && launchHalf.peak < 0.05f && light.peak < 0.05f &&
+                  tapShort.peak < 0.05f,
+              "SUV everyday squeal: launch %.3f (slide until %.2f s), half %.3f, light brake %.3f, short tap %.3f",
+              launch.peak, launch.lastSlide, launchHalf.peak, light.peak, tapShort.peak);
+        CHECK(tap.peak > 0.1f && tap.lastSlide < 0.9 && tap.tail() < 0.25, "SUV brake tap: peak %.2f, slide until %.2f s, "
+              "tail %.2f s", tap.peak, tap.lastSlide, tap.tail());
+        CHECK(full.peak > 0.3f && handbrake.peak > 0.3f, "SUV slides: brake %.2f handbrake %.2f", full.peak,
+              handbrake.peak);
+        CHECK(full.tail() < 0.2 && handbrake.tail() < 0.2, "SUV squeal tails: %.2f / %.2f s", full.tail(),
+              handbrake.tail());
+    }
+
     // Mud lane: wheelspin, lock-up and a handbrake slide drive the mud layer and never the squeal.
     Driver d;
     d.sim.requestTeleport(2);
@@ -503,6 +614,64 @@ void skidGating() {
     skid = std::max(skid, d.peakSkid(2.0, {.steer = 0.6f, .handBrake = 1.0f}, &mud));
     std::printf("    mud lane: peak skid %.3f, peak mud %.2f\n", skid, mud);
     CHECK(skid == 0.0f && mud > 0.3f, "mud: skid %.3f mud %.2f", skid, mud);
+}
+
+// Mixer squeal voices with the real lengths of the squeal sounds (manifest durations, every other sound empty): a
+// wheel squeals for 0.3 s and stops. The onset short squeal (1.7 s file) must fade out with the slide instead of
+// playing to its end; the output follows the squeal level.
+void squealRelease() {
+    SoundBank bank;
+    std::string error;
+    loadAudioManifest(kManifest, bank.manifest, &error);
+    for (SoundId id : {SoundId::TireSkidLoop, SoundId::TireSkidShort}) {
+        SoundData& d = bank.sounds[std::size_t(id)];
+        d.loop = bank.manifest[id].loop;
+        d.frames = std::size_t(bank.manifest[id].durationS * 48000.0);
+        d.pcm.resize(d.frames);
+        for (std::size_t k = 0; k < d.frames; ++k)
+            d.pcm[k] = float(0.25 * std::sin(6.283185307 * (id == SoundId::TireSkidLoop ? 1700.0 : 1900.0) *
+                                             double(k) / 48000.0));
+    }
+    CHECK(bank[SoundId::TireSkidShort].frames > 48000, "short squeal length %zu frames",
+          bank[SoundId::TireSkidShort].frames);
+
+    // Returns the time (s) from the end of the squeal until the output stays below -60 dBFS, and the peak (dBFS).
+    auto run = [&](float squeal, double seconds, float* peakDb, int* chirps) {
+        AudioMixer mixer(bank);
+        AudioFrame f;
+        f.vehicleValid = true;
+        f.settings.whine = 0.0f;
+        f.listenerPos = {0.0f, 1.5f, -6.0f};
+        std::vector<float> buf(2 * 400);
+        double lastLoud = -1.0;
+        *peakDb = -120.0f;
+        for (int i = 0; i < 3 * 120; ++i) {
+            const double t = i / 120.0;
+            WheelAudio& w = f.wheels[2];
+            w.contact = true;
+            w.position = {0.8f, 0.0f, -1.4f};
+            w.squeal = t >= 0.5 && t < 0.5 + seconds ? squeal : 0.0f;
+            mixer.setFrame(f);
+            mixer.render(buf.data(), 400);
+            double p = 0.0;
+            for (float x : buf) p += double(x) * double(x);
+            const float db = gainToDb(float(std::sqrt(p / double(buf.size()))));
+            *peakDb = std::max(*peakDb, db);
+            if (db > -60.0f) lastLoud = t;
+        }
+        *chirps = mixer.stats().skidChirps;
+        return lastLoud < 0.0 ? 0.0 : lastLoud - (0.5 + seconds);
+    };
+    float fullDb = 0.0f, lowDb = 0.0f;
+    int fullChirps = 0, lowChirps = 0;
+    const double fullTail = run(1.0f, 0.3, &fullDb, &fullChirps);
+    const double lowTail = run(0.25f, 0.3, &lowDb, &lowChirps);
+    std::printf("    0.3 s squeal at 1.0: peak %.1f dBFS, %d short squeal(s), output below -60 dBFS %.3f s after the "
+                "slide | at 0.25: peak %.1f dBFS, %d short squeal(s), tail %.3f s\n",
+                fullDb, fullChirps, fullTail, lowDb, lowChirps, lowTail);
+    CHECK(fullChirps == 1 && lowChirps == 0, "short squeals %d / %d", fullChirps, lowChirps);
+    CHECK(fullTail < 0.2 && lowTail < 0.2, "squeal tail %.3f / %.3f s", fullTail, lowTail);
+    CHECK(fullDb - lowDb > 9.0f, "squeal level not proportional: %.1f vs %.1f dBFS", fullDb, lowDb);
 }
 
 // Music bus with a synthetic streamed track: fades, volume, loop, restart, and no change while the game is paused.
@@ -587,6 +756,7 @@ int main(int argc, char** argv) {
         {"audio_manifest", manifest},
         {"audio_feed_and_mixer", feedAndMixer},
         {"audio_skid_gating", skidGating},
+        {"audio_squeal_release", squealRelease},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

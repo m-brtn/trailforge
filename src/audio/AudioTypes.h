@@ -42,8 +42,9 @@ struct WheelAudio {
     float load = 0.0f;          // N
     float slipSpeed = 0.0f;     // m/s, patch sliding speed over the ground
     float slipRatio = 0.0f;     // sliding speed / max(patch speed, rolling speed, 1 m/s)
+    float longRatio = 0.0f;     // |longitudinal sliding speed| / the same reference (wheelspin, lock-up)
+    float latRatio = 0.0f;      // |lateral sliding speed| / the same reference (scrub, drift)
     float rollSpeed = 0.0f;     // m/s, |patch speed over the ground|
-    float slide = 0.0f;         // 0..1, rubberSlide() of the contact (the same gate as the rubber marks)
     float soil = 0.0f;          // 0..1, soil in the tread (TreadSoil): a dirty tread does not squeal
     float squeal = 0.0f;        // 0..~1.2, rubber squeal of this wheel: smoothed, gated per tick in VehicleAudioFeed
     AudioVec3 position;         // world, contact patch

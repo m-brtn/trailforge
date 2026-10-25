@@ -52,7 +52,10 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         const float patchSpeed = c.velocity.Length();
         w.rollSpeed = c.contact ? patchSpeed : 0.0f;
         w.slipSpeed = c.contact ? c.slipSpeed() : 0.0f;
-        w.slipRatio = w.slipSpeed / std::max({patchSpeed, std::abs(c.rollingSpeed), 1.0f});
+        const float slipRef = std::max({patchSpeed, std::abs(c.rollingSpeed), 1.0f});
+        w.slipRatio = w.slipSpeed / slipRef;
+        w.longRatio = c.contact ? std::abs(c.longitudinalSlipSpeed) / slipRef : 0.0f;
+        w.latRatio = c.contact ? std::abs(c.lateralSlipSpeed) / slipRef : 0.0f;
         w.position = toAudio(c.contact ? c.patchCenter : wt.suspensionTop + wt.suspensionDir * wt.suspensionLength);
         const JPH::Vec3 p = c.patchCenter;
         w.inWater = c.contact && p.GetY() < water.level - 0.02f && p.GetX() > water.x0 && p.GetX() < water.x1 &&
@@ -66,7 +69,6 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         }
         m_soil[k].update(c, dt);
         w.soil = m_soil[k].amount;
-        w.slide = rubberSlide(c);
         const float drive = wheelSquealDrive(w, f.referenceLoad);
         const bool hard = c.contact && squealSurface(c.surface) > 0.0f;
         float& env = m_squealEnv[k];

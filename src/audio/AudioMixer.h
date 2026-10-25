@@ -78,6 +78,7 @@ private:
         AudioVec3 position;
         float gain = 1.0f;
         int delay = 0;         // frames before the sound starts
+        std::uint32_t serial = 0; // one-shots: start count, tells a tracked shot from a later reuse of its slot
         float lowpass = 0.0f;  // one-pole low-pass coefficient per sample (0 = off)
         float lpL = 0.0f, lpR = 0.0f;
     };
@@ -91,6 +92,11 @@ private:
         float wobblePhase = 0.0f, wobbleHz = 3.0f;
         double lastChirp = -1e9;    // s
         double sinceChirp = 1e9;    // s, the loop is ducked under a fresh chirp
+        // The onset chirp follows this wheel's squeal and fades out with it instead of playing to its end.
+        Voice* chirp = nullptr;
+        std::uint32_t chirpSerial = 0;
+        float chirpLevel = 0.0f;    // chirp gain at full squeal
+        float chirpGain = 0.0f;     // smoothed
     };
 
     void controlUpdate(float dt);
@@ -130,6 +136,7 @@ private:
     bool m_starterHandover = false;
     double m_time = 0.0;         // rendered time, s
     double m_lastChirp = -1e9;
+    std::uint32_t m_shotSerial = 0;
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;
     float m_whineHz = 0.0f, m_whineGain = 0.0f, m_whineL = 0.0f, m_whineR = 0.0f, m_whineTl = 0.0f, m_whineTr = 0.0f;

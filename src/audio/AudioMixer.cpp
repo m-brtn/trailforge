@@ -135,6 +135,7 @@ AudioMixer::Voice* AudioMixer::startOneShot(SoundId id, float gain, Bus bus, con
     v.positional = position != nullptr;
     if (position) v.position = *position;
     v.gain = gain;
+    v.serial = ++m_shotSerial;
     // Start at the target gain (no fade-in: the files have their own 2 ms fade).
     StereoGain g = v.positional ? place(v.position) : StereoGain{1.0f, 1.0f};
     setLoop(v, v.gain, g);
@@ -270,7 +271,8 @@ void AudioMixer::controlUpdate(float dt) {
     // Rubber squeal: one voice per wheel, driven by that wheel's gated squeal (hard surfaces only, see
     // VehicleAudioFeed). Every slide starts at a random point of the loop with its own pitch; pitch follows the
     // sliding speed and load, brightness the intensity, and a slow wobble keeps a held slide from sounding static.
-    // A fresh slide starts with the short squeal; the loop is ducked under it and takes over as it decays.
+    // A fresh slide starts with the short squeal; the loop is ducked under it and takes over as it decays. The short
+    // squeal follows the wheel's squeal level, so it ends with the slide instead of playing its 1.7 s to the end.
     float skidPower = 0.0f;
     for (int i = 0; i < kAudioWheels; ++i) {
         SkidVoice& sv = m_skid[std::size_t(i)];
@@ -285,18 +287,31 @@ void AudioMixer::controlUpdate(float dt) {
             const bool onset = target > 0.3f && sv.prevTarget <= 0.3f;
             if (onset && m_time - sv.lastChirp > 0.8 && m_time - m_lastChirp > 0.25) {
                 const AudioVec3 p = wa.position;
-                startOneShot(SoundId::TireSkidShort, 0.32f * std::min(1.0f, target) * (0.85f + 0.3f * rand01()),
-                             Bus::Tires, &p, sv.jitter * (0.92f + 0.16f * rand01()));
+                sv.chirpLevel = 0.32f * (0.85f + 0.3f * rand01());
+                sv.chirpGain = sv.chirpLevel * std::min(1.0f, target);
+                sv.chirp = startOneShot(SoundId::TireSkidShort, sv.chirpGain, Bus::Tires, &p,
+                                        sv.jitter * (0.92f + 0.16f * rand01()));
+                sv.chirpSerial = sv.chirp ? sv.chirp->serial : 0;
                 sv.lastChirp = m_time;
                 sv.sinceChirp = 0.0;
                 m_lastChirp = m_time;
                 ++m_stats.skidChirps;
             }
+            if (sv.chirp && (!sv.chirp->active || sv.chirp->serial != sv.chirpSerial)) sv.chirp = nullptr;
+            if (sv.chirp) {
+                const float chirpTarget = sv.chirpLevel * std::min(1.0f, target);
+                sv.chirpGain = approach(sv.chirpGain, chirpTarget, chirpTarget > sv.chirpGain ? 0.03f : 0.04f, dt);
+                sv.chirp->gain = sv.chirpGain;
+                if (target == 0.0f && sv.chirpGain < 1e-4f) {
+                    sv.chirp->active = false;
+                    sv.chirp = nullptr;
+                }
+            }
             sv.prevTarget = target;
             sv.sinceChirp += dt;
             sv.wobblePhase = std::fmod(sv.wobblePhase + 6.2831853f * sv.wobbleHz * dt, 6.2831853f * 100.0f);
         }
-        sv.gain = approach(sv.gain, target, target > sv.gain ? 0.06f : 0.10f, dt);
+        sv.gain = approach(sv.gain, target, target > sv.gain ? 0.03f : 0.04f, dt);
         if (sv.gain < 1e-4f && target == 0.0f) sv.gain = 0.0f;
         const float slide = smoothstep(1.0f, 12.0f, wa.slipSpeed);
         const float load = std::clamp(wa.load / std::max(f.referenceLoad, 1.0f), 0.0f, 1.6f);

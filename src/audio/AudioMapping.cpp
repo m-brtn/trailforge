@@ -117,11 +117,22 @@ float wheelSlipIntensity(const WheelAudio& w, float referenceLoad) {
     return std::clamp(w.slipSpeed / 6.0f, 0.0f, 1.0f) * gate * loadFactor(w, referenceLoad);
 }
 
+float squealSlip(const WheelAudio& w, float referenceLoad) {
+    if (!w.contact) return 0.0f;
+    // Elliptic combination: 1 on the onset ellipse (longitudinal 0.55, lateral 0.40), full squeal at 1.7.
+    const float lo = w.longRatio / 0.55f, la = w.latRatio / 0.40f;
+    const float ratio = smoothstep(1.0f, 1.7f, std::sqrt(lo * lo + la * la));
+    const float sliding = smoothstep(2.5f, 9.0f, w.slipSpeed);
+    const float ground = smoothstep(1.0f, 2.5f, w.rollSpeed);
+    const float loaded = smoothstep(0.15f, 0.4f, w.load / std::max(referenceLoad, 1.0f));
+    return ratio * sliding * ground * loaded;
+}
+
 float wheelSquealDrive(const WheelAudio& w, float referenceLoad) {
     if (!w.contact) return 0.0f;
     const float surface = squealSurface(SurfaceId(w.surface));
     if (surface <= 0.0f) return 0.0f;
-    return surface * std::clamp(w.slide, 0.0f, 1.0f) * loadFactor(w, referenceLoad) *
+    return surface * squealSlip(w, referenceLoad) * loadFactor(w, referenceLoad) *
            (1.0f - std::clamp(w.soil, 0.0f, 1.0f));
 }
 

@@ -58,8 +58,16 @@ float squealSurface(SurfaceId surface);
 // speed gated by the slip ratio. Both scale with the load relative to the static wheel load.
 float wheelRollIntensity(const WheelAudio& w, float referenceLoad);
 float wheelSlipIntensity(const WheelAudio& w, float referenceLoad);
-// Instantaneous squeal drive of one wheel, 0..~1.4: squealSurface x slide (rubberSlide, the dead zones shared with
-// the rubber marks) x load x clean tread. Smoothing and hysteresis are applied per tick in VehicleAudioFeed.
+// How much one wheel slides for the rubber squeal, 0..1, from the combined (longitudinal + lateral) patch slip.
+// Proportional between onset and full: the slip ratios combined on an ellipse (onset at longitudinal 0.55 or lateral
+// 0.40, full at 1.7 x that) times the combined sliding speed 2.5..9 m/s, gated by the patch ground speed
+// (1..2.5 m/s) and the wheel load (0.15..0.4 of the static load). Stricter than the rubber-mark gate (rubberSlide):
+// the SUV's full-throttle 2H launch on concrete spins its rear wheels at ~5 m/s and ratio ~0.5 for ~1.5 s, a 30 km/h
+// full-lock turn scrubs at 4 m/s / 0.45, ABS stops stay near ratio 0.3; all stay silent. Lock-up, handbrake and power
+// slides (ratio ~1, 8-15 m/s) reach 0.9-1; a full-lock plow at 6.6 m/s sideways / 0.5 squeals partly.
+float squealSlip(const WheelAudio& w, float referenceLoad);
+// Instantaneous squeal drive of one wheel, 0..~1.4: squealSurface x squealSlip x load x clean tread. Smoothing and
+// hysteresis are applied per tick in VehicleAudioFeed.
 float wheelSquealDrive(const WheelAudio& w, float referenceLoad);
 
 struct TireLayerMix {
