@@ -10,8 +10,10 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 namespace tf {
 

@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 
 namespace tf {
 namespace {
