@@ -166,7 +166,9 @@ Command-line options:
   prints the per-wheel slip); `skid` also lists the wheel-seconds of squeal per surface under the wheel;
   `keyboard` — instant W / S (1.0 at once) against the keyboard pedal ramp (`src/input/KeyboardPedals.h`): held W
   launch, 0.15 / 0.25 / 0.4 s S taps and a held S at 50 km/h on the concrete lane and the flat pad (slip, sliding
-  time, marks, 0-30 km/h, stopping time and distance);
+  time, marks, 0-30 km/h, stopping time and distance); `launchmarks` — rubber laid by gentle / keyboard / hard /
+  full-pedal launches in 2H and 4H and by 1 / 2 / 5 s stationary burnouts on the concrete lane (ribbon length, peak,
+  mean, dark length and width; burnout stamps composited per spot);
 - `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
   flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
   headless only); `climb [lane]` — the force balance of one ramp climb;
@@ -216,6 +218,7 @@ One command per line, `#` starts a comment:
 | `click garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
 | `click modal:confirm` / `click modal:cancel` | click a button of the open modal dialog through the SDL queue |
 | `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
+| `pedal throttle\|brake V` | hold an analog pedal at V (0..1) like a gamepad trigger (not ramped; max with the keys) until set to 0 |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
@@ -232,6 +235,8 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
 cost of the marks with the ring empty and filled to 16k / 64k segments),
+`tools/scenarios/launch_marks.txt` (2H full-pedal launch, 2 s and 5 s burnouts on concrete with analog `pedal`
+input, `/tmp/trailforge_launchmarks_*.png`),
 `tools/scenarios/garage.txt` (garage from the pause and the start menu: keyboard, mouse slider click, rebuild in
 place, RWD layout, save / typed rename / save as new / select / delete / reset, `/tmp/trailforge_garage_*.png`),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
@@ -918,11 +923,23 @@ time, and two intensities per end:
 Rubber marks use a per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio 0.2..0.55, sideways
 sliding 2.5..7 m/s at 0.4..0.8. Tire squeal has its own, stricter gate (`squealSlip`, see "Audio"), so a launch with
 some wheelspin leaves marks but stays silent. Only concrete, rock and the low-grip patch squeal; loose surfaces
-drive their own layers. Soil in the tread suppresses both. Rubber marks additionally follow a patch "heat" that
-builds up over ~0.35 s of sliding and drops within ~0.1 s when the slide ends, and scale with √load, so a locked
-stop starts faint, stays even and does not darken toward the end (the front wheels lock later than the rears and
-are more loaded). A locked wheel keeps marking until the patch slides slower than ~1 m/s. In-place burnout stamps
-need a driven wheel spinning faster than the ground (+2 m/s), never a braking wheel.
+drive their own layers. Soil in the tread suppresses both. Lock-up, braking slip and sideways sliding follow a patch
+"heat" that builds up over ~0.35 s of sliding and drops within ~0.1 s when the slide ends, and scale with √load, so a
+locked stop starts faint, stays even and does not darken toward the end (the front wheels lock later than the rears
+and are more loaded). A locked wheel keeps marking until the patch slides slower than ~1 m/s.
+
+Driven wheelspin (`wheelspinSlide`, the same gate with the ratio from `WheelContactSample::longSlipRatio`, which the
+squeal gate also uses) lays rubber in proportion to a per-wheel tread heat H instead: dH/dt = gate × spinning speed /
+15 m × (1 − H) − H / 4 s, so H grows with the sliding distance and cools within seconds (steady state ~0.5 at
+3.8 m/s, ~0.73 at 10 m/s). Darkness = gate × min(1, H / 0.5) × √load, width = (0.35 + 0.65 × smoothstep(0.1, 0.45,
+H)) × the tire width: a brief hard launch leaves a faint narrow streak, only seconds of fast spin (a burnout) a dark
+full-width mark. In-place burnout stamps need a driven wheel spinning faster than the ground (+2 m/s), never a
+braking wheel, and each stamp adds only the increase of the laid rubber, so the overlapping stamps composite to the
+current darkness instead of darkening with their number. Measured (`trailforge_probe launchmarks`, SUV, concrete,
+before → after): gentle 0.3, keyboard W, 0.7 pedal and 4H full pedal no rubber in both (0.7: 0.6 m at 0.03 before);
+2H full pedal (2.2 s of spin, peak 4.8 m/s) 18.3 m of ribbon at max 0.76 / mean 0.43, 8.4 m darker than 0.5, 0.32 m
+wide → 11.4 m at max 0.16 / mean 0.10, none darker, 0.11 m wide; stationary burnout (brake 0.6 + full throttle, rears
+at 7.7–10.4 m/s) 2 s: spot cover 1.00 at 0.32 m → 0.39–0.46 at 0.16 m; 5 s: 1.00 at 0.32 m → 0.95 at 0.31 m.
 
 **Tread soil** (cosmetic, `TreadSoil`): each wheel carries an amount, colour, wetness, adhesion and grass-blade
 fraction of soil. Loose ground loads the tread toward its own level and colour by adhesion (mud: 1.0, dark, wet,

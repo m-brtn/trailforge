@@ -17,6 +17,7 @@
 #include <imgui_impl_sdlgpu3.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <cmath>
 #include <cstdio>
@@ -1160,6 +1161,15 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         if (arg == "2h") m_sim.requestTransfer(TransferMode::TwoHigh);
         else if (arg == "4h") m_sim.requestTransfer(TransferMode::FourHigh);
         else if (arg == "4l") m_sim.requestTransfer(TransferMode::FourLow);
+        else return Exec::Failed;
+        return Exec::Done;
+    }
+    if (c.op == "pedal") {
+        // pedal throttle|brake V: hold an analog pedal at V (0..1) like a gamepad trigger, until set to 0.
+        if (c.args.size() != 2) return Exec::Failed;
+        const float v = std::clamp(std::strtof(c.args[1].c_str(), nullptr), 0.0f, 1.0f);
+        if (arg == "throttle") m_input.setScriptPedals(v, m_input.scriptBrake());
+        else if (arg == "brake") m_input.setScriptPedals(m_input.scriptThrottle(), v);
         else return Exec::Failed;
         return Exec::Done;
     }

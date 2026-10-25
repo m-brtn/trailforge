@@ -141,7 +141,7 @@ if(TRAILFORGE_BUILD_TESTS)
             tire_marks_surfaces
             auto_reverse
             surface_launch_grip
-            skid_mark_profile suv_marks_keyboard tire_marks_boundary wheel_spray
+            skid_mark_profile suv_marks_keyboard launch_marks_proportional tire_marks_boundary wheel_spray
             abs_prevents_lock
             diff_locks_climb
             traction_control_mud driving_aids_logic friction_ellipse

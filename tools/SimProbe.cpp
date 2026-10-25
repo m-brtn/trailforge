@@ -663,6 +663,97 @@ void keyboardPedals() {
     }
 }
 
+// Rubber marks of launches on the concrete lane, read from the mark ring: gentle (0.3), keyboard W (ramp), hard
+// (0.7) and full-pedal launches in 2H and 4H, and stationary burnouts (brake 0.6 + full throttle: the rear wheels
+// spin at ~10 m/s while the car stays put; with brake 1.0 the open differential alternates a slow spin between the
+// rear wheels). Reports the time a wheel spins (> 1 m/s) and the peak spinning speed; over the ribbon segments the
+// marked length, peak and length-weighted mean intensity (the shader's rubber cover is ~1.1 x this), the length
+// darker than 0.5 and the mean width; burnout stamps composited per spot (cover = 1 - prod(1 - 1.1 x slip)).
+void launchMarks() {
+    struct Case {
+        const char* name;
+        TransferMode mode;
+        float throttle; // < 0: keyboard W through KeyboardPedals
+        float brake;
+        double seconds;
+    };
+    const Case cases[] = {
+        {"2H gentle 0.3", TransferMode::TwoHigh, 0.3f, 0.0f, 5.0},
+        {"2H keyboard W", TransferMode::TwoHigh, -1.0f, 0.0f, 5.0},
+        {"2H hard 0.7", TransferMode::TwoHigh, 0.7f, 0.0f, 5.0},
+        {"2H full pedal", TransferMode::TwoHigh, 1.0f, 0.0f, 5.0},
+        {"4H gentle 0.3", TransferMode::FourHigh, 0.3f, 0.0f, 5.0},
+        {"4H keyboard W", TransferMode::FourHigh, -1.0f, 0.0f, 5.0},
+        {"4H full pedal", TransferMode::FourHigh, 1.0f, 0.0f, 5.0},
+        {"2H burnout 1 s", TransferMode::TwoHigh, 1.0f, 0.6f, 1.0},
+        {"2H burnout 2 s", TransferMode::TwoHigh, 1.0f, 0.6f, 2.0},
+        {"2H burnout 5 s", TransferMode::TwoHigh, 1.0f, 0.6f, 5.0},
+    };
+    for (const Case& k : cases) {
+        SkidRig r(0);
+        r.spawn();
+        r.sim.requestTransfer(k.mode);
+        r.run(0.2, {}, false);
+        r.sim.tireMarks().clear();
+        KeyboardPedals pedals;
+        double spin = 0.0;
+        float peak = 0.0f;
+        const JPH::RVec3 start = r.sim.vehicle().bodyTransform().GetTranslation();
+        for (int i = 0; i < int(k.seconds * 120.0); ++i) {
+            pedals.update(true, false, float(r.sim.fixedStep()));
+            r.tick({.throttle = k.throttle < 0.0f ? pedals.throttle() : k.throttle, .brake = k.brake}, true);
+            bool spinning = false;
+            for (const WheelContactSample& c : r.sim.vehicle().contacts()) {
+                if (!c.contact) continue;
+                peak = std::max(peak, c.longitudinalSlipSpeed);
+                spinning = spinning || c.longitudinalSlipSpeed > 1.0f;
+            }
+            if (spinning) spin += r.sim.fixedStep();
+        }
+        const float travel = float((r.sim.vehicle().bodyTransform().GetTranslation() - start).Length());
+        const TireMarks& m = r.sim.tireMarks();
+        double len = 0.0, dark = 0.0, sumSlip = 0.0, sumWidth = 0.0;
+        float maxSlip = 0.0f;
+        struct Spot {
+            float x, z, keep, width;
+            int stamps;
+        };
+        std::vector<Spot> spots;
+        for (std::size_t i = 0; i < m.size(); ++i) {
+            const TireMarkSegment& s = m.oldest(i);
+            if (markSurface(s) != SurfaceId::Concrete) continue;
+            const float slip = 0.5f * (s.slip0 + s.slip1);
+            const float w = 2.0f * std::sqrt(s.side1[0] * s.side1[0] + s.side1[1] * s.side1[1] + s.side1[2] * s.side1[2]);
+            if (s.u0 == 0.0f && s.u1 == 0.25f) { // burnout stamp (patch length)
+                const float x = 0.5f * (s.p0[0] + s.p1[0]), z = 0.5f * (s.p0[2] + s.p1[2]);
+                Spot* spot = nullptr;
+                for (Spot& q : spots)
+                    if (std::hypot(q.x - x, q.z - z) < 0.3f) spot = &q;
+                if (!spot) spot = &spots.emplace_back(Spot{x, z, 1.0f, 0.0f, 0});
+                spot->keep *= 1.0f - std::min(1.0f, 1.1f * slip);
+                spot->width = std::max(spot->width, w);
+                ++spot->stamps;
+                continue;
+            }
+            if (slip < 0.02f) continue;
+            const float dx = s.p1[0] - s.p0[0], dz = s.p1[2] - s.p0[2];
+            const double l = std::sqrt(dx * dx + dz * dz);
+            len += l;
+            sumSlip += slip * l;
+            sumWidth += w * l;
+            if (slip > 0.5f) dark += l;
+            maxSlip = std::max(maxSlip, slip);
+        }
+        std::printf("%-15s spin %4.2f s, peak %5.2f m/s, moved %5.1f m | ribbon %5.1f m, max %4.2f, mean %4.2f, "
+                    "dark(>0.5) %5.1f m, width %4.2f m",
+                    k.name, spin, peak, travel, len, maxSlip, len > 0.0 ? sumSlip / len : 0.0, dark,
+                    len > 0.0 ? sumWidth / len : 0.0);
+        for (const Spot& q : spots)
+            if (q.stamps >= 2) std::printf(" | spot: %d stamps, cover %4.2f, width %4.2f m", q.stamps, 1.0f - q.keep, q.width);
+        std::printf("\n");
+    }
+}
+
 // Drives around the mud & puddles showcase (real proving ground surfaces) with wheelspin and turns, and reports
 // every stretch where the skid layer is audible with the surfaces under the wheels.
 void showcase() {
@@ -1340,6 +1431,7 @@ int main(int argc, char** argv) {
     else if (mode == "skid") skid();
     else if (mode == "squeal") squealCases();
     else if (mode == "keyboard") keyboardPedals();
+    else if (mode == "launchmarks") launchMarks();
     else if (mode == "showcase") showcase();
     else if (mode == "surfaces") surfaces();
     else if (mode == "abs") absProbe(argc > 2 ? std::atoi(argv[2]) : -1);

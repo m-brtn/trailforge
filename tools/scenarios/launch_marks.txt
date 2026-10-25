@@ -1,0 +1,76 @@
+# Launch tire marks on concrete (screenshots to /tmp/trailforge_launchmarks_*.png):
+#   ./build/release/trailforge --script tools/scenarios/launch_marks.txt --no-audio
+# A 2H full-pedal launch on the skid strip (the rear wheels spin ~2.2 s at up to 4.8 m/s), a 2 s burnout where it
+# stopped and a 5 s stationary burnout on the start pad (brake 0.6 + full throttle: the rears spin at ~10 m/s). Pedals are analog (`pedal`), like
+# a gamepad trigger; the stops use 0.3 brake, below rear lock-up, so only the wheelspin marks the ground.
+set ui 0
+set auto_reverse 0
+set hud 0
+time 16.5
+
+# ---------------------------------------------------------------- skid strip: 2H full-pedal launch
+teleport 9
+wait 1.5
+pedal brake 1                    # the strip spawn rolls on: start from rest
+until speed_kmh < 0.1 5
+wait 0.5
+set marks_clear 1
+pedal brake 0
+log launch_begin
+pedal throttle 1
+wait 3
+pedal throttle 0
+pedal brake 0.3
+until speed_kmh < 0.5 12
+pedal brake 0
+log launch_end
+expect marks_s0 >= 0
+camera 42.8 1.7 -49.0 42.0 0.0 -36.0
+wait 0.6
+capture /tmp/trailforge_launchmarks_launch.png
+wait 0.3
+
+# ---------------------------------------------------------------- skid strip, where the launch stopped: 2 s burnout
+camera follow
+log burnout2_begin
+pedal brake 0.6
+pedal throttle 1
+wait 2
+pedal throttle 0
+wait 0.5
+pedal brake 0
+log burnout2_end
+pedal throttle 0.3
+wait 2
+pedal throttle 0
+pedal brake 0.3
+until speed_kmh < 0.5 8
+pedal brake 0
+camera 43.0 1.6 -9.5 42.1 0.0 -2.5
+wait 0.6
+capture /tmp/trailforge_launchmarks_burnout2.png
+wait 0.3
+
+# ---------------------------------------------------------------- start pad: stationary burnout, then roll away
+camera follow
+teleport 0
+wait 1.5
+log burnout_begin
+pedal brake 0.6
+pedal throttle 1
+wait 5
+pedal throttle 0
+wait 0.5
+pedal brake 0
+log burnout_end
+pedal throttle 0.3
+wait 2
+pedal throttle 0
+pedal brake 0.3
+until speed_kmh < 0.5 8
+pedal brake 0
+camera 1.8 1.6 -45.5 0.0 0.0 -40.5
+wait 0.6
+capture /tmp/trailforge_launchmarks_burnout.png
+wait 0.3
+quit

@@ -61,6 +61,13 @@ public:
     bool fastModifier() const { return m_fast; }
 
     bool gamepadConnected() const { return m_gamepad != nullptr; }
+    // Scenario `pedal throttle|brake V`: an analog pedal held like a gamepad trigger (max with keyboard / gamepad).
+    void setScriptPedals(float throttle, float brake) {
+        m_scriptThrottle = throttle;
+        m_scriptBrake = brake;
+    }
+    float scriptThrottle() const { return m_scriptThrottle; }
+    float scriptBrake() const { return m_scriptBrake; }
     const char* gamepadName() const;
     PadType gamepadType() const; // PadType::None without a pad
 
@@ -77,6 +84,7 @@ private:
     std::array<bool, SDL_SCANCODE_COUNT> m_held{};
     KeyboardPedals m_keyPedals; // forward / backward drive keys: progressive pedals (KeyboardPedals.h)
     DriveKeys m_driveKeys = DriveKeys::Wasd;
+    float m_scriptThrottle = 0.0f, m_scriptBrake = 0.0f;
     DriverIntent m_intent;
     glm::vec2 m_mouseDelta{0.0f};
     float m_wheel = 0.0f;

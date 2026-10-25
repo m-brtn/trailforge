@@ -303,6 +303,8 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
         }
         if (SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) in.handBrake = 1.0f;
     }
+    in.throttle = std::max(in.throttle, m_scriptThrottle);
+    in.brake = std::max(in.brake, m_scriptBrake);
     m_intent = in;
 }
 

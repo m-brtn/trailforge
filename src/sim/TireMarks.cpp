@@ -14,6 +14,11 @@ constexpr float kPatchLength = 0.25f;   // m: contact patch length, widens the m
 constexpr float kBurnoutInterval = 0.1; // s: a spinning wheel that does not travel stamps a patch this often
 constexpr float kHeatRise = 0.35f;      // s: a sliding patch needs this long to lay full-strength rubber
 constexpr float kHeatFall = 0.08f;      // s: time constant of the fade once the patch stops sliding
+// Wheelspin tread heat: dH/dt = spin x sliding speed / kSpinHeatDistance x (1 - H) - H / kSpinCool. At a steady
+// sliding speed v it settles at v / (v + kSpinHeatDistance / kSpinCool): ~0.5 at 3.8 m/s, ~0.73 at 10 m/s.
+constexpr float kSpinHeatDistance = 15.0f; // m of tread sliding to heat a cold tread ~63 % (without cooling)
+constexpr float kSpinCool = 4.0f;          // s: cooling time constant
+constexpr float kStampStep = 0.08f;        // burnout: a new stamp once the spot's cover would rise by this
 
 float saturate(float x) { return std::clamp(x, 0.0f, 1.0f); }
 
@@ -60,14 +65,27 @@ void markSoil(const TireMarkSegment& s, float c[3], float& wet) {
     wet = std::sqrt(d((code >> 15) & 7, 7.0f) * 2.0f);
 }
 
+namespace {
+float spinGate(const WheelContactSample& c) {
+    return smoothstep(1.0f, 5.0f, std::abs(c.longitudinalSlipSpeed)) * smoothstep(0.2f, 0.55f, c.longSlipRatio());
+}
+float scrubGate(const WheelContactSample& c) {
+    return smoothstep(2.5f, 7.0f, std::abs(c.lateralSlipSpeed)) * smoothstep(0.4f, 0.8f, c.latSlipRatio());
+}
+} // namespace
+
 float rubberSlide(const WheelContactSample& c) {
     if (!c.contact) return 0.0f;
-    const float ref = std::max({c.velocity.Length(), std::abs(c.rollingSpeed), 1.0f});
-    const float vl = std::abs(c.longitudinalSlipSpeed), vt = std::abs(c.lateralSlipSpeed);
-    const float spin = smoothstep(1.0f, 5.0f, vl) * smoothstep(0.2f, 0.55f, vl / ref);
-    const float scrub = smoothstep(2.5f, 7.0f, vt) * smoothstep(0.4f, 0.8f, vt / ref);
-    return std::max(spin, scrub);
+    return std::max(spinGate(c), scrubGate(c));
 }
+
+float wheelspinSlide(const WheelContactSample& c) {
+    if (!c.contact || c.longitudinalSlipSpeed <= 0.0f) return 0.0f;
+    return spinGate(c);
+}
+
+float spinLaydown(float heat) { return saturate(heat / 0.5f); }
+float spinLaydownWidth(float heat) { return 0.35f + 0.65f * smoothstep(0.1f, 0.45f, heat); }
 
 float markSlide(const WheelContactSample& c) {
     if (!c.contact) return 0.0f;
@@ -118,7 +136,8 @@ void TreadSoil::update(const WheelContactSample& c, float dt, bool inWater) {
     }
 }
 
-MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, const TreadSoil& soil, float slide) {
+MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, const TreadSoil& soil, float slide,
+                            float widthFactor) {
     MarkIntensity m;
     if (!c.contact) return m;
     const SurfaceMarkResponse r = surfaceMarkResponse(c.surface);
@@ -143,7 +162,7 @@ MarkIntensity markIntensity(const WheelContactSample& c, float referenceLoad, co
     const float vLong = std::abs(c.velocity.Dot(c.longitudinal)), vLat = std::abs(c.velocity.Dot(c.lateral));
     const float angle = (vLong + vLat) > 0.3f ? std::atan2(vLat, vLong) : 0.0f;
     const float swept = c.width * std::cos(angle) + kPatchLength * std::sin(angle);
-    m.halfWidth = 0.5f * std::min(swept, 0.7f) * r.widthScale;
+    m.halfWidth = 0.5f * std::min(swept, 0.7f) * r.widthScale * widthFactor;
     return m;
 }
 
@@ -174,6 +193,8 @@ void TireMarks::breakRibbons() {
         t.active = false;
         t.soil = {};
         t.heat = 0.0f;
+        t.spinHeat = 0.0f;
+        t.stampCover = 0.0f;
     }
 }
 
@@ -199,6 +220,7 @@ void TireMarks::start(Trail& t, const WheelContactSample& c, const MarkIntensity
     t.lastEmit = time;
     t.accImprint = t.accSlip = t.accHalfWidth = 0.0f;
     t.accCount = 0;
+    t.stampCover = 0.0f;
 }
 
 void TireMarks::emit(Trail& t, const WheelContactSample& c, float imprint, float slip, float halfWidth,
@@ -231,6 +253,7 @@ void TireMarks::emit(Trail& t, const WheelContactSample& c, float imprint, float
     t.lastEmit = time;
     t.accImprint = t.accSlip = t.accHalfWidth = 0.0f;
     t.accCount = 0;
+    t.stampCover = 0.0f;
 }
 
 void TireMarks::update(std::span<const WheelContactSample> wheels, double time) {
@@ -249,17 +272,26 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
         if (!c.contact) {
             t.active = false;
             t.heat = 0.0f;
+            t.spinHeat *= std::exp(-dt / kSpinCool);
             continue;
         }
         const JPH::Vec3 pc = c.patchCenter;
         const bool inWater = pc.GetY() < water.level - 0.03f && pc.GetX() > water.x0 && pc.GetX() < water.x1 &&
                              pc.GetZ() > water.z0 && pc.GetZ() < water.z1;
         t.soil.update(c, dt, inWater);
-        // Patch heating: rubber builds up over the first ~0.35 s of sliding and fades as soon as the slide ends.
-        const float target = surfaceMarkResponse(c.surface).imprint > 0.0f ? 0.0f : markSlide(c);
+        // Lock-up, braking slip and sideways sliding: rubber builds up over the first ~0.35 s of sliding and fades as
+        // soon as the slide ends. Driven wheelspin heats the tread with the distance it slides (spinning speed x
+        // time) and lays rubber in proportion to that heat, narrow while the tread is cool.
+        const bool hard = surfaceMarkResponse(c.surface).imprint <= 0.0f;
+        const float spin = hard ? wheelspinSlide(c) : 0.0f;
+        const float target = !hard ? 0.0f : c.longitudinalSlipSpeed > 0.0f ? scrubGate(c) : markSlide(c);
         t.heat = target > t.heat ? std::min(target, t.heat + dt / kHeatRise)
                                  : target + (t.heat - target) * std::exp(-dt / kHeatFall);
-        const MarkIntensity m = markIntensity(c, m_settings.referenceLoad, t.soil, t.heat);
+        const float vSpin = spin * std::max(c.longitudinalSlipSpeed, 0.0f);
+        t.spinHeat = saturate(t.spinHeat + dt * (vSpin / kSpinHeatDistance * (1.0f - t.spinHeat) - t.spinHeat / kSpinCool));
+        const float spinMark = spin * spinLaydown(t.spinHeat);
+        const MarkIntensity m = markIntensity(c, m_settings.referenceLoad, t.soil, std::max(t.heat, spinMark),
+                                              spinMark > t.heat ? spinLaydownWidth(t.spinHeat) : 1.0f);
         if (!t.active) {
             start(t, c, m, time);
             continue;
@@ -297,10 +329,15 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
         s.surface = packMarkSurface(c.surface, t.soil.color, t.soil.wetness);
         if (dist >= segLen) {
             emit(t, c, imprint, slip, halfWidth, s.surface, time);
-        } else if (time - t.lastEmit >= kBurnoutInterval && slip > 0.25f && dist < 0.5f * segLen &&
-                   c.longitudinalSlipSpeed > 2.0f && std::abs(c.rollingSpeed) > c.velocity.Length() + 2.0f) {
-            // A driven wheel spinning in place (burnout): stamp the patch; repeated stamps darken the spot. A
-            // braking wheel never stamps. The ribbon itself continues from its last point.
+        } else if (time - t.lastEmit >= kBurnoutInterval && dist < 0.5f * segLen && c.longitudinalSlipSpeed > 2.0f &&
+                   std::abs(c.rollingSpeed) > c.velocity.Length() + 2.0f &&
+                   std::min(1.0f, slip * 1.1f) >= t.stampCover + kStampStep) {
+            // A driven wheel spinning in place (burnout): stamp the patch as the laid rubber grows. Each stamp adds
+            // only the increment, so the overlapping stamps composite (shader cover ~ slip x 1.1) to the current
+            // laydown instead of darkening with the number of stamps. A braking wheel never stamps. The ribbon itself
+            // continues from its last point.
+            const float cover = std::min(1.0f, slip * 1.1f);
+            const float add = 1.0f - (1.0f - cover) / std::max(1.0f - t.stampCover, 1e-3f);
             const JPH::Vec3 fwd = c.longitudinal * (0.5f * kPatchLength);
             const JPH::Vec3 side = c.normal.Cross(c.longitudinal).NormalizedOr(c.lateral) * halfWidth;
             store(s.p0, c.patchCenter - fwd);
@@ -310,11 +347,12 @@ void TireMarks::update(std::span<const WheelContactSample> wheels, double time) 
             s.u0 = 0.0f;
             s.u1 = kPatchLength;
             s.imprint0 = s.imprint1 = imprint;
-            s.slip0 = s.slip1 = slip;
+            s.slip0 = s.slip1 = add / 1.1f;
             push(s);
             t.lastEmit = time;
             t.accImprint = t.accSlip = t.accHalfWidth = 0.0f;
             t.accCount = 0;
+            t.stampCover = cover;
         }
     }
 }
