@@ -232,8 +232,10 @@ Application::Application(const AppOptions& options)
         std::sort(ids.begin(), ids.end());
         if (ids.empty()) continue;
         m_levelIds = ids;
+        std::printf("Levels: %zu level(s) from %s\n", ids.size(), dir.c_str());
         break;
     }
+    if (m_levelIds.empty()) std::printf("Levels: none found (proving ground only)\n");
     m_levelIds.push_back("proving_ground");
     m_flow.setLevels(m_levelIds);
     if (!options.levelId.empty()) m_settings.level = options.levelId;

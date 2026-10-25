@@ -47,6 +47,7 @@ jobs:
           cat "$OUT/lavapipe_smoke.log"
           grep -F "GPU driver 'vulkan', shaders: SPIR-V" "$OUT/lavapipe_smoke.log"
           grep -F "auto-quit after" "$OUT/lavapipe_smoke.log"
+          grep -E "^Levels: [1-9][0-9]* level\(s\) from " "$OUT/lavapipe_smoke.log"
           if grep -F "Validation Error" "$OUT/lavapipe_smoke.log"; then echo "Vulkan validation errors"; exit 1; fi
           python3 - "$OUT/lavapipe_smoke.png" <<'EOF'
           import sys

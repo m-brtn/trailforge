@@ -57,7 +57,7 @@ mkdir -p "$DIST"
 rm -rf "$APP" "$ZIP"
 ditto "$BUILD/TrailForge.app" "$APP"
 for f in audio/manifest.json music/intro.mp3 fonts/Rajdhani-SemiBold.ttf fonts/OFL.txt images/logo.png \
-         vehicles/trailforge_suv/vehicle.json; do
+         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json; do
     [[ -f "$APP/Contents/Resources/assets/$f" ]] || fail "assets/$f missing in the bundle"
 done
 [[ -f "$APP/Contents/Resources/TrailForge.icns" ]] || fail "icns missing in the bundle"
@@ -98,6 +98,7 @@ smoke() {
     grep -F "Menu: logo $app/Contents/Resources/assets/images/logo.png" "$log" || { cat "$log"; fail "logo missing"; }
     grep -F "definition(s) from $app/Contents/Resources/assets/vehicles" "$log" ||
         { cat "$log"; fail "vehicle definitions missing"; }
+    grep -F "level(s) from $app/Contents/Resources/assets/levels" "$log" || { cat "$log"; fail "levels missing"; }
     grep -E "auto-quit after" "$log"
     rm -f "$log" "$log.wav" "$log.wav.csv"
 }

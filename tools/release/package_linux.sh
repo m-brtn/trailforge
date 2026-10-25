@@ -6,7 +6,7 @@
 #                                                  # with Vulkan, or Mesa lavapipe under xvfb in CI)
 #
 # Steps: clean Release configure in build/package with TRAILFORGE_PACKAGED=ON (assets are read only from next to
-# the executable), build, ctest, assemble dist/TrailForge-<version>-linux-<arch>/ (trailforge, assets/{audio,music,fonts,images,vehicles},
+# the executable), build, ctest, assemble dist/TrailForge-<version>-linux-<arch>/ (trailforge, assets/ (all of it),
 # README.txt), check that the binary has no source-tree references and only system shared libraries, tar.gz it,
 # then smoke test a fresh extraction from another working directory (--version, --paths: the asset directory must
 # be the one inside the package). The version comes from project(TrailForge VERSION x.y.z) in CMakeLists.txt.
@@ -55,7 +55,7 @@ rm -rf "$PKG" "$TGZ"
 mkdir -p "$PKG/assets"
 cp "$BUILD/trailforge" "$PKG/"
 strip "$PKG/trailforge"
-cp -R "$ROOT/assets/audio" "$ROOT/assets/music" "$ROOT/assets/fonts" "$ROOT/assets/images" "$ROOT/assets/vehicles" "$PKG/assets/"
+cp -R "$ROOT/assets/." "$PKG/assets/"
 cp "$BUILD/assets/images/logo.png" "$PKG/assets/images/" # copied from external_assets/images at configure time
 cat >"$PKG/README.txt" <<EOF
 TrailForge $VERSION for Linux ($ARCH)
@@ -68,7 +68,7 @@ Run:  ./trailforge          (needs a Vulkan driver: Mesa RADV/ANV/NVK, NVIDIA, o
 Keep the assets/ directory next to the executable.
 EOF
 for f in audio/manifest.json music/intro.mp3 fonts/Rajdhani-SemiBold.ttf fonts/OFL.txt images/logo.png \
-         vehicles/trailforge_suv/vehicle.json; do
+         vehicles/trailforge_suv/vehicle.json levels/exploration_peaks/level.json; do
     [[ -f "$PKG/assets/$f" ]] || fail "assets/$f missing in the package"
 done
 
@@ -104,6 +104,7 @@ if [[ $SMOKE_WINDOW -eq 1 ]]; then
     grep -F "sounds loaded from $FIRST_ASSETS" "$LOG" | grep -F "0 missing" || { cat "$LOG"; fail "assets did not load"; }
     grep -F "Audio: music $MUSIC_DIR/intro.mp3" "$LOG" || { cat "$LOG"; fail "music did not load"; }
     grep -E "^Menu: (font|logo) " "$LOG" || { cat "$LOG"; fail "menu font / logo did not load"; }
+    grep -E "^Levels: [1-9]" "$LOG" || { cat "$LOG"; fail "levels did not load"; }
     rm -f "$LOG" "$LOG.wav" "$LOG.wav.csv"
 fi
 rm -rf "$EXTRACT"
