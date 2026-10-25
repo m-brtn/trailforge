@@ -56,7 +56,7 @@ struct GraphicsState {
     float timeLapseSpeed = 0.25f; // game hours per real second
     // Tire marks (render-only): drawing toggle and per-surface intensity multipliers (SurfaceId order).
     bool tireMarks = true;
-    std::array<float, 7> markGain{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 8> markGain{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     bool fillMarks = false;      // request: fill the ring with synthetic segments (performance test at the cap)
     bool spray = true;           // wheel spray particles (render-only)
     std::size_t sprayLive = 0, sprayDrawn = 0;

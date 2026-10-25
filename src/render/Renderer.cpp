@@ -16,9 +16,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -36,12 +38,17 @@ namespace {
 enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2 };
 enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4 };
 // Shadow casters: positive slope bias, no depth clip. Decals: pulled toward the camera so they win against the
-// surface they lie on.
+// surface they lie on. The scene uses reversed depth (near 1, far 0, compare GREATER_OR_EQUAL) for precision over
+// kilometres; the shadow maps keep the standard 0..1 depth.
 enum DepthBias { kBiasNone = 0, kBiasShadow = 1, kBiasDecal = 2 };
 
 constexpr float kMarkLift = 0.012f; // m: tire marks are drawn this far above the contact plane
 
 constexpr float kGrassChunk = 2.4f;
+constexpr int kGrassBucket = 32;           // chunks per bucket side (76.8 m)
+constexpr float kTrampleWindow = 204.8f;   // m: side of the trample window on large ground maps
+constexpr int kTerrainPatch = 64;          // cells per terrain chunk side
+constexpr int kTerrainLevels = 4;          // steps 8, 4, 2, 1
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
 constexpr int kGrassSegs[3] = {4, 2, 1};
 constexpr float kGrassNearCanopy[4] = {0.6f, 0.5f, 0.35f, 0.3f};
@@ -209,14 +216,14 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
     // 1x1 placeholders until setGround() is called.
     {
         const std::uint8_t px[4] = {128, 128, 128, 255};
-        const std::uint16_t h = 0;
+        const float h = 0.0f;
         m_noise = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         m_mask = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        m_height = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R16_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        m_height = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         uploadTexture(m_noise.tex, px, 1, 1, 4);
         const std::uint8_t noWheat[4] = {128, 128, 128, 0};
         uploadTexture(m_mask.tex, noWheat, 1, 1, 4);
-        uploadTexture(m_height.tex, &h, 1, 1, 2);
+        uploadTexture(m_height.tex, &h, 1, 1, 4);
         m_trample = makeTexture(1, 1, kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
         clearTrample();
     }
@@ -236,9 +243,12 @@ Renderer::~Renderer() {
     releaseScenePipelines();
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
                                        m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe,
-                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe})
+                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
     for (GpuMesh& m : m_treeMeshes) m.release();
+    m_terrainPatch.release();
+    releaseTexture(m_terrainHeight);
+    releaseTexture(m_terrainSplat);
     if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
     if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
     if (m_sprayBuffer) SDL_ReleaseGPUBuffer(m_device, m_sprayBuffer);
@@ -400,14 +410,15 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
         pi.rasterizer_state.depth_bias_clamp = m_shadowBiasClamp;
     } else if (depthBias == kBiasDecal) {
         pi.rasterizer_state.enable_depth_bias = true;
-        pi.rasterizer_state.depth_bias_constant_factor = -2.0f;
-        pi.rasterizer_state.depth_bias_slope_factor = -2.0f;
+        pi.rasterizer_state.depth_bias_constant_factor = 2.0f; // toward the camera in reversed depth
+        pi.rasterizer_state.depth_bias_slope_factor = 2.0f;
         pi.rasterizer_state.depth_bias_clamp = 0.0f;
     }
     pi.multisample_state.sample_count = samples;
     pi.depth_stencil_state.enable_depth_test = depthTest;
     pi.depth_stencil_state.enable_depth_write = depthWrite;
-    pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+    pi.depth_stencil_state.compare_op =
+        depthBias == kBiasShadow ? SDL_GPU_COMPAREOP_LESS_OR_EQUAL : SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
     pi.target_info.color_target_descriptions = color != SDL_GPU_TEXTUREFORMAT_INVALID ? &ct : nullptr;
     pi.target_info.num_color_targets = color != SDL_GPU_TEXTUREFORMAT_INVALID ? 1 : 0;
     const bool hasDepth = depthTest || depthWrite;
@@ -451,6 +462,9 @@ void Renderer::createStaticPipelines() {
                                   false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_blurCompositePipe = createPipeline("fullscreen_vs", "blur_composite_fs", 0, 1, 0, 2, 0, kLayoutNone,
                                          m_colorFormat, s1, false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_terrainShadowPipe = createPipeline("terrain_shadow_vs", "shadow_fs", 2, 0, 1, 0, 0, kLayoutLit, none, s1, true,
+                                         true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone,
+                                         SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
 }
 
 void Renderer::createScenePipelines() {
@@ -474,13 +488,16 @@ void Renderer::createScenePipelines() {
                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
     m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, sc, true, true,
                                 SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
+    // Skirts hang down from both sides of a chunk edge, so the terrain is drawn without culling.
+    m_terrainPipe = createPipeline("terrain_vs", "lit_fs", 2, 1, 2, 3, 0, kLayoutLit, kHdrFormat, sc, true, true,
+                                   SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_sceneMsaa = m_settings.msaa;
 }
 
 void Renderer::releaseScenePipelines() {
     for (SDL_GPUGraphicsPipeline** p :
          {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe,
-          &m_sprayPipe}) {
+          &m_sprayPipe, &m_terrainPipe}) {
         if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
         *p = nullptr;
     }
@@ -645,48 +662,173 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
     const std::uint32_t w = std::uint32_t(maps.width), h = std::uint32_t(maps.height);
     m_mask = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
     uploadTexture(m_mask.tex, maps.mask.data(), w, h, 4);
-    m_height = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R16_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    uploadTexture(m_height.tex, maps.heights.data(), w, h, 2);
+    m_height = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    uploadTexture(m_height.tex, maps.heights.data(), w, h, 4);
     // Texel centers sit on the grid points: uv = (xz - x0 + texel/2) / (n * texel).
     const float half = maps.texel * 0.5f;
     m_groundRect = glm::vec4(maps.x0 - half, maps.z0 - half, 1.0f / (float(w) * maps.texel),
                              1.0f / (float(h) * maps.texel));
     m_waterLevel = waterLevel;
-    // The trample mask covers the same rect at a finer texel.
+    // The trample mask covers the same rect at a finer texel; on large maps it is a window around the camera that
+    // is re-rendered from the mark ring when it moves.
     releaseTexture(m_trample);
-    m_trample = makeTexture(std::uint32_t(std::ceil(float(w) * maps.texel / kTrampleTexel)),
-                            std::uint32_t(std::ceil(float(h) * maps.texel / kTrampleTexel)), kTrampleFormat,
-                            SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+    const float sizeX = float(w) * maps.texel, sizeZ = float(h) * maps.texel;
+    m_trampleWindowed = std::max(sizeX, sizeZ) / kTrampleTexel > 4096.0f;
+    const float tw = m_trampleWindowed ? kTrampleWindow : sizeX, th = m_trampleWindowed ? kTrampleWindow : sizeZ;
+    m_trample = makeTexture(std::uint32_t(std::ceil(tw / kTrampleTexel)), std::uint32_t(std::ceil(th / kTrampleTexel)),
+                            kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+    m_trampleRect = m_trampleWindowed ? glm::vec4(-1e6f, -1e6f, 1.0f / tw, 1.0f / th) : m_groundRect;
+    m_trampleCenter = glm::vec2(1e9f);
     clearTrample();
 
-    // Grass chunks: aligned to multiples of the chunk size so blade ids are stable on every density grid.
+    // Grass chunks: aligned to multiples of the chunk size so blade ids are stable on every density grid, sorted
+    // into buckets for culling.
     m_grassChunks.clear();
+    m_grassBuckets.clear();
     const float xMax = maps.x0 + maps.sizeX(), zMax = maps.z0 + maps.sizeZ();
     const int i0 = int(std::ceil(maps.x0 / kGrassChunk)), i1 = int(std::floor(xMax / kGrassChunk)) - 1;
     const int j0 = int(std::ceil(maps.z0 / kGrassChunk)), j1 = int(std::floor(zMax / kGrassChunk)) - 1;
-    for (int j = j0; j <= j1; ++j) {
-        for (int i = i0; i <= i1; ++i) {
-            const float x0 = float(i) * kGrassChunk, z0 = float(j) * kGrassChunk;
-            float maxGrass = 0.0f, minY = 1e9f, maxY = -1e9f;
-            constexpr int kS = 8;
-            for (int b = 0; b <= kS; ++b) {
-                for (int a = 0; a <= kS; ++a) {
-                    const float x = x0 + kGrassChunk * float(a) / kS, z = z0 + kGrassChunk * float(b) / kS;
-                    maxGrass = std::max(maxGrass, maps.grassAt(x, z));
-                    const float y = maps.heightAt(x, z);
-                    minY = std::min(minY, y);
-                    maxY = std::max(maxY, y);
+    const int kS = (i1 - i0) * (j1 - j0) > 200000 ? 4 : 8; // samples per chunk side for the bounds and cover
+    for (int bj = j0; bj <= j1; bj += kGrassBucket) {
+        for (int bi = i0; bi <= i1; bi += kGrassBucket) {
+            GrassBucket bucket{1e9f, 1e9f, -1e9f, -1e9f, std::uint32_t(m_grassChunks.size()), 0};
+            for (int j = bj; j <= std::min(j1, bj + kGrassBucket - 1); ++j) {
+                for (int i = bi; i <= std::min(i1, bi + kGrassBucket - 1); ++i) {
+                    const float x0 = float(i) * kGrassChunk, z0 = float(j) * kGrassChunk;
+                    float maxGrass = 0.0f, minY = 1e9f, maxY = -1e9f;
+                    for (int b = 0; b <= kS; ++b) {
+                        for (int a = 0; a <= kS; ++a) {
+                            const float x = x0 + kGrassChunk * float(a) / float(kS), z = z0 + kGrassChunk * float(b) / float(kS);
+                            maxGrass = std::max(maxGrass, maps.grassAt(x, z));
+                            const float y = maps.heightAt(x, z);
+                            minY = std::min(minY, y);
+                            maxY = std::max(maxY, y);
+                        }
+                    }
+                    if (maxGrass <= 0.03f) continue;
+                    m_grassChunks.push_back({x0, z0, minY - 0.1f, maxY + 1.3f});
+                    bucket.x0 = std::min(bucket.x0, x0);
+                    bucket.z0 = std::min(bucket.z0, z0);
+                    bucket.x1 = std::max(bucket.x1, x0 + kGrassChunk);
+                    bucket.z1 = std::max(bucket.z1, z0 + kGrassChunk);
                 }
             }
-            if (maxGrass > 0.03f) m_grassChunks.push_back({x0, z0, minY - 0.1f, maxY + 1.3f});
+            bucket.count = std::uint32_t(m_grassChunks.size()) - bucket.first;
+            if (bucket.count > 0) m_grassBuckets.push_back(bucket);
         }
     }
-    SDL_Log("TrailForge: ground maps %dx%d, %zu grass chunks", maps.width, maps.height, m_grassChunks.size());
+    SDL_Log("TrailForge: ground maps %dx%d, %zu grass chunks in %zu buckets", maps.width, maps.height,
+            m_grassChunks.size(), m_grassBuckets.size());
 }
 
-void Renderer::setTrees(const std::array<MeshData, 3>& lods, std::span<const TreeInstance> instances) {
+void Renderer::setTerrain(const TerrainSource* src) {
     SDL_WaitForGPUIdle(m_device);
-    for (int i = 0; i < 3; ++i) m_treeMeshes[i] = upload(lods[i]);
+    releaseTexture(m_terrainHeight);
+    releaseTexture(m_terrainSplat);
+    m_terrainPatch.release();
+    for (auto& level : m_terrainNodes) level.clear();
+    m_terrainSamples = 0;
+    m_terrainRoots = 0;
+    if (!src || src->samples < 2) return;
+    const int n = src->samples, cells = n - 1;
+    const int rootCells = kTerrainPatch << (kTerrainLevels - 1);
+    if (cells % rootCells != 0) throw std::runtime_error("terrain: samples - 1 must be a multiple of 512");
+    m_terrainSamples = n;
+    m_terrainOrigin = src->origin;
+    m_terrainCell = src->cell;
+    m_terrainRoots = cells / rootCells;
+    m_terrainHeight = makeTexture(std::uint32_t(n), std::uint32_t(n), SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
+                                  SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    uploadTexture(m_terrainHeight.tex, src->heights, std::uint32_t(n), std::uint32_t(n), 4);
+    m_terrainSplat = makeTexture(std::uint32_t(cells), std::uint32_t(cells), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                 SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    uploadTexture(m_terrainSplat.tex, src->splat, std::uint32_t(cells), std::uint32_t(cells), 4);
+
+    // Height bounds per node: finest level (step 1, 64 cells) from the samples, coarser levels from their children.
+    for (int level = kTerrainLevels - 1; level >= 0; --level) {
+        const int side = m_terrainRoots << level;
+        std::vector<TerrainNode>& nodes = m_terrainNodes[std::size_t(level)];
+        nodes.assign(std::size_t(side) * std::size_t(side), {1e9f, -1e9f});
+        for (int nj = 0; nj < side; ++nj)
+            for (int ni = 0; ni < side; ++ni) {
+                TerrainNode& node = nodes[std::size_t(nj) * std::size_t(side) + std::size_t(ni)];
+                if (level == kTerrainLevels - 1) {
+                    for (int j = nj * kTerrainPatch; j <= (nj + 1) * kTerrainPatch; ++j)
+                        for (int i = ni * kTerrainPatch; i <= (ni + 1) * kTerrainPatch; ++i) {
+                            const float y = src->heights[std::size_t(j) * std::size_t(n) + std::size_t(i)];
+                            node.minY = std::min(node.minY, y);
+                            node.maxY = std::max(node.maxY, y);
+                        }
+                } else {
+                    const auto& fine = m_terrainNodes[std::size_t(level + 1)];
+                    for (int c = 0; c < 4; ++c) {
+                        const TerrainNode& ch = fine[std::size_t(nj * 2 + c / 2) * std::size_t(side * 2) + std::size_t(ni * 2 + c % 2)];
+                        node.minY = std::min(node.minY, ch.minY);
+                        node.maxY = std::max(node.maxY, ch.maxY);
+                    }
+                }
+            }
+    }
+
+    // Shared patch: kTerrainPatch^2 cells as two triangles each, plus a skirt quad along every edge segment.
+    MeshData patch;
+    const Material m{};
+    auto v = [](int i, int j, float skirt) { return glm::vec3(float(i), skirt, float(j)); };
+    for (int j = 0; j < kTerrainPatch; ++j)
+        for (int i = 0; i < kTerrainPatch; ++i) {
+            const glm::vec3 a = v(i, j, 0), b = v(i, j + 1, 0), c = v(i + 1, j + 1, 0), d = v(i + 1, j, 0);
+            patch.addTriangle(a, b, c, m); // {00, 01, 11}
+            patch.addTriangle(a, c, d, m); // {00, 11, 10}
+        }
+    for (int k = 0; k < kTerrainPatch; ++k) {
+        const int edges[4][4] = {{k, 0, k + 1, 0},
+                                 {kTerrainPatch, k, kTerrainPatch, k + 1},
+                                 {k + 1, kTerrainPatch, k, kTerrainPatch},
+                                 {0, k + 1, 0, k}};
+        for (const auto& e : edges) {
+            const glm::vec3 a = v(e[0], e[1], 0), b = v(e[2], e[3], 0), c = v(e[2], e[3], 1), d = v(e[0], e[1], 1);
+            patch.addTriangle(a, b, c, m);
+            patch.addTriangle(a, c, d, m);
+        }
+    }
+    m_terrainPatch = upload(patch);
+    SDL_Log("TrailForge: terrain %dx%d samples, %d root chunks, patch %u triangles", n, n,
+            m_terrainRoots * m_terrainRoots, m_terrainPatch.vertexCount() / 3);
+}
+
+void Renderer::selectTerrain(const glm::vec3& cam, const glm::mat4* viewProj, float maxDistance, float lodScale,
+                             std::vector<TerrainChunk>& out) const {
+    out.clear();
+    if (m_terrainSamples == 0) return;
+    const std::optional<Frustum> fr = viewProj ? std::optional<Frustum>(Frustum(*viewProj)) : std::nullopt;
+    auto visit = [&](auto&& self, int level, int ni, int nj) -> void {
+        const int side = m_terrainRoots << level;
+        const TerrainNode& node = m_terrainNodes[std::size_t(level)][std::size_t(nj) * std::size_t(side) + std::size_t(ni)];
+        const int step = 1 << (kTerrainLevels - 1 - level);
+        const int i0 = ni * kTerrainPatch * step, j0 = nj * kTerrainPatch * step;
+        const float size = float(kTerrainPatch * step) * m_terrainCell;
+        const glm::vec3 bmin(m_terrainOrigin + float(i0) * m_terrainCell, node.minY, m_terrainOrigin + float(j0) * m_terrainCell);
+        const glm::vec3 bmax(bmin.x + size, node.maxY, bmin.z + size);
+        const glm::vec3 nearest = glm::clamp(cam, bmin, bmax);
+        const float d = glm::length(nearest - cam);
+        if (d > maxDistance) return;
+        if (fr && !fr->box(bmin - glm::vec3(0.0f, 2.0f * float(step), 0.0f), bmax)) return;
+        if (step > 1 && d < lodScale * size) {
+            for (int c = 0; c < 4; ++c) self(self, level + 1, ni * 2 + c % 2, nj * 2 + c / 2);
+            return;
+        }
+        out.push_back({i0, j0, step});
+    };
+    for (int nj = 0; nj < m_terrainRoots; ++nj)
+        for (int ni = 0; ni < m_terrainRoots; ++ni) visit(visit, 0, ni, nj);
+}
+
+void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances) {
+    SDL_WaitForGPUIdle(m_device);
+    for (int i = 0; i < 4; ++i) {
+        m_treeMeshes[i].release();
+        m_treeMeshes[i] = upload(lods[i]);
+    }
     m_trees.assign(instances.begin(), instances.end());
     if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
     if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
@@ -703,8 +845,8 @@ void Renderer::setTrees(const std::array<MeshData, 3>& lods, std::span<const Tre
     ti.size = bi.size;
     m_treeTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
     if (!m_treeBuffer || !m_treeTransfer) fail("tree buffers");
-    SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
-            m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3);
+    SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
+            m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3, m_treeMeshes[3].vertexCount() / 3);
 }
 
 void Renderer::clearTrample() {
@@ -849,7 +991,7 @@ void Renderer::fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& ex
     fu.skyZenith = glm::vec4(sky.zenith, 0.0f);
     fu.skyHorizon = glm::vec4(sky.horizon, 0.0f);
     fu.groundAmbient = glm::vec4(sky.groundAmbient, 0.0f);
-    fu.fogParams = glm::vec4(0.0016f * s.fogDensity * sky.fogMul, 0.05f, 1.0f, s.clouds ? 0.55f : 0.0f);
+    fu.fogParams = glm::vec4(frame.fogDensity * s.fogDensity * sky.fogMul, frame.fogFalloff, 1.0f, s.clouds ? 0.55f : 0.0f);
     fu.skySun = glm::vec4(sky.sunDir, sky.sunDiscCos);
     fu.skySunGlow = glm::vec4(sky.sunGlow, sky.stars);
     fu.sunDisc = glm::vec4(sky.sunDisc, sky.moonDisc);
@@ -873,17 +1015,20 @@ std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewP
     if (m_trees.empty()) return 0;
     const Frustum fr(viewProj);
     const glm::vec3 cam = frame.cameraPos;
-    constexpr float kLod0 = 55.0f, kLod1 = 140.0f;
-    std::vector<TreeInstance> lod[3];
+    constexpr float kLod0 = 55.0f, kLod1 = 140.0f, kLod2 = 380.0f;
+    const float maxD = m_settings.treeDistance;
+    for (auto& l : m_treeLod) l.clear();
     for (const TreeInstance& t : m_trees) {
         const glm::vec3 base(t.baseHeight);
         const float h = t.baseHeight.w;
         const glm::vec3 c = base + glm::vec3(0, 0.5f * h, 0);
-        if (!fr.sphere(c, 0.6f * h)) continue;
-        const float d = glm::length(c - cam);
-        lod[d < kLod0 ? 0 : d < kLod1 ? 1 : 2].push_back(t);
+        const glm::vec3 dc = c - cam;
+        const float d2 = glm::dot(dc, dc);
+        if (d2 > maxD * maxD || !fr.sphere(c, 0.6f * h)) continue;
+        m_treeLod[d2 < kLod0 * kLod0 ? 0 : d2 < kLod1 * kLod1 ? 1 : d2 < kLod2 * kLod2 ? 2 : 3].push_back(t);
     }
-    for (int l = 0; l < 3; ++l) {
+    const auto& lod = m_treeLod;
+    for (int l = 0; l < 4; ++l) {
         lists.first[l] = std::uint32_t(m_treeScratch.size());
         lists.count[l] = std::uint32_t(lod[l].size());
         m_treeScratch.insert(m_treeScratch.end(), lod[l].begin(), lod[l].end());
@@ -900,7 +1045,7 @@ std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewP
     if (m_settings.shadowCascades > 0) {
         // Casters near the camera: the last cascade ends at the shadow distance; tall trees just beyond it still
         // throw shadows into it.
-        const float r = m_settings.shadowDistance + 25.0f;
+        const float r = m_settings.shadowDistance * frame.shadowScale + 25.0f;
         lists.shadowFirst = std::uint32_t(m_treeScratch.size());
         for (const TreeInstance& t : m_trees) {
             const glm::vec2 dxz(t.baseHeight.x - cam.x, t.baseHeight.z - cam.z);
@@ -919,7 +1064,7 @@ void Renderer::computeCascades(const FrameDesc& frame, float aspect, FrameUnifor
     fu.cascadeSplits = glm::vec4(1e9f);
     fu.cascadeTexel = glm::vec4(0.0f);
     if (n <= 0) return;
-    const float nearD = 0.5f, farD = s.shadowDistance;
+    const float nearD = 0.5f, farD = s.shadowDistance * frame.shadowScale;
     const glm::mat4 invView = glm::inverse(frame.view);
     const float tanY = std::tan(frame.fovYRadians * 0.5f), tanX = tanY * aspect;
     const glm::vec3 sun(fu.sunDir);
@@ -971,14 +1116,19 @@ std::uint32_t Renderer::cullGrass(const FrameDesc& frame, const glm::mat4& viewP
     const float radii[3] = {D * 0.3f, D * 0.6f, D};
     std::vector<glm::vec4> lists[3];
     const glm::vec2 cam(frame.cameraPos.x, frame.cameraPos.z);
-    for (const GrassChunk& ch : m_grassChunks) {
-        const glm::vec2 nearest(std::clamp(cam.x, ch.x0, ch.x0 + kGrassChunk), std::clamp(cam.y, ch.z0, ch.z0 + kGrassChunk));
-        const float d = glm::length(nearest - cam);
-        if (d > D) continue;
-        if (!fr.box(glm::vec3(ch.x0, ch.minY, ch.z0), glm::vec3(ch.x0 + kGrassChunk, ch.maxY, ch.z0 + kGrassChunk)))
-            continue;
-        const int lod = d < radii[0] ? 0 : d < radii[1] ? 1 : 2;
-        lists[lod].push_back(glm::vec4(ch.x0, ch.z0, 0, 0));
+    for (const GrassBucket& b : m_grassBuckets) {
+        const glm::vec2 nb(std::clamp(cam.x, b.x0, b.x1), std::clamp(cam.y, b.z0, b.z1));
+        if (glm::length(nb - cam) > D) continue;
+        for (std::uint32_t k = b.first; k < b.first + b.count; ++k) {
+            const GrassChunk& ch = m_grassChunks[k];
+            const glm::vec2 nearest(std::clamp(cam.x, ch.x0, ch.x0 + kGrassChunk), std::clamp(cam.y, ch.z0, ch.z0 + kGrassChunk));
+            const float d = glm::length(nearest - cam);
+            if (d > D) continue;
+            if (!fr.box(glm::vec3(ch.x0, ch.minY, ch.z0), glm::vec3(ch.x0 + kGrassChunk, ch.maxY, ch.z0 + kGrassChunk)))
+                continue;
+            const int lod = d < radii[0] ? 0 : d < radii[1] ? 1 : 2;
+            lists[lod].push_back(glm::vec4(ch.x0, ch.z0, 0, 0));
+        }
     }
     m_grassScratch.clear();
     for (int l = 0; l < 3; ++l) {
@@ -1031,7 +1181,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
     // ---- Frame uniforms
     FrameUniforms fu{};
-    const glm::mat4 viewProj = frame.proj * frame.view;
+    // Reversed depth: z' = w - z maps the 0..1 range of the projection to 1 (near) .. 0 (far).
+    glm::mat4 reverse(1.0f);
+    reverse[2][2] = -1.0f;
+    reverse[3][2] = 1.0f;
+    const glm::mat4 proj = reverse * frame.proj;
+    const glm::mat4 viewProj = proj * frame.view;
     fu.viewProj = viewProj;
     fu.invViewProj = glm::inverse(viewProj);
     fu.vehicleInv = glm::inverse(frame.vehicleModel);
@@ -1042,6 +1197,18 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     glm::mat4 lightViewProj[4];
     computeCascades(frame, aspect, fu, lightViewProj);
     fu.groundRect = m_groundRect;
+    if (m_trampleWindowed) {
+        // Recentre the trample window (snapped to 10 m) when the camera has moved 40 m from its centre.
+        const glm::vec2 cam(frame.cameraPos.x, frame.cameraPos.z);
+        if (glm::length(cam - m_trampleCenter) > 40.0f) {
+            m_trampleCenter = glm::round(cam / 10.0f) * 10.0f;
+            const float half = 0.5f * kTrampleWindow;
+            m_trampleRect = glm::vec4(m_trampleCenter.x - half, m_trampleCenter.y - half, 1.0f / kTrampleWindow,
+                                      1.0f / kTrampleWindow);
+            m_trampleGeneration = ~0ull - 1; // forces a re-render
+        }
+    }
+    fu.trampleRect = m_trampleRect;
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
     if (frame.bodyMud) {
         for (int r = 0; r < kBodyMudRegions; ++r) {
@@ -1058,7 +1225,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                                s.grassLevel > 0 ? kGrassNearCanopy[s.grassLevel - 1] : 1.0f, 0.0f, 0.0f);
 
     // Puddle reflection only when the camera is above the water and near enough to see it.
-    const bool wantRefl = s.reflections && m_reflColor.tex && frame.water && frame.water->vertexCount() > 0 &&
+    const bool wantRefl = s.reflections && frame.waterReflection && m_reflColor.tex && frame.water &&
+                          frame.water->vertexCount() > 0 &&
                           frame.cameraPos.y > m_waterLevel + 0.05f;
     bool reflVisible = false;
     if (wantRefl) {
@@ -1075,7 +1243,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     mirror[1][1] = -1.0f;
     mirror[3][1] = 2.0f * m_waterLevel;
     const glm::mat4 reflView = frame.view * mirror;
-    const glm::mat4 reflViewProj = frame.proj * reflView;
+    const glm::mat4 reflViewProj = proj * reflView;
 
     // ---- Uploads (lines, grass chunks, tree instances, ImGui) before any render pass
     const std::uint32_t lineBytes = std::uint32_t(frame.lines.size_bytes());
@@ -1083,7 +1251,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
     TreeLists trees;
     const std::uint32_t treeTotal = cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, trees);
-    for (int l = 0; l < 3; ++l) m_stats.trees[l] = int(trees.count[l]);
+    for (int l = 0; l < 4; ++l) m_stats.trees[l] = int(trees.count[l]);
     m_stats.shadowTrees = int(trees.shadowCount);
     const TireMarks* marks = frame.tireMarks;
     if (marks) ensureMarkCapacity(std::uint32_t(marks->capacity()));
@@ -1171,6 +1339,49 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_DrawGPUPrimitives(pass, mesh.vertexCount(), count, 0, 0);
     };
 
+    // Level terrain chunks: main view (frustum, LOD by distance) and shadow casters (coarser, around the camera).
+    selectTerrain(frame.cameraPos, &viewProj, 1e9f, s.terrainDetail, m_terrainScratch);
+    if (s.shadowCascades > 0)
+        selectTerrain(frame.cameraPos, nullptr, s.shadowDistance * frame.shadowScale + 60.0f, 1.0f, m_terrainShadowScratch);
+    else
+        m_terrainShadowScratch.clear();
+    m_stats.terrainChunks = int(m_terrainScratch.size());
+    m_stats.terrainLod = {};
+    for (const TerrainChunk& c : m_terrainScratch) ++m_stats.terrainLod[std::size_t(std::countr_zero(unsigned(c.step)))];
+    m_stats.terrainTriangles = std::uint64_t(m_terrainScratch.size()) * (m_terrainPatch.vertexCount() / 3);
+    // samplers: 2 for the main view (heights, splat), 1 for the shadow pass (heights).
+    auto drawTerrain = [&](SDL_GPURenderPass* pass, const std::vector<TerrainChunk>& chunks, std::uint32_t samplers,
+                           const glm::mat4* lightViewProj) {
+        if (chunks.empty() || m_terrainPatch.vertexCount() == 0) return 0;
+        SDL_GPUTextureSamplerBinding vt[2] = {{m_terrainHeight.tex, m_clampSampler}, {m_terrainSplat.tex, m_clampSampler}};
+        SDL_BindGPUVertexSamplers(pass, 0, vt, samplers);
+        SDL_GPUBufferBinding binding{m_terrainPatch.buffer(), 0};
+        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+        int drawn = 0;
+        for (const TerrainChunk& c : chunks) {
+            const float size = float(kTerrainPatch * c.step) * m_terrainCell;
+            if (lightViewProj) {
+                // Ortho light: skip chunks whose bounding sphere is outside the cascade's clip square.
+                const glm::vec3 center(m_terrainOrigin + (float(c.i0) + 0.5f * float(kTerrainPatch * c.step)) * m_terrainCell,
+                                       frame.cameraPos.y,
+                                       m_terrainOrigin + (float(c.j0) + 0.5f * float(kTerrainPatch * c.step)) * m_terrainCell);
+                const glm::mat4& lv = *lightViewProj;
+                const glm::vec4 p = lv * glm::vec4(center, 1.0f);
+                const float r = size * 0.75f + 300.0f; // height range of the map
+                const float sx = glm::length(glm::vec3(lv[0][0], lv[1][0], lv[2][0]));
+                const float sy = glm::length(glm::vec3(lv[0][1], lv[1][1], lv[2][1]));
+                if (std::abs(p.x) > 1.0f + r * sx || std::abs(p.y) > 1.0f + r * sy) continue;
+            }
+            DrawUniforms du{};
+            du.params = glm::vec4(float(c.i0), float(c.j0), float(c.step), 1.0f + 1.5f * float(c.step) * m_terrainCell);
+            du.tint = glm::vec4(float(m_terrainSamples), m_terrainOrigin, m_terrainCell, 0.0f);
+            SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
+            SDL_DrawGPUPrimitives(pass, m_terrainPatch.vertexCount(), 1, 0, 0);
+            ++drawn;
+        }
+        return drawn;
+    };
+
     // ---- 1. Sun shadow cascades
     for (int c = 0; c < s.shadowCascades; ++c) {
         SDL_GPUDepthStencilTargetInfo dt{};
@@ -1200,6 +1411,11 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             drawLit(pass, d);
             ++m_stats.shadowDraws;
         }
+        if (!m_terrainShadowScratch.empty()) {
+            SDL_BindGPUGraphicsPipeline(pass, m_terrainShadowPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+            m_stats.shadowDraws += drawTerrain(pass, m_terrainShadowScratch, 1, &lightViewProj[c]);
+        }
         if (trees.shadowCount > 0) {
             SDL_BindGPUGraphicsPipeline(pass, m_treeShadowPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
@@ -1219,7 +1435,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                             marks->settings().fadeTime);
         mu.params = glm::vec4(kMarkLift, 0, 0, 0);
         mu.gainA = glm::vec4(frame.markGain[0], frame.markGain[1], frame.markGain[2], frame.markGain[3]);
-        mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], frame.markGain[6], 0);
+        mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], frame.markGain[6], frame.markGain[7]);
         float width[8] = {1, 1, 1, 1, 1, 1, 1, 1};
         for (std::size_t i = 0; i < kSurfaceCount; ++i) width[i] = surfaceMarkResponse(SurfaceId(i)).widthScale;
         mu.widthA = glm::vec4(width[0], width[1], width[2], width[3]);
@@ -1275,7 +1491,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ct.cycle = true;
         SDL_GPUDepthStencilTargetInfo dt{};
         dt.texture = m_reflDepth.tex;
-        dt.clear_depth = 1.0f;
+        dt.clear_depth = 0.0f;
         dt.load_op = SDL_GPU_LOADOP_CLEAR;
         dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
@@ -1329,13 +1545,22 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ct.cycle = true;
         SDL_GPUDepthStencilTargetInfo dt{};
         dt.texture = m_depth.tex;
-        dt.clear_depth = 1.0f;
+        dt.clear_depth = 0.0f;
         dt.load_op = SDL_GPU_LOADOP_CLEAR;
         dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.cycle = true;
         SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+
+        // Level terrain first (the largest occluder).
+        if (!m_terrainScratch.empty()) {
+            SDL_BindGPUGraphicsPipeline(pass, m_terrainPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            m_stats.drawCalls += drawTerrain(pass, m_terrainScratch, 2, nullptr);
+        }
 
         // Opaque meshes.
         SDL_BindGPUGraphicsPipeline(pass, m_litPipe);
@@ -1354,12 +1579,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
 
         // Trees (one instanced draw per LOD).
-        if (trees.count[0] + trees.count[1] + trees.count[2] > 0) {
+        if (trees.count[0] + trees.count[1] + trees.count[2] + trees.count[3] > 0) {
             SDL_BindGPUGraphicsPipeline(pass, m_treePipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
-            for (int l = 0; l < 3; ++l) {
+            for (int l = 0; l < 4; ++l) {
                 if (trees.count[l] == 0) continue;
                 drawTrees(pass, m_treeMeshes[l], trees.first[l], trees.count[l]);
                 ++m_stats.drawCalls;

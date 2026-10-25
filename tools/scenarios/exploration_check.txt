@@ -1,0 +1,222 @@
+# Exploration Peaks level check: switch from the proving ground, spawn, a road drive across a physics tile border, a
+# ford, a deep-water recovery, every POI teleport, the map, both vehicles, and overview captures to compare with
+# external_assets/images/Exploration.png:
+#   ./build/release/trailforge --script tools/scenarios/exploration_check.txt --no-audio
+# Captures /tmp/trailforge_expl_*.png. Exit code 1 on FAIL. `place X Z YAW` puts the vehicle on the ground at
+# (X, Z) heading YAW degrees (0 = +Z, 90 = +X east).
+set ui 0
+set hud 0
+set auto_reverse 0
+
+# ---------------------------------------------------------------- level switch and spawn
+expect level == 0
+level exploration_peaks
+until level == 1 10
+wait 1.5
+expect tiles_loaded >= 4
+expect road_dist < 2.5
+expect water_depth == 0
+expect recoveries == 0
+expect tilt < 12
+capture /tmp/trailforge_expl_01_spawn.png
+wait 0.3
+
+# ---------------------------------------------------------------- Coast Road east across the tile border x = -255
+place -300 443 88
+wait 1.5
+expect tile_x == 2
+mark tiles_async
+pedal throttle 0.5
+until tile_x == 3 25
+expect road_dist < 5                    # 6 m road; the drive is straight, the road curves slightly
+expect speed_kmh > 15
+capture /tmp/trailforge_expl_02_tile_crossing.png
+wait 0.3
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect tile_stall_ms < 30
+expect tiles_loaded <= 25
+expect tile_build_ms < 40
+expect tile_update_ms < 30
+expect d_tiles_async >= 0
+
+# ---------------------------------------------------------------- Valley Road ford (water < 0.45 m over the road)
+place -228 -333 100
+wait 1.5
+mark recoveries
+pedal throttle 0.35
+until water_depth > 0.1 15
+capture /tmp/trailforge_expl_03_ford.png
+wait 0.3
+camera vehicle three_quarter 12
+wait 0.4
+capture /tmp/trailforge_expl_04_ford_side.png
+wait 0.3
+camera follow
+until water_depth == 0 20
+wait 1.0
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect d_recoveries == 0
+expect road_dist < 5
+
+# ---------------------------------------------------------------- deep water: Alpine Lake, recovered to the road
+place -115 -135 0
+wait 0.5
+until recoveries >= 1 10
+wait 1.5
+expect water_depth == 0
+expect road_dist < 2
+expect submersion <= 0
+capture /tmp/trailforge_expl_05_after_recovery.png
+wait 0.3
+
+# ---------------------------------------------------------------- POI teleports (features 1..13)
+teleport 1
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_01.png
+wait 0.3
+teleport 2
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_02.png
+wait 0.3
+teleport 3
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_03.png
+wait 0.3
+teleport 4
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_04.png
+wait 0.3
+teleport 5
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_05.png
+wait 0.3
+teleport 6
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_06.png
+wait 0.3
+teleport 7
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_07.png
+wait 0.3
+teleport 8
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_08.png
+wait 0.3
+teleport 9
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_09.png
+wait 0.3
+teleport 10
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_10.png
+wait 0.3
+teleport 11
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_11.png
+wait 0.3
+teleport 12
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_12.png
+wait 0.3
+teleport 13
+wait 2.5
+expect water_depth < 0.3
+expect tilt < 25
+capture /tmp/trailforge_expl_poi_13.png
+wait 0.3
+expect d_recoveries == 1
+
+# ---------------------------------------------------------------- map overlay
+map on
+wait 0.5
+capture /tmp/trailforge_expl_06_map.png
+wait 0.3
+map off
+
+# ---------------------------------------------------------------- electric SUV on the level
+vehicle trailforge_ev
+wait 1.0
+expect electric == 1
+place -300 443 88
+wait 1.5
+pedal throttle 0.5
+until speed_kmh > 30 15
+until tile_x == 3 15
+capture /tmp/trailforge_expl_07_ev_road.png
+wait 0.3
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+place -228 -333 100
+wait 1.5
+pedal throttle 0.35
+until water_depth > 0.1 15
+until water_depth == 0 20
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect d_recoveries == 1
+vehicle trailforge_suv
+wait 1.0
+
+# ---------------------------------------------------------------- overviews (Ultra: trees drawn out to 2 km)
+quality Ultra
+time 11
+camera 0 1150 2050 0 40 -150
+wait 1.5
+capture /tmp/trailforge_expl_08_overview.png
+wait 0.3
+camera 0 2900 60 0 0 0
+wait 1.5
+capture /tmp/trailforge_expl_09_top.png
+wait 0.3
+camera -300 160 -60 -120 70 -150
+wait 1.0
+capture /tmp/trailforge_expl_10_lake.png
+wait 0.3
+camera -650 420 -480 -760 250 -850
+wait 1.0
+capture /tmp/trailforge_expl_11_peaks.png
+wait 0.3
+quality High
+camera follow
+
+# ---------------------------------------------------------------- back to the proving ground
+level proving_ground
+until level == 0 10
+wait 1.0
+teleport 8
+wait 1.5
+expect tilt < 10

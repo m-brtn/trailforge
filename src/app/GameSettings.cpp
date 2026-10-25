@@ -44,6 +44,10 @@ GameSettings sanitized(GameSettings s) {
         return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
     });
     if (!idOk) s.vehicle.clear();
+    const bool levelOk = s.level.size() <= 64 && std::all_of(s.level.begin(), s.level.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    });
+    if (!levelOk) s.level.clear();
     return s;
 }
 
@@ -70,6 +74,7 @@ std::string serializeSettings(const GameSettings& in) {
                   s.autoReverse ? 1 : 0, s.driveKeys, s.padGlyphs);
     std::string out = buf;
     if (!s.vehicle.empty()) out += "vehicle = " + s.vehicle + "\n";
+    if (!s.level.empty()) out += "level = " + s.level + "\n";
     return out;
 }
 
@@ -88,6 +93,14 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
             s.vehicle = trim(line.substr(eq + 1));
             if (sanitized(s).vehicle != s.vehicle) {
                 s.vehicle.clear();
+                ++bad;
+            }
+            continue;
+        }
+        if (eq != std::string::npos && trim(line.substr(0, eq)) == "level") {
+            s.level = trim(line.substr(eq + 1));
+            if (sanitized(s).level != s.level) {
+                s.level.clear();
                 ++bad;
             }
             continue;

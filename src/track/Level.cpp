@@ -284,7 +284,7 @@ public:
 private:
     struct Peak { float x, z, h, r; };
     struct Beach { float x, z, r; };
-    struct Lake { std::string name; float level, depth; Polygon poly; };
+    struct Lake { std::string name; float level, depth; Polygon poly; float shore = 0.0f; };
     struct RiverDef { std::string name; float width, depth, bank; std::vector<Float3> points; };
     struct BridgeDef { float x0, z0, x1, z1; };
     struct RoadDef { std::string name; bool trail; float width, grade; std::vector<Float3> points; std::vector<BridgeDef> bridges; };
@@ -471,7 +471,7 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
         m_beaches.push_back({float(b["x"].numberOr(0)), float(b["z"].numberOr(0)), float(b["radius"].numberOr(50))});
     for (const json::Value& l : doc["lakes"].array) {
         Lake lake{l["name"].stringOr("lake"), float(l["level"].numberOr(0)), float(l["depth"].numberOr(4)),
-                  readPolygon(l["polygon"])};
+                  readPolygon(l["polygon"]), std::max(0.0f, float(l["shore"].numberOr(0)))};
         if (lake.poly.p.size() < 3) {
             err = "level: lake " + lake.name + " needs a polygon";
             return false;
@@ -648,7 +648,7 @@ void LevelBaker::bakeFlats() {
 void LevelBaker::bakeLakes() {
     for (std::size_t k = 0; k < m_lakes.size(); ++k) {
         const Lake& lake = m_lakes[k];
-        const float pad = 12.0f;
+        const float lip = 12.0f, pad = std::max(lip, lake.shore);
         const int i0 = std::max(0, int((lake.poly.x0 - pad - m_origin) / m_cell)), i1 = std::min(m_n - 1, int((lake.poly.x1 + pad - m_origin) / m_cell) + 1);
         const int j0 = std::max(0, int((lake.poly.z0 - pad - m_origin) / m_cell)), j1 = std::min(m_n - 1, int((lake.poly.z1 + pad - m_origin) / m_cell) + 1);
         parallelFor(j1 - j0 + 1, m_threads, [&](int jj) {
@@ -663,7 +663,13 @@ void LevelBaker::bakeLakes() {
                     h = std::min(h, bed);
                     m_lakeId[idx(i, j)] = std::uint8_t(k + 1);
                 } else if (-d < pad) {
-                    h = std::max(h, lake.level + 0.3f + d * 0.06f);
+                    // Shore band: higher ground eases down to the waterline (about 7 deg at the water) instead
+                    // of meeting the lake in a cut; then the low lip that keeps the water in.
+                    if (-d < lake.shore) {
+                        const float lowered = std::min(h, lake.level + 0.3f - d * 0.12f);
+                        h = lowered + (h - lowered) * smoothstep(0.0f, lake.shore, -d);
+                    }
+                    if (-d < lip) h = std::max(h, lake.level + 0.3f + d * 0.06f);
                 }
             }
         });

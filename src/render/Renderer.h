@@ -57,6 +57,7 @@ struct FrameUniforms {
     glm::vec4 bodyMudColor[16]; // rgb linear, w: wetness
     glm::vec4 bodyMudFlecks[4]; // grass blades in the coat per region
     glm::vec4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
+    glm::vec4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
 };
 
 struct DrawUniforms {
@@ -95,7 +96,7 @@ struct MarkUniforms {
     glm::vec4 info;   // x: first live segment (ring index), y: ring capacity, z: simulation time (s), w: fade time (s)
     glm::vec4 params; // x: lift along the contact normal (m)
     glm::vec4 gainA;  // per-surface intensity multipliers: Concrete, PackedDirt, Rock, LowGrip
-    glm::vec4 gainB;  // Mud, Grass, Sand
+    glm::vec4 gainB;  // Mud, Grass, Sand, Snow
     glm::vec4 widthA; // mark width / tire width per surface (SurfaceMarkResponse::widthScale), same order
     glm::vec4 widthB;
 };
@@ -149,7 +150,11 @@ struct FrameDesc {
     float nearPlane = 0.1f;
     float time = 0.0f;         // s, drives wind, clouds and ripples
     std::span<const DrawItem> draws;
-    const GpuMesh* water = nullptr; // puddle surface (identity transform)
+    const GpuMesh* water = nullptr; // water surfaces (identity transform): puddles, or a level's lakes, rivers and sea
+    bool waterReflection = true;    // planar reflection at the ground maps' water level (puddles only)
+    float fogDensity = 0.0016f;     // height fog at y = 0 (1/m), times the fog setting
+    float fogFalloff = 0.05f;       // 1/m
+    float shadowScale = 1.0f;       // multiplies the shadow distance setting (open levels see farther)
     std::span<const LineVertex> lines;
     bool linesOnTop = false;   // true: lines without depth test (visible through the body)
     ImDrawData* ui = nullptr;
@@ -174,7 +179,7 @@ struct FrameDesc {
     const TireMarks* tireMarks = nullptr;
     const WheelSpray* spray = nullptr;           // wheel spray particles (one instanced draw)
     double simTime = 0.0;                        // simulation time the segment birth times refer to (s)
-    std::array<float, 7> markGain{1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
+    std::array<float, 8> markGain{1, 1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
 };
 
 struct RenderStats {
@@ -184,7 +189,7 @@ struct RenderStats {
     int shadowDraws = 0;
     int grassChunks = 0;
     std::uint64_t grassBlades = 0;            // blade instances submitted (before the mask test)
-    std::array<int, 3> trees{};               // tree instances drawn per LOD (main view)
+    std::array<int, 4> trees{};               // tree instances drawn per LOD (main view; 3 = crossed cards)
     int shadowTrees = 0;                      // tree instances per shadow cascade
     bool reflectionRendered = false;
     std::uint32_t markSegments = 0;           // tire mark segments drawn (one instanced draw)
@@ -194,6 +199,17 @@ struct RenderStats {
     double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
     double gpuMsAvg = 0.0;                    // exponential average
     double acquireWaitMs = 0.0;               // CPU time blocked in SDL_WaitAndAcquireGPUSwapchainTexture
+    int terrainChunks = 0;                    // level terrain chunks drawn (main view)
+    std::uint64_t terrainTriangles = 0;
+    std::array<int, 4> terrainLod{};          // chunks per LOD (step 1, 2, 4, 8 samples)
+};
+
+// Level terrain for the renderer: the physics height grid and the per-cell splat weights (render-only copy).
+struct TerrainSource {
+    int samples = 0;                          // per side; samples - 1 must be a multiple of 512
+    float origin = 0.0f, cell = 1.0f;         // sample (0, 0) at (origin, origin)
+    const float* heights = nullptr;           // samples^2, row-major by z
+    const std::uint32_t* splat = nullptr;     // (samples - 1)^2 RGBA8: dirt, rock, sand, snow
 };
 
 // SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
@@ -216,8 +232,10 @@ public:
     GpuMesh upload(const MeshData& mesh);
     // Ground maps (height, mask, noise) and grass chunk list; call once after loading the track.
     void setGround(const GroundMaps& maps, float waterLevel);
-    // Instanced trees: one unit-height mesh per LOD (near, mid, far) and the static instance list.
-    void setTrees(const std::array<MeshData, 3>& lods, std::span<const TreeInstance> instances);
+    // Level terrain (quadtree of 64 x 64 cell chunks, step 1..8 samples, skirts); nullptr removes it.
+    void setTerrain(const TerrainSource* terrain);
+    // Instanced trees: one unit-height mesh per LOD (near, mid, far, crossed cards) and the static instance list.
+    void setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances);
 
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
@@ -287,11 +305,17 @@ private:
     std::uint32_t cullGrass(const FrameDesc& frame, const glm::mat4& viewProj, std::array<std::uint32_t, 3>& counts);
     // Fills m_treeScratch: main view LOD 0/1/2, puddle reflection, shadow casters. Returns the total instance count.
     struct TreeLists {
-        std::array<std::uint32_t, 3> first{}, count{};
+        std::array<std::uint32_t, 4> first{}, count{};
         std::uint32_t reflFirst = 0, reflCount = 0, shadowFirst = 0, shadowCount = 0;
     };
     std::uint32_t cullTrees(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* reflViewProj,
                             TreeLists& lists);
+    struct TerrainChunk {
+        int i0, j0, step;
+    };
+    // Quadtree selection: frustum (optional) and maximum distance from the camera.
+    void selectTerrain(const glm::vec3& cam, const glm::mat4* viewProj, float maxDistance, float lodScale,
+                       std::vector<TerrainChunk>& out) const;
 
     SDL_Window* m_window = nullptr;
     SDL_GPUDevice* m_device = nullptr;
@@ -324,6 +348,7 @@ private:
     SDL_GPUGraphicsPipeline* m_blurDownPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_blurUpPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_blurCompositePipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_terrainShadowPipe = nullptr;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
     SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
@@ -335,6 +360,7 @@ private:
     SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_markPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_sprayPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_terrainPipe = nullptr;
 
     // Frame targets.
     std::uint32_t m_outW = 0, m_outH = 0;
@@ -356,7 +382,24 @@ private:
     glm::vec4 m_groundRect{0.0f};
     float m_waterLevel = 0.0f;
 
-    // Grass.
+    // Level terrain.
+    struct TerrainNode {
+        float minY, maxY;
+    };
+    Texture m_terrainHeight, m_terrainSplat;
+    GpuMesh m_terrainPatch;
+    int m_terrainSamples = 0;
+    float m_terrainOrigin = 0.0f, m_terrainCell = 1.0f;
+    int m_terrainRoots = 0;                         // root nodes per side (step 8)
+    std::array<std::vector<TerrainNode>, 4> m_terrainNodes; // per level (step 8, 4, 2, 1), row-major
+    std::vector<TerrainChunk> m_terrainScratch, m_terrainShadowScratch;
+
+    // Grass: chunks sorted into square buckets of kGrassBucket x kGrassBucket chunks for culling.
+    struct GrassBucket {
+        float x0, z0, x1, z1;
+        std::uint32_t first, count;
+    };
+    std::vector<GrassBucket> m_grassBuckets;
     std::vector<GrassChunk> m_grassChunks;
     std::vector<glm::vec4> m_grassScratch;
     SDL_GPUBuffer* m_grassBuffer = nullptr;
@@ -364,9 +407,10 @@ private:
     static constexpr std::uint32_t kMaxGrassChunks = 8192;
 
     // Trees (static instance list; the visible subsets are uploaded every frame).
-    std::array<GpuMesh, 3> m_treeMeshes;
+    std::array<GpuMesh, 4> m_treeMeshes;
     std::vector<TreeInstance> m_trees;
     std::vector<TreeInstance> m_treeScratch;
+    std::array<std::vector<TreeInstance>, 4> m_treeLod;
     SDL_GPUBuffer* m_treeBuffer = nullptr;
     SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
     std::uint32_t m_treeCapacity = 0; // instances
@@ -386,6 +430,9 @@ private:
     static constexpr float kTrampleTexel = 0.1f; // m
     static constexpr SDL_GPUTextureFormat kTrampleFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
     Texture m_trample;
+    glm::vec4 m_trampleRect{0.0f};
+    bool m_trampleWindowed = false; // the mask is a window that follows the camera (large ground maps)
+    glm::vec2 m_trampleCenter{0.0f};
     std::uint64_t m_trampleWritten = 0, m_trampleGeneration = ~0ull;
     std::size_t m_trampleCount = 0;
     double m_trampleTime = -1e9;

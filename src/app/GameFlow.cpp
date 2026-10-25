@@ -36,7 +36,7 @@ GameFlow::GameFlow(Screen start) : m_screen(start) {
 
 const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
     using M = MenuItem;
-    static const std::vector<MenuItem> kMain = {M::Start, M::Garage, M::Settings, M::Quit};
+    static const std::vector<MenuItem> kMain = {M::Start, M::LevelChoice, M::Garage, M::Settings, M::Quit};
     static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
                                                  M::QuitGame};
     static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::VSync,     M::MasterVolume,
@@ -124,6 +124,19 @@ void GameFlow::openVehiclePage() {
     m_stack.push_back({MenuPage::Vehicle, 0});
 }
 
+int GameFlow::levelIndex(const GameSettings& settings) const {
+    const auto it = std::find(m_levelIds.begin(), m_levelIds.end(), settings.level);
+    return it == m_levelIds.end() ? 0 : int(it - m_levelIds.begin());
+}
+
+MenuResult GameFlow::pickLevel(int index, GameSettings& settings) {
+    if (m_levelIds.size() < 2) return {};
+    const int old = levelIndex(settings);
+    const int i = wrap(index, int(m_levelIds.size()));
+    settings.level = m_levelIds[std::size_t(i)];
+    return i == old ? MenuResult{} : MenuResult{MenuCommand::LevelChanged, MenuSound::Adjust};
+}
+
 MenuResult GameFlow::pickVehicle(int index, GameSettings& settings) {
     if (m_vehicleIds.empty()) return {};
     const int i = wrap(index, int(m_vehicleIds.size()));
@@ -168,6 +181,7 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
         }
         startGame();
         return {MenuCommand::StartGame, MenuSound::Confirm};
+    case M::LevelChoice: return pickLevel(levelIndex(settings) + (dir == 0 ? 1 : dir), settings);
     case M::VehicleChoice:
         if (dir != 0) return pickVehicle(vehicleIndex(settings) + dir, settings);
         [[fallthrough]];
@@ -261,6 +275,7 @@ const char* menuLabel(MenuItem item) {
     using M = MenuItem;
     switch (item) {
     case M::Start: return "START";
+    case M::LevelChoice: return "LEVEL";
     case M::Garage: return "GARAGE";
     case M::Settings: return "SETTINGS";
     case M::Quit: return "QUIT";
@@ -310,12 +325,20 @@ const char* menuSection(MenuItem item) {
 }
 
 bool menuAdjustable(MenuItem item) {
-    return (int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::PadGlyphs)) || item == MenuItem::VehicleChoice;
+    return (int(item) >= int(MenuItem::Quality) && int(item) <= int(MenuItem::PadGlyphs)) || item == MenuItem::VehicleChoice ||
+           item == MenuItem::LevelChoice;
 }
 
-std::string menuValue(MenuItem item, const GameSettings& s) {
+std::string levelDisplayName(const std::string& id) {
+    std::string n = id;
+    for (char& c : n) c = c == '_' ? ' ' : char(std::toupper(static_cast<unsigned char>(c)));
+    return n;
+}
+
+std::string menuValue(MenuItem item, const GameSettings& s, const std::string& defaultLevel) {
     using M = MenuItem;
     switch (item) {
+    case M::LevelChoice: return levelDisplayName(s.level.empty() ? defaultLevel : s.level);
     case M::Quality: {
         std::string n = presetName(QualityPreset(std::clamp(s.quality, 0, 3)));
         for (char& c : n) c = char(std::toupper(static_cast<unsigned char>(c)));

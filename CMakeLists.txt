@@ -96,6 +96,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/VehicleModel.cpp
         src/render/StyleKit.cpp
         src/render/Scenery.cpp
+        src/render/LevelScene.cpp
         src/render/TimeOfDay.cpp
         src/render/Camera.cpp
         src/render/DebugDraw.cpp

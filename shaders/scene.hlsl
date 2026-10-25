@@ -42,6 +42,8 @@ static const int MAT_AMBER = 12;
 static const int MAT_FOLIAGE = 13;
 static const int MAT_PAINT = 14;
 static const int MAT_SAND = 15;
+static const int MAT_SNOW = 16;
+static const int MAT_TERRAIN = 17; // level terrain: splat weights rock / sand / snow in the color, the rest is dirt + mask
 
 // BodyMudRegion (src/sim/BodyMud.h).
 static const int kMudArchRearShader = 0;
@@ -84,6 +86,7 @@ struct FrameUniforms {
     float4 bodyMudColor[16]; // rgb linear, w: wetness
     float4 bodyMudFlecks[4]; // grass blades in the coat per region
     float4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
+    float4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
 };
 
 struct DrawUniforms {
@@ -97,7 +100,8 @@ struct DrawUniforms {
 
 // The frame uniforms are uniform slot 0 of almost every entry point. The entry points whose slot 0 holds other
 // uniforms do not read them; there `f` is parked on an unused slot and the compiler drops it.
-#if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs) || defined(TF_ENTRY_bloom_down_fs) || \
+#if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs) || defined(TF_ENTRY_terrain_shadow_vs) || \
+    defined(TF_ENTRY_bloom_down_fs) || \
     defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs) || \
     defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs)
 ConstantBuffer<FrameUniforms> f : UBO(13);
@@ -229,6 +233,7 @@ float shadowFactor(Texture2DArray<float> sm, SamplerComparisonState cmp, float3 
 
 // Ground maps (mask: R grass, G mud weight, B wetness).
 float2 groundUV(float2 xz) { return (xz - f.groundRect.xy) * f.groundRect.zw; }
+float2 trampleUV(float2 xz) { return (xz - f.trampleRect.xy) * f.trampleRect.zw; }
 
 float4 sampleMask(Texture2D<float4> mask, SamplerState s, float2 xz) {
     const float2 uv = groundUV(xz);
@@ -522,6 +527,16 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, Texture2D
         g.roughness = 0.96;
         g.height = 0.35 * (0.5 + 0.5 * ripple) + fine * 0.25;
         g.bump = 0.35;
+    } else if (mat == MAT_SNOW) {
+        // Old wind-packed snow: soft drifts, sastrugi streaks across the wind, faint sparkle in the fine noise.
+        const float drift = nA.r * 0.6 + nB.g * 0.4;
+        const float streaks = sampleNoise(noiseTex, ns, float2(dot(P.xz, float2(0.8, 0.6)) * 0.35, dot(P.xz, float2(-0.6, 0.8)) * 0.06)).g;
+        float3 c = lerp(float3(0.56, 0.60, 0.66), float3(0.78, 0.81, 0.86), smoothstep(0.25, 0.75, drift * 0.7 + streaks * 0.3));
+        c *= 0.96 + 0.08 * fine;
+        g.albedo = c;
+        g.roughness = 0.62 - 0.12 * smoothstep(0.7, 0.95, fine);
+        g.height = drift * 0.5 + streaks * 0.4 + fine * 0.1;
+        g.bump = 0.3;
     } else { // MAT_LOWGRIP: sealed slab, smooth
         g.albedo = float3(0.075, 0.095, 0.12) * (0.9 + 0.2 * large);
         g.roughness = 0.30 + 0.1 * fine;
@@ -533,6 +548,29 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, Texture2D
     g.albedo *= lerp(1.0, 0.6, wet);
     g.roughness = lerp(g.roughness, 0.38, wet * 0.8);
     g.bump *= 1.0 - 0.5 * wet;
+    return g;
+}
+
+GroundSurface mixGround(GroundSurface a, GroundSurface b, float t) {
+    GroundSurface r;
+    r.albedo = lerp(a.albedo, b.albedo, t);
+    r.roughness = lerp(a.roughness, b.roughness, t);
+    r.height = lerp(a.height, b.height, t);
+    r.bump = lerp(a.bump, b.bump, t);
+    return r;
+}
+
+// Level terrain: packed dirt / grass (from the mask) under rock, sand and snow by the baked splat weights. The edges
+// are sharpened with noise so the layers do not blur into each other over the 1 m splat cells.
+GroundSurface terrainMaterial(float3 w, float3 P, float3 N, float4 mask, Texture2D<float4> noiseTex, SamplerState ns, float far) {
+    const float2 nz = noiseTex.Sample(ns, P.xz * 0.13).rg;
+    const float rock = saturate((w.x - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, w.x);
+    const float sand = saturate((w.y - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, w.y);
+    const float snow = saturate((w.z - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, w.z);
+    GroundSurface g = groundMaterial(MAT_DIRT, P, N, mask, noiseTex, ns, far);
+    if (sand > 0.0) g = mixGround(g, groundMaterial(MAT_SAND, P, N, mask, noiseTex, ns, far), sand);
+    if (rock > 0.0) g = mixGround(g, groundMaterial(MAT_ROCK, P, N, mask, noiseTex, ns, far), rock);
+    if (snow > 0.0) g = mixGround(g, groundMaterial(MAT_SNOW, P, N, mask, noiseTex, ns, far), snow);
     return g;
 }
 
@@ -673,10 +711,11 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     s.emissive = ((float3)(0.0));
     s.clearCoat = 0.0;
 
-    const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND;
+    const bool ground = (mat >= MAT_DIRT && mat <= MAT_GRASS) || mat == MAT_SAND || mat == MAT_SNOW || mat == MAT_TERRAIN;
     if (ground) {
         const float4 m = sampleMask(mask, maskSampler, P.xz);
-        GroundSurface g = groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
+        GroundSurface g = mat == MAT_TERRAIN ? terrainMaterial(vin.color, P, N, m, noiseTex, noiseSampler, grassFar(P))
+                                             : groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
         s.albedo = g.albedo;
         s.roughness = g.roughness;
         s.metallic = 0.0;
@@ -861,6 +900,68 @@ float4 tree_shadow_vs(LitIn vin, uint iid : SV_InstanceID) : SV_Position {
 }
 #endif
 
+// ---------------------------------------------------------------- level terrain (render copy of the physics grid)
+
+// One shared patch of 64 x 64 cells (+ skirt) drawn per quadtree chunk. LitIn.position = (column, skirt 0/1, row).
+// The heights are read with Load at the grid samples, so at step 1 the triangles are the physics heightfield
+// (same diagonal: per cell {00, 01, 11} and {00, 11, 10}).
+#if defined(TF_ENTRY_terrain_vs) || defined(TF_ENTRY_terrain_shadow_vs)
+ConstantBuffer<DrawUniforms> draw : UBO(1); // params: first column, first row, step (samples), skirt depth (m); tint: samples, origin, cell
+Texture2D<float> terrainHeight : TEX(0);
+SamplerState terrainHeightSampler : SMP(0);
+Texture2D<float4> terrainSplat : TEX(1);
+SamplerState terrainSplatSampler : SMP(1);
+
+float terrainSample(int i, int j) {
+    const int last = int(draw.tint.x) - 1;
+    return terrainHeight.Load(int3(clamp(i, 0, last), clamp(j, 0, last), 0));
+}
+
+int2 terrainIndex(float3 lp) {
+    const int stepN = int(draw.params.z);
+    return int2(int(draw.params.x) + int(lp.x + 0.5) * stepN, int(draw.params.y) + int(lp.z + 0.5) * stepN);
+}
+
+float3 terrainWorld(float3 lp, int2 ij) {
+    return float3(draw.tint.y + float(ij.x) * draw.tint.z, terrainSample(ij.x, ij.y) - lp.y * draw.params.w,
+                  draw.tint.y + float(ij.y) * draw.tint.z);
+}
+#endif
+
+#if defined(TF_ENTRY_terrain_vs)
+LitOut terrain_vs(LitIn vin) {
+    const int2 ij = terrainIndex(vin.position);
+    const float3 world = terrainWorld(vin.position, ij);
+    // Normal from central differences over one LOD step (smooth at every LOD).
+    const int d = int(draw.params.z);
+    const float hx = terrainSample(ij.x - d, ij.y) - terrainSample(ij.x + d, ij.y);
+    const float hz = terrainSample(ij.x, ij.y - d) - terrainSample(ij.x, ij.y + d);
+    LitOut vout;
+    vout.position = mul(f.viewProj, float4(world, 1.0));
+    vout.worldPos = world;
+    vout.normal = normalize(float3(hx, 2.0 * float(d) * draw.tint.z, hz));
+    // Splat texels are the cells; a grid sample sits on the corner of four, the linear filter averages them.
+    const float cells = draw.tint.x - 1.0;
+    const float4 sp = terrainSplat.SampleLevel(terrainSplatSampler, float2(ij) / cells, 0);
+    vout.color = sp.gba; // rock, sand, snow
+    vout.material = float4(float(MAT_TERRAIN), 0.0, 0.0, 0.0);
+    vout.localPos = world;
+    vout.localNormal = vout.normal;
+    vout.mudMode = 0.0;
+    vout.soil = ((float4)(0.0));
+    vout.soilParams = ((float2)(0.0));
+    vout.soilExtra = ((float2)(0.0));
+    return vout;
+}
+#endif
+
+#if defined(TF_ENTRY_terrain_shadow_vs)
+ConstantBuffer<ShadowUniforms> su : UBO(0);
+float4 terrain_shadow_vs(LitIn vin) : SV_Position {
+    return mul(su.lightViewProj, float4(terrainWorld(vin.position, terrainIndex(vin.position)), 1.0));
+}
+#endif
+
 // ---------------------------------------------------------------- sky
 
 struct FullscreenOut {
@@ -872,7 +973,7 @@ struct FullscreenOut {
 FullscreenOut fullscreen_vs(uint vid : SV_VertexID) {
     FullscreenOut vout;
     const float2 p = float2((vid << 1) & 2, vid & 2);
-    vout.position = float4(p * 2.0 - 1.0, 1.0, 1.0); // z = 1: far plane (sky drawn behind everything)
+    vout.position = float4(p * 2.0 - 1.0, 0.0, 1.0); // z = 0: far plane of the reversed depth (sky behind everything)
     vout.uv = float2(p.x, 1.0 - p.y);
     return vout;
 }
@@ -1025,7 +1126,7 @@ SamplerState rs : SMP(3);
 float4 water_fs(LitOut vin) : SV_Target0 {
     const float3 P = vin.worldPos;
     const float terrain = heightTex.SampleLevel(cs, groundUV(P.xz), 0).r;
-    const float depth = f.waterParams.x - terrain;
+    const float depth = P.y - terrain;
     if (depth <= 0.0) discard;
     const float t = f.cameraPos.w;
     // Ripples: two scrolling noise layers, normal from finite differences.
@@ -1048,10 +1149,11 @@ float4 water_fs(LitOut vin) : SV_Target0 {
     const float3 H = normalize(f.sunDir.xyz + V);
     const float spec = ggxSpec(saturate(dot(N, H)), max(NdotV, 1e-3), saturate(dot(N, f.sunDir.xyz)), 0.07);
     const float3 sunSpec = f.sunColor.rgb * spec * 0.02 * saturate(dot(N, f.sunDir.xyz)) * shadow;
-    // Muddy water body: opaque brown with depth, see-through at the very edge.
+    // Water body from the mesh: color (puddles muddy brown, lakes and sea blue-green), material.y = depth (m) at
+    // which it turns opaque, material.z = opacity; see-through at the very edge.
     const float3 skyUp = lerp(f.skyHorizon.rgb, f.skyZenith.rgb, 0.5);
-    const float3 body = float3(0.055, 0.040, 0.026) * (skyUp + f.sunColor.rgb * 0.15 * shadow);
-    const float aBody = saturate(depth / 0.10) * 0.88;
+    const float3 body = vin.color * (skyUp + f.sunColor.rgb * 0.15 * shadow);
+    const float aBody = saturate(depth / vin.material.y) * vin.material.z;
     const float edge = smoothstep(0.0, 0.025, depth);
     float3 src = (body * aBody * (1.0 - F) + refl * F + sunSpec) * edge;
     const float srcAlpha = edge * (1.0 - (1.0 - F) * (1.0 - aBody));
@@ -1171,7 +1273,8 @@ GrassOut grass_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const float slope = length(float2(hX - hC, hZ - hC)) * 2.0;
     const GrassZones zones = grassZones(noiseTex, ns, root, m.r, slope);
     // Tire marks: R = flattened by a rolling wheel, G = torn out by a spinning or sliding wheel.
-    const float2 trampled = trample.SampleLevel(ts, uvRoot, 0).rg;
+    const float2 uvTrample = trampleUV(root);
+    const float2 trampled = all(uvTrample >= 0.0) && all(uvTrample <= 1.0) ? trample.SampleLevel(ts, uvTrample, 0).rg : ((float2)(0.0));
     const bool alive = (wheat || r3 < m.r * zones.patch * 1.15) && scale > 0.02 && r2 >= trampled.g * 1.3 - 0.2;
 
     // ---- species
@@ -1536,8 +1639,9 @@ static const int SURF_ROCK = 2;
 static const int SURF_MUD = 4;
 static const int SURF_GRASS = 5;
 static const int SURF_SAND = 6;
+static const int SURF_SNOW = 7;
 
-bool softSurface(int s) { return s == SURF_DIRT || s == SURF_MUD || s == SURF_GRASS || s == SURF_SAND; }
+bool softSurface(int s) { return s == SURF_DIRT || s == SURF_MUD || s == SURF_GRASS || s == SURF_SAND || s == SURF_SNOW; }
 
 float surfaceParam(float4 a, float4 b, int surface) { return surface < 4 ? a[surface] : b[min(surface - 4, 3)]; }
 
@@ -1660,7 +1764,8 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     float cover;      // blend weight over the ground
     float cavity = 0.0;
     if (softSurface(surface)) {
-        const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : surface == SURF_SAND ? MAT_SAND : MAT_DIRT;
+        const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : surface == SURF_SAND ? MAT_SAND
+                      : surface == SURF_SNOW ? MAT_SNOW : MAT_DIRT;
         const GroundSurface ground = groundMaterial(mat, P, N0, m, noiseTex, ns, grassFar(P));
         const GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, 0.0), noiseTex, ns, 0.0);
         const float under = 1.0 - smoothstep(0.82, 0.98, atv);
@@ -1692,6 +1797,18 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
             rough = lerp(0.85, 0.95, torn);
             cover = saturate(max(imprint * 0.75, slip * 1.5));
             cavity = torn * 0.2;
+        } else if (surface == SURF_SNOW) {
+            // Snow: the tread packs a smoother, slightly darker and glossier track with crisp lugs; spinning throws up
+            // loose granular snow at the sides.
+            const float berm = smoothstep(0.85, 1.05, atv) * (1.0 - smoothstep(1.05, 1.3, atv));
+            h = -(0.015 * imprint + 0.03 * slip) * under - lugs * 0.012 * under + (0.006 * imprint + 0.015 * slip) * berm +
+                churn * (clods - 0.5) * 0.02 * under + baseH * lerp(1.0, 0.25, imprint);
+            const float3 packed = ground.albedo * 0.84 * (1.0 - 0.1 * lugs);
+            const float3 loose = ground.albedo * lerp(0.9, 1.05, clods);
+            albedo = lerp(packed, loose, churn);
+            rough = lerp(0.42, 0.7, churn);
+            cover = saturate(max(imprint * 0.9, slip * 1.3));
+            cavity = under * 0.08 * lugs;
         } else if (surface == SURF_SAND) {
             // Dry sand: the tread presses crisp lugs into a slightly darker, smoother floor; spinning digs a loose
             // trench with sand heaped at the sides.
@@ -1774,7 +1891,7 @@ struct MarkMaskOut {
 MarkMaskOut mark_mask_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const MarkCorner c = markCorner(vid, iid);
     const bool soft = softSurface(c.surface);
-    const float2 uv = groundUV(c.world.xz);
+    const float2 uv = trampleUV(c.world.xz);
     MarkMaskOut vout;
     vout.position = c.visible && soft ? float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0) : float4(-2.0, -2.0, 0.5, 1.0);
     vout.amount = float2(c.imprint, c.slip) * c.fade;

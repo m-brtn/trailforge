@@ -44,6 +44,7 @@ const char* keyLabel(Key key, KeyboardStyle style) {
     case Key::V: return "V";
     case Key::B: return "B";
     case Key::N: return "N";
+    case Key::M: return "M";
     case Key::Count: break;
     }
     return "";
@@ -88,6 +89,7 @@ KeyRect keyRect(Key key) {
     case Key::V: return {5.25f, 4};
     case Key::B: return {6.25f, 4};
     case Key::N: return {7.25f, 4};
+    case Key::M: return {8.25f, 4};
     case Key::Up: return {16.25f, 4};
     case Key::Space: return {3.75f, 5, 6.25f};
     case Key::Left: return {15.25f, 5};
@@ -116,7 +118,7 @@ const std::vector<KeyAction>& keyActions() {
         {Key::C, Action::ToggleCamera},    {Key::N, Action::StepOnce},       {Key::P, Action::TogglePause},
         {Key::H, Action::ToggleHeadlights}, {Key::B, Action::ToggleAbs},     {Key::T, Action::CycleTraction},
         {Key::X, Action::CycleDiffLock},   {Key::V, Action::CycleTransfer},  {Key::F1, Action::ToggleDebugUI},
-        {Key::F2, Action::ToggleGraphicsUI}, {Key::F3, Action::ToggleAudioUI},
+        {Key::F2, Action::ToggleGraphicsUI}, {Key::F3, Action::ToggleAudioUI}, {Key::M, Action::ToggleMap},
     };
     return k;
 }
@@ -137,6 +139,7 @@ const char* actionLabel(Action a) {
     case Action::CycleTransfer: return "2H / 4H / 4L";
     case Action::TogglePause: return "DEBUG FREEZE";
     case Action::StepOnce: return "SINGLE STEP";
+    case Action::ToggleMap: return "MAP";
     case Action::Quit: return "QUIT";
     case Action::Count: break;
     }

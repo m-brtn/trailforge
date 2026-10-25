@@ -25,6 +25,7 @@ enum class Action {
     CycleTransfer,    // part-time transfer case 2H -> 4H -> 4L
     TogglePause,      // debug freeze without the menu (Escape / gamepad Start open the pause menu, see MenuKeys)
     StepOnce,         // while frozen: a single physics step
+    ToggleMap,        // open-world level map with the point-of-interest teleports
     Quit,
     Count
 };
@@ -45,7 +46,7 @@ enum class Key {
     Backspace, PageUp,
     Q, W, R, T, P, PageDown,
     A, S, D, H, L, Return,
-    LeftShift, X, C, V, B, N, Up,
+    LeftShift, X, C, V, B, N, M, Up,
     Space, Left, Down, Right,
     LeftCtrl, LeftAlt, LeftGui,
     Count

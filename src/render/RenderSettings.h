@@ -33,6 +33,8 @@ struct RenderSettings {
     bool grassDetail = true;       // wheat awns, seed-head spikelets, clover leaf marks (alpha-cut shapes)
     bool clouds = true;
     int sprayMax = 3000;           // wheel spray particle cap (cosmetic)
+    float treeDistance = 3500.0f;  // m, trees beyond are not drawn (far trees are 4-triangle cards)
+    float terrainDetail = 2.0f;    // level terrain: a chunk splits while the camera is closer than this times its size
     bool sprayDust = true;         // dust puffs / clouds in the spray
 
     // Look
@@ -61,18 +63,21 @@ inline RenderSettings presetSettings(QualityPreset p) {
         s.renderScale = 0.67f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 1; s.shadowMapSize = 1024;
         s.shadowDistance = 40.0f; s.shadowFilter = 0; s.reflections = false; s.bloom = false; s.grassLevel = 1;
         s.grassDistance = 22.0f; s.flowerDensity = 0.5f; s.grassDetail = false; s.sprayMax = 600; s.sprayDust = false;
+        s.terrainDetail = 1.2f; s.treeDistance = 1500.0f;
         break;
     case QualityPreset::Medium:
         s.renderScale = 0.85f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 2; s.shadowMapSize = 1536;
         s.shadowDistance = 60.0f; s.shadowFilter = 1; s.reflections = true; s.reflectionScale = 0.35f; s.bloom = true;
-        s.grassLevel = 2; s.grassDistance = 32.0f; s.flowerDensity = 0.8f; s.sprayMax = 1500;
+        s.grassLevel = 2; s.grassDistance = 32.0f; s.flowerDensity = 0.8f; s.sprayMax = 1500; s.terrainDetail = 1.6f;
+        s.treeDistance = 2500.0f;
         break;
     case QualityPreset::High:
         break; // defaults above
     case QualityPreset::Ultra:
         s.renderScale = 1.0f; s.msaa = 4; s.fxaa = false; s.shadowCascades = 4; s.shadowMapSize = 2048;
         s.shadowDistance = 110.0f; s.shadowFilter = 2; s.reflections = true; s.reflectionScale = 0.75f; s.bloom = true;
-        s.grassLevel = 4; s.grassDistance = 60.0f; s.sprayMax = 6000;
+        s.grassLevel = 4; s.grassDistance = 60.0f; s.sprayMax = 6000; s.terrainDetail = 2.6f;
+        s.treeDistance = 4500.0f;
         break;
     default: break;
     }

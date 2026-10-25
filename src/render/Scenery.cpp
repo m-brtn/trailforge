@@ -118,7 +118,7 @@ MeshData buildSceneryMesh() {
     return m;
 }
 
-std::array<MeshData, 3> buildPineMeshes() {
+std::array<MeshData, 4> buildPineMeshes() {
     const Material bark{MatId::Generic, {0.10f, 0.07f, 0.045f}, 0.9f, 0.0f, 0.0f};
     auto needles = [](float t) {
         // Lower tiers are darker (self-occlusion), upper tiers catch more light.
@@ -129,7 +129,7 @@ std::array<MeshData, 3> buildPineMeshes() {
         bool trunk, underside;
     };
     const Lod lods[3] = {{6, 8, true, true}, {4, 6, true, false}, {2, 5, false, false}};
-    std::array<MeshData, 3> out;
+    std::array<MeshData, 4> out;
     for (int l = 0; l < 3; ++l) {
         MeshData& m = out[l];
         const Lod& lod = lods[l];
@@ -142,6 +142,21 @@ std::array<MeshData, 3> buildPineMeshes() {
             const bool top = k + 1 == lod.tiers;
             const float height = top ? 1.0f - baseY : (0.32f - 0.12f * t) * 4.5f / float(lod.tiers);
             addTier(m, baseY, radius, height, lod.seg, 0.9f * float(k), needles(t), lod.underside);
+        }
+    }
+    // Cards: the cone outline 0.14..1.0 high, radius 0.30, in two vertical planes; normals lean outward and up so
+    // the far canopy shades like the cones.
+    MeshData& card = out[3];
+    for (int k = 0; k < 2; ++k) {
+        const float a = 0.5f * kPi * float(k) + 0.4f;
+        const glm::vec3 side(std::cos(a), 0.0f, std::sin(a)), across(-side.z, 0.0f, side.x);
+        const glm::vec3 l = 0.30f * side + glm::vec3(0, 0.14f, 0), r = -0.30f * side + glm::vec3(0, 0.14f, 0);
+        const glm::vec3 apex(0.0f, 1.0f, 0.0f);
+        for (float f : {1.0f, -1.0f}) {
+            const glm::vec3 n = glm::normalize(f * across + glm::vec3(0, 0.8f, 0));
+            const Material mat = needles(0.4f);
+            if (f > 0.0f) card.addTri(l, r, apex, n, n, n, mat);
+            else card.addTri(r, l, apex, n, n, n, mat);
         }
     }
     return out;
@@ -169,7 +184,8 @@ std::vector<TreeInstance> buildTreeInstances() {
 MeshData buildWaterMesh() {
     MeshData m;
     const WaterInfo w = TestTrack::water();
-    const Material water{MatId::Generic, {0.0f, 0.0f, 0.0f}, 0.05f, 0.0f, 0.0f};
+    // water_fs: color = muddy body, roughness slot = depth (m) at which it is opaque, metallic slot = opacity.
+    const Material water{MatId::Generic, {0.055f, 0.040f, 0.026f}, 0.10f, 0.88f, 0.0f};
     const float pad = 0.5f;
     const glm::vec3 a(w.x0 - pad, w.level, w.z0 - pad), b(w.x0 - pad, w.level, w.z1 + pad);
     const glm::vec3 c(w.x1 + pad, w.level, w.z1 + pad), d(w.x1 + pad, w.level, w.z0 - pad);

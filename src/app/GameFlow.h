@@ -14,12 +14,12 @@ namespace tf {
 // closing it returns to the menu it came from.
 enum class Screen { Intro, MainMenu, Playing, Paused, Garage };
 
-// Menu pages. Start opens the vehicle page when the catalog has more than one vehicle (else it starts directly);
-// a level page would go between it and the StartGame command.
+// Menu pages. Start opens the vehicle page when the catalog has more than one vehicle (else it starts directly).
+// The level is a row of the start menu (applied at once, so the menu backdrop is the chosen world).
 enum class MenuPage { Main, Pause, Settings, Controls, Vehicle };
 
 enum class MenuItem {
-    Start, Garage, Settings, Quit,               // main
+    Start, LevelChoice, Garage, Settings, Quit,  // main
     Resume, Restart, QuitToMenu, QuitGame,       // pause (+ Garage, Settings)
     Quality, RenderScale, VSync,                 // settings: graphics
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
@@ -31,7 +31,8 @@ enum class MenuItem {
 
 enum class MenuCommand {
     None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed, OpenGarage, CloseGarage,
-    VehicleChanged // GameSettings::vehicle changed on the vehicle page
+    VehicleChanged, // GameSettings::vehicle changed on the vehicle page
+    LevelChanged    // GameSettings::level changed on the start menu
 };
 enum class MenuSound { None, Move, Confirm, Back, Adjust, Open, Close };
 
@@ -95,6 +96,10 @@ public:
     // Catalog index of settings.vehicle; 0 (the default vehicle) when it is empty or unknown.
     int vehicleIndex(const GameSettings& settings) const;
     void openVehiclePage(); // from the start menu (scenario command; Start does it through the input)
+    // Level ids in display order (the LEVEL row cycles through them); settings.level empty = the first one.
+    void setLevels(std::vector<std::string> ids) { m_levelIds = std::move(ids); }
+    const std::vector<std::string>& levels() const { return m_levelIds; }
+    int levelIndex(const GameSettings& settings) const;
 
     // Direct transitions (scenario commands and the application).
     void skipIntro();
@@ -118,6 +123,7 @@ private:
     MenuResult activate(MenuItem item, GameSettings& settings, int dir);
     MenuResult goBack();
     MenuResult pickVehicle(int index, GameSettings& settings);
+    MenuResult pickLevel(int index, GameSettings& settings);
 
     Screen m_screen;
     std::vector<PageState> m_stack;
@@ -126,6 +132,7 @@ private:
     double m_menuFadeLength = 0.0; // > 0 while the start menu fades in after the intro
     Screen m_garageReturn = Screen::MainMenu;
     std::vector<std::string> m_vehicleIds;
+    std::vector<std::string> m_levelIds;
 };
 
 const char* menuLabel(MenuItem item);
@@ -134,8 +141,10 @@ const char* menuPageTitle(MenuPage page);
 const char* menuSection(MenuItem item);
 // Rows with a value (left / right change it).
 bool menuAdjustable(MenuItem item);
-// Current value as shown in the menu ("ON", "HIGH", "80 %"); empty for plain actions.
-std::string menuValue(MenuItem item, const GameSettings& s);
+// Current value as shown in the menu ("ON", "HIGH", "80 %"); empty for plain actions. The level row shows the id in
+// capitals with spaces ("EXPLORATION PEAKS"); an empty level shows `defaultLevel` that way.
+std::string menuValue(MenuItem item, const GameSettings& s, const std::string& defaultLevel = {});
+std::string levelDisplayName(const std::string& id);
 // Changes the value one step (dir -1 / +1); returns false if nothing changed.
 bool adjustSetting(MenuItem item, GameSettings& s, int dir);
 

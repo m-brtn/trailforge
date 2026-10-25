@@ -95,6 +95,12 @@ void settingsRoundtrip() {
               parseSettings("traction_mode = 0\n").traction == 0 && parseSettings("traction_mode = -4\n").traction == -1,
           "legacy traction key / traction_mode mapping");
     CHECK(serializeSettings(defaults).find("vehicle") == std::string::npos, "no vehicle line without a choice");
+    CHECK(serializeSettings(defaults).find("level") == std::string::npos, "no level line without a choice");
+    GameSettings withLevel = defaults;
+    withLevel.level = "proving_ground";
+    CHECK(parseSettings(serializeSettings(withLevel)).level == "proving_ground", "level choice roundtrip");
+    int badLevel = 0;
+    CHECK(parseSettings("level = ../x\n", &badLevel).level.empty() && badLevel == 1, "invalid level id rejected");
     GameSettings untouched = s;
     CHECK(!loadSettingsFile((dir / "missing.ini").string(), untouched) && untouched == s,
           "a missing file must leave the settings alone");
@@ -123,11 +129,25 @@ void menuNavigation() {
     skipped.handle(key(&MenuInput::any), settings);
     CHECK(skipped.screen() == Screen::MainMenu && skipped.menuFade() == 0.0f, "any key skips the intro");
 
-    // Main menu: Start, Garage, Settings, Quit; Up from the top wraps to Quit.
+    // Main menu: Start, Level, Garage, Settings, Quit; Up from the top wraps to Quit.
     CHECK(flow.current() == MenuItem::Start, "cursor starts on Start");
     MenuResult r = flow.handle(key(&MenuInput::up), settings);
     CHECK(flow.current() == MenuItem::Quit && r.sound == MenuSound::Move, "up wraps to Quit");
     flow.handle(key(&MenuInput::down), settings);
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::LevelChoice, "down moves to Level");
+    // Level row: cycles the level ids (empty setting = the first), LevelChanged on every change.
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::None && settings.level.empty(), "no levels set: the row does nothing");
+    flow.setLevels({"exploration_peaks", "proving_ground"});
+    CHECK(flow.levelIndex(settings) == 0 && menuValue(MenuItem::LevelChoice, settings, "exploration_peaks") ==
+              "EXPLORATION PEAKS", "default level shown");
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::LevelChanged && settings.level == "proving_ground" &&
+              menuValue(MenuItem::LevelChoice, settings) == "PROVING GROUND", "right picks the proving ground");
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::LevelChanged && settings.level == "exploration_peaks", "accept cycles (wraps)");
+    CHECK(flow.screen() == Screen::MainMenu, "the level row stays on the start menu");
     flow.handle(key(&MenuInput::down), settings);
     CHECK(flow.current() == MenuItem::Garage, "down moves to Garage");
     r = flow.handle(key(&MenuInput::accept), settings);

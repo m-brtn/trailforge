@@ -234,7 +234,11 @@ void levelRoadCarving() {
             if (i > 0) {
                 const float ds = s.s - r.samples[i - 1].s;
                 worstGrade = std::max(worstGrade, std::abs(s.y - r.samples[i - 1].y) / ds);
-                fords += s.ford && !r.samples[i - 1].ford;
+                if (s.ford && !r.samples[i - 1].ford) {
+                    ++fords;
+                    std::printf("  ford on %s at %.0f %.0f (s = %.0f m, heading %.0f deg)\n", r.name.c_str(), double(s.x),
+                                double(s.z), double(s.s), double(std::atan2(s.dx, s.dz) * 57.2958f));
+                }
             }
             if (s.bridge || std::abs(s.x) > L.playHalfExtent() || std::abs(s.z) > L.playHalfExtent()) continue;
             // Junctions blend two profiles; they are checked by the vehicle drives, not against one profile.

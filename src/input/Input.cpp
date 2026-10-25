@@ -43,6 +43,7 @@ SDL_Scancode scancode(Key k) {
     case Key::V: return SDL_SCANCODE_V;
     case Key::B: return SDL_SCANCODE_B;
     case Key::N: return SDL_SCANCODE_N;
+    case Key::M: return SDL_SCANCODE_M;
     case Key::Up: return SDL_SCANCODE_UP;
     case Key::Space: return SDL_SCANCODE_SPACE;
     case Key::Left: return SDL_SCANCODE_LEFT;
@@ -73,6 +74,7 @@ SDL_Keycode keycode(Key k) {
     case Key::V: return SDLK_V;
     case Key::B: return SDLK_B;
     case Key::N: return SDLK_N;
+    case Key::M: return SDLK_M;
     case Key::F1: return SDLK_F1;
     case Key::F2: return SDLK_F2;
     case Key::F3: return SDLK_F3;

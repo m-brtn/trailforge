@@ -1,5 +1,6 @@
 #include "render/GroundMaps.h"
 
+#include "track/Level.h"
 #include "track/TestTrack.h"
 
 #include <algorithm>
@@ -7,6 +8,9 @@
 #include <cstring>
 
 namespace tf {
+
+void buildNoise(GroundMaps& g);
+
 namespace {
 
 std::uint32_t hash3(std::int32_t x, std::int32_t y, std::uint32_t seed) {
@@ -59,17 +63,6 @@ float tileCells(float u, float v, int cells, std::uint32_t seed) {
     return std::clamp(best / 1.1f, 0.0f, 1.0f);
 }
 
-std::uint16_t toHalf(float f) {
-    std::uint32_t x;
-    std::memcpy(&x, &f, 4);
-    const std::uint32_t sign = (x >> 16) & 0x8000u;
-    std::int32_t exp = std::int32_t((x >> 23) & 0xff) - 127 + 15;
-    std::uint32_t mant = x & 0x7fffffu;
-    if (exp <= 0) return std::uint16_t(sign); // flush tiny values to zero
-    if (exp >= 31) return std::uint16_t(sign | 0x7c00u);
-    return std::uint16_t(sign | (std::uint32_t(exp) << 10) | (mant >> 13));
-}
-
 float smooth(float e0, float e1, float x) {
     const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
@@ -108,8 +101,13 @@ float GroundMaps::grassAt(float x, float z) const {
 }
 
 float GroundMaps::heightAt(float x, float z) const {
-    const float cx = std::clamp(x, x0, x0 + sizeX()), cz = std::clamp(z, z0, z0 + sizeZ());
-    return TestTrack::provingGroundHeight(cx, cz);
+    const float u = std::clamp((x - x0) / texel, 0.0f, float(width - 1));
+    const float v = std::clamp((z - z0) / texel, 0.0f, float(height - 1));
+    const int i = std::min(int(u), width - 2), j = std::min(int(v), height - 2);
+    const float fu = u - float(i), fv = v - float(j);
+    const float* r0 = &heights[std::size_t(j) * width + i];
+    const float* r1 = r0 + width;
+    return (r0[0] * (1.0f - fu) + r0[1] * fu) * (1.0f - fv) + (r1[0] * (1.0f - fu) + r1[1] * fu) * fv;
 }
 
 GroundMaps buildGroundMaps(const TestTrack& track) {
@@ -153,7 +151,7 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
         for (int i = 0; i < g.width; ++i) {
             const float x = g.x0 + float(i) * g.texel, z = g.z0 + float(j) * g.texel;
             const float h = TestTrack::provingGroundHeight(x, z);
-            g.heights[std::size_t(j) * g.width + i] = toHalf(h);
+            g.heights[std::size_t(j) * g.width + i] = h;
 
             const SurfaceId s = TestTrack::groundSurfaceAt(x, z);
             // Visual mud: the smooth path weight plus the blurred Mud surface (puddle rims) of the physics.
@@ -195,6 +193,11 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
         }
     }
 
+    buildNoise(g);
+    return g;
+}
+
+void buildNoise(GroundMaps& g) {
     g.noise.resize(std::size_t(g.noiseSize) * g.noiseSize * 4);
     for (int j = 0; j < g.noiseSize; ++j)
         for (int i = 0; i < g.noiseSize; ++i) {
@@ -205,6 +208,21 @@ GroundMaps buildGroundMaps(const TestTrack& track) {
             px[2] = std::uint8_t(std::lround(tileCells(u, v, 16, 3u) * 255.0f));
             px[3] = std::uint8_t(std::lround(tileFbm(u, v, 32, 2, 4u) * 255.0f));
         }
+}
+
+GroundMaps buildLevelGroundMaps(const Level& level) {
+    GroundMaps g;
+    const int cells = level.cells();
+    g.texel = level.cell();
+    g.x0 = g.z0 = level.origin() + 0.5f * level.cell();
+    g.width = g.height = cells;
+    g.heights.resize(std::size_t(cells) * cells);
+    g.mask.resize(std::size_t(cells) * cells * 4);
+    std::memcpy(g.mask.data(), level.maskTexels().data(), g.mask.size());
+    for (int j = 0; j < cells; ++j)
+        for (int i = 0; i < cells; ++i)
+            g.heights[std::size_t(j) * cells + i] = level.heightAt(g.x0 + float(i) * g.texel, g.z0 + float(j) * g.texel);
+    buildNoise(g);
     return g;
 }
 

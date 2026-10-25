@@ -419,7 +419,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         text(dl, m_body, textSize, ImVec2(x0 + 0.006f * W, ty), c, menuLabel(item), 0.08f);
         Row row{item, x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
         if (menuAdjustable(item)) {
-            std::string v = menuValue(item, settings);
+            std::string v = menuValue(item, settings, flow.levels().empty() ? std::string() : flow.levels().front());
             if (item == MenuItem::VehicleChoice && view.vehicles && !view.vehicles->empty()) {
                 const int vi = std::clamp(flow.vehicleIndex(settings), 0, int(view.vehicles->size()) - 1);
                 v = (*view.vehicles)[std::size_t(vi)].name;

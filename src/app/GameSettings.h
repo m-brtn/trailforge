@@ -27,6 +27,8 @@ struct GameSettings {
     int padGlyphs = 0;         // PadGlyphSetting: 0 auto (from the connected pad), 1 Xbox, 2 PlayStation
     // Vehicle chosen last on the vehicle page (catalog id, [a-z0-9_] only); empty = the default vehicle
     std::string vehicle;
+    // Level chosen on the start menu ("proving_ground" or an assets/levels id, [a-z0-9_]); empty = the default level
+    std::string level;
 
     bool operator==(const GameSettings&) const = default;
 };

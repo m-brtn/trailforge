@@ -4,6 +4,7 @@
 #include "app/Paths.h"
 
 #include "render/GroundMaps.h"
+#include "render/LevelScene.h"
 #include "render/MathConvert.h"
 #include "render/Scenery.h"
 #include "render/TimeOfDay.h"
@@ -160,27 +161,20 @@ Application::Application(const AppOptions& options)
     m_ui.visible = options.startWithUi;
 
     const Uint64 t0 = SDL_GetPerformanceCounter();
-    const MeshData trackMesh = buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces());
-    const MeshData sceneryMesh = buildSceneryMesh();
     rebuildVehicleVisual();
     const MeshData& bodyMesh = m_vehicleVisual.mesh;
-    m_trackMesh = m_renderer->upload(trackMesh);
-    m_sceneryMesh = m_renderer->upload(sceneryMesh);
-    m_waterMesh = m_renderer->upload(buildWaterMesh());
+    buildWorldContent();
     m_springMesh = m_renderer->upload(buildUnitSpringMesh());
     m_armMesh = m_renderer->upload(buildUnitTubeMesh(0.021f));
     m_halfShaftMesh = m_renderer->upload(buildUnitTubeMesh(0.028f));
     m_shockBodyMesh = m_renderer->upload(buildShockBodyMesh());
     m_shockShaftMesh = m_renderer->upload(buildShockShaftMesh());
-    m_renderer->setGround(buildGroundMaps(m_sim.track()), TestTrack::water().level);
-    const std::vector<TreeInstance> trees = buildTreeInstances();
-    m_renderer->setTrees(buildPineMeshes(), trees);
     m_gfx.settings = m_renderer->settings();
-    std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu, render triangles: track %zu, "
-                "scenery %zu, vehicle body %zu (%zu parts), trees %zu (instanced), scene build %.0f ms\n",
+    std::printf("TrailForge: GPU driver '%s', shaders: %s, track triangles: %zu, render triangles: track %u, "
+                "scenery %u, vehicle body %zu (%zu parts), scene build %.0f ms\n",
                 m_renderer->driverName(), m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount(),
-                trackMesh.vertices.size() / 3, sceneryMesh.vertices.size() / 3, bodyMesh.vertices.size() / 3,
-                m_vehicleVisual.parts.size(), trees.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
+                m_trackMesh.vertexCount() / 3, m_sceneryMesh.vertexCount() / 3, bodyMesh.vertices.size() / 3,
+                m_vehicleVisual.parts.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
     if (!options.scriptPath.empty()) {
         m_scenario = Scenario::load(options.scriptPath);
         if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
@@ -225,6 +219,31 @@ Application::Application(const AppOptions& options)
                     m_garage->factoryActive() ? "factory" : m_garage->activeName().c_str());
         if (!(m_garage->config() == m_sim.vehicleConfig())) m_sim.requestRebuild(m_garage->config());
         m_garage->markApplied();
+    }
+
+    // Levels: the assets/levels catalog, then the proving ground. Scenarios and the demo drive start on the proving
+    // ground (their scripts are written for it) unless --level is given.
+    for (const std::string& dir : assetDirs("levels")) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec)) continue;
+        std::vector<std::string> ids;
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+            if (std::filesystem::exists(e.path() / "level.json", ec)) ids.push_back(e.path().filename().string());
+        std::sort(ids.begin(), ids.end());
+        if (ids.empty()) continue;
+        m_levelIds = ids;
+        break;
+    }
+    m_levelIds.push_back("proving_ground");
+    m_flow.setLevels(m_levelIds);
+    if (!options.levelId.empty()) m_settings.level = options.levelId;
+    const std::string startLevel = !options.levelId.empty() ? options.levelId
+                                   : (m_scenario || options.demoDrive) ? std::string("proving_ground")
+                                                                       : m_settings.level;
+    if (!selectLevel(startLevel)) {
+        std::printf("Levels: no level '%s', using the proving ground\n", startLevel.c_str());
+        m_settings.level.clear();
+        selectLevel("proving_ground");
     }
 
     AudioOptions audio;
@@ -282,6 +301,7 @@ void Application::processEvents() {
     if (m_input.pressed(Action::TogglePause)) setPaused(!m_paused);
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
     if (m_input.pressed(Action::ToggleCamera)) m_camera.toggleMode();
+    if (m_input.pressed(Action::ToggleMap)) m_mapOpen = !m_mapOpen && m_sim.level();
     if (m_input.pressed(Action::ToggleDirection)) m_sim.requestToggleDirection();
     if (m_input.pressed(Action::ToggleLowRange)) m_sim.requestToggleLowRange();
     if (m_input.pressed(Action::Reset)) m_sim.requestReset();
@@ -361,6 +381,11 @@ void Application::onMenuCommand(MenuCommand c) {
     case MenuCommand::OpenGarage: openGarage(); break;
     case MenuCommand::VehicleChanged:
         selectVehicle(m_settings.vehicle);
+        saveSettings();
+        break;
+    case MenuCommand::LevelChanged:
+        if (!selectLevel(m_settings.level)) std::printf("Levels: cannot load '%s'\n", m_settings.level.c_str());
+        m_mapOpen = false;
         saveSettings();
         break;
     default: break;
@@ -571,6 +596,193 @@ void Application::updateGarageCamera(float dt) {
     m_camera.setFreePose(pos, car + glm::vec3(0.0f, 0.45f, 0.0f) - right * 2.2f);
 }
 
+std::shared_ptr<const Level> Application::loadLevel(const std::string& id) {
+    if (const auto it = m_levelCache.find(id); it != m_levelCache.end()) return it->second;
+    for (const std::string& dir : assetDirs("levels")) {
+        const std::string path = dir + "/" + id + "/level.json";
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) continue;
+        std::string error;
+        std::shared_ptr<const Level> level = Level::load(path, &error);
+        if (!level) {
+            std::printf("Levels: %s\n", error.c_str());
+            return nullptr;
+        }
+        const LevelBakeStats& st = level->bakeStats();
+        std::printf("Levels: baked '%s' in %.0f ms (%d^2 samples, heights %.1f..%.1f m, %zu trees, %zu rocks, "
+                    "%zu prop triangles)\n", id.c_str(), st.totalMs, st.samples, double(st.minHeight),
+                    double(st.maxHeight), st.trees, st.rocks, st.propTriangles);
+        m_levelCache[id] = level;
+        return level;
+    }
+    return nullptr;
+}
+
+bool Application::selectLevel(const std::string& requested) {
+    const std::string id = requested.empty() ? m_levelIds.front() : requested;
+    if (id == "proving_ground") {
+        m_sim.requestLevel(nullptr);
+        return true;
+    }
+    if (std::find(m_levelIds.begin(), m_levelIds.end(), id) == m_levelIds.end()) return false;
+    std::shared_ptr<const Level> level = loadLevel(id);
+    if (!level) return false;
+    m_sim.requestLevel(std::move(level));
+    return true;
+}
+
+void Application::buildWorldContent() {
+    const Uint64 t0 = SDL_GetPerformanceCounter();
+    SDL_WaitForGPUIdle(m_renderer->device());
+    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh}) m->release();
+    const Level* level = m_sim.level();
+    m_contentLevel = level;
+    m_contentBuilt = true;
+    m_mapColors.clear();
+    std::size_t trees = 0;
+    if (level) {
+        m_trackMesh = m_renderer->upload(buildLevelPropsMesh(*level));
+        m_waterMesh = m_renderer->upload(buildLevelWaterMesh(*level));
+        m_renderer->setGround(buildLevelGroundMaps(*level), 0.0f);
+        TerrainSource src;
+        src.samples = level->samples();
+        src.origin = level->origin();
+        src.cell = level->cell();
+        src.heights = level->heights().data();
+        src.splat = level->splatTexels().data();
+        m_renderer->setTerrain(&src);
+        const std::vector<TreeInstance> inst = buildLevelTreeInstances(*level);
+        trees = inst.size();
+        m_renderer->setTrees(buildPineMeshes(), inst);
+        m_camera.farPlane = 4000.0f;
+    } else {
+        m_trackMesh = m_renderer->upload(buildTrackMesh(m_sim.track().geometry(), m_sim.surfaces()));
+        m_sceneryMesh = m_renderer->upload(buildSceneryMesh());
+        m_waterMesh = m_renderer->upload(buildWaterMesh());
+        m_renderer->setTerrain(nullptr);
+        m_renderer->setGround(buildGroundMaps(m_sim.track()), TestTrack::water().level);
+        const std::vector<TreeInstance> inst = buildTreeInstances();
+        trees = inst.size();
+        m_renderer->setTrees(buildPineMeshes(), inst);
+        m_camera.farPlane = Camera{}.farPlane;
+    }
+    std::printf("World: %s, render triangles: props/track %u, scenery %u, water %u, trees %zu, build %.0f ms\n",
+                level ? level->name().c_str() : "Proving Ground", m_trackMesh.vertexCount() / 3,
+                m_sceneryMesh.vertexCount() / 3, m_waterMesh.vertexCount() / 3, trees,
+                1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
+}
+
+// Level map (M): hill-shaded surfaces and water of the play area, roads, rivers, the vehicle and the points of
+// interest; clicking a marker or a list entry teleports there (the same teleports as the F1 panel).
+void Application::drawMap() {
+    const Level& L = *m_sim.level();
+    constexpr int kMapRes = 160;
+    const float half = L.playHalfExtent();
+    const float cellM = 2.0f * half / float(kMapRes);
+    if (m_mapColors.size() != std::size_t(kMapRes * kMapRes)) {
+        m_mapColors.assign(std::size_t(kMapRes * kMapRes), 0u);
+        for (int j = 0; j < kMapRes; ++j)
+            for (int i = 0; i < kMapRes; ++i) {
+                const float x = -half + (float(i) + 0.5f) * cellM, z = -half + (float(j) + 0.5f) * cellM;
+                glm::vec3 c;
+                switch (L.waterKindAt(x, z)) {
+                case WaterKind::Sea: c = {0.13f, 0.29f, 0.40f}; break;
+                case WaterKind::Lake: c = {0.17f, 0.37f, 0.46f}; break;
+                case WaterKind::River: c = {0.22f, 0.42f, 0.52f}; break;
+                case WaterKind::None:
+                    switch (L.surfaceAt(x, z)) {
+                    case SurfaceId::Snow: c = {0.88f, 0.90f, 0.92f}; break;
+                    case SurfaceId::Rock: c = {0.47f, 0.45f, 0.42f}; break;
+                    case SurfaceId::Sand: c = {0.75f, 0.69f, 0.52f}; break;
+                    case SurfaceId::PackedDirt: case SurfaceId::Mud: c = {0.52f, 0.42f, 0.30f}; break;
+                    default: c = glm::mix(glm::vec3(0.27f, 0.41f, 0.21f), glm::vec3(0.40f, 0.44f, 0.30f),
+                                          std::clamp(L.heightAt(x, z) / 220.0f, 0.0f, 1.0f));
+                    }
+                }
+                // Hill shade: light from the north-west.
+                const float d = 6.0f;
+                const float gx = (L.heightAt(x + d, z) - L.heightAt(x - d, z)) / (2.0f * d);
+                const float gz = (L.heightAt(x, z + d) - L.heightAt(x, z - d)) / (2.0f * d);
+                const float shade = std::clamp(1.0f - 0.9f * (gx + gz), 0.55f, 1.25f);
+                c = glm::clamp(c * shade, 0.0f, 1.0f);
+                m_mapColors[std::size_t(j * kMapRes + i)] =
+                    IM_COL32(int(c.r * 255.0f), int(c.g * 255.0f), int(c.b * 255.0f), 255);
+            }
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    const float side = std::floor(std::min(io.DisplaySize.x * 0.62f, io.DisplaySize.y * 0.80f));
+    const float listW = 0.30f * side;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(side + listW + 3.0f * ImGui::GetStyle().WindowPadding.x, side + ImGui::GetFrameHeightWithSpacing() * 2.0f));
+    if (!ImGui::Begin("Map - Exploration (M closes)", &m_mapOpen,
+                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    const float px = side / float(kMapRes);
+    auto toMap = [&](float x, float z) { return ImVec2(o.x + (x + half) / (2.0f * half) * side, o.y + (z + half) / (2.0f * half) * side); };
+    for (int j = 0; j < kMapRes; ++j)
+        for (int i = 0; i < kMapRes; ++i)
+            dl->AddRectFilled(ImVec2(o.x + float(i) * px, o.y + float(j) * px),
+                              ImVec2(o.x + float(i + 1) * px + 0.5f, o.y + float(j + 1) * px + 0.5f),
+                              m_mapColors[std::size_t(j * kMapRes + i)]);
+    std::vector<ImVec2> line;
+    for (const LevelRiver& r : L.rivers()) {
+        line.clear();
+        for (std::size_t k = 0; k < r.samples.size(); k += 3) line.push_back(toMap(r.samples[k].x, r.samples[k].z));
+        dl->AddPolyline(line.data(), int(line.size()), IM_COL32(70, 130, 170, 255), 0, 2.0f);
+    }
+    for (const LevelRoad& r : L.roads()) {
+        line.clear();
+        for (std::size_t k = 0; k < r.samples.size(); k += 3) line.push_back(toMap(r.samples[k].x, r.samples[k].z));
+        if (!r.samples.empty()) line.push_back(toMap(r.samples.back().x, r.samples.back().z));
+        dl->AddPolyline(line.data(), int(line.size()), r.trail ? IM_COL32(150, 112, 70, 255) : IM_COL32(232, 205, 150, 255),
+                        0, r.trail ? 1.5f : 2.5f);
+    }
+    // Points of interest: features 1.. are the POIs in map order (feature 0 is the spawn).
+    const auto& pois = L.pois();
+    int clicked = -1;
+    const ImVec2 mouse = io.MousePos;
+    for (std::size_t k = 0; k < pois.size(); ++k) {
+        const ImVec2 c = toMap(pois[k].x, pois[k].z);
+        const bool hover = std::hypot(mouse.x - c.x, mouse.y - c.y) < 10.0f && ImGui::IsWindowHovered();
+        dl->AddCircleFilled(c, hover ? 9.0f : 7.0f, hover ? IM_COL32(255, 160, 40, 255) : IM_COL32(240, 110, 20, 255));
+        dl->AddCircle(c, hover ? 9.0f : 7.0f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
+        const std::string id = std::to_string(pois[k].id);
+        const ImVec2 ts = ImGui::CalcTextSize(id.c_str());
+        dl->AddText(ImVec2(c.x - 0.5f * ts.x, c.y - 0.5f * ts.y), IM_COL32(255, 255, 255, 255), id.c_str());
+        dl->AddText(ImVec2(c.x + 11.0f, c.y - 0.5f * ts.y), IM_COL32(15, 15, 15, 255), pois[k].name.c_str());
+        if (hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) clicked = int(k) + 1;
+    }
+    {
+        const JPH::RMat44 xf = m_sim.vehicle().bodyTransform();
+        const JPH::Vec3 p(xf.GetTranslation()), f = xf.GetAxisZ();
+        glm::vec2 fw(f.GetX(), f.GetZ());
+        fw = glm::length(fw) > 1e-3f ? glm::normalize(fw) : glm::vec2(0, 1);
+        const ImVec2 c = toMap(p.GetX(), p.GetZ());
+        const glm::vec2 s(-fw.y, fw.x);
+        auto pt = [&](float a, float b) { return ImVec2(c.x + fw.x * a + s.x * b, c.y + fw.y * a + s.y * b); };
+        dl->AddTriangleFilled(pt(11, 0), pt(-7, 6), pt(-7, -6), IM_COL32(255, 255, 255, 255));
+        dl->AddTriangle(pt(11, 0), pt(-7, 6), pt(-7, -6), IM_COL32(0, 0, 0, 255), 1.5f);
+    }
+    ImGui::Dummy(ImVec2(side, side));
+    ImGui::SameLine();
+    ImGui::BeginChild("teleports", ImVec2(listW, side));
+    ImGui::TextUnformatted("Teleport");
+    ImGui::Separator();
+    const std::vector<TrackFeature>& features = m_sim.track().features();
+    for (std::size_t k = 0; k < features.size(); ++k)
+        if (ImGui::Selectable(features[k].name.c_str())) clicked = int(k);
+    ImGui::EndChild();
+    ImGui::End();
+    if (clicked >= 0) {
+        m_sim.requestTeleport(clicked);
+        m_mapOpen = false;
+    }
+}
+
 void Application::publishAudio() {
     AudioFrame f = m_audioFeed.frame();
     const glm::mat4 v = m_camera.view();
@@ -622,6 +834,7 @@ void Application::stepSimulation(double frameTime) {
 }
 
 void Application::renderFrame(float frameTime) {
+    if (m_sim.level() != m_contentLevel) buildWorldContent();
     // ---- Pose interpolation between the last two physics ticks
     const float alpha = float(m_clock.alpha()); // constant while frozen: the accumulator does not change
     const RenderSnapshot& a = m_sim.previousSnapshot();
@@ -710,6 +923,7 @@ void Application::renderFrame(float frameTime) {
     m_audioPanel.status = m_audio->status().c_str();
     m_audioPanel.active = m_audio->active();
     if (!m_flow.menuActive()) m_ui.drawAudio(m_audioPanel);
+    if (m_mapOpen && !m_flow.menuActive() && m_sim.level()) drawMap();
     MenuView view;
     view.gamepad = m_input.gamepadConnected();
     view.version = TRAILFORGE_VERSION;
@@ -778,6 +992,13 @@ void Application::renderFrame(float frameTime) {
     frame.time = float(m_time);
     frame.draws = m_draws;
     frame.water = &m_waterMesh;
+    if (m_sim.level()) {
+        // Open world: thinner fog over kilometers, longer shadow cascades, no planar puddle reflection.
+        frame.fogDensity = 0.00045f;
+        frame.fogFalloff = 0.004f;
+        frame.shadowScale = 2.0f;
+        frame.waterReflection = false;
+    }
     frame.vehicleModel = bodyM;
     frame.vehicleMud = m_gfx.mud;
     frame.bodyMud = &m_bodyMud;
@@ -1418,6 +1639,36 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_sim.requestTeleport(std::atoi(arg.c_str()));
         return Exec::Done;
     }
+    if (c.op == "level") {
+        // level ID: switch the world like the start menu row (proving_ground or an assets/levels id).
+        if (!selectLevel(arg)) {
+            std::printf("SCENARIO: no level '%s'\n", arg.c_str());
+            return Exec::Failed;
+        }
+        m_settings.level = arg;
+        return Exec::Done;
+    }
+    if (c.op == "place") {
+        // place X Z [YAW_DEG]: vehicle on the ground at (X, Z) of the current world.
+        if (c.args.size() < 2) return Exec::Failed;
+        const float x = float(std::atof(c.args[0].c_str())), z = float(std::atof(c.args[1].c_str()));
+        TrackFeature at;
+        at.name = "place";
+        float y = 0.0f;
+        if (const Level* level = m_sim.level()) {
+            y = level->heightAt(x, z);
+        } else if (auto hit = m_sim.castRayIgnoringVehicle(JPH::Vec3(x, 200.0f, z), JPH::Vec3(x, -50.0f, z))) {
+            y = 200.0f - 250.0f * *hit;
+        }
+        at.position = JPH::Vec3(x, y, z);
+        at.yaw = c.args.size() > 2 ? float(std::atof(c.args[2].c_str())) * 0.0174532925f : 0.0f;
+        m_sim.requestPlace(at);
+        return Exec::Done;
+    }
+    if (c.op == "map") {
+        m_mapOpen = (arg == "on" || arg == "1") && m_sim.level();
+        return Exec::Done;
+    }
     if (c.op == "resize") {
         if (c.args.size() < 2) return Exec::Failed;
         return SDL_SetWindowSize(m_window.get(), std::atoi(c.args[0].c_str()), std::atoi(c.args[1].c_str()))
@@ -1812,9 +2063,38 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     }
     if (n == "trees") {
         const auto& t = m_renderer->stats().trees;
-        return t[0] + t[1] + t[2];
+        return t[0] + t[1] + t[2] + t[3];
     }
     if (n == "quality") return double(int(m_gfx.preset));
+    if (n == "level") return m_sim.level() ? 1.0 : 0.0; // 1 on an open-world level, 0 on the proving ground
+    if (n == "level_choice") return m_flow.levelIndex(m_settings);
+    if (n == "submersion") return m_sim.vehicleSubmersion();
+    if (const Level* level = m_sim.level()) {
+        // Water over the ground at the body position (m, 0 when dry) and the distance to the nearest road center.
+        if (n == "water_depth") {
+            const std::optional<float> w = level->waterAt(p.GetX(), p.GetZ());
+            return w ? std::max(0.0, double(*w - level->heightAt(p.GetX(), p.GetZ()))) : 0.0;
+        }
+        if (n == "road_dist") {
+            const TrackFeature r = level->nearestRoadPoint(p.GetX(), p.GetZ());
+            return std::hypot(double(r.position.GetX() - p.GetX()), double(r.position.GetZ() - p.GetZ()));
+        }
+    }
+    if (n == "recoveries") return m_sim.recoveries();
+    if (n == "terrain_chunks") return m_renderer->stats().terrainChunks;
+    if (n == "terrain_tris") return double(m_renderer->stats().terrainTriangles);
+    if (const TerrainTiles* tt = m_sim.terrain()) {
+        const TerrainStreamingStats& st = tt->stats();
+        if (n == "tiles_loaded") return st.loaded;
+        if (n == "tiles_async") return st.builtAsync;
+        if (n == "tiles_sync") return st.builtSync;
+        if (n == "tiles_unloaded") return st.unloaded;
+        if (n == "tile_build_ms") return st.maxBuildMs;
+        if (n == "tile_stall_ms") return st.maxSyncStallMs;
+        if (n == "tile_update_ms") return st.maxUpdateMs;
+        if (n == "tile_x") return tt->tileIndexOf(float(p.GetX()));
+        if (n == "tile_z") return tt->tileIndexOf(float(p.GetZ()));
+    }
     if (n == "msaa") return m_renderer->settings().msaa;
     if (n == "grass_blades") return double(m_renderer->stats().grassBlades);
     if (n == "marks") return double(m_sim.tireMarks().size());

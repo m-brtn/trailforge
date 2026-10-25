@@ -23,6 +23,7 @@
 
 #include <array>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +41,7 @@ struct AppOptions {
     bool audio = true;         // false: --no-audio (no device, no sound assets loaded)
     std::string audioCapturePath; // non-empty: offline audio render to this WAV instead of the device
     std::string vehicleId;     // --vehicle ID: start with this catalog vehicle (remembered like a menu choice)
+    std::string levelId;       // --level ID: start on this level (proving_ground or an assets/levels id; remembered)
     bool intro = true;         // false: --no-intro (start at the main menu); scenarios and --demo start driving
 };
 
@@ -96,6 +98,13 @@ private:
     void applyGarageConfig();
     // Garage, simulation and the remembered choice to a catalog vehicle; false if the id is unknown.
     bool selectVehicle(const std::string& id);
+    // Levels: "proving_ground" or an assets/levels/<id>/level.json (baked once, then cached). Empty = the first
+    // (default) level. Requests the switch from the simulation; false if the id is unknown or fails to load.
+    bool selectLevel(const std::string& id);
+    std::shared_ptr<const Level> loadLevel(const std::string& id);
+    // Render content of the simulation's current world (track or level props, water, ground maps, terrain, trees).
+    void buildWorldContent();
+    void drawMap();
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
@@ -131,6 +140,12 @@ private:
     std::vector<VehicleCard> m_vehicleCards; // vehicle page (catalog order)
     float m_vehicleWheel = 0.0f;             // vehicle page: wheel steps not yet turned into a vehicle change
     bool m_vehiclePageCamera = false;        // last frame showed the vehicle page (its camera restarts on entry)
+    std::vector<std::string> m_levelIds;     // start menu order: assets/levels ids, then proving_ground
+    std::map<std::string, std::shared_ptr<const Level>> m_levelCache;
+    const Level* m_contentLevel = nullptr;   // world the render content was built for
+    bool m_contentBuilt = false;
+    bool m_mapOpen = false;
+    std::vector<std::uint32_t> m_mapColors;  // map overlay: kMapRes^2 ImGui colors of the current level
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)
