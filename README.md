@@ -19,16 +19,42 @@ that light the ground at night. A small mud & puddles showcase meadow sits north
 
 ## Platforms
 
-Verified only on **macOS 27 / Apple Silicon (arm64), Apple clang 21, Metal**.
-Shaders are written only in MSL, so other platforms (Windows/Linux, Vulkan/D3D12) are not supported.
-The physics core (`trailforge_sim`) and the tests do not depend on graphics and can be built separately
-(`headless` preset), but this has not been verified outside macOS either.
+| Platform | Status |
+|---|---|
+| macOS 27 / Apple Silicon (arm64), Apple clang 21, Metal | **Run and verified** (everything in "Verification results") |
+| macOS, Vulkan through MoltenVK (`SDL_GPU_DRIVER=vulkan`) | Run on the same Mac: `full_check` 210 / 0, captures look like Metal. Not a supported configuration, only a test of the SPIR-V path |
+| Windows x64 (MSVC, D3D12 / Vulkan) | Builds and the headless tests pass in GitHub Actions; the package is built there. **Not run on real hardware** |
+| Linux x64 (gcc, Vulkan) | Builds and the headless tests pass in GitHub Actions; the packaged app starts and renders on Mesa lavapipe (software Vulkan) under Xvfb. **Not run on real hardware** |
+
+The shaders have one HLSL source compiled at build time to SPIR-V, MSL / metallib and (on Windows) DXIL, see
+[Shader pipeline](#shader-pipeline). The renderer takes the first format the SDL GPU device accepts, in the order
+metallib, MSL, DXIL, SPIR-V. GPU frame timing exists only on Metal; elsewhere the UI shows `GPU n/a`.
+
+Trying Windows or Linux (please report what happens):
+
+1. Download the package from the GitHub release (`TrailForge-<version>-windows-x64.zip` or `...-linux-x64.tar.gz`),
+   extract it and keep `assets/` next to the executable. Windows: SmartScreen warns about an unsigned executable
+   ("More info" → "Run anyway"). Linux: a Vulkan driver is needed (Mesa RADV / ANV / NVK or the NVIDIA driver).
+2. `trailforge --version` and `trailforge --paths` (asset directory and user data directory) in a terminal.
+3. Start `trailforge`; the console prints `GPU driver '<d3d12|vulkan>', shaders: <DXIL|SPIR-V>`. Check that the
+   picture looks like the macOS screenshots (sky, shadows, grass, puddle reflections, no upside-down image).
+4. Drive (W/S, A/D, Space, R), press F1, change Graphics → quality presets, and listen for the engine and tire
+   sounds.
+5. From a source checkout, `trailforge --script tools/scenarios/full_check.txt --no-audio` must end with
+   `0 failed`; the console log and the exit code are the most useful report. Windows: try
+   `SDL_GPU_DRIVER=vulkan` as well.
 
 ## Prerequisites
 
-- Xcode Command Line Tools with the Metal toolchain (`xcrun -sdk macosx -f metal` must find the compiler).
-  Without it the build still succeeds: the shader is compiled from the embedded MSL source at startup.
-- CMake ≥ 3.24 and Ninja: `brew install cmake ninja`.
+- macOS: Xcode Command Line Tools with the Metal toolchain (`xcrun -sdk macosx -f metal` must find the compiler).
+  Without it the build still succeeds: the shaders are compiled from the embedded MSL source at startup.
+  CMake ≥ 3.24 and Ninja: `brew install cmake ninja`.
+- Windows: Visual Studio 2022 or newer with the C++ x64 tools (MSVC), CMake ≥ 3.24 and Ninja (both ship with
+  Visual Studio); configure from an "x64 Native Tools" prompt.
+- Linux: gcc or clang with C++20, CMake ≥ 3.24, Ninja and the SDL3 build dependencies (on Ubuntu:
+  `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev
+  libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev libasound2-dev
+  libpulse-dev libudev-dev libdbus-1-dev`, the list used in `.github/workflows/ci.yml`).
 - Internet access for the first configure. Dependencies are downloaded via FetchContent as archives
   of exact commits with SHA256 verification:
 
@@ -39,6 +65,8 @@ The physics core (`trailforge_sim`) and the tests do not depend on graphics and 
 | Dear ImGui | v1.92.9b | `f1cc2ae1` |
 | GLM | 1.0.3 | `8d1fd52e` |
 | miniaudio | 0.11.25 | `9634bedb` |
+| SPIRV-Headers, SPIRV-Tools, glslang, SPIRV-Cross (shader compiler, host tool only) | Vulkan SDK tag vulkan-sdk-1.4.357.0 | `29981f65`, `9a49b088`, `168d452a`, `6c09849f` |
+| DXC (prebuilt, Windows hosts only) | v1.9.2609 | release zip `dxc_2026_09_29.zip` |
 
 ## Build and run
 
@@ -55,7 +83,16 @@ ctest --preset release        # or debug
 
 # physics + tests only, without SDL/rendering
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
+
+# Windows (x64 Native Tools prompt) and Linux; presets only show up on their host system
+cmake --preset windows-release && cmake --build --preset windows-release && ctest --preset windows-release
+cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
+# (windows-debug / linux-debug likewise)
 ```
+
+`trailforge --paths` prints the asset lookup directories and the user data directory (`SDL_GetPrefPath`, e.g.
+`~/Library/Application Support/TrailForge/`, `%APPDATA%\TrailForge\`, `~/.local/share/TrailForge/`; reserved for
+future settings, nothing is written there yet except the empty directory that SDL creates).
 
 App icon (`external_assets/images/Icon.png`, macOS): the build converts it with `sips` to a 256×256 BMP that is embedded into the binary;
 at startup `SDL_SetWindowIcon` sets it (on Cocoa this is `NSApp.applicationIconImage`, i.e. the Dock icon of the
@@ -86,6 +123,19 @@ from inside the bundle. `dist/` is git-ignored. The app is not notarized: after 
 right-click → Open, or `xattr -dr com.apple.quarantine TrailForge.app`. Releases are on GitHub
 (`gh release list`); release notes live in `docs/releases/`.
 
+Windows and Linux packages are built by CI (`.github/workflows/ci.yml`) and can be built locally the same way:
+
+```sh
+tools/release/package_linux.sh [--smoke-window]               # -> dist/TrailForge-<version>-linux-<arch>.tar.gz
+pwsh tools/release/package_windows.ps1 [-SmokeWindow]         # -> dist/TrailForge-<version>-windows-x64.zip
+```
+
+Both do a clean packaged Release build in `build/package`, run CTest, put the executable, `assets/audio` and a
+`README.txt` into `dist/TrailForge-<version>-<os>-<arch>/`, archive it, extract the archive into a temporary
+directory and check from another working directory that `--version` matches and that `--paths` reports exactly one
+asset directory, the one inside the package. The optional window smoke test needs a GPU (CI runs the Linux package
+on lavapipe in a separate step instead).
+
 Command-line options:
 
 - `--no-ui` — start with diagnostics hidden;
@@ -95,6 +145,7 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
+- `--paths` — print the asset lookup directories and the user data directory, then exit;
 - `--version` — print the version and exit.
 
 `build/<preset>/trailforge_probe` — headless measurements:
@@ -251,13 +302,14 @@ src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pur
               VehicleAudioFeed (per-tick frame and events), AudioManifest + Json, AudioSystem (miniaudio device / WAV capture)
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), VehicleModel (procedural vehicle mesh),
               Scenery (backdrop terrain, pine meshes and instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
-              GpuTimingMetal.m (GPU time from MTLCommandBuffer)
+              GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels)
-src/app/      Application (lifecycle and main loop), Scenario (scenario mode), main
-shaders/      scene.metal → metallib at build time, embedded into the binary
+src/app/      Application (lifecycle and main loop), Scenario (scenario mode), Paths (asset / user dirs), main
+shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedded into the binary
 tests/        CTest physics and audio tests (no window, no audio device)
-tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis
+tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
+              shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 ```
 
@@ -448,7 +500,8 @@ Teleport points are in the Tuning window.
 
 ## Rendering
 
-SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per frame:
+SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); one HLSL shader source
+(`shaders/scene.hlsl`, see [Shader pipeline](#shader-pipeline)). Passes per frame:
 
 1. Sun (or moon) shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with
    1/4/12 taps).
@@ -461,6 +514,42 @@ SDL GPU on Metal; the shaders (`shaders/scene.metal`) are MSL only. Passes per f
    reflection, height fog, debug lines.
 5. Bloom (5-level downsample/upsample chain).
 6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA; ImGui.
+
+### Shader pipeline
+
+`shaders/scene.hlsl` holds all 23 entry points (10 vertex, 13 fragment). Each entry's resources are declared inside
+`#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
+in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
+fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
+
+- `trailforge_shaderc` (`tools/shaderc`, a host tool built from source): glslang HLSL front end → SPIR-V 1.0 for
+  Vulkan 1.0 → SPIRV-Tools legalization and validation → `.spv`; on macOS also SPIRV-Cross → MSL 3.0 with the
+  resources remapped to SDL GPU's Metal slots (`buffer(n)` uniforms, storage buffers after them, `texture(n)` /
+  `sampler(n)`, vertex buffers from `buffer(14)`). It checks that every resource is in the descriptor set of its
+  stage and prints the slot counts.
+- macOS: `xcrun metal` + `metallib` → one `.metallib` per entry (falls back to embedding the MSL source when the
+  Metal toolchain is missing).
+- Windows hosts: the pinned prebuilt DXC (`vs_6_0` / `ps_6_0`) → `.dxil`. DXC has no macOS release, so macOS and
+  Linux builds carry no DXIL (SDL picks Vulkan / SPIR-V there).
+- `cmake/EmbedShaders.cmake` writes every blob into `generated/shaders/shader_blobs.cpp` (table in
+  `src/render/ShaderBlobs.h`). Nothing generated is committed; the toolchain is fetched as pinned archives with
+  SHA256 like the other dependencies.
+
+Why not SDL_shadercross: its HLSL input goes through DXC, which is not available on macOS arm64. glslang's HLSL
+front end is officially deprecated upstream (it still works, and CMake prints a deprecation warning while
+configuring); if it breaks, the replacement is DXC → SPIR-V on Windows / Linux hosts.
+
+Metal output was compared with v0.5.0 in one process: each capture of `visual_tour`, `time_of_day`, `grass_look`
+and `spray_look` (38 frames) was rendered from the same frame state with the v0.5.0 metallib and with the new
+shaders. 3,100 of 197 million pixels differ (0.0016 %), 8 of them by more than 1 / 255 (grass blade edges);
+rendering twice with the new shaders gives identical images. `tools/render/compare_captures.py` prints the
+statistics for two capture directories (numpy + Pillow).
+
+Backend differences (only Metal is verified on hardware): GPU frame timing is Metal only (`GPU n/a` elsewhere);
+on Vulkan the shadow depth bias is not clamped (SDL does not enable the `depthBiasClamp` device feature; Metal and
+D3D12 clamp at 0.01); MSAA uses the highest sample count the device supports at or below the preset's (Mesa
+lavapipe has 4× but no 2×). The Linux CI job runs the packaged app on lavapipe with the Khronos validation layer
+and fails on any validation error or a black frame.
 
 ### Grass, flowers and wheat
 
@@ -795,8 +884,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 Everything below was actually run on macOS 27 / M-series.
 
 - **Build.** The `debug`, `release` and `headless` presets build without errors.
-  The Metal shader is compiled to a metallib at build time and embedded into the binary.
-  At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`.
+  The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
+  At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
+  (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
 - **CTest.** 26 of 26 tests pass in Debug, Release and headless (numbers below are from the latest run where they
   changed):
 

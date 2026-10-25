@@ -5,15 +5,18 @@ Instructions for coding agents working on TrailForge. Human-facing documentation
 ## Project overview
 
 TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 (window, input, gamepad),
-SDL GPU on Metal (rendering, MSL shaders only), Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
+SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry and
 textures are procedural; the only external assets are the sounds in `assets/audio/` (licenses in
 `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY` from the
 environment — never write the key into any file).
 
-Only macOS / Apple Silicon / Metal has been run. Dependencies are fetched by CMake FetchContent as pinned
-archives with SHA256 checks (internet is needed for the first configure).
+Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on the same Mac as a test of the
+SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
+(`.github/workflows/ci.yml`; the Linux package also starts on Mesa lavapipe under Xvfb) but have never been run on
+real hardware: say so whenever they are mentioned. Dependencies are fetched by CMake FetchContent as pinned archives
+with SHA256 checks (internet is needed for the first configure).
 
 ## Build and test
 
@@ -31,7 +34,20 @@ ctest --preset debug
 
 # physics and tests only, without SDL/rendering
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
+
+# Windows (x64 Native Tools prompt: MSVC cl + Ninja) and Linux (Ninja, gcc/clang); shown only on their host
+cmake --preset windows-release && cmake --build --preset windows-release && ctest --preset windows-release
+cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
+
+Shaders: `shaders/scene.hlsl` is the only shader source (23 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
+register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
+tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
+MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->
+DXIL on Windows hosts only; `cmake/EmbedShaders.cmake` embeds the blobs. When adding a shader entry, add it to
+`TRAILFORGE_SHADER_ENTRIES` and keep the resource counts in the renderer's pipeline creation in sync (the tool
+prints them). Visual changes to Metal output can be measured with `tools/render/compare_captures.py BEFORE AFTER`.
+Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
@@ -54,7 +70,7 @@ python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 ```
 
 Other app flags: `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
-`--audio-capture file.wav`, `--version`. Scenario checks must not depend on an audio device: everything except
+`--audio-capture file.wav`, `--paths`, `--version`. Scenario checks must not depend on an audio device: everything except
 `audio_check.txt` and `skid_check.txt` (both check the mixer) passes with `--no-audio`.
 The scenario command reference is in `README.md` ("Scenario mode").
 
@@ -78,6 +94,12 @@ Every stage ends with a packaged build and a GitHub release, after the stage's c
 
 `dist/` is git-ignored; never commit the zip or the app.
 
+Windows / Linux packages: CI builds them with `tools/release/package_windows.ps1` and `tools/release/package_linux.sh`
+and uploads them as artifacts (`trailforge-windows-x64`, `trailforge-linux-x64`). After `package_macos.sh --publish`,
+download the artifacts of the green CI run for the release commit (`gh run download <run-id>`) and attach them with
+`gh release upload v<version>`; the release notes must label them "untested on real hardware". Check the CI run with
+`gh run watch` / `gh run view --log-failed` after every push.
+
 ## Layout
 
 ```
@@ -89,16 +111,19 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepC
               BodyImpacts (chassis contact listener for impact sounds)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest, Json; AudioSystem (app only: miniaudio device / offline WAV capture)
-src/render/   Renderer (SDL GPU passes), RenderSettings, TimeOfDay, VehicleModel, Scenery, GroundMaps, Mesh, Camera,
-              DebugDraw, GpuTimingMetal.m
+src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, VehicleModel, Scenery,
+              GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel)
-src/app/      Application (lifecycle, main loop), Scenario (scenario mode), main
-shaders/      scene.metal -> metallib at build time, embedded into the binary
+src/app/      Application (lifecycle, main loop), Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
+              dir via SDL_GetPrefPath), main
+shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
 tests/        CTest physics and audio tests (no window, no audio device)
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
-              release/package_macos.sh (packaged .app, zip, GitHub release)
+              release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
+              packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics)
 docs/releases/ release notes per version
+.github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
 assets/audio/ WAV sounds, manifest.json, CREDITS.md
 external_assets/ images/ (Icon.png app icon source, Logo.png, Banner.png, Cars.png vehicle concept sheet),
  music/ (user-provided tracks, not wired in yet)
