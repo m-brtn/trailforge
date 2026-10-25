@@ -108,6 +108,9 @@ public:
     void requestCycleTraction() { m_pendingTractionCycle = true; }
     void requestCycleDiffLock() { m_pendingDiffCycle = true; }
     void requestAidControls(const AidControls& c) { m_pendingAids = c; }
+    // Traction control back to the vehicle's own default (vehicle.json aids.traction), resolved after a pending
+    // vehicle change; overrides the traction field of a pending requestAidControls.
+    void requestDefaultTraction() { m_pendingDefaultTraction = true; }
     // Requested switches if a request is pending, otherwise the vehicle's.
     AidControls aidControls() const { return m_pendingAids.value_or(m_vehicle->aidControls()); }
 
@@ -186,6 +189,7 @@ private:
     std::optional<int> m_pendingTeleport;
     bool m_pendingAbsToggle = false;
     bool m_pendingTractionCycle = false;
+    bool m_pendingDefaultTraction = false;
     bool m_pendingDiffCycle = false;
     std::optional<AidControls> m_pendingAids;
     std::optional<AidControls> m_aidSwitches; // ABS/TC state carried over to a respawned vehicle

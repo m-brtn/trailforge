@@ -90,6 +90,10 @@ void settingsRoundtrip() {
               odd.padGlyphs == 0 && odd.vehicle.empty(),
           "damaged values not clamped as expected");
     CHECK(skipped == 4, "skipped lines %d (expected 4)", skipped);
+    CHECK(defaults.traction == -1, "traction control defaults to the vehicle's own mode");
+    CHECK(parseSettings("traction = 0\n").traction == -1 && parseSettings("traction = 1\n").traction == 1 &&
+              parseSettings("traction_mode = 0\n").traction == 0 && parseSettings("traction_mode = -4\n").traction == -1,
+          "legacy traction key / traction_mode mapping");
     CHECK(serializeSettings(defaults).find("vehicle") == std::string::npos, "no vehicle line without a choice");
     GameSettings untouched = s;
     CHECK(!loadSettingsFile((dir / "missing.ini").string(), untouched) && untouched == s,
@@ -154,9 +158,15 @@ void menuNavigation() {
           "accept on a slider changes nothing");
     flow.select(MenuItem::Traction);
     flow.handle(key(&MenuInput::accept), settings);
-    CHECK(settings.traction == 1, "accept cycles traction control (%d)", settings.traction);
-    CHECK(menuValue(MenuItem::Traction, settings) == "ON", "value text '%s'",
+    CHECK(settings.traction == 0, "accept cycles traction control (%d)", settings.traction);
+    CHECK(menuValue(MenuItem::Traction, settings) == "OFF", "value text '%s'",
           menuValue(MenuItem::Traction, settings).c_str());
+    flow.handle(key(&MenuInput::left), settings);
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.traction == 2 && menuValue(MenuItem::Traction, settings) == "OFF-ROAD",
+          "left wraps vehicle default -> off-road (%d)", settings.traction);
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.traction == -1 && menuValue(MenuItem::Traction, settings) == "VEHICLE DEFAULT", "right wraps back");
     // Mouse: hover moves the cursor, a click on the right arrow steps the value.
     MenuInput mouse;
     mouse.hover = 2;

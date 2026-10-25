@@ -369,7 +369,11 @@ clicks rows (clicking the arrows of a setting steps it down / up). Esc during pl
 (shared by both menus): graphics preset, resolution scale, VSync, master / music / effects / UI volume, the driver
 aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and the Controls page
 (drive keys W A S D / arrows, gamepad button names auto / Xbox / PlayStation, keyboard and gamepad diagrams).
-They are saved to `settings.cfg` (keys include `drive_keys` 0 / 1 and `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation)
+The TC default "VEHICLE DEFAULT" (the default setting) uses each vehicle's `aids.traction`: on for the electric SUV,
+off for the gasoline SUV; OFF / ON / OFF-ROAD force one mode for every vehicle.
+They are saved to `settings.cfg` (keys include `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
+`drive_keys` 0 / 1 and `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation; an old `traction = 0` line reads as the vehicle
+default)
 in the user data directory (`trailforge --paths`) when a Settings page is closed and
 loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
 the settings for the session; they are hidden while a menu is open.
@@ -397,7 +401,8 @@ S only brakes and Q + W drive backwards).
 **Driver aids and differentials.** B toggles ABS, T cycles traction control (off → on → off-road), X cycles the
 diff locks (none → rear → rear + center → all). The bottom HUD shows ABS / TC lamps (dim = off, green = armed,
 blinking amber = acting) and the effective mode of each differential (F / C / R: open, LSD, LOCK). ABS and TC
-switches survive R and teleports; the diff locks reset to none. Both aids are off by default. Details and limits are
+switches survive R and teleports; the diff locks reset to none. ABS is off by default; TC starts in the vehicle's
+default mode (on for the electric SUV, off for the gasoline SUV, see the Settings page). Details and limits are
 under "Driver aids" below.
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
 F1–F3, P and Escape always work (Escape opens the pause menu, which takes all input until it is closed).

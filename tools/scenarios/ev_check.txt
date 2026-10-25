@@ -40,6 +40,7 @@ click vehicle_card:1                    # clicking the selected card drives off
 wait 0.5
 expect menu_screen == 2
 expect electric == 1
+expect tc == 1                          # the EV's own default (vehicle.json aids.traction "on")
 set auto_reverse 0                      # classic mapping (starting the game applies the settings)
 
 # ---------------------------------------------------------------- skid strip: launch, lift-off regen, blended braking
@@ -56,17 +57,18 @@ expect ev_mode == 0
 expect ev_front_share < 0.45            # road split (0.40 front)
 mark soc
 mark energy_out_kwh
+mark marks
 log ev_launch
 pedal throttle 1
-wait 0.5
+wait 2.0                                # TC trims the first 0.5 s of front-wheel spin, then hands back full torque
 expect motor_kw > 150                   # both motors pulling
 expect motor_nm_f > 100
 expect motor_nm_r > 100
 expect battery_kw > motor_kw            # drive losses: the pack supplies more than the motors deliver
-wait 1.5
 expect fwd_kmh > 45
 expect d_soc < 0
 expect d_energy_out_kwh > 0.05
+expect d_marks < 10                     # TC on: no wheelspin marks from a full-pedal launch (TC off: ~200)
 capture /tmp/trailforge_ev_02_launch.png
 wait 0.3
 pedal throttle 0

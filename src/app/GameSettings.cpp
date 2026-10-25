@@ -36,7 +36,7 @@ GameSettings sanitized(GameSettings s) {
     s.musicVolume = volume(s.musicVolume);
     s.effectsVolume = volume(s.effectsVolume);
     s.uiVolume = volume(s.uiVolume);
-    s.traction = std::clamp(s.traction, 0, 2);
+    s.traction = std::clamp(s.traction, -1, 2);
     s.diffLocks = std::clamp(s.diffLocks, 0, 3);
     s.driveKeys = std::clamp(s.driveKeys, 0, 1);
     s.padGlyphs = std::clamp(s.padGlyphs, 0, 2);
@@ -60,7 +60,7 @@ std::string serializeSettings(const GameSettings& in) {
                   "volume_effects = %.2f\n"
                   "volume_ui = %.2f\n"
                   "abs = %d\n"
-                  "traction = %d\n"
+                  "traction_mode = %d\n"
                   "diff_locks = %d\n"
                   "auto_reverse = %d\n"
                   "drive_keys = %d\n"
@@ -107,7 +107,9 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
         else if (k == "volume_effects") s.effectsVolume = float(v);
         else if (k == "volume_ui") s.uiVolume = float(v);
         else if (k == "abs") s.abs = i != 0;
-        else if (k == "traction") s.traction = i;
+        else if (k == "traction_mode") s.traction = i;
+        // Files up to v0.11 wrote "traction" with 0 (off) as the untouched default, so 0 maps to the vehicle default.
+        else if (k == "traction") s.traction = i == 0 ? -1 : i;
         else if (k == "diff_locks") s.diffLocks = i;
         else if (k == "auto_reverse") s.autoReverse = i != 0;
         else if (k == "drive_keys") s.driveKeys = i;

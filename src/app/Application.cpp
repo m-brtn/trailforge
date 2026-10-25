@@ -462,9 +462,10 @@ void Application::startGameplay() {
     m_sim.requestReset();
     AidControls aids;
     aids.abs = m_settings.abs;
-    aids.traction = TractionMode(m_settings.traction);
+    aids.traction = TractionMode(std::max(m_settings.traction, 0));
     aids.diffLocks = m_settings.diffLocks;
     m_sim.requestAidControls(aids);
+    if (m_settings.traction < 0) m_sim.requestDefaultTraction();
     m_ui.autoReverse = m_settings.autoReverse;
     if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
     m_gfx.settings.timeOfDay = m_gameplayTimeOfDay;
@@ -510,9 +511,10 @@ void Application::applySettings(bool force) {
     if (force || s.abs != m_applied.abs || s.traction != m_applied.traction || s.diffLocks != m_applied.diffLocks) {
         AidControls aids = m_sim.aidControls();
         aids.abs = s.abs;
-        aids.traction = TractionMode(s.traction);
+        if (s.traction >= 0) aids.traction = TractionMode(s.traction);
         aids.diffLocks = s.diffLocks;
         m_sim.requestAidControls(aids);
+        if (s.traction < 0 && (force || s.traction != m_applied.traction)) m_sim.requestDefaultTraction();
     }
     if (force || s.autoReverse != m_applied.autoReverse) m_ui.autoReverse = s.autoReverse;
     m_input.setDriveKeys(DriveKeys(s.driveKeys));

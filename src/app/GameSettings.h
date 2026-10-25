@@ -18,7 +18,8 @@ struct GameSettings {
     float uiVolume = 1.0f;
     // Driving aid defaults (applied at start and when changed; B / T / X still toggle them while driving)
     bool abs = false;
-    int traction = 0;          // TractionMode: 0 Off, 1 On, 2 Off-road
+    int traction = -1;         // -1: the vehicle's own default (vehicle.json aids.traction), else TractionMode 0 Off,
+                               // 1 On, 2 Off-road
     int diffLocks = 0;         // 0 open, 1 rear, 2 rear + center, 3 all
     bool autoReverse = true;
     // Controls

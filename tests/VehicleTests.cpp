@@ -759,7 +759,30 @@ void evSimulation() {
     CHECK(dm >= 400.0f && dm <= 700.0f, "EV must be 400-700 kg heavier than the SUV: %+.0f", dm);
     CHECK(def.config.comHeight < suv.config.comHeight - 0.02f, "battery in the floor must lower the COM");
 
-    Simulation sim(settings(def.config, TrackLayout::Flat));
+    CHECK(def.config.tuning.aids.traction == TractionMode::On, "the EV ships with traction control on");
+    {
+        // Full-pedal launch with the defaults: TC keeps the front wheels from spinning up, so no wheelspin marks.
+        Simulation tc(settings(def.config, TrackLayout::Flat));
+        for (int i = 0; i < 120; ++i) tc.tick();
+        float slip = 0.0f, kmh1 = 0.0f, minKW = 1e9f;
+        for (int i = 0; i < 360; ++i) {
+            tc.setIntent({.throttle = 1.0f});
+            tc.tick();
+            if (i == 119) kmh1 = tc.vehicle().telemetry().forwardSpeed * 3.6f;
+            if (i >= 30 && i < 120) minKW = std::min(minKW, tc.vehicle().telemetry().ev.motorPowerKW);
+            if (i > 60)
+                for (const auto& w : tc.vehicle().telemetry().wheels)
+                    if (w.contact && w.slipValid) slip = std::max(slip, w.longitudinalSlip);
+        }
+        std::printf("    full pedal, TC on: %.1f km/h at 1 s, %.1f km/h at 3 s, min power 0.25-1 s %.0f kW, max slip after "
+                    "0.5 s %.2f, %zu mark segments\n",
+                    kmh1, tc.vehicle().telemetry().forwardSpeed * 3.6f, minKW, slip, tc.tireMarks().size());
+        CHECK(slip < 0.5f && tc.tireMarks().size() < 10, "TC-on launch spins: slip %.2f, %zu marks", slip,
+              tc.tireMarks().size());
+    }
+    VehicleConfig raw = def.config;
+    raw.tuning.aids.traction = TractionMode::Off; // full motor envelope, wheelspin included
+    Simulation sim(settings(raw, TrackLayout::Flat));
     for (int i = 0; i < 120; ++i) sim.tick();
     const float soc0 = sim.vehicle().telemetry().ev.soc;
     CHECK(std::abs(soc0 - def.config.electric.initialSoC) < 1e-3f, "spawn SoC %.4f", soc0);

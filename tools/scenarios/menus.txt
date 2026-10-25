@@ -64,10 +64,10 @@ expect setting_music > 0.79
 menu select tc
 tap Return
 wait 0.1
-expect setting_tc == 1
+expect setting_tc == 0
 tap Left
 wait 0.1
-expect setting_tc == 0
+expect setting_tc == -1
 
 # mouse: click a row
 click menu:controls

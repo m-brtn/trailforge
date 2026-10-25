@@ -872,7 +872,8 @@ void electricSound() {
         CHECK(evMotorTones(m, 20.0f, es).gain[5] == 0.0f, "inverter tone gone at 20 m/s");
     }
 
-    const VehicleConfig ev = evConfig();
+    VehicleConfig ev = evConfig();
+    ev.tuning.aids.traction = TractionMode::Off; // the motor order must follow free wheelspin too
     Driver d(TrackLayout::SurfaceLanes, 1.0 / 120.0, &ev);
     d.run(1.0);
     CHECK(d.starts == 0, "an electric vehicle has no engine start (%d)", d.starts);

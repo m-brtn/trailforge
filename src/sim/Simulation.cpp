@@ -176,8 +176,9 @@ void Simulation::processCommands() {
         else
             setMessage(ok ? "Transfer case range changed" : "Low range change only near standstill (< 1 m/s)");
     }
-    if (m_pendingAbsToggle || m_pendingTractionCycle || m_pendingDiffCycle || m_pendingAids) {
+    if (m_pendingAbsToggle || m_pendingTractionCycle || m_pendingDiffCycle || m_pendingAids || m_pendingDefaultTraction) {
         AidControls c = m_pendingAids ? *m_pendingAids : m_vehicle->aidControls();
+        if (m_pendingDefaultTraction) c.traction = m_vehicle->config().tuning.aids.traction;
         if (m_pendingAbsToggle) {
             c.abs = !c.abs;
             setMessage(c.abs ? "ABS on" : "ABS off");
@@ -193,7 +194,7 @@ void Simulation::processCommands() {
             const char* names[] = {"Lockers off", "Rear diff locked", "Rear + center diffs locked", "All diffs locked"};
             setMessage(names[c.diffLocks]);
         }
-        m_pendingAbsToggle = m_pendingTractionCycle = m_pendingDiffCycle = false;
+        m_pendingAbsToggle = m_pendingTractionCycle = m_pendingDiffCycle = m_pendingDefaultTraction = false;
         m_pendingAids.reset();
         m_vehicle->setAidControls(c);
         m_aidSwitches = m_vehicle->aidControls();

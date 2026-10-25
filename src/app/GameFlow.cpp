@@ -332,8 +332,8 @@ std::string menuValue(MenuItem item, const GameSettings& s) {
     case M::UiVolume: return percent(s.uiVolume);
     case M::Abs: return s.abs ? "ON" : "OFF";
     case M::Traction: {
-        static const char* kNames[] = {"OFF", "ON", "OFF-ROAD"};
-        return kNames[std::clamp(s.traction, 0, 2)];
+        static const char* kNames[] = {"VEHICLE DEFAULT", "OFF", "ON", "OFF-ROAD"};
+        return kNames[std::clamp(s.traction, -1, 2) + 1];
     }
     case M::DiffLocks: {
         static const char* kNames[] = {"OPEN", "REAR", "REAR + CENTER", "ALL"};
@@ -367,7 +367,7 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
     case M::EffectsVolume: stepVolume(s.effectsVolume, dir); break;
     case M::UiVolume: stepVolume(s.uiVolume, dir); break;
     case M::Abs: s.abs = !s.abs; break;
-    case M::Traction: s.traction = wrap(s.traction + dir, 3); break;
+    case M::Traction: s.traction = wrap(s.traction + 1 + dir, 4) - 1; break;
     case M::DiffLocks: s.diffLocks = wrap(s.diffLocks + dir, 4); break;
     case M::AutoReverse: s.autoReverse = !s.autoReverse; break;
     case M::DriveKeys: s.driveKeys = wrap(s.driveKeys + dir, 2); break;
