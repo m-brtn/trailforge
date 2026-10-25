@@ -4,7 +4,7 @@
 
 namespace tf {
 
-// Player settings edited in the Settings screen and stored as `settings.ini` in the user data directory.
+// Player settings edited in the Settings screen and stored as `settings.cfg` in the user data directory.
 // Plain values only (no SDL, no renderer), so the file format is testable headless.
 struct GameSettings {
     // Graphics

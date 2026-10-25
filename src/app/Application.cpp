@@ -164,7 +164,7 @@ Application::Application(const AppOptions& options)
     // from the defaults and nothing is written.
     if (!m_scenario) {
         const std::string dir = userDataDir();
-        if (!dir.empty()) m_settingsPath = dir + "settings.ini";
+        if (!dir.empty()) m_settingsPath = dir + "settings.cfg";
         int skipped = 0;
         if (!m_settingsPath.empty() && loadSettingsFile(m_settingsPath, m_settings, &skipped))
             std::printf("Settings: loaded %s (%d lines skipped)\n", m_settingsPath.c_str(), skipped);

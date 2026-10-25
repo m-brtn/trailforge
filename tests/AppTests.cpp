@@ -48,7 +48,7 @@ void settingsRoundtrip() {
     s.autoReverse = false;
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
-    const std::string path = (dir / "settings.ini").string();
+    const std::string path = (dir / "settings.cfg").string();
     std::string error;
     CHECK(saveSettingsFile(path, s, &error), "save failed: %s", error.c_str());
     CHECK(!std::filesystem::exists(path + ".tmp"), "temporary file left behind");
