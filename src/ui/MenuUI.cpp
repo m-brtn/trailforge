@@ -668,6 +668,9 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
         ImVec2 anchor; // g units
         std::vector<Line> lines;
         float w = 0.0f, h = 0.0f, at = 0.0f;
+        // Side columns: the leader drops straight down from the anchor to this row (g units) and runs across to the
+        // column there, so it passes below the buttons between the anchor and the column instead of across them.
+        std::optional<float> dropRow;
     };
     const float gapName = 0.45f * lf;
     const auto lineWidth = [&](const Line& l) {
@@ -699,7 +702,14 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
         case PadControl::RightShoulder: it = {Side::Right, {3.05f, -0.1f}, {}}; break;
         case PadControl::LeftStick: it = {Side::Left, {L.leftStick.x - kStickR, L.leftStick.y}, {}}; break;
         case PadControl::RightStick: it = {Side::Right, {L.rightStick.x + kStickR, L.rightStick.y}, {}}; break;
-        case PadControl::West: it = {Side::Top, {fc.x, fc.y - kFaceR}, {}}; break;
+        case PadControl::West: {
+            const ImVec2 so = faceOffset(PadControl::South);
+            // Down from the lower right of the button, midway between the right stick and the bottom button.
+            const float dx = 0.1f;
+            it = {Side::Right, {fc.x + dx, fc.y + std::sqrt(kFaceR * kFaceR - dx * dx)}, {}};
+            it.dropRow = L.face.y + so.y + kFaceR + 0.42f;
+            break;
+        }
         case PadControl::South: case PadControl::East: case PadControl::North:
             it = {Side::Right, {fc.x + kFaceR, fc.y}, {}};
             break;
@@ -750,13 +760,14 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
         for (Item& it : items)
             if (it.side == side) col_.push_back(&it);
         const bool vertical = side == Side::Left || side == Side::Right;
+        const auto rowOf = [](const Item* it) { return it->dropRow.value_or(it->anchor.y); };
         std::sort(col_.begin(), col_.end(), [&](const Item* a, const Item* b) {
-            return vertical ? a->anchor.y < b->anchor.y : a->anchor.x < b->anchor.x;
+            return vertical ? rowOf(a) < rowOf(b) : a->anchor.x < b->anchor.x;
         });
         std::vector<float> want, size;
         for (const Item* it : col_) {
             // Side labels: the first line (the name) at the anchor height.
-            want.push_back(vertical ? y0 + it->anchor.y * g + 0.5f * (it->h - lineH) : cx + it->anchor.x * g);
+            want.push_back(vertical ? y0 + rowOf(it) * g + 0.5f * (it->h - lineH) : cx + it->anchor.x * g);
             size.push_back(vertical ? it->h : it->w);
         }
         const std::vector<float> at = vertical ? spreadLabels(want, size, 0.35f * lf, y0 - 1.2f * g, y0 + 5.0f * g)
@@ -769,7 +780,8 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
                 const float s = side == Side::Left ? -1.0f : 1.0f;
                 by0 = at[i] - 0.5f * it.h;
                 const float ly = by0 + 0.5f * lineH;
-                const ImVec2 pts[3] = {ImVec2(cx + s * (edge - 0.12f * g), ly), ImVec2(cx + s * elbow, ly), a};
+                const ImVec2 pts[3] = {ImVec2(cx + s * (edge - 0.12f * g), ly),
+                                       it.dropRow ? ImVec2(a.x, ly) : ImVec2(cx + s * elbow, ly), a};
                 dl->AddPolyline(pts, 3, leader, 0, thin);
                 bx0 = side == Side::Left ? cx - edge - it.w : cx + edge;
                 float y = by0;
