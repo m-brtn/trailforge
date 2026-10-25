@@ -201,9 +201,15 @@ One command per line, `#` starts a comment:
 | `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
 | `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `back` |
+| `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
+| `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
+| `garage save` / `save_new` / `rename NAME` / `delete` / `select NAME\|factory` / `reset` / `kit ID\|none` / `vehicle ID` | setup operations of the garage model |
+| `click garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
+| `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 
-Scenarios start in gameplay (no intro, no menu) and never read or write the settings file.
+Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
+`<tmp>/trailforge_scenario_setups`, emptied at start.
 
 Other scenarios: `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
 and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
@@ -214,6 +220,8 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
 cost of the marks with the ring empty and filled to 16k / 64k segments),
+`tools/scenarios/garage.txt` (garage from the pause and the start menu: keyboard, mouse slider click, rebuild in
+place, RWD layout, save / typed rename / save as new / select / delete / reset, `/tmp/trailforge_garage_*.png`),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
 `--audio-capture`, see [Audio](#audio)),
 `tools/scenarios/suspension.txt` (stops on the diagonal twister with a wheel in the air; follow view with the HUD,
@@ -231,10 +239,14 @@ lock-up and handbrake slides, never while the mud layer is active; needs the mix
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
-1 start menu, 2 playing, 3 paused), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
+1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls), `menu_depth`,
 `menu_cursor`, `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
-`abs`, `tc`, `diff`, `auto_reverse`),
+`abs`, `tc`, `diff`, `auto_reverse`), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
+`garage_factory`, `garage_renaming`, `garage_pending`, `garage:<key>` (the garage's value of a setup parameter),
+`cfg:<key>` (the same parameter read from the running vehicle), `text_input` (SDL text input active), drivetrain:
+`layout` (0 RWD, 1 FWD, 2 AWD, 3 part-time, 4 on-demand), `transfer` (0 2H, 1 4H, 2 4L), `front_driven`,
+`rear_driven`,
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
@@ -266,7 +278,8 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Steering | A / D | left stick |
 | Handbrake | Space | A (South) |
 | Forward ↔ reverse, manual (only below 1 m/s) | Q | X (West) |
-| Low range (only below 1 m/s) | L | Y (North) |
+| Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L) | L | Y (North) |
+| Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s) | V | D-pad left |
 | Reset to the last start point | R | Back / View |
 | Camera: follow ↔ free | C | RB |
 | ABS on / off | B | D-pad up |
@@ -276,13 +289,13 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Diagnostics | F1 | — |
 | Graphics panel (quality, look, cosmetic dirt) | F2 | — |
 | Audio panel (volumes, mute, engine pitch, read-outs) | F3 | — |
-| Pause menu (Resume, Reset vehicle, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
+| Pause menu (Resume, Reset vehicle, Garage, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
 | Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | arrow keys, PgUp/PgDn, Shift — faster | — |
 
 **Menus.** The game starts with an intro (logo over `intro.mp3`; any key, click or gamepad button skips it), then
-the start menu: Start, Settings, Quit. Up / Down (arrows, W / S, D-pad or left stick) move, Enter / Space / gamepad A
+the start menu: Start, Garage, Settings, Quit. Up / Down (arrows, W / S, D-pad or left stick) move, Enter / Space / gamepad A
 select, Left / Right (A / D, D-pad, stick) change a setting, Esc / Backspace / gamepad B go back; the mouse hovers and
 clicks rows (clicking the arrows of a setting steps it down / up). Esc during play opens the pause menu. Settings
 (shared by both menus): graphics preset, resolution scale, VSync, master / music / effects / UI volume, the driver
@@ -317,8 +330,10 @@ on other platforms use Ctrl+click.
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (per-tick contact samples),
-              DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor)
+src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest)
+src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
+              DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
+              VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
@@ -330,12 +345,13 @@ src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete acti
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,
               pause and Settings menus drawn with ImGui draw lists)
 src/app/      Application (lifecycle and main loop), GameFlow (screen / menu state machine, no SDL: intro, start
-              menu, playing, paused; level and vehicle select pages can slot in as further pages), GameSettings
-              (settings.cfg), Scenario (scenario mode), Paths (asset / user dirs), main
+              menu, playing, paused, garage; level and vehicle select pages can slot in as further pages), Garage
+              (setup model, no SDL), GameSettings (settings.cfg), Scenario (scenario mode), Paths (asset / user dirs), main
 shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedded into the binary
-tests/        CTest physics and audio tests (no window, no audio device)
+tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only definitions
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
               shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts
+assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format")
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
               assets/images/ (CREDITS.md; logo.png is copied from external_assets/images/Logo.png into the build tree)
@@ -371,6 +387,9 @@ vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 
 ## Vehicle
 
+The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format below); the C++ defaults of
+`VehicleConfig` are the same SUV with full-time AWD and no drag (the v0.7 vehicle, used by the physics tests).
+
 - Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares), wheels r = 0.4 m and 0.3 m wide (35 kg each).
 - Center of mass 0.10 m below the frame center.
 - The body collision is a compound of three boxes. The visible model (`VehicleModel`, ~7k triangles) is a
@@ -379,16 +398,98 @@ vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
-- Four-wheel drive:
+- Part-time 4WD (since v0.8.0; full-time AWD before): starts in 2H (rear-wheel drive), V engages 4H (front axle,
+  center locked) and 4L; see "Drivetrain layouts".
   - engine 520 N·m, 800–4800 rpm;
   - 5-speed automatic plus reverse −4.0, final drive 3.9;
   - low range ×2.72 — a multiplier on the differential ratios, not a separate gearbox;
   - open front differential, rear and center are LSD (ratio 1.4); X locks rear, rear + center or all
-    (see "Driver aids").
+    (see "Driver aids");
+  - aerodynamic drag Cd·A 1.3 m² (no lift or downforce).
 - Wheels use `VehicleCollisionTesterCastCylinder`; their positions come from the simulation.
 - Roll and pitch limits are disabled (`mMaxPitchRollAngle = π`): the vehicle can roll over.
 - No hidden downforce, no direct setting of velocity or position.
   The only teleports are the R reset and the teleport buttons in the UI.
+
+## Vehicle data format
+
+Every vehicle is a folder `assets/vehicles/<id>/` with a `vehicle.json`; the folder name must equal `id`. All values
+are SI (m, kg, s, N, N·m, rad/s as rpm where named); angles in degrees where the key says `Deg`. The loader
+(`VehicleDefinition.cpp`) checks every field's type and range, cross-field rules (min < max suspension length, idle <
+max rpm, rev limit ≤ max rpm, ascending torque curve, front share in 0..1, ...) and rejects unknown keys, with messages
+like `assets/vehicles/x/vehicle.json: axles.front.suspension.maxLength: 0.12 must be greater than minLength (0.15)`.
+Broken definitions are skipped with the message in the log. The test `vehicle_definition_validation` feeds it broken
+documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` plus `tests/data/vehicles` (settle,
+0-30 / 0-50 km/h, braking from 50 km/h, a 15° low-range climb, suspension travel limits).
+
+| Section | Keys |
+|---|---|
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`) |
+| `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping` |
+| `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
+| `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
+| `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`} |
+| `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
+| `engine` | `type` (`combustion`; `electric` is reserved and rejected for now), `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
+| `gearbox` | `mode` (`auto`), `ratios`, `reverseRatios`, `finalDrive`, `lowRange`, `shiftUpRPM`, `shiftDownRPM`, `shiftTime`, `clutchReleaseTime`, `shiftLatency`, `clutchStrength`, `launchClutchLimit`, `creepTorque` |
+| `drivetrain` | `layout` (`rwd`, `fwd`, `awd`, `part_time`, `on_demand`), `frontTorqueShare`, `frontDiff` / `rearDiff` / `centerDiff` (`open`, `lsd`, `locked`), `limitedSlipRatio`, `centerLimitedSlipRatio`, `lockedSlipRatio` |
+| `aero` | `dragArea` (Cd·A, m²), `airDensity` |
+| `aids` | `absEnabled`, `traction` (`off`, `on`, `off_road`) and the ABS / TC thresholds and rates |
+| `garage` | `ranges` {setup parameter key: [min, max]} — slider ranges for this vehicle |
+| `kits` | [{`id`, `name`, `description`, `massDelta`, `overrides` (a partial vehicle.json merged over the base), `ranges`, `visualParts`}] |
+
+`tests/data/vehicles/rwd_test/vehicle.json` (test-only, not shipped) is a 1650 kg RWD pickup with bump stops,
+asymmetric damping, Ackermann, a rev limiter below the max rpm, six gears, drag and a lift kit; it exercises the
+fields the SUV leaves at their defaults. Probes take the vehicle from `TRAILFORGE_VEHICLE` (path; `builtin` = the C++
+defaults).
+
+The SUV migration was checked against v0.7.0: with the JSON SUV (still full-time AWD at that commit) all 21
+physics test outputs and all 13 probe outputs (`brake surfaces susp abs diff hillbrake launch skid climb corner tc
+tcmud ellipse`, 626 lines) were byte-identical to the v0.7.0 binaries. The test `suv_definition_matches_builtin`
+keeps the JSON equal to the C++ defaults except the layout and the drag area.
+
+## Drivetrain layouts
+
+Set by `drivetrain.layout`; the Jolt `WheeledVehicleController` gets one differential per axle and a center LSD
+setting. An undriven axle has its differential disconnected (wheel indices −1): it gets no torque and does not count
+for the clutch speed; it still brakes.
+
+| Layout | Front | Rear | Center | Notes |
+|---|---|---|---|---|
+| RWD | free | driven | — | |
+| FWD | driven | free | — | |
+| AWD (full-time) | driven | driven | `centerDiff` (open / LSD / locked), static split `frontTorqueShare` | the v0.7 SUV |
+| Part-time 4WD | 2H free, 4H / 4L driven | driven | 4H / 4L: locked, split 0.5 | V: 2H → 4H → 4L → 2H; L: 4H ↔ 4L |
+| On-demand AWD | driven | driven | LSD with `frontTorqueShare` (e.g. 0.1) | simplification, see below |
+
+Headless launch on low grip (`drivetrain_layouts`, speed after 1.5 s): RWD 2.41, FWD 2.21, AWD 4.56, on-demand
+(front share 0.1) 4.54, part-time 2H 2.40, 4H 4.56, 4L 3.66 m/s; undriven wheels slip 0.00. `trailforge_probe
+layouts` prints launches on concrete, mud and low grip and climbs on the 20° dirt and 15° mud ramps for every
+layout with the probe vehicle; with the SUV, 2H stalls on the 15° mud ramp (13 m of 30 m) where 4H tops it in 6.1 s.
+The diff-lock key X still works on top (rear, rear + center, all). Electric motors are not implemented; the engine
+`type` field and the per-axle structure are there for a dual-motor layout later.
+
+## Garage
+
+Start menu → Garage, or pause menu → Garage. The simulation keeps running (also when opened from the pause menu)
+so changes show on the vehicle; closing returns to the menu it came from. Layers: base definition → kit (data
+structure and loader; no kit content for the SUV yet, the test vehicle has one) → fine tune within the ranges of the
+definition / kit (or the defaults of `VehicleSetup.cpp`, always containing the base value):
+
+- Suspension: spring frequency, compression and rebound damping, preload, anti-roll bar per axle; ride height.
+- Tires: grip scale (a stand-in for pressure: scales both peak and sliding μ), peak slip ratio and peak slip angle
+  (stand-ins for longitudinal / cornering stiffness: they move the peak of the μ(slip) curves), static grip on / off.
+  Nothing here is a tire pressure model.
+- Engine and gearbox: torque scale, rev limit, final drive. Brakes: torque scale, front share.
+- Drivetrain: layout, front torque share, front / rear / center differential, LSD ratio.
+- Driving aids: ABS release slip, TC slip thresholds (the on / off switches stay in Settings and the B / T keys).
+
+Live values change the running vehicle between physics ticks; layout, preload and ride height mark "RESPAWN" and
+rebuild the vehicle in place (same position and heading, lowered onto the ground by a raycast, aid switches and the
+transfer mode kept). Setups (several per vehicle: Factory is read-only; save, save as new, rename, delete, reset to
+factory) are saved as JSON in `<user data>/setups/<vehicle id>.json` (`trailforge --paths`); the selected setup is
+applied at the next start. Keyboard (arrows, Enter, Esc), mouse (hover, click arrows, click or drag a slider) and
+gamepad (D-pad, A, B) work; rename takes typed text.
 
 ## Driver aids
 
@@ -908,8 +1009,23 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   preloaded clutch pack.
 - ABS and TC read the true contact-point ground speed instead of estimating it from wheel speeds, and act through
   brake torque and a throttle factor only. ABS at 60 Hz is coarser (see "Driver aids").
-- No aerodynamics or rolling resistance (linear damping = 0).
+- Aerodynamics: drag only, F = ½ ρ Cd·A v² against the body velocity at the centre of mass (`dragArea`, SUV 1.3 m²),
+  no lift, downforce, side force or wind. No rolling resistance (linear damping = 0).
   The engine is a torque curve, with no flywheel inertia beyond Jolt's model.
+- Compression / rebound damping: Jolt has one damping coefficient per wheel; before each step it is set to the
+  compression or the rebound ratio by the direction the suspension moved in the previous step (one step of lag).
+- Bump stops: within `bumpStop.range` of full compression the spring frequency ramps up to `frequencyScale` ×; a
+  progressive spring, not a separate rubber element. Jolt's hard stop at `minLength` stays (it can be passed by a
+  few mm under load).
+- Ackermann: the outer wheel's maximum angle is lowered before each step (cot(outer) = cot(inner) + track /
+  wheelbase, blended by `ackermann`); Jolt steers each wheel to input × its maximum angle, so the geometry holds
+  exactly only at full lock and is proportional in between.
+- Rev limiter: a throttle cut above `revLimitRPM` with 150 rpm hysteresis, applied only when it is below `maxRPM`
+  (Jolt clamps the engine at `maxRPM` anyway).
+- Drivetrain layouts: "locked" (4H, 4L, locked center) is still the LSD with ratio 1.05, so there is no driveline
+  wind-up or tire scrub in tight turns on high-grip ground as with a real locked part-time system. On-demand AWD is a
+  center LSD with a rear-biased static split: it reacts to wheel speed differences at once, with no clutch pack
+  engagement delay or heat. Undriven wheels roll freely with their own inertia; there is no hub-lock model.
 - Body collision is a compound of three boxes.
 - Time of day, moonlight and headlights are lighting only: they do not change grip, temperature or anything else in
   the simulation.
@@ -930,7 +1046,9 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 30 of 30 tests pass in Debug, Release and headless (numbers below are from the latest run where they
+- **CTest.** 36 of 36 tests pass in Debug, Release and headless (30 before v0.8.0; new: `vehicle_catalog_sweep`,
+  `vehicle_definition_validation`, `drivetrain_layouts`, `garage_setups`, `suv_definition_matches_builtin`,
+  `garage_model`) (numbers below are from the latest run where they
   changed):
 
 | Test | Result |

@@ -28,7 +28,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics and audio tests (CTest, 30 tests; no window, no audio device)
+# headless physics and audio tests (CTest, 36 tests; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -49,9 +49,11 @@ DXIL on Windows hosts only; `cmake/EmbedShaders.cmake` embeds the blobs. When ad
 prints them). Visual changes to Metal output can be measured with `tools/render/compare_captures.py BEFORE AFTER`.
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
-Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_audio_tests`, `trailforge_probe`
+Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
+`trailforge_audio_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`).
+`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`; they drive the vehicle of
+`TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
 check failed:
@@ -59,6 +61,7 @@ check failed:
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
 ./build/release/trailforge --script tools/scenarios/menus.txt         # intro, start/pause/settings menus, /tmp/trailforge_menu_*.png
+./build/release/trailforge --script tools/scenarios/garage.txt        # garage setups, live / rebuild values, /tmp/trailforge_garage_*.png
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
@@ -106,26 +109,32 @@ download the artifacts of the green CI run for the release commit (`gh run downl
 ```
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape)
-src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, telemetry), WheelContact (contact samples),
-              DrivingAids (ABS / traction control logic, brake torque and throttle factor only)
+src/core/     Json (reader, writer, merge)
+src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
+              WheelContact (contact samples), DrivingAids (ABS / traction control logic, brake torque and throttle
+              factor only), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
+              parameters, setup files)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
               BodyImpacts (chassis contact listener for impact sounds)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
-              frame + events), AudioManifest, Json; AudioSystem (app only: miniaudio device / offline WAV capture)
+              frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, VehicleModel, Scenery,
               GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions)
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
-src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), GameSettings (settings.cfg),
+src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), Garage (setup model, no SDL),
+              GameSettings (settings.cfg),
               Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
               dir via SDL_GetPrefPath), main
 shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
-tests/        CTest physics and audio tests (no window, no audio device)
+tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only
+              definitions (rwd_test), swept by vehicle_catalog_sweep together with assets/vehicles
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
               packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics)
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
+assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id)
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
               assets/images/ CREDITS.md (logo.png is copied from external_assets/images/Logo.png into build/<preset>/assets/images
               at configure time); each with CREDITS.md
@@ -134,7 +143,8 @@ external_assets/ images/ (Icon.png app icon source, Logo.png, Banner.png, Cars.p
 devlog/       daily development log
 ```
 
-The physics library `trailforge_sim` must not depend on SDL or rendering; `trailforge_audio` depends only on
+The physics library `trailforge_sim` (with the vehicle loader and setups) must not depend on SDL or rendering;
+`trailforge_flow` (GameFlow, GameSettings, Garage) links only `trailforge_sim`; `trailforge_audio` depends only on
 `trailforge_sim` (no miniaudio, no device), so the sound model is testable headless. The audio thread never blocks
 the frame loop: the game publishes one `AudioFrame` per frame through a mailbox the callback reads with `try_lock`. Resources are released via RAII;
 member order defines destruction order. No ECS, no plugins, no graphics API abstraction.
