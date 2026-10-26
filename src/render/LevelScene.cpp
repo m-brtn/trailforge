@@ -300,8 +300,8 @@ MeshData buildLevelHorizonMesh(const Level& level) {
     const int nc = int(cols.size());
     for (int c = 0; c < nc; ++c) {
         float sum = 0.0f;
-        for (int d = -8; d <= 8; ++d) sum += cols[std::size_t((c + d + nc) % nc)].h0;
-        cols[std::size_t(c)].land = glm::smoothstep(-6.0f, 8.0f, sum / 17.0f);
+        for (int d = -20; d <= 20; ++d) sum += cols[std::size_t((c + d + nc) % nc)].h0;
+        cols[std::size_t(c)].land = glm::smoothstep(-6.0f, 8.0f, sum / 41.0f);
     }
 
     // Rings: geometric spacing out to ~14 km; the square scales outward from the center.
@@ -310,12 +310,14 @@ MeshData buildLevelHorizonMesh(const Level& level) {
     constexpr int nr = int(std::size(kRings));
     auto heightAt = [&](const Column& col, float r) {
         const glm::vec2 p = col.p * ((e + r) / e);
-        const float w = glm::smoothstep(0.0f, 700.0f, r);
-        // Hills everywhere on land; to the north (-Z) a mountain range from ~2 km out, lower again far away.
+        const float w = glm::smoothstep(0.0f, 1200.0f, r);
+        // Ridged hills everywhere on land (they rise out of the valley haze right past the edge); to the north (-Z)
+        // a mountain range from ~1 km out, lower again far away.
         const float north = glm::smoothstep(0.1f, 0.8f, -p.y / glm::length(p));
-        const float hills = 40.0f + 170.0f * fbm2(p.x / 1100.0f, p.y / 1100.0f, 4, 711u);
+        const float spur = 1.0f - std::abs(2.0f * fbm2(p.x / 420.0f, p.y / 420.0f, 3, 719u) - 1.0f);
+        const float hills = 60.0f + 230.0f * fbm2(p.x / 950.0f, p.y / 950.0f, 4, 711u) + 70.0f * spur * spur;
         const float ridge = 1.0f - std::abs(2.0f * fbm2(p.x / 1700.0f, p.y / 1700.0f, 4, 733u) - 1.0f);
-        const float range = (260.0f + 640.0f * ridge * ridge) * glm::smoothstep(1200.0f, 4200.0f, r) *
+        const float range = (260.0f + 640.0f * ridge * ridge) * glm::smoothstep(500.0f, 3200.0f, r) *
                             (1.0f - 0.55f * glm::smoothstep(7000.0f, 14000.0f, r));
         const float land = glm::mix(hills, std::max(hills, range), north);
         const float seabed = -18.0f - 12.0f * glm::smoothstep(0.0f, 2500.0f, r);
@@ -344,8 +346,8 @@ MeshData buildLevelHorizonMesh(const Level& level) {
         const float slope = 1.0f - nn.y;
         const float n1 = fbm2(p.x / 700.0f, p.z / 700.0f, 3, 751u);
         const float n2 = fbm2(p.x / 260.0f, p.z / 260.0f, 3, 757u);
-        glm::vec3 c = glm::mix(glm::vec3(0.060f, 0.080f, 0.026f), glm::vec3(0.115f, 0.112f, 0.045f), glm::smoothstep(0.35f, 0.75f, n1));
-        c = glm::mix(c, glm::vec3(0.032f, 0.050f, 0.022f), 0.8f * glm::smoothstep(0.55f, 0.75f, n2)); // forest
+        glm::vec3 c = glm::mix(glm::vec3(0.085f, 0.092f, 0.040f), glm::vec3(0.150f, 0.122f, 0.062f), glm::smoothstep(0.35f, 0.75f, n1));
+        c = glm::mix(c, glm::vec3(0.045f, 0.060f, 0.030f), 0.7f * glm::smoothstep(0.55f, 0.75f, n2)); // forest
         const glm::vec3 rock = glm::mix(glm::vec3(0.115f, 0.105f, 0.095f), glm::vec3(0.205f, 0.190f, 0.170f), n2);
         c = glm::mix(c, rock, glm::max(glm::smoothstep(0.18f, 0.32f, slope), glm::smoothstep(380.0f, 560.0f, p.y)));
         const float snowLine = 720.0f + 260.0f * (n1 - 0.5f);

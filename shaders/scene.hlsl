@@ -1026,7 +1026,7 @@ LayerSample sampleLayer(int layer, float3 P, float far, float fade) {
 }
 
 // Rock: triplanar on steep faces (projections with a negligible weight are skipped).
-LayerSample sampleRock(float3 P, float3 N, float far, float fade) {
+LayerSample sampleRock(float3 P, float3 N, float2 warp, float far, float fade) {
     float3 w = pow(abs(N), 4.0);
     w /= w.x + w.y + w.z;
     const float k = layerInvTile(LAYER_ROCK);
@@ -1041,11 +1041,11 @@ LayerSample sampleRock(float3 P, float3 N, float far, float fade) {
         r.albedo += s.albedo * w.y; r.height += s.height * w.y; r.dn += s.dn * w.y; r.rough += s.rough * w.y; r.ao += s.ao * w.y;
     }
     if (w.x > 0.02) {
-        const LayerSample s = sampleProjection(LAYER_ROCK, float2(P.z, -P.y) * k, float3(0, 0, 1), float3(0, -1, 0), far, fade);
+        const LayerSample s = sampleProjection(LAYER_ROCK, (float2(P.z, -P.y) + warp) * k, float3(0, 0, 1), float3(0, -1, 0), far, fade);
         r.albedo += s.albedo * w.x; r.height += s.height * w.x; r.dn += s.dn * w.x; r.rough += s.rough * w.x; r.ao += s.ao * w.x;
     }
     if (w.z > 0.02) {
-        const LayerSample s = sampleProjection(LAYER_ROCK, float2(P.x, -P.y) * k, float3(1, 0, 0), float3(0, -1, 0), far, fade);
+        const LayerSample s = sampleProjection(LAYER_ROCK, (float2(P.x, -P.y) + warp) * k, float3(1, 0, 0), float3(0, -1, 0), far, fade);
         r.albedo += s.albedo * w.z; r.height += s.height * w.z; r.dn += s.dn * w.z; r.rough += s.rough * w.z; r.ao += s.ao * w.z;
     }
     const float sum = (w.y > 0.02 ? w.y : 0.0) + (w.x > 0.02 ? w.x : 0.0) + (w.z > 0.02 ? w.z : 0.0);
@@ -1122,7 +1122,31 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             blendLayer(g, l, heightBlend(sand, l.height, g.height));
         }
         if (rock > 0.001) {
-            const LayerSample l = sampleRock(P, N, farTex, fadeTex);
+            // Walls: the side projections are warped by ~1.5 m so the repeats of the texture do not stack into
+            // regular vertical stripes, then sedimentary beds and large tone patches that stay at any distance.
+            const float steepF = smoothstep(0.25, 0.65, 1.0 - N.y);
+            const float2 warp = (noiseTex.Sample(noiseSampler, P.xz * 0.021 + P.y * 0.013).rg - 0.5) * 3.0 * steepF;
+            LayerSample l = sampleRock(P, N, warp, farTex, fadeTex);
+            if (steepF > 0.0) {
+                // Gently dipping beds (the dip turns with a large-scale noise), bent by smaller folds.
+                const float2 dip = (noiseTex.Sample(noiseSampler, P.xz * 0.0011).rg - 0.5) * 0.16;
+                const float y = P.y + dot(P.xz, dip) + noiseTex.Sample(noiseSampler, P.xz * 0.0045).r * 16.0 +
+                                noiseTex.Sample(noiseSampler, P.xz * 0.029).g * 2.5;
+                const float coarse = noiseTex.Sample(noiseSampler, float2(y * 0.047, 0.213)).r;
+                const float fine = noiseTex.Sample(noiseSampler, float2(y * 0.21, 0.637)).g;
+                const float fineUp = noiseTex.Sample(noiseSampler, float2((y + 0.25) * 0.21, 0.637)).g;
+                const float bed = smoothstep(0.36, 0.64, coarse * 0.72 + fine * 0.28);
+                float3 tone = lerp(float3(0.76, 0.75, 0.74), float3(1.14, 1.06, 0.95), bed);
+                tone = lerp(tone, tone * float3(1.10, 0.93, 0.82), smoothstep(0.64, 0.80, fine)); // iron-stained beds
+                tone *= 0.82 + 0.36 * noiseTex.Sample(noiseSampler, float2(P.x + P.z, P.y * 2.5) * 0.0043).r;
+                // Grey beds between the buff ones (the source texture alone is one warm brown).
+                const float grey = dot(l.albedo, float3(0.3, 0.55, 0.15));
+                l.albedo = lerp(l.albedo, grey * float3(1.0, 0.98, 0.95), 0.55 * (1.0 - bed) * steepF);
+                l.albedo *= lerp((float3)(1.0), tone, steepF);
+                // Bed edges stand out as small ledges: the normal tips up where the harder bed starts.
+                l.dn.y += steepF * clamp((fineUp - fine) * 6.0, -0.35, 0.35);
+                l.height = lerp(l.height, saturate(l.height * 0.6 + bed * 0.5), steepF);
+            }
             blendLayer(g, l, heightBlend(rock, l.height, g.height));
         }
         if (snow > 0.001) {
@@ -1156,9 +1180,19 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         rough = lerp(rough, 0.38, wetG * 0.8);
         flat *= 1.0 - 0.5 * wetG;
 
+        // Under the crowns: needle and leaf litter (dark, brown-olive, broken up by noise) and less sky light.
+        const float canopy = smoothstep(0.05, 0.6, vin.localNormal.y) * (1.0 - road) * (1.0 - snow);
+        if (canopy > 0.0) {
+            const float litterN = noiseTex.Sample(noiseSampler, P.xz * 0.37).r;
+            const float lum = dot(albedo, float3(0.3, 0.5, 0.2));
+            const float3 litter = lerp(float3(0.040, 0.032, 0.022), float3(0.085, 0.066, 0.042), litterN) *
+                                  (0.55 + 2.2 * lum);
+            albedo = lerp(albedo, litter, canopy * (0.8 + 0.2 * nz.g));
+            rough = lerp(rough, 0.9, canopy * 0.5);
+        }
         s.albedo = albedo;
         s.roughness = rough;
-        s.ao *= lerp(1.0, g.ao, 0.8);
+        s.ao *= lerp(1.0, g.ao, 0.8) * (1.0 - 0.35 * canopy);
         N = normalize(N + g.dn * flat);
     }
     if (f.options.x > 0.0) {
@@ -1528,10 +1562,11 @@ LitOut terrain_vs(LitIn vin) {
     // Splat texels are the cells; a grid sample sits on the corner of four, the linear filter averages them.
     const float cells = draw.tint.x - 1.0;
     const float4 sp = terrainSplat.SampleLevel(terrainSplatSampler, float2(ij) / cells, 0);
-    vout.color = sp.gba; // rock, sand, snow
+    const float sandSnow = sp.b * (255.0 / 127.5) - 1.0; // splat b: sand above the middle, snow below
+    vout.color = float3(sp.g, max(sandSnow, 0.0), max(-sandSnow, 0.0)); // rock, sand, snow
     vout.material = float4(float(MAT_TERRAIN), 0.0, 0.0, 0.0);
     vout.localPos = world;
-    vout.localNormal = float3(sp.r, 0.0, 0.0); // terrain: x = road paint (interpolated; unused by ground shading)
+    vout.localNormal = float3(sp.r, sp.a, 0.0); // terrain: x = road paint, y = tree canopy above the ground
     vout.mudMode = 0.0;
     vout.soil = ((float4)(0.0));
     vout.soilParams = ((float2)(0.0));

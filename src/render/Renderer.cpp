@@ -1309,7 +1309,7 @@ Renderer::ModelRange Renderer::modelRange(const GpuModel& m) const {
     std::array<float, 3> b{};
     float maxD = 0.0f;
     if (m.kind == "tree") {
-        b = {45.0f * k, 125.0f * k, 360.0f * k};
+        b = {45.0f * k, 100.0f * k, 290.0f * k};
         maxD = s.treeDistance;
         r.impostor = m.impostorAlbedo >= 0;
         r.shadowCascades = 4;

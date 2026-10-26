@@ -28,7 +28,7 @@ capture /tmp/trailforge_beauty_02_forest.png
 wait 0.3
 place -170 62 160
 wait 1.5
-camera -200 66 70 -110 69 -140
+camera -165 71.6 22 -100 69.5 -120
 wait 2.0
 capture /tmp/trailforge_beauty_03_lake_shore.png
 wait 0.3
@@ -67,6 +67,26 @@ wait 1.5
 camera follow
 wait 2.0
 capture /tmp/trailforge_beauty_11_chase_road.png
+wait 0.3
+place -170 62 160
+wait 1.5
+camera -200 66 70 -110 69 -140
+wait 2.0
+capture /tmp/trailforge_beauty_12_lake_bank.png
+wait 0.3
+place -748 -228 210
+wait 1.5
+camera -930 114.6 -262 -956 112.6 -286
+wait 2.0
+capture /tmp/trailforge_beauty_13_forest_floor.png
+wait 0.3
+camera 905 102 150 2400 110 -250
+wait 2.0
+capture /tmp/trailforge_beauty_14_horizon_east.png
+wait 0.3
+camera 300 205 -950 300 150 -2500
+wait 2.0
+capture /tmp/trailforge_beauty_15_horizon_north.png
 wait 0.3
 
 # ---------------------------------------------------------------- frame times per preset and view
