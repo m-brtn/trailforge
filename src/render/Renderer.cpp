@@ -1150,10 +1150,11 @@ int Renderer::loadModelTexture(const std::string& path, bool srgb, std::uint64_t
     return int(m_modelTextures.size()) - 1;
 }
 
-int Renderer::setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements) {
+int Renderer::setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements,
+                         std::span<const ModelAsset* const> assets, const std::string& assetTextureDir) {
     SDL_WaitForGPUIdle(m_device);
     releaseModels();
-    if (paths.empty()) return 0;
+    if (paths.empty() && assets.empty()) return 0;
     const Uint64 start = SDL_GetPerformanceCounter();
     constexpr auto kAlbedoFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB;
     if (!SDL_GPUTextureSupportsFormat(m_device, kAlbedoFmt, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
@@ -1202,16 +1203,39 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
         return b;
     };
 
-    std::vector<int> remap(paths.size(), -1);
-    for (std::size_t i = 0; i < paths.size(); ++i) {
-        ModelAsset a;
-        std::string error;
-        if (!a.load(paths[i], true, &error) || a.lods.empty()) {
-            SDL_Log("TrailForge: model unavailable (%s)", error.empty() ? paths[i].c_str() : error.c_str());
+    // Constant roughness without a map: a 1 x 1 flat-normal texture per value.
+    std::map<int, int> roughnessTextures;
+    auto roughnessTexture = [&](float roughness) {
+        const int key = std::clamp(int(std::lround(roughness * 255.0f)), 0, 255);
+        const auto it = roughnessTextures.find(key);
+        if (it != roughnessTextures.end()) return it->second;
+        const std::uint8_t px[4] = {128, 128, std::uint8_t(key), 255};
+        Texture t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        uploadTexture(t.tex, px, 1, 1, 4);
+        m_modelTextures.push_back(t);
+        return roughnessTextures[key] = int(m_modelTextures.size()) - 1;
+    };
+
+    const std::size_t total = paths.size() + assets.size();
+    std::vector<int> remap(total, -1);
+    for (std::size_t i = 0; i < total; ++i) {
+        ModelAsset loaded;
+        const ModelAsset* src = i < paths.size() ? &loaded : assets[i - paths.size()];
+        std::string dir = assetTextureDir;
+        if (i < paths.size()) {
+            std::string error;
+            if (!loaded.load(paths[i], true, &error) || loaded.lods.empty()) {
+                SDL_Log("TrailForge: model unavailable (%s)", error.empty() ? paths[i].c_str() : error.c_str());
+                continue;
+            }
+            const std::size_t slash = paths[i].find_last_of('/');
+            dir = slash == std::string::npos ? std::string() : paths[i].substr(0, slash + 1);
+        } else if (!src || src->lods.empty()) {
             continue;
+        } else if (!dir.empty() && dir.back() != '/') {
+            dir += '/';
         }
-        const std::size_t slash = paths[i].find_last_of('/');
-        const std::string dir = slash == std::string::npos ? std::string() : paths[i].substr(0, slash + 1);
+        const ModelAsset& a = *src;
         GpuModel g;
         g.kind = a.kind;
         g.height = a.height;
@@ -1223,8 +1247,9 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
         for (const ModelMaterial& mat : a.materials) {
             GpuModelMaterial gm;
             gm.alphaTest = mat.alphaTest;
+            gm.tint = glm::vec3(mat.tint[0], mat.tint[1], mat.tint[2]);
             gm.albedo = mat.albedo.empty() ? 0 : texture(dir + mat.albedo, true);
-            gm.nra = mat.nra.empty() ? 1 : texture(dir + mat.nra, false);
+            gm.nra = mat.roughness >= 0.0f ? roughnessTexture(mat.roughness) : mat.nra.empty() ? 1 : texture(dir + mat.nra, false);
             g.foliage = g.foliage || mat.alphaTest;
             g.materials.push_back(gm);
         }
@@ -1295,7 +1320,7 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
     m_stats.modelGpuBytes = bytes;
     m_stats.modelLoadMs = 1000.0 * double(SDL_GetPerformanceCounter() - start) / double(SDL_GetPerformanceFrequency());
     SDL_Log("TrailForge: %zu / %zu level models, %zu instances in %zu buckets, %zu textures, %.1f MB, %.0f ms",
-            m_models.size(), paths.size(), m_modelObjects.size(), m_modelBuckets.size(), m_modelTextures.size() - 2,
+            m_models.size(), total, m_modelObjects.size(), m_modelBuckets.size(), m_modelTextures.size() - 2,
             double(bytes) / 1e6, m_stats.modelLoadMs);
     return int(m_models.size());
 }
@@ -1323,6 +1348,14 @@ Renderer::ModelRange Renderer::modelRange(const GpuModel& m) const {
     } else if (m.kind == "log") {
         b = {30.0f * k, 100.0f * k, 420.0f * k};
         maxD = 420.0f * k;
+        r.shadowCascades = 2;
+    } else if (m.kind == "building") {
+        b = {70.0f * k, 220.0f * k, 1600.0f * k};
+        maxD = 1600.0f * k;
+        r.shadowCascades = 4;
+    } else if (m.kind == "prop") {
+        b = {30.0f * k, 90.0f * k, 320.0f * k};
+        maxD = 320.0f * k;
         r.shadowCascades = 2;
     } else if (m.kind == "cliff") {
         b = {120.0f * k, 400.0f * k, s.treeDistance};
@@ -2168,10 +2201,11 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                     SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
                     bound = true;
                 }
-                const float hue = g.kind == "tree" || g.kind == "bush" ? (mat.alphaTest ? 0.6f : 0.2f) : 0.15f;
+                const bool kit = g.kind == "building" || g.kind == "prop";
+                const float hue = g.kind == "tree" || g.kind == "bush" ? (mat.alphaTest ? 0.6f : 0.2f) : kit ? 0.04f : 0.15f;
                 ModelMaterialUniforms mm{glm::vec4(mat.alphaTest ? 1.0f : 0.0f, mat.alphaTest ? 1.0f : 0.0f,
                                                    m_modelA2C ? 1.0f : 0.0f, 1.0f),
-                                         glm::vec4(1.0f, 1.0f, 1.0f, hue)};
+                                         glm::vec4(mat.tint, hue)};
                 SDL_PushGPUFragmentUniformData(cmd, 1, &mm, sizeof(mm));
                 const SDL_GPUTextureSamplerBinding albedo{m_modelTextures[std::size_t(mat.albedo)].tex, m_repeatSampler};
                 if (shadow) {

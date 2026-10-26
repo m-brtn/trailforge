@@ -2,12 +2,15 @@
 
 #include "render/FieldMesh.h"
 #include "vehicle/VehicleBlueprint.h"
+#include "vehicle/VehicleBody.h"
+#include "vehicle/WheelSweep.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <tuple>
@@ -673,11 +676,6 @@ void buildSuv(VehicleVisual& v, const VehicleConfig& cfg, const VehicleBlueprint
     }
 
     P.finish(v);
-    v.wheel.spokes = 8;
-    v.wheel.beadlock = false;
-    v.wheel.rim = {MatId::Generic, glm::vec3(0.040f), 0.40f, 0.9f, 0.6f};
-    v.wheel.ring = {MatId::Generic, glm::vec3(0.22f), 0.35f, 1.0f, 0.5f};
-    v.coil = {MatId::Generic, style::srgb(0.96f, 0.50f, 0.13f), 0.40f, 0.2f, 0.8f}; // orange coils (concept)
 }
 
 // ================================================================ trailforge_ev
@@ -769,11 +767,115 @@ void buildEv(VehicleVisual& v, const VehicleConfig& cfg, const VehicleBlueprint&
     }
 
     P.finish(v);
-    v.wheel.spokes = 6;
+}
+
+// Wheels and coil springs of a model (also used under a Blender body: wheels and suspension stay procedural).
+void wheelStyle(VehicleVisual& v, bool ev) {
     v.wheel.beadlock = false;
-    v.wheel.rim = {MatId::Generic, glm::vec3(0.030f), 0.38f, 0.9f, 0.6f};
-    v.wheel.ring = {MatId::Generic, glm::vec3(0.16f), 0.35f, 1.0f, 0.5f};
-    v.coil = {MatId::Generic, style::srgb(0.10f, 0.42f, 0.92f), 0.40f, 0.2f, 0.8f}; // blue coils (EV accent)
+    if (ev) {
+        v.wheel.spokes = 6;
+        v.wheel.rim = {MatId::Generic, glm::vec3(0.030f), 0.38f, 0.9f, 0.6f};
+        v.wheel.ring = {MatId::Generic, glm::vec3(0.16f), 0.35f, 1.0f, 0.5f};
+        v.coil = {MatId::Generic, style::srgb(0.10f, 0.42f, 0.92f), 0.40f, 0.2f, 0.8f}; // blue coils (EV accent)
+    } else {
+        v.wheel.spokes = 8;
+        v.wheel.rim = {MatId::Generic, glm::vec3(0.040f), 0.40f, 0.9f, 0.6f};
+        v.wheel.ring = {MatId::Generic, glm::vec3(0.22f), 0.35f, 1.0f, 0.5f};
+        v.coil = {MatId::Generic, style::srgb(0.96f, 0.50f, 0.13f), 0.40f, 0.2f, 0.8f}; // orange coils (concept)
+    }
+}
+
+// ================================================================ Blender bodies (body.glb)
+// LOD0 of every part, materials by role (README "Vehicle data format"): the light roles get the shader's light ids
+// so the lamps follow the headlight switch, brake pedal, reverse gear and indicators; paint roles can be recoloured
+// by vehicle.json body.paint.
+Material roleMaterial(const BodyMaterial& m, const VehicleConfig& cfg) {
+    const glm::vec3 base(m.color[0], m.color[1], m.color[2]);
+    const glm::vec3 emissive(m.emissive[0], m.emissive[1], m.emissive[2]);
+    const float peak = std::max({emissive.x, emissive.y, emissive.z});
+    const glm::vec3 light = peak > 0.0f ? emissive / peak : base;
+    Material out{MatId::Generic, base, m.roughness, m.metallic, m.mud};
+    switch (m.role) {
+    case BodyRole::PaintPrimary:
+    case BodyRole::PaintSecondary:
+    case BodyRole::PaintAccent: {
+        out.id = MatId::Paint;
+        const auto it = cfg.bodyPaint.find(bodyRoleName(m.role));
+        if (it != cfg.bodyPaint.end()) out.color = style::srgb(it->second[0], it->second[1], it->second[2]);
+        break;
+    }
+    case BodyRole::Cladding: out.id = MatId::Cladding; break;
+    case BodyRole::Glass: out.id = MatId::Glass; break;
+    case BodyRole::Rubber: out.id = MatId::Rubber; break;
+    case BodyRole::LightHead: out = style::led(MatId::Headlight, light); break;
+    case BodyRole::LightTail:
+    case BodyRole::LightBrake: out = style::led(MatId::BrakeLight, light); break;
+    case BodyRole::LightReverse: out = style::led(MatId::ReverseLight, light); break;
+    case BodyRole::LightIndicator: out = style::led(MatId::Amber, light); break;
+    default: break;
+    }
+    if (m.role >= BodyRole::LightHead && m.role <= BodyRole::LightIndicator) out.mud = m.mud;
+    return out;
+}
+
+bool buildFromBody(VehicleVisual& v, const VehicleConfig& cfg, std::string& error) {
+    BodyModel body;
+    if (!loadBodyModel(cfg.bodyModel, body, true, &error)) return false;
+    std::vector<Material> mats;
+    for (const BodyMaterial& m : body.materials) mats.push_back(roleMaterial(m, cfg));
+    glm::vec3 lens(0.0f);
+    int lensCount = 0;
+    const float r = 0.5f * (cfg.axles[0].wheelRadius + cfg.axles[1].wheelRadius);
+    const auto sweeps = wheelSweeps(cfg);
+    // Static sag of a spring with natural frequency f is g / (2 pi f)^2, whatever the load.
+    float restHub = 0.0f;
+    for (int a = 0; a < 2; ++a) {
+        const AxleConfig& ax = cfg.axles[std::size_t(a)];
+        const float w = 2.0f * kPi * cfg.tuning.axles[std::size_t(a)].springFrequency;
+        const float len = std::clamp(ax.suspensionMaxLength - 9.81f / (w * w), ax.suspensionMinLength, ax.suspensionMaxLength);
+        restHub += 0.5f * (cfg.attachHeight - len);
+    }
+    float sideX = 0.0f;
+    for (const BodyPart& part : body.parts) {
+        if (part.lods.empty()) continue;
+        const BodyMesh& m = part.lods[0];
+        VehiclePart vp{part.name, part.parent, {part.attach[0], part.attach[1], part.attach[2]}, part.deformable,
+                       part.detachable, v.mesh.vertices.size(), 0};
+        auto pos = [&](std::uint32_t i) { return glm::vec3(m.positions[3 * i], m.positions[3 * i + 1], m.positions[3 * i + 2]); };
+        auto nrm = [&](std::uint32_t i) { return glm::vec3(m.normals[3 * i], m.normals[3 * i + 1], m.normals[3 * i + 2]); };
+        for (const BodyMesh::Primitive& prim : m.primitives) {
+            const Material& base = mats.at(std::size_t(prim.material));
+            const bool head = body.materials[std::size_t(prim.material)].role == BodyRole::LightHead;
+            for (std::uint32_t t = prim.firstIndex; t + 2 < prim.firstIndex + prim.indexCount + 0u; t += 3) {
+                const std::uint32_t i[3] = {m.indices[t], m.indices[t + 1], m.indices[t + 2]};
+                if (m.colors.empty()) {
+                    v.mesh.addTri(pos(i[0]), pos(i[1]), pos(i[2]), nrm(i[0]), nrm(i[1]), nrm(i[2]), base);
+                } else {
+                    // Vertex colours tint the material: one material per corner, as addTri takes one per triangle.
+                    const std::size_t first = v.mesh.vertices.size();
+                    v.mesh.addTri(pos(i[0]), pos(i[1]), pos(i[2]), nrm(i[0]), nrm(i[1]), nrm(i[2]), base);
+                    for (int k = 0; k < 3; ++k)
+                        v.mesh.vertices[first + std::size_t(k)].color *=
+                            glm::vec3(m.colors[3 * i[k]], m.colors[3 * i[k] + 1], m.colors[3 * i[k] + 2]);
+                }
+                for (int k = 0; k < 3; ++k) {
+                    const glm::vec3 p = pos(i[k]);
+                    if (head && p.x > 0.0f) lens += p, ++lensCount;
+                    if (part.collides && std::abs(p.y - (restHub + r + 0.10f)) < 0.05f) sideX = std::max(sideX, std::abs(p.x));
+                }
+            }
+        }
+        vp.vertexCount = v.mesh.vertices.size() - vp.firstVertex;
+        v.parts.push_back(vp);
+    }
+    for (const BodySpare& s : body.spares)
+        v.spares.push_back({s.name, s.parent, {s.seat[0], s.seat[1], s.seat[2]},
+                            {s.outward[0], s.outward[1], s.outward[2]}, true});
+    if (lensCount > 0) v.headlightLens = lens / float(lensCount) + glm::vec3(0.0f, 0.0f, 0.01f);
+    else v.headlightLens = {0.67f, restHub + 0.75f, body.boundsMax[2]};
+    v.mudArch = {sweeps[0].z, -sweeps[2].z, restHub + 0.15f, r + 0.11f};
+    v.mudBody = {sideX > 0.0f ? sideX : body.boundsMax[0], body.boundsMax[2] - 0.15f, body.boundsMin[2] + 0.15f, 0.0f};
+    return true;
 }
 
 // Head lamp lens (left) from the blueprint: centre of the left head lamp box on the front face.
@@ -807,6 +909,14 @@ VehicleVisual buildVehicleVisual(const VehicleConfig& config) {
     VehicleVisual v;
     // The loader rejects unknown ids; an empty id falls back to trailforge_suv.
     const bool ev = config.visualModel == "trailforge_ev";
+    wheelStyle(v, ev);
+    if (!config.bodyModel.empty()) {
+        std::string error;
+        if (buildFromBody(v, config, error)) return v;
+        std::fprintf(stderr, "TrailForge: %s; drawing the procedural body\n", error.c_str());
+        v = VehicleVisual{};
+        wheelStyle(v, ev);
+    }
     const VehicleBlueprint* bp = findVehicleBlueprint(ev ? "trailforge_ev" : "trailforge_suv");
     if (!bp) return v; // the blueprints are embedded at build time
     if (ev) buildEv(v, config, *bp);
@@ -839,7 +949,7 @@ glm::vec2 wheelMeshSize(const MeshData& wheel) {
 }
 
 bool sameWheelFit(const VehicleConfig& a, const VehicleConfig& b) {
-    if (a.visualModel != b.visualModel || a.wheelBase != b.wheelBase || a.attachHeight != b.attachHeight) return false;
+    if (a.visualModel != b.visualModel || a.bodyModel != b.bodyModel || a.bodyPaint != b.bodyPaint || a.wheelBase != b.wheelBase || a.attachHeight != b.attachHeight) return false;
     for (std::size_t i = 0; i < a.axles.size(); ++i) {
         const AxleConfig &x = a.axles[i], &y = b.axles[i];
         if (x.track != y.track || x.wheelRadius != y.wheelRadius || x.wheelWidth != y.wheelWidth ||

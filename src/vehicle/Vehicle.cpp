@@ -154,10 +154,18 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     using namespace JPH;
     const VehicleConfig& c = m_config;
 
-    // ---- Body shape: convex hulls of the traced blueprint body (the render model's data), or the three boxes of
-    // VehicleShape.h for a model without a blueprint
+    // ---- Body shape: the convex collision pieces of a Blender-authored body (body.glb COL_*), else convex hulls of
+    // the traced blueprint body (the render model's data), or the three boxes of VehicleShape.h for a model without
+    // a blueprint
     StaticCompoundShapeSettings compound;
-    if (const VehicleBlueprint* bp = findVehicleBlueprint(c.visualModel)) {
+    if (!c.bodyHulls.empty()) {
+        for (const auto& hull : c.bodyHulls) {
+            Array<Vec3> points;
+            points.reserve(hull.size());
+            for (const auto& p : hull) points.push_back(Vec3(p[0], p[1], p[2]));
+            compound.AddShape(Vec3::sZero(), Quat::sIdentity(), new ConvexHullShapeSettings(points, kBodyConvexRadius));
+        }
+    } else if (const VehicleBlueprint* bp = findVehicleBlueprint(c.visualModel)) {
         for (const auto& part : BlueprintBody(*bp, c).collisionParts()) {
             Array<Vec3> points;
             points.reserve(part.size());

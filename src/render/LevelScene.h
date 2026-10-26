@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ModelAsset.h"
 #include "render/Mesh.h"
 
 #include <string>
@@ -34,5 +35,9 @@ std::vector<TreeInstance> buildLevelTreeInstances(const Level& level);
 // Level model files (Level::models() paths) and the placements of the trees, rocks, logs and ground cover that use
 // them, with the transforms of their collision (track/Level.h addLevelRock / addLevelTrunk).
 void buildLevelModelPlacements(const Level& level, std::vector<std::string>& paths, std::vector<ModelPlacement>& out);
+// Render models of the level's kit building types (Level::buildingTypes order, track/BuildingKit: the same parts as
+// their collision) and the placements of the buildings, model index first + type.
+std::vector<ModelAsset> buildLevelBuildingModels(const Level& level);
+void appendLevelBuildingPlacements(const Level& level, int first, std::vector<ModelPlacement>& out);
 
 } // namespace tf

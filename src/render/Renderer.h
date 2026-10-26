@@ -18,6 +18,8 @@ struct ImDrawData;
 
 namespace tf {
 
+struct ModelAsset;
+
 struct GroundMaps;
 class TireMarks;
 class WheelSpray;
@@ -323,8 +325,10 @@ public:
     void setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances);
     // Instanced level models (core/ModelAsset .glb: mesh LODs, BC7 materials, impostor atlas) and their static
     // placements. Files that fail to load are skipped with a log line (their placements are not drawn).
-    // Returns the number of models loaded.
-    int setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements);
+    // In-memory models (the building kit) follow the files: placement model paths.size() + k is assets[k], its
+    // material textures are relative to assetTextureDir. Returns the number of models loaded.
+    int setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements,
+                  std::span<const ModelAsset* const> assets = {}, const std::string& assetTextureDir = {});
 
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
@@ -572,6 +576,7 @@ private:
     struct GpuModelMaterial {
         int albedo = -1, nra = -1; // m_modelTextures
         bool alphaTest = false;
+        glm::vec3 tint{1.0f};
     };
     struct GpuModel {
         std::string kind;

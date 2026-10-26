@@ -1,3 +1,5 @@
 assets/textures/**/*.ktx2 filter=lfs diff=lfs merge=lfs -text
 assets/models/**/*.glb filter=lfs diff=lfs merge=lfs -text
 assets/models/**/*.ktx2 filter=lfs diff=lfs merge=lfs -text
+assets/vehicles/**/*.glb filter=lfs diff=lfs merge=lfs -text
+tests/data/**/*.glb filter=lfs diff=lfs merge=lfs -text

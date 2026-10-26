@@ -169,6 +169,12 @@ Application::Application(const AppOptions& options)
         std::printf("Textures: terrain materials from %s/terrain\n", dir.c_str());
         break;
     }
+    for (const std::string& dir : assetDirs("textures")) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dir + "/buildings/buildings.json", ec)) continue;
+        m_buildingTextureDir = dir + "/buildings";
+        break;
+    }
     m_ui.visible = options.startWithUi;
 
     const Uint64 t0 = SDL_GetPerformanceCounter();
@@ -712,7 +718,11 @@ void Application::buildWorldContent() {
         std::vector<std::string> modelPaths;
         std::vector<ModelPlacement> placements;
         buildLevelModelPlacements(*level, modelPaths, placements);
-        const int models = m_renderer->setModels(modelPaths, placements);
+        const std::vector<ModelAsset> kit = buildLevelBuildingModels(*level);
+        std::vector<const ModelAsset*> kitPtrs;
+        for (const ModelAsset& a : kit) kitPtrs.push_back(&a);
+        appendLevelBuildingPlacements(*level, int(modelPaths.size()), placements);
+        const int models = m_renderer->setModels(modelPaths, placements, kitPtrs, m_buildingTextureDir);
         if (models < int(modelPaths.size()))
             std::printf("Levels: %d of %zu level models loaded (see the log)\n", models, modelPaths.size());
         if (!level->modelError().empty())
@@ -1779,6 +1789,21 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             std::printf("SCENARIO: no vehicle '%s'\n", arg.c_str());
             return Exec::Failed;
         }
+        m_sim.requestVehicleConfig(m_garage->config()); // also replaces a vehicle_file vehicle
+        return Exec::Done;
+    }
+    if (c.op == "vehicle_file") {
+        // vehicle_file PATH: a vehicle.json outside the catalog (test definitions) replaces the running vehicle in
+        // place until the next `vehicle`; the garage keeps its own vehicle.
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        if (!loadVehicleDefinition(arg, def, errors)) {
+            for (const std::string& e : errors) std::printf("SCENARIO: %s\n", e.c_str());
+            return Exec::Failed;
+        }
+        std::printf("SCENARIO: vehicle '%s' from %s%s\n", def.id.c_str(), arg.c_str(),
+                    def.config.bodyModel.empty() ? "" : " (body.glb)");
+        m_sim.requestVehicleConfig(def.config);
         return Exec::Done;
     }
     if (c.op == "click" && arg.rfind("vehicle_card:", 0) == 0) {
@@ -2342,6 +2367,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     }
     // The settings file format keeps every value of the current settings (parse(serialize(s)) == s).
     if (n == "settings_roundtrip") return parseSettings(serializeSettings(m_settings)) == m_settings ? 1.0 : 0.0;
+    if (n == "body_glb") return m_sim.vehicleConfig().bodyModel.empty() ? 0.0 : 1.0; // running vehicle has a body.glb
+    if (n == "body_parts") return double(m_vehicleVisual.parts.size());
+    if (n == "body_triangles") return double(m_vehicleVisual.mesh.vertices.size() / 3);
+    if (n == "body_hulls") return double(m_sim.vehicleConfig().bodyHulls.size());
     if (n == "drive_keys") return double(int(m_input.driveKeys()));
     if (n == "kb_style") return double(int(keyboardStyle())); // 0 Mac, 1 PC
     if (n == "pad_glyphs") return double(int(resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), padType())));
@@ -2497,6 +2526,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "terrain_tex_mb") return double(m_renderer->stats().terrainTexBytes) / 1e6;
     if (n == "terrain_tex_ms") return m_renderer->stats().terrainTexLoadMs;
     if (n == "terrain_tex_loads") return m_renderer->stats().terrainTexLoads;
+    if (n == "buildings") return m_sim.level() ? double(m_sim.level()->buildings().size()) : 0.0;
+    if (n == "model_instances") return m_renderer->stats().modelInstances;
+    if (n == "model_tris") return double(m_renderer->stats().modelTriangles);
+    if (n == "model_draws") return m_renderer->stats().modelDraws;
     if (const TerrainTiles* tt = m_sim.terrain()) {
         const TerrainStreamingStats& st = tt->stats();
         if (n == "tiles_loaded") return st.loaded;

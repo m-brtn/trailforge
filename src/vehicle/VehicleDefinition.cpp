@@ -1,5 +1,6 @@
 #include "vehicle/VehicleDefinition.h"
 
+#include "vehicle/VehicleBody.h"
 #include "vehicle/VehicleSetup.h"
 
 #include <algorithm>
@@ -498,6 +499,42 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             }
             b.num("friction", c.bodyFriction, 0.0, 2.0, "");
             b.num("angularDamping", c.bodyAngularDamping, 0.0, 1.0, "1/s");
+            std::string model;
+            b.str("model", model, false);
+            if (!model.empty()) {
+                // Next to the vehicle.json; no paths outside its folder.
+                const std::filesystem::path rel(model);
+                if (rel.is_absolute() || model.find("..") != std::string::npos || rel.extension() != ".glb") {
+                    b.error("body.model", "must be a .glb file name in the vehicle folder");
+                } else {
+                    c.bodyModel = (std::filesystem::path(source).parent_path() / rel).lexically_normal().string();
+                    BodyModel body;
+                    std::string err;
+                    if (!loadBodyModel(c.bodyModel, body, false, &err)) b.error("body.model", err);
+                    else if (body.hulls.empty()) b.error("body.model", c.bodyModel + ": no collision pieces (COL_*)");
+                    for (const BodyHull& h : body.hulls) c.bodyHulls.push_back(h.points);
+                }
+            }
+            if (const json::Value* paint = b.member("paint", false)) {
+                if (!paint->isObject()) b.error("body.paint", "must be an object");
+                else
+                    for (const auto& [role, v] : paint->object) {
+                        if (role != "paint_primary" && role != "paint_secondary" && role != "paint_accent") {
+                            b.error("body.paint." + role, "unknown role (paint_primary, paint_secondary, paint_accent)");
+                            continue;
+                        }
+                        std::array<float, 3> rgb{};
+                        bool ok = v.isArray() && v.array.size() == 3;
+                        for (std::size_t i = 0; ok && i < 3; ++i) {
+                            rgb[i] = float(v.array[i].numberOr(-1.0));
+                            ok = rgb[i] >= 0.0f && rgb[i] <= 1.0f;
+                        }
+                        if (!ok) b.error("body.paint." + role, "must be [r, g, b] in sRGB 0..1");
+                        else c.bodyPaint[role] = rgb;
+                    }
+                if (c.bodyModel.empty() && !c.bodyPaint.empty())
+                    b.error("body.paint", "needs body.model (the procedural bodies have fixed liveries)");
+            }
         }
         {
             Obj ax(root.member("axles"), "axles", source, errors);

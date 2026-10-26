@@ -2,6 +2,7 @@
 //
 //   trailforge_texc albedo --color diff.jpg --height disp.jpg --size 4096 --out grass_albedo.ktx2
 //       RGB: albedo (sRGB), A: height (stretched to 0..1 between the 1st and 99th percentile). BC7 sRGB.
+//       Without --height, A is 1: level model materials (the model shader cuts alpha below 0.5).
 //   trailforge_texc nra --normal nor_dx.jpg --arm arm.jpg --size 2048 --out grass_nra.ktx2
 //       R, G: tangent-space normal x, y (DirectX convention: +G points down the image), B: roughness, A: ambient
 //       occlusion (from the glTF ARM map: R = AO, G = roughness). BC7 linear.
@@ -22,7 +23,7 @@ using namespace texcore;
 
 int main(int argc, char** argv) {
     if (argc < 2 || (std::strcmp(argv[1], "albedo") != 0 && std::strcmp(argv[1], "nra") != 0)) {
-        std::fprintf(stderr, "usage: trailforge_texc albedo --color C --height H --size N --out F\n"
+        std::fprintf(stderr, "usage: trailforge_texc albedo --color C [--height H] --size N --out F\n"
                              "       trailforge_texc nra --normal N --arm A --size N --out F\n");
         return 2;
     }
@@ -35,7 +36,13 @@ int main(int argc, char** argv) {
     // Level 0 in linear working space: albedo RGB linear + height; or normal xyz (-1..1) + roughness, AO packed as
     // (nx, ny, nz) in px[0..2] and the roughness / AO in px[3] / a second plane.
     Plane base, extra; // extra: nra only (R roughness, G AO)
-    if (albedo) {
+    if (albedo && !args.count("height")) {
+        base = load(need(args, "color"), size);
+        for (std::size_t i = 0; i < base.px.size(); i += 4) {
+            for (int c = 0; c < 3; ++c) base.px[i + std::size_t(c)] = srgbToLinear(base.px[i + std::size_t(c)]);
+            base.px[i + 3] = 1.0f;
+        }
+    } else if (albedo) {
         base = load(need(args, "color"), size);
         const Plane height = load(need(args, "height"), size);
         std::vector<float> hs;

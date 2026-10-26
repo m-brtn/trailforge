@@ -237,6 +237,7 @@ One command per line, `#` starts a comment:
 | `pedal throttle\|brake V` | hold an analog pedal at V (0..1) like a gamepad trigger (not ramped; max with the keys) until set to 0 |
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
+| `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 | `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
@@ -265,6 +266,8 @@ on the level, overviews; `/tmp/trailforge_expl_*.png`),
 controls, minimap options, the proving-ground map, minimap + compass cost; `/tmp/trailforge_map_*.png`),
 `tools/scenarios/terrain_textures.txt` (terrain texture size per preset and Off, no reloads while driving, frame
 times textured vs procedural per preset, `/tmp/trailforge_tex_*.png`),
+`tools/scenarios/buildings_views.txt` (the village and every POI with buildings from fixed cameras, frame times on the
+village per preset and in an Ultra stress pass, `/tmp/trailforge_bld_*.png`),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
@@ -312,14 +315,15 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 `soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `lowgrip_wheels`, `max_slip`, `load_sum`,
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
 2 locked), `abs_seen` / `tc_seen` (the aid acted in a sampled frame since `reset_stats`), `max_locked` (most locked
 wheels in one frame) and `lock_time` (locked wheel-seconds; locked = in contact, ground speed > 2 m/s, wheel surface
 speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
-`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
+`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `buildings` (placed on the
+level), `model_instances` / `model_tris` / `model_draws` (level models drawn, main view), `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
 `spray` (live spray particles), `spray_emitted`, `spray_drawn`, `spray_max`, `spray_fine` (share of fine bits),
@@ -466,7 +470,8 @@ on other platforms use Ctrl+click.
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape),
-              Level (level.json bake: heights, surfaces, water, trees, rocks, POIs), TerrainTiles (streamed
+              Level (level.json bake: heights, surfaces, water, trees, rocks, POIs, buildings), BuildingKit
+              (procedural buildings: render LODs + convex collision pieces), TerrainTiles (streamed
               HeightFieldShape tiles + per-tile trunk / rock colliders)
 src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest), Ktx2 (BC7 KTX2
               reader / writer), TerrainTextureSet (terrain.json, level skip per texture size)
@@ -754,15 +759,17 @@ Broken definitions are skipped with the message in the log. The test `vehicle_de
 documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` plus `tests/data/vehicles` (settle,
 0-30 / 0-50 km/h, braking from 50 km/h, a 15° low-range climb, suspension travel limits).
 
-The body shape is not part of vehicle.json: `visualModel` selects the traced `assets/vehicles/<id>/blueprint.json`
-(generated by `tools/cars/trace_blueprint.py`, embedded at build time; see "Vehicle blueprints"), which gives both the
-visible body and the collision hulls, placed on the wheelbase, track and wheels of the definition.
+By default the body shape is not part of vehicle.json: `visualModel` selects the traced
+`assets/vehicles/<id>/blueprint.json` (generated by `tools/cars/trace_blueprint.py`, embedded at build time; see
+"Vehicle blueprints"), which gives both the visible body and the collision hulls, placed on the wheelbase, track and
+wheels of the definition. A vehicle can instead reference a Blender-authored body, `body.model` = `body.glb` in its
+folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks the procedural wheel and coil style.
 
 | Section | Keys |
 |---|---|
 | top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev` |
 | `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
-| `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping` |
+| `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
 | `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
 | `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`} |
@@ -786,6 +793,99 @@ The SUV migration was checked against v0.7.0: with the JSON SUV (still full-time
 physics test outputs and all 13 probe outputs (`brake surfaces susp abs diff hillbrake launch skid climb corner tc
 tcmud ellipse`, 626 lines) were byte-identical to the v0.7.0 binaries. The test `suv_definition_matches_builtin`
 keeps the JSON equal to the C++ defaults except the layout and the drag area.
+
+### Blender bodies (body.glb)
+
+A vehicle body can be modelled in Blender instead of traced from the concept sheet. The game reads a converted
+`assets/vehicles/<id>/body.glb` (Git LFS, `.gitattributes`) when vehicle.json has `"body": {"model": "body.glb"}`;
+without it, or when the file fails to load (logged), the procedural blueprint body is used. The shipped SUV and EV
+still use their procedural bodies; the only glb body is the test vehicle `tests/data/vehicles/suv_glb_test` (the SUV
+definition with a scripted body, red `paint_primary`).
+
+**Contract of the Blender export** (the source glTF that `trailforge_vehiclec` reads):
+
+- **Body only.** No wheels, tires, rims, brake discs, springs, shocks, arms, axles or spare *tire*: the game draws
+  them procedurally from the Jolt wheels (the wheel mesh is the physics wheel). Part names containing `wheel`,
+  `tire` / `tyre`, `rim`, `spring`, `shock`, `strut`, `damper`, `coil`, `suspension` or `axle` are rejected
+  (`spare_carrier` is fine; the spare wheel itself is a seat, see `SPARE_`).
+- **Frame and units.** Vehicle body space: +Z forward, +X left, +Y up, metres, origin = the body origin the physics
+  places the wheels from (wheel hubs at x = ±track/2, z = ±wheelBase/2, hub y from `attachHeight − maxLength` to
+  `attachHeight − minLength`). The glTF exporter (+Y up) maps Blender (x, y, z) to (x, z, −y), so in Blender the
+  vehicle faces **−Y**, left is +X, up is +Z. Node transforms are applied by the converter.
+- **Parts.** Each mesh node is a part named after the node (`hood`, `door_front_left`, `bumper_rear`, ...); the
+  node hierarchy is the part hierarchy (parent = the part a part is hinged or bolted to). Custom properties (glTF
+  extras): `tf_deformable`, `tf_detachable` (bool, default false), `tf_collides` (default true, false for names
+  containing `mirror` or `antenna`: left out of the visual vs collision check), `tf_attach` [x, y, z] (hinge / bolt
+  point, default the part's bounds centre). These flags are data for later damage stages (no damage logic yet).
+- **LODs.** Optional `<part>_LOD1` / `<part>_LOD2` nodes; missing LODs are generated by simplification (about 1/2
+  and 1/4 of the triangles, error limits 10 / 30 mm, material borders locked). The game draws LOD0 for now.
+- **Materials** map to game roles by the custom property `tf_role` or by the material name up to the first `.`
+  (`paint_primary.001` → `paint_primary`): `paint_primary`, `paint_secondary`, `paint_accent` (clear-coat paint,
+  recolourable from vehicle.json `body.paint`), `cladding` (grained plastic), `plastic`, `chrome`, `metal`, `glass`,
+  `rubber`, `lens` (clear lamp housing), `light_head`, `light_tail`, `light_brake`, `light_reverse`,
+  `light_indicator`, `liner`, `underbody`. Unknown names are errors. Base colour, roughness, metallic, emission
+  (`emissiveFactor` + strength), clear coat, transmission and IOR are kept; colour only (textures are ignored with a
+  warning; vertex colours multiply the base colour). The light roles are driven by the game state: head lamps by
+  the headlight switch, tail / brake lamps by the brake pedal (dim running level otherwise), reverse lamps in
+  reverse, indicators as markers; their colour is the emission colour, else the base colour. `tf_mud` (0..1)
+  overrides the per-role cosmetic mud receptivity.
+- **Collision.** `COL_<name>` mesh nodes are convex collision pieces (closed, convex within 2 mm: every point on
+  the convex hull of the piece, at least 10 mm in every direction). The physics body is a Jolt compound of their
+  convex hulls (convex radius 0.05 m), replacing the blueprint hulls; mass, inertia and centre of mass stay those of
+  vehicle.json. Pieces must clear the wheel sweep like the body, the visual and collision bounds must agree within
+  0.12 m per face (parts with `tf_collides` false excluded), and 90 % of the LOD0 vertices must be within 0.10 m of a
+  piece.
+- **Spare wheel.** `SPARE_<name>` empties: the procedural rear wheel is drawn with its inner face at the empty's
+  origin, its outer face along the empty's local +Y in glTF (the Blender empty's local +Z arrow).
+- **Helpers.** Nodes under `REF_`, `PROXY_` or `CUT_` names (reference planes, proxy wheels, arch cutters) are
+  skipped with a warning; export only the `BODY` and `COL` collections.
+- **Wheel sweep.** No LOD0 point (vertices, edge midpoints, triangle centroids) may come within 10 mm of the space
+  a physics tire sweeps (`src/vehicle/WheelSweep.h`: tire radius and width, hub over the full suspension travel,
+  front wheels over ± the steering lock), checked for the base definition, every kit, and each of them at both ends
+  of the garage ride-height range. LOD1 / LOD2 points closer than 10 mm are warnings. Tire sizes changed outside
+  the definition (scenario `wheels`) are not covered.
+
+**Converter.** `trailforge_vehiclec` (built with every preset, `tools/cars/vehiclec.cpp`):
+
+```sh
+./build/release/trailforge_vehiclec --vehicle assets/vehicles/<id>/vehicle.json body_src.glb assets/vehicles/<id>/body.glb
+./build/release/trailforge_vehiclec --check assets/vehicles/<id>/body.glb   # re-read a converted file
+```
+
+It prints parts, materials and roles, triangles per LOD, the smallest wheel-sweep clearance (body and collision)
+and where, the visual vs collision bounds deviation and coverage; exit code 1 and nothing written on any error. The
+converted body.glb keeps the part names, hierarchy and flags (node extras), body-space vertices (identity
+transforms), the LOD meshes, materials with `KHR_materials_clearcoat` / `transmission` / `ior` /
+`emissive_strength` and the role in the material extras, the `COL_*` pieces and the `SPARE_*` seats.
+
+**Blender round trip** (`tools/cars/blender/`, Blender 5.x, headless or from a live session such as BlenderMCP):
+
+1. `Blender -b --factory-startup --python tools/cars/blender/make_body_blend.py -- --vehicle <id | path/vehicle.json>
+   --out body.blend` writes a starting `.blend` from the definition: `REF_references` (the four Cars.png views as
+   image planes at blueprint scale on the concept axles), `PROXY_wheels` (physics-size tires at rest plus wireframe
+   tires at full bump; not exported), `CUT_arches` (wheelhouse cutters from the tire radius, width, the
+   suspension travel above rest (rest length − `minLength`) and the steering lock, +25 mm), a parametric base body in `BODY` with
+   contract-named parts and material slots (arches cut by the cutters, flares outside them), and `COL` pieces made by
+   cutting the evaluated body into cells and taking their convex hulls. `tools/cars/blender/tf_vehicle.py` holds the
+   shared numbers (it also runs in plain Python and prints the wheel / arch summary).
+2. Model in Blender: keep the parts in `BODY`, the pieces in `COL`, stay outside the `PROXY_` tires; regenerate or
+   re-hull `COL` pieces after big shape changes.
+3. `Blender -b body.blend --python tools/cars/blender/export_body.py -- --out assets/vehicles/<id>/body.glb`
+   (from a live session: `import export_body; export_body.run(out=...)`) exports `BODY` + `COL` as glTF (modifiers
+   applied, +Y up, extras on) and runs the converter against the vehicle's definition; validation errors are printed
+   and nothing is written.
+4. Add `"model": "body.glb"` to the vehicle's `body` section; check with `trailforge_vehiclec --check`, the tests
+   and a capture.
+
+The test asset `tests/data/vehicles/suv_glb_test/` was made exactly this way (`body_src.glb` = the export, `body.glb`
+= the converter output): 42 parts, 15 materials, 7 collision pieces, LOD0 5720 / LOD1 3300 / LOD2 2394 triangles,
+body clearance 23.6 mm, collision clearance 24.0 mm, bounds deviation 0 mm, 94.3 % coverage (one LOD2 warning). Tests:
+`body_hull_convexity`, `body_convert_source` (converts the committed source, compares with the committed body.glb,
+write / read round trip), `body_validation_rules` (each rule rejects a body that breaks it), `body_definition`
+(`body.model` / `body.paint` parsing and errors), `body_physics` (Jolt shape bounds = the pieces, same ride height as
+the procedural SUV), `model_body_glb` (visual parts, light ids, paint override, wheel sweep, fallback);
+`vehicle_catalog_sweep` drives it with the other definitions. Scenario: `tools/scenarios/vehicle_glb.txt`
+(`/tmp/trailforge_vglb_*.png`).
 
 ## Drivetrain layouts
 
@@ -1010,7 +1110,8 @@ the development level and is what scenarios and `--demo` start on.
   (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
   flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
   shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
-  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI blockouts.
+  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI buildings
+  ([Buildings](#buildings)).
 - **Physics:** the grid is split into 255 m Jolt `HeightFieldShape` tiles (`TerrainTiles`) with per-sample
   materials; tiles within 420 m are built on a worker thread (removed beyond 620 m), a tile within 110 m that is
   not ready yet is built synchronously. Tree trunks and rocks are per-tile mesh colliders. The rendered terrain, the props and the colliders
@@ -1244,6 +1345,44 @@ elsewhere), places model rocks and logs with collision, and scatters render-only
   with at least 8 m of drop: a 9 m jittered grid, tilted into the slope and turned downhill, kept only where every
   edge point stays within the slab depth of the ground (no fins past a rim). Collision is their collision mesh in the
   tile compound, like the other model rocks.
+
+### Buildings
+
+Valley Village and the POIs are built from a modular procedural kit (`src/track/BuildingKit`): 85 placed buildings
+of 58 distinct specs. Village houses (stone or plaster ground floor, timber or plaster upper floors, 1–3 floors,
+balconies, shutters, framed windows with glass, chimneys, roof overhangs, clay tile or slate roofs, gutters and
+downpipes) in six archetypes facing the square, gardens, a well, benches, a power line along the road; the fuel
+station (canopy, pump islands, shop, price pylon), the workshop, castle ruins (curtain walls with a breach, two broken
+towers, a gate), the lighthouse with its keeper's house, the radio mast (lattice, ladder, antennas) with its hut, the
+quarry crusher, conveyor, silo and shed, docks on the Alpine Lake and at the beach camp (placed from the first water
+along a shore line), a boathouse, beach and island camps (tents, shelter, woodpile, fire pit), a forest cabin, a pass
+hut, cairns and signposts. No interiors: windows are dark glass (constant roughness 0.06, the sky reflection of the
+model shader).
+
+- **Same parts for render and collision:** every solid part (wall block, roof slab, post, beam, deck, plinth) is one
+  convex collision piece, wound outward, and is drawn unchanged in the far LOD. The near LODs cut window and door
+  recesses (at most 0.16 m) into the same wall planes and add trims up to 0.30 m proud (frames, sills, shutters,
+  flower boxes, barge boards, balusters, gutters). Render-only: power line wires, mast antennas above 6 m, thin rungs
+  and rails between collision posts. CTest `building_kit_parts` checks convexity and winding of every piece and that
+  every far-LOD vertex below 6 m lies within 3 cm of the collision (near LODs within 0.33 m), for every kind.
+- **Placement:** structures keep 3 m from road corridors, stay out of water and off spawn points (`level_placement`,
+  the same check as before); a group that has to move is moved as a whole, and only to a place where the plinths of
+  its structures still reach the ground. Floors sit on the highest ground sample under a structure (its plinth reaches
+  down 1–3.5 m), so no corner is buried and no plinth hangs (`level_buildings`). Trees and rocks are cleared from the
+  footprints.
+- **Rendering:** the kit models go through the level model renderer, instanced per material and LOD: LOD 0 to 70 m,
+  LOD 1 to 220 m, LOD 2 to 1600 m at High (scaled with the tree detail distance), shadows in all cascades; small props
+  (fences, benches, gardens) 30 / 90 / 320 m. Triangles with every building at one LOD: 118k / 66k / 16k; collision
+  15.8k triangles.
+- **Materials:** 11 CC0 Poly Haven layers in `assets/textures/buildings/` (plaster `white_stucco`, rubble stone,
+  castle slates, plank siding, planks, clay roof tiles, roof slates, worn corrugated iron, metal plate, rusty metal,
+  concrete; credits in `assets/textures/CREDITS.md`), BC7 KTX2 albedo 1024² and normal / roughness / AO 512², 19.2 MB
+  in Git LFS, rebuilt by `fetch_textures.py --set buildings`. The albedo alpha is 1 (`"heightInAlpha": false`):
+  the model shader cuts alpha below 0.5. Painted metal, glass, nylon and soil are untextured tints with a constant
+  roughness. No glTF props were added (the kit covers them).
+- **Map:** building footprints are drawn on the full-screen map and the minimap (roof colour per kind).
+- **Views:** `tools/scenarios/buildings_views.txt` (village and every POI from fixed cameras,
+  `/tmp/trailforge_bld_*.png`, frame times per preset).
 
 ### Canyon and waterfalls
 
@@ -1611,6 +1750,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   per-sample material).
 - Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
   the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
+- Buildings collide with convex pieces made from the same solid parts as their far LOD; window / door recesses
+  (≤ 0.16 m) and trims (≤ 0.30 m: frames, sills, shutters, flower boxes, balusters) exist only in the near render
+  LODs. Power line wires, mast antennas above 6 m and thin ladder rungs and rails are render-only. Buildings have no
+  interiors and do not break.
 - Level models: rocks, cliffs, logs and stumps collide with their model's collision mesh (a simplified LOD; the
   nearer render LODs differ from it by the simplification error modelc reports, a few cm to dm per model). Model trees
   collide only with a hexagonal prism along the trunk axis; branches and foliage have no collision. Bushes, ferns and
@@ -1678,6 +1821,11 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   blueprints"): convex pieces, so concave details of the visible body are filled in, and the style-kit accessories
   (roof load, winch, spare, jerry cans, mirrors) have no collision. The wheels touch the ground only through Jolt's
   wheel casts.
+- A Blender body (body.glb) collides only with its authored `COL_*` convex pieces (hulls with a 0.05 m convex
+  radius), never with the render mesh; how closely they follow the visual body is checked only by bounds (0.12 m per
+  face) and coverage (90 % of the vertices within 0.10 m). Mass, inertia and centre of mass stay those of
+  vehicle.json, whatever the body shape. The validated wheel clearance holds for the definition's tires; tire sizes
+  set outside it (scenario `wheels`) are not checked against a glb body (the procedural bodies refit their arches).
 - Time of day, moonlight and headlights are lighting only: they do not change grip, temperature or anything else in
   the simulation.
 - Determinism is guaranteed only at the same step rate on the same platform.
@@ -1699,7 +1847,8 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 69 of 69 tests pass in Debug and Release as of v0.15.0; 56 of 56 in headless (no model tests) as of
+- **CTest.** 75 of 75 tests pass in Debug and Release with the buildings (new: `building_kit_parts`,
+  `building_kit_materials`, `level_buildings`); 69 of 69 as of v0.15.0; 56 of 56 in headless (no model tests) as of
   v0.12.0 (new in
   v0.12.0: `level_heightfield_sampling`, `level_tile_streaming`, `level_road_carving`, `level_surfaces_water`,
   `level_vehicles` in the new `trailforge_level_tests`; new in v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,

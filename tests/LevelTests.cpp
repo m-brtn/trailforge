@@ -1,11 +1,14 @@
 // Headless tests of the open-world level: the bake (height and material sampling, roads, rivers, water), the
 // physics tiles (heightfield == baked grid, streaming bookkeeping), both vehicles on Exploration Peaks and the
-// terrain texture files (KTX2 container, shipped BC7 maps).
+// terrain texture files (KTX2 container, shipped BC7 maps) and the building kit (collision pieces vs render LODs,
+// materials vs assets/textures/buildings).
 
+#include "core/Json.h"
 #include "core/Ktx2.h"
 #include "core/TerrainTextureSet.h"
 #include "physics/PhysicsWorld.h"
 #include "sim/Simulation.h"
+#include "track/BuildingKit.h"
 #include "track/Level.h"
 #include "track/TerrainTiles.h"
 #include "vehicle/VehicleDefinition.h"
@@ -24,9 +27,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1124,6 +1129,174 @@ void levelSlopes() {
           double(stepZ));
 }
 
+// One spec per kind plus the house variants placed on the level.
+std::vector<BuildingSpec> kitSpecs() {
+    using BK = BuildingKind;
+    std::vector<BuildingSpec> v = {
+        {BK::House, 9.0f, 8.0f, 0.0f, 2, kHouseStoneBase | kHouseBalcony | kHouseOchre},
+        {BK::House, 10.0f, 8.5f, 0.0f, 3, kHouseStoneBase | kHouseUpperPlaster | kHouseSideBalcony | (2 << kHouseShutterShift)},
+        {BK::House, 6.0f, 4.5f, 0.0f, 1, kHouseTimber | kHouseShingles | (3 << kHouseShutterShift)},
+        {BK::FuelCanopy, 10.0f, 8.0f, 4.8f, 0, 0}, {BK::FuelShop, 8.0f, 6.0f, 0, 0, 0}, {BK::Pylon, 0, 0, 6.0f, 0, 0},
+        {BK::Garage, 12.0f, 9.0f, 4.4f, 0, 0}, {BK::Garage, 10.0f, 8.0f, 4.0f, 0, 1}, {BK::Lighthouse, 0, 0, 18.0f, 0, 0},
+        {BK::RadioMast, 0, 0, 34.0f, 0, 0}, {BK::RadioHut, 4.0f, 3.0f, 0, 0, 0}, {BK::RuinWall, 14.0f, 0, 5.0f, 0, 3},
+        {BK::RuinTower, 6.0f, 0, 9.0f, 0, 1}, {BK::RuinGate, 5.0f, 0, 0, 0, 0}, {BK::Crusher, 0, 0, 9.0f, 0, 0},
+        {BK::Conveyor, 12.0f, 0, 3.0f, 0, 0}, {BK::Silo, 3.0f, 0, 8.0f, 0, 0}, {BK::Dock, 20.0f, 2.4f, 4.0f, 0, 0},
+        {BK::Tent, 0, 0, 0, 0, 0}, {BK::Tent, 0, 0, 0, 0, 1}, {BK::Fence, 9.0f, 0, 0, 0, 0}, {BK::Fence, 9.0f, 0, 0, 0, 1},
+        {BK::Fence, 9.0f, 0, 0, 0, 2}, {BK::Garden, 6.0f, 5.0f, 0, 0, 1}, {BK::PowerPole, 0, 0, 8.0f, 0, 0},
+        {BK::Wire, 18.0f, 0, 0.5f, 0, 0}, {BK::Woodpile, 5.0f, 0, 0, 0, 0}, {BK::Cairn, 0, 0, 0, 0, 0},
+        {BK::Signpost, 0, 0, 0, 0, 0}, {BK::Well, 0, 0, 0, 0, 0}, {BK::Shelter, 5.0f, 4.0f, 0, 0, 0},
+        {BK::Bench, 1.8f, 0, 0, 0, 0},
+    };
+    return v;
+}
+
+struct KitPiece {
+    std::vector<JPH::Float3> verts;
+    std::vector<std::pair<JPH::Float3, float>> planes; // outward normal, offset
+};
+
+std::vector<KitPiece> kitPieces(const BuildingGeometry& g) {
+    std::vector<KitPiece> out;
+    const std::size_t tris = g.collision.size() / 3;
+    for (std::size_t k = 0; k < g.pieceStarts.size(); ++k) {
+        const std::size_t first = g.pieceStarts[k], last = k + 1 < g.pieceStarts.size() ? g.pieceStarts[k + 1] : tris;
+        KitPiece p;
+        for (std::size_t t = first; t < last; ++t) {
+            const JPH::Vec3 a(g.collision[3 * t]), b(g.collision[3 * t + 1]), c(g.collision[3 * t + 2]);
+            for (int i = 0; i < 3; ++i) p.verts.push_back(g.collision[3 * t + std::size_t(i)]);
+            const JPH::Vec3 n = (b - a).Cross(c - a);
+            if (n.Length() < 1e-9f) continue;
+            const JPH::Vec3 u = n.Normalized();
+            p.planes.push_back({JPH::Float3(u.GetX(), u.GetY(), u.GetZ()), u.Dot(a)});
+        }
+        out.push_back(std::move(p));
+    }
+    return out;
+}
+
+// Largest plane distance of a point outside a convex piece (<= 0 inside; a lower bound of the true distance).
+float pieceDistance(const KitPiece& p, const JPH::Float3& q) {
+    float d = -1e30f;
+    for (const auto& [n, o] : p.planes) d = std::max(d, n.x * q.x + n.y * q.y + n.z * q.z - o);
+    return d;
+}
+
+// Every collision piece is convex and wound outward; the far LOD (LOD 2) has every vertex below 6 m on the
+// collision (within 3 cm: decals 12 mm proud), the near LODs within kKitTrim (trims standing proud of the solid parts).
+void buildingKitParts() {
+    int specs = 0;
+    for (const BuildingSpec& spec : kitSpecs()) {
+        const BuildingGeometry g = buildBuilding(spec, true);
+        const char* name = buildingKindName(spec.kind);
+        ++specs;
+        const bool renderOnly = spec.kind == BuildingKind::Wire;
+        CHECK(renderOnly == g.collision.empty(), "%s: %zu collision triangles", name, g.collision.size() / 3);
+        CHECK(g.model.lods.size() == 3, "%s: %zu LODs", name, g.model.lods.size());
+        if (g.model.lods.size() != 3) continue;
+        const std::vector<KitPiece> pieces = kitPieces(g);
+        int concave = 0, inward = 0;
+        for (const KitPiece& p : pieces) {
+            JPH::Float3 c(0, 0, 0);
+            for (const JPH::Float3& v : p.verts) c = JPH::Float3(c.x + v.x, c.y + v.y, c.z + v.z);
+            const float inv = 1.0f / float(std::max<std::size_t>(p.verts.size(), 1));
+            c = JPH::Float3(c.x * inv, c.y * inv, c.z * inv);
+            bool convex = true;
+            for (const JPH::Float3& v : p.verts) convex = convex && pieceDistance(p, v) < 1e-3f;
+            concave += !convex;
+            inward += pieceDistance(p, c) >= 0.0f;
+        }
+        CHECK(concave == 0 && inward == 0, "%s: %d of %zu pieces not convex, %d wound inward", name, concave,
+              pieces.size(), inward);
+        for (int lod = 0; lod < 3 && !renderOnly; ++lod) {
+            const float tol = lod == 2 ? 0.03f : kKitTrim + 0.03f;
+            int far = 0, checked = 0;
+            float worst = 0.0f;
+            for (const ModelVertex& mv : g.model.lods[std::size_t(lod)].vertices) {
+                const JPH::Float3 q(mv.pos[0], mv.pos[1], mv.pos[2]);
+                if (q.y > 6.0f) continue;
+                float d = 1e30f;
+                for (const KitPiece& p : pieces) d = std::min(d, pieceDistance(p, q));
+                ++checked;
+                if (d > tol) ++far, worst = std::max(worst, d);
+            }
+            CHECK(far == 0, "%s LOD%d: %d of %d vertices below 6 m farther than %.2f m from the collision (max %.2f)",
+                  name, lod, far, checked, double(tol), double(worst));
+        }
+    }
+    std::printf("  %d kit specs checked\n", specs);
+}
+
+// Every textured kit material names a layer of buildings.json with the same tile size and both maps on disk, and
+// the set keeps alpha free of height (the level model shader cuts alpha below 0.5).
+void buildingKitMaterials() {
+    const std::string dir = std::string(TRAILFORGE_SOURCE_DIR) + "/assets/textures/buildings";
+    std::ifstream f(dir + "/buildings.json");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    json::Value doc;
+    std::string err;
+    CHECK(json::parse(ss.str(), doc, &err), "buildings.json: %s", err.c_str());
+    CHECK(!doc["heightInAlpha"].boolOr(true), "buildings.json must set heightInAlpha false");
+    int textured = 0;
+    for (int m = 0; m < kKitMatCount; ++m) {
+        const KitMaterial& km = kitMaterial(KitMat(m));
+        if (!km.layer) {
+            CHECK(km.roughness >= 0.0f, "%s: untextured without a constant roughness", km.name);
+            continue;
+        }
+        ++textured;
+        const json::Value* layer = nullptr;
+        for (const json::Value& l : doc["layers"].array)
+            if (l["id"].stringOr("") == km.layer) layer = &l;
+        CHECK(layer != nullptr, "%s: layer %s not in buildings.json", km.name, km.layer);
+        if (!layer) continue;
+        CHECK(std::abs((*layer)["tile"].numberOr(0.0) - double(km.tile)) < 1e-4, "%s: tile %.2f, buildings.json %.2f",
+              km.name, double(km.tile), (*layer)["tile"].numberOr(0.0));
+        for (const char* map : {"_albedo.ktx2", "_nra.ktx2"}) {
+            const std::string path = dir + "/" + km.layer + map;
+            ktx2::Image img;
+            CHECK(loadTerrainTextureMap(path, std::strcmp(map, "_albedo.ktx2") == 0, 0, img, err), "%s", err.c_str());
+        }
+    }
+    std::printf("  %d of %d kit materials textured\n", textured, kKitMatCount);
+}
+
+// The level places the kit: houses in the village, every structure on a floor at or above the ground under its
+// footprint corners and no plinth bottom above the ground there.
+void levelBuildings() {
+    const Level& L = *level();
+    int houses = 0, structures = 0, sunk = 0, hung = 0;
+    for (const LevelBuilding& b : L.buildings()) {
+        const LevelBuildingType& t = L.buildingTypes()[b.type];
+        houses += t.spec.kind == BuildingKind::House;
+        if (!buildingIsStructure(t.spec.kind)) continue;
+        ++structures;
+        const float c = std::cos(b.yaw), s = std::sin(b.yaw);
+        for (const float sx : {-1.0f, 1.0f})
+            for (const float sz : {-1.0f, 1.0f}) {
+                const float lx = sx * t.footprintX, lz = sz * t.footprintZ;
+                const float x = b.x + c * lx + s * lz, z = b.z - s * lx + c * lz;
+                const bool low = b.y < L.heightAt(x, z) - 0.05f;
+                if (low)
+                    std::printf("  %s at %.1f %.1f: floor %.2f, ground %.2f at a footprint corner\n",
+                                buildingKindName(t.spec.kind), double(b.x), double(b.z), double(b.y),
+                                double(L.heightAt(x, z)));
+                sunk += low;
+                const bool hanging = L.heightAt(x, z) < b.y - buildingPlinthDepth(t.spec.kind) + 0.1f;
+                if (hanging)
+                    std::printf("  %s at %.1f %.1f: floor %.2f, ground %.2f below the plinth at a footprint corner\n",
+                                buildingKindName(t.spec.kind), double(b.x), double(b.z), double(b.y),
+                                double(L.heightAt(x, z)));
+                hung += hanging;
+            }
+    }
+    CHECK(L.buildings().size() > 80 && houses >= 18, "%zu buildings, %d houses", L.buildings().size(), houses);
+    CHECK(sunk == 0, "ground above the floor at %d footprint corners of %d structures", sunk, structures);
+    CHECK(hung == 0, "ground below the plinth at %d footprint corners of %d structures", hung, structures);
+    std::printf("  %zu buildings (%d houses, %d structures) of %zu types\n", L.buildings().size(), houses,
+                structures, L.buildingTypes().size());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1141,6 +1314,9 @@ int main(int argc, char** argv) {
         {"autopilot_loops", autopilotLoops},
         {"terrain_textures_ktx2", terrainTexturesKtx2},
         {"terrain_textures_assets", terrainTexturesAssets},
+        {"building_kit_parts", buildingKitParts},
+        {"building_kit_materials", buildingKitMaterials},
+        {"level_buildings", levelBuildings},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

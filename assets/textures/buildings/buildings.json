@@ -1,0 +1,19 @@
+{
+  "comment": "Building kit materials (src/track/BuildingKit). Sources: Poly Haven (CC0). Rebuilt by tools/textures/fetch_textures.py --set buildings, which checks the md5 of every download. tile: world size of one texture repeat (m); the kit maps its UVs in meters divided by tile. heightInAlpha false: the albedo alpha is 1 (the level model shader cuts alpha below 0.5).",
+  "heightInAlpha": false,
+  "albedoSize": 1024,
+  "nraSize": 512,
+  "layers": [
+    {"id": "plaster", "asset": "white_stucco", "tile": 2.0},
+    {"id": "stone", "asset": "rustic_stone_wall_02", "tile": 1.5},
+    {"id": "castle", "asset": "castle_wall_slates", "tile": 2.5},
+    {"id": "siding", "asset": "weathered_plank_siding", "tile": 1.6},
+    {"id": "wood", "asset": "weathered_planks", "tile": 2.0},
+    {"id": "roof_tiles", "asset": "clay_roof_tiles_02", "tile": 2.5},
+    {"id": "shingles", "asset": "roof_slates_02", "tile": 3.0},
+    {"id": "corrugated", "asset": "worn_corrugated_iron", "tile": 1.8},
+    {"id": "metal", "asset": "metal_plate_02", "tile": 2.0},
+    {"id": "rust", "asset": "rusty_metal_04", "tile": 2.0},
+    {"id": "concrete", "asset": "concrete_floor_02", "tile": 2.0}
+  ]
+}

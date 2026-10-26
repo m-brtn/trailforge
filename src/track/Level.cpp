@@ -365,13 +365,22 @@ private:
              SurfaceId s = SurfaceId::Concrete);
     void groundedBox(float x, float z, float hx, float hy, float hz, float yaw, PropStyle style,
                      SurfaceId s = SurfaceId::Concrete, float lift = 0.0f);
-    void gableRoof(float x, float y, float z, float hx, float hz, float rise, float yaw, PropStyle style);
-    void prism(float x, float y0, float z, float radius, float y1, int sides, PropStyle style, float topRadius = -1.0f);
     void slab(Vec3 a, Vec3 b, float halfWidth, float thickness, PropStyle style, SurfaceId s);
-    void house(float x, float z, float w, float d, float h, float yaw, PropStyle walls, PropStyle roof);
-    void tent(float x, float z, float yaw);
     void rock(Vec3 center, Vec3 radii, float yaw, std::uint32_t seed, PropStyle style);
-    void pier(float x0, float z0, float x1, float z1, float deckY, float halfWidth);
+    // Kit buildings (track/BuildingKit). building() places one at (x, z) turned by yaw, with its floor at floorY or,
+    // when floorY is kGroundFloor, from the ground under its bounds (structures: above the highest sample, the plinth
+    // reaches down; tents: on the lowest; small props: the middle). Its collision pieces form one Site.
+    static constexpr float kGroundFloor = -1.0e30f;
+    std::uint16_t buildingType(const BuildingSpec& spec);
+    void building(const BuildingSpec& spec, float x, float z, float yaw, float floorY = kGroundFloor);
+    float groundFloor(std::uint16_t type, float x, float z, float yaw, float* spread = nullptr) const;
+    void dock(float x0, float z0, float x1, float z1, float deckY, float width);
+    std::optional<P2> shoreDock(float x, float z, float dirX, float dirZ, float reach, float width);
+    void powerLine(const std::vector<P2>& poles, float height);
+    std::vector<BuildingGeometry> m_kitGeometry; // per L.m_buildingTypes entry (collision only)
+    std::vector<std::size_t> m_structureSites;   // m_sites indices of placed structures (tree / rock clearing)
+    std::vector<bool> m_onGround;                // per L.m_buildings entry: floor from groundFloor()
+    std::vector<std::size_t> m_buildingTri;      // per L.m_buildings entry: its first props triangle
     float footprintMin(float x, float z, float hx, float hz, float yaw) const;
     float roadClearance(float x, float z) const;   // distance to the nearest road edge or bridge deck (m), large when far
     float bridgeClearance(float x, float z) const; // distance to the nearest bridge deck with its ramps (m)
@@ -384,21 +393,21 @@ private:
     struct Site {
         explicit Site(LevelBaker& baker)
             : b(baker), tri(baker.L.m_props.geometry.triangleCount()), piece(baker.L.m_props.pieceStarts.size()),
-              outer(!baker.m_inSite) {
+              building(baker.L.m_buildings.size()), outer(!baker.m_inSite) {
             b.m_inSite = true;
         }
         ~Site() {
             if (!outer) return;
             b.m_inSite = false;
-            b.settle(tri, piece);
+            b.settle(tri, piece, building);
         }
         Site(const Site&) = delete;
         Site& operator=(const Site&) = delete;
         LevelBaker& b;
-        std::size_t tri, piece;
+        std::size_t tri, piece, building;
         bool outer;
     };
-    void settle(std::size_t firstTriangle, std::size_t firstPiece);
+    void settle(std::size_t firstTriangle, std::size_t firstPiece, std::size_t firstBuilding);
     bool siteClear(const std::vector<P2>& hull, float margin, bool building, bool moved) const;
     void buildRoadPoints();
     static constexpr float kRoadMargin = 2.0f;     // m from the road edge: trees, rocks
@@ -2039,7 +2048,7 @@ bool LevelBaker::siteClear(const std::vector<P2>& hull, float margin, bool build
     return true;
 }
 
-void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece) {
+void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece, std::size_t firstBuilding) {
     TrackGeometry& g = L.m_props.geometry;
     const std::size_t lastTri = g.triangleCount();
     if (lastTri <= firstTri) return;
@@ -2064,6 +2073,7 @@ void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece) {
         return h;
     };
     if (siteClear(hull, margin, building, false)) {
+        if (building) m_structureSites.push_back(m_sites.size());
         m_sites.push_back(hull);
         return;
     }
@@ -2074,12 +2084,33 @@ void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece) {
             const float dx = r * std::sin(ang), dz = r * std::cos(ang);
             std::vector<P2> h = shifted(dx, dz);
             if (!siteClear(h, margin, building, true)) continue;
+            bool level = true; // the plinths of moved structures must still reach the ground
+            for (std::size_t k = firstBuilding; k < L.m_buildings.size() && level; ++k) {
+                const LevelBuilding& b = L.m_buildings[k];
+                const BuildingKind kind = L.m_buildingTypes[b.type].spec.kind;
+                if (!m_onGround[k] || !buildingIsStructure(kind)) continue;
+                float spread = 0.0f;
+                groundFloor(b.type, b.x + dx, b.z + dz, b.yaw, &spread);
+                level = spread < buildingPlinthDepth(kind) - 0.5f;
+            }
+            if (!level) continue;
             const float dy = L.heightAt(cx + dx, cz + dz) - L.heightAt(cx, cz);
             for (std::size_t v = 3 * firstTri; v < 3 * lastTri; ++v) {
                 g.positions[v].x += dx;
                 g.positions[v].y += dy;
                 g.positions[v].z += dz;
             }
+            // Buildings on the ground get their floor rule again at the new place (the slope may differ).
+            for (std::size_t k = firstBuilding; k < L.m_buildings.size(); ++k) {
+                LevelBuilding& b = L.m_buildings[k];
+                b.x += dx;
+                b.z += dz;
+                const float by = m_onGround[k] ? groundFloor(b.type, b.x, b.z, b.yaw) - b.y : dy;
+                b.y += by;
+                const std::size_t t1 = k + 1 < L.m_buildings.size() ? m_buildingTri[k + 1] : lastTri;
+                for (std::size_t v = 3 * m_buildingTri[k]; v < 3 * t1; ++v) g.positions[v].y += by - dy;
+            }
+            if (building) m_structureSites.push_back(m_sites.size());
             m_sites.push_back(std::move(h));
             ++L.m_stats.propsMoved;
             return;
@@ -2089,6 +2120,9 @@ void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece) {
     L.m_props.styles.resize(firstTri);
     L.m_props.pieceStarts.resize(firstPiece);
     L.m_props.pieceRoles.resize(firstPiece);
+    L.m_buildings.resize(firstBuilding);
+    m_onGround.resize(firstBuilding);
+    m_buildingTri.resize(firstBuilding);
     ++L.m_stats.propsRemoved;
 }
 
@@ -2113,36 +2147,6 @@ void LevelBaker::groundedBox(float x, float z, float hx, float hy, float hz, flo
     box(x, base + hy, z, hx, hy, hz, yaw, style, s);
 }
 
-void LevelBaker::gableRoof(float x, float y, float z, float hx, float hz, float rise, float yaw, PropStyle style) {
-    addProp([&](TrackGeometry& g) {
-        const JPH::Quat q = JPH::Quat::sRotation(Vec3::sAxisY(), yaw);
-        auto P = [&](float a, float b, float c) { return Vec3(x, y, z) + q * Vec3(a, b, c); };
-        const float o = 0.35f; // eaves overhang
-        // Two roof planes (ridge along local z) and the gable triangles.
-        g.addQuad(P(-hx - o, 0, -hz - o), P(-hx - o, 0, hz + o), P(0, rise, hz + o), P(0, rise, -hz - o), SurfaceId::Concrete);
-        g.addQuad(P(hx + o, 0, hz + o), P(hx + o, 0, -hz - o), P(0, rise, -hz - o), P(0, rise, hz + o), SurfaceId::Concrete);
-        g.addTriangle(P(-hx, 0, hz), P(hx, 0, hz), P(0, rise, hz), SurfaceId::Concrete);
-        g.addTriangle(P(hx, 0, -hz), P(-hx, 0, -hz), P(0, rise, -hz), SurfaceId::Concrete);
-        // Underside of the eaves.
-        g.addQuad(P(-hx - o, 0, hz + o), P(-hx - o, 0, -hz - o), P(hx + o, 0, -hz - o), P(hx + o, 0, hz + o), SurfaceId::Concrete);
-    }, style);
-}
-
-void LevelBaker::prism(float x, float y0, float z, float radius, float y1, int sides, PropStyle style, float topRadius) {
-    if (topRadius < 0.0f) topRadius = radius;
-    addProp([&](TrackGeometry& g) {
-        for (int k = 0; k < sides; ++k) {
-            const float a0 = 2.0f * kPi * float(k) / float(sides), a1 = 2.0f * kPi * float(k + 1) / float(sides);
-            const Vec3 b0(x + radius * std::cos(a0), y0, z + radius * std::sin(a0));
-            const Vec3 b1(x + radius * std::cos(a1), y0, z + radius * std::sin(a1));
-            const Vec3 t0(x + topRadius * std::cos(a0), y1, z + topRadius * std::sin(a0));
-            const Vec3 t1(x + topRadius * std::cos(a1), y1, z + topRadius * std::sin(a1));
-            g.addQuad(b0, t0, t1, b1, SurfaceId::Concrete);
-            g.addTriangle(Vec3(x, y1, z), t1, t0, SurfaceId::Concrete);
-        }
-    }, style);
-}
-
 void LevelBaker::slab(Vec3 a, Vec3 b, float hw, float th, PropStyle style, SurfaceId s) {
     addProp([&](TrackGeometry& g) {
         Vec3 dir = b - a;
@@ -2161,42 +2165,10 @@ void LevelBaker::slab(Vec3 a, Vec3 b, float hw, float th, PropStyle style, Surfa
     }, style);
 }
 
-void LevelBaker::house(float x, float z, float w, float d, float h, float yaw, PropStyle walls, PropStyle roof) {
-    Site site(*this);
-    const PropRole role = std::exchange(m_role, PropRole::Building);
-    const float base = footprintMin(x, z, 0.5f * w, 0.5f * d, yaw) - 0.4f;
-    const float top = std::max(base + 0.4f + h, L.heightAt(x, z) + h);
-    box(x, 0.5f * (base + top), z, 0.5f * w, 0.5f * (top - base), 0.5f * d, yaw, walls);
-    gableRoof(x, top, z, 0.5f * w, 0.5f * d, 0.45f * w, yaw, roof);
-    m_role = role;
-}
-
 void LevelBaker::rock(Vec3 center, Vec3 radii, float yaw, std::uint32_t seed, PropStyle style) {
     const PropRole role = std::exchange(m_role, PropRole::Rock);
     addProp([&](TrackGeometry& g) { g.addRock(center, radii, yaw, seed, SurfaceId::Rock); }, style);
     m_role = role;
-}
-
-void LevelBaker::tent(float x, float z, float yaw) {
-    const float y = L.heightAt(x, z) - 0.1f;
-    gableRoof(x, y, z, 1.3f, 1.6f, 1.7f, yaw, PropStyle::Canvas);
-}
-
-void LevelBaker::pier(float x0, float z0, float x1, float z1, float deckY, float hw) {
-    Site site(*this);
-    slab(Vec3(x0, deckY, z0), Vec3(x1, deckY, z1), hw, 0.25f, PropStyle::Wood, SurfaceId::Concrete);
-    const float len = std::hypot(x1 - x0, z1 - z0);
-    const int posts = std::max(2, int(len / 5.0f) + 1);
-    const float dx = (x1 - x0) / len, dz = (z1 - z0) / len;
-    for (int k = 0; k < posts; ++k) {
-        const float t = float(k) / float(posts - 1);
-        for (float side : {-1.0f, 1.0f}) {
-            const float px = lerp(x0, x1, t) + dz * side * (hw - 0.15f), pz = lerp(z0, z1, t) - dx * side * (hw - 0.15f);
-            const float bottom = L.heightAt(px, pz) - 0.5f;
-            if (deckY - 0.25f - bottom < 0.6f) continue; // the deck rests on the ground here
-            box(px, 0.5f * (bottom + deckY - 0.25f), pz, 0.14f, 0.5f * (deckY - 0.25f - bottom), 0.14f, 0.0f, PropStyle::DarkWood);
-        }
-    }
 }
 
 void LevelBaker::bakeProps() {
@@ -2240,165 +2212,319 @@ void LevelBaker::bakeProps() {
     }
 
     m_role = PropRole::Prop;
+    using BK = BuildingKind;
+    constexpr int kShutGreen = 0 << kHouseShutterShift, kShutRed = 1 << kHouseShutterShift,
+                  kShutWood = 2 << kHouseShutterShift, kShutNone = 3 << kHouseShutterShift;
+    // Village house archetypes (few distinct models, drawn instanced).
+    const BuildingSpec villageHouses[6] = {
+        {BK::House, 9.0f, 7.0f, 0.0f, 2, kHouseStoneBase | kHouseBalcony | kShutGreen},
+        {BK::House, 8.0f, 6.5f, 0.0f, 2, kHouseUpperPlaster | kHouseShingles | kShutRed},
+        {BK::House, 10.0f, 7.5f, 0.0f, 3, kHouseStoneBase | kHouseUpperPlaster | kHouseOchre | kHouseBalcony | kHouseSideBalcony | kShutWood},
+        {BK::House, 7.0f, 6.0f, 0.0f, 1, kHouseTimber | kHouseShingles | kShutNone},
+        {BK::House, 8.5f, 7.0f, 0.0f, 2, kHouseUpperPlaster | kHouseBalcony | kShutWood},
+        {BK::House, 9.0f, 6.5f, 0.0f, 2, kHouseStoneBase | kHouseShingles | kHouseSideBalcony | kShutGreen},
+    };
+    const BuildingSpec cabin{BK::House, 6.0f, 4.5f, 0.0f, 1, kHouseTimber | kHouseShingles | kShutWood};
+    const BuildingSpec hut{BK::House, 5.0f, 4.0f, 0.0f, 1, kHouseStoneBase | kHouseShingles | kShutNone};
+    const BuildingSpec keeper{BK::House, 6.5f, 5.0f, 0.0f, 1, kHouseUpperPlaster | kShutRed};
+    const BuildingSpec boathouse{BK::House, 6.0f, 5.0f, 0.0f, 1, kHouseTimber | kShutGreen};
+    const BuildingSpec shack{BK::House, 4.5f, 4.0f, 0.0f, 1, kHouseTimber | kHouseShingles | kShutNone};
+    const auto faceTo = [](float fx, float fz, float tx, float tz) { return std::atan2(tx - fx, tz - fz); };
     for (const LevelPoi& p : L.m_pois) {
         const float x = p.x, z = p.z;
-        const float gy = L.heightAt(x, z);
         if (p.kind == "peak") {
-            {
-                Site site(*this);
-                prism(x + 4.0f, gy - 0.5f, z - 3.0f, 1.4f, gy + 1.6f, 6, PropStyle::DarkStone, 0.5f); // cairn
-                box(x + 4.0f, gy + 3.0f, z - 3.0f, 0.06f, 1.6f, 0.06f, 0.0f, PropStyle::Metal);
-                box(x + 4.5f, gy + 4.2f, z - 3.0f, 0.5f, 0.3f, 0.02f, 0.0f, PropStyle::Marker);
-            }
+            building({BK::Cairn, 0, 0, 0, 0, 0}, x + 4.0f, z - 3.0f, 0.3f);
         } else if (p.kind == "pass") {
-            prism(x - 9.0f, L.heightAt(x - 9.0f, z + 6.0f) - 0.5f, z + 6.0f, 1.2f, L.heightAt(x - 9.0f, z + 6.0f) + 1.4f, 6,
-                  PropStyle::DarkStone, 0.4f);
-            house(x + 12.0f, z + 9.0f, 5.0f, 4.0f, 2.6f, 0.3f, PropStyle::DarkWood, PropStyle::RoofDark);
+            building({BK::Cairn, 0, 0, 0, 0, 1}, x - 9.0f, z + 6.0f, 1.1f);
             {
                 Site site(*this);
-                groundedBox(x - 6.0f, z - 7.0f, 0.08f, 1.3f, 0.08f, 0.0f, PropStyle::DarkWood);
-                box(x - 6.0f, L.heightAt(x - 6.0f, z - 7.0f) + 2.2f, z - 7.0f, 0.9f, 0.25f, 0.04f, 0.4f, PropStyle::Wood);
+                building(hut, x + 12.0f, z + 9.0f, 0.3f);
+                building({BK::Woodpile, 3.0f, 0, 0, 0, 0}, x + 12.0f + 3.6f * std::cos(0.3f), z + 9.0f - 3.6f * std::sin(0.3f), 0.3f + 0.5f * kPi);
             }
+            building({BK::Signpost, 0, 0, 0, 0, 0}, x - 6.0f, z - 7.0f, 0.4f);
         } else if (p.kind == "quarry") {
             {
+                // Crusher, its discharge belt and a silo.
                 Site site(*this);
-                groundedBox(x + 20.0f, z - 18.0f, 4.0f, 4.0f, 3.0f, 0.4f, PropStyle::Rust);              // crusher
-                groundedBox(x + 20.0f, z - 18.0f, 2.0f, 6.5f, 2.0f, 0.4f, PropStyle::Rust);
-                slab(Vec3(x + 24.0f, L.heightAt(x + 24.0f, z - 12.0f) + 9.0f, z - 12.0f),
-                     Vec3(x + 34.0f, L.heightAt(x + 34.0f, z + 4.0f) + 1.5f, z + 4.0f), 0.8f, 0.4f, PropStyle::Metal,
-                     SurfaceId::Concrete); // conveyor
+                const float cx = x + 20.0f, cz = z - 18.0f, yaw = 0.4f;
+                building({BK::Crusher, 0, 0, 9.0f, 0, 0}, cx, cz, yaw);
+                const float c = std::cos(yaw), sn = std::sin(yaw);
+                const float bx = cx - sn * 6.5f, bz = cz - c * 6.5f;
+                float lo = 1e30f;
+                for (int k = 0; k <= 4; ++k) lo = std::min(lo, L.heightAt(bx - sn * 3.5f * float(k), bz - c * 3.5f * float(k)));
+                building({BK::Conveyor, 14.0f, 0, 4.5f, 0, 0}, bx, bz, yaw + kPi, lo);
+                building({BK::Silo, 4.0f, 0, 12.0f, 0, 0}, cx + c * 7.5f, cz - sn * 7.5f, 0.0f);
             }
-            house(x - 22.0f, z - 20.0f, 9.0f, 6.0f, 3.2f, 0.2f, PropStyle::Metal, PropStyle::Rust);
+            building({BK::Garage, 10.0f, 7.0f, 4.2f, 0, 1}, x - 22.0f, z - 20.0f, 0.2f);
             for (int k = 0; k < 4; ++k) {
                 const float hx = x - 10.0f + 9.0f * float(k), hz = z + 22.0f;
                 rock(Vec3(hx, L.heightAt(hx, hz) - 0.6f, hz), Vec3(3.4f, 1.8f, 3.0f), 0.7f * float(k), 900u + k, PropStyle::Stone);
             }
         } else if (p.kind == "forest") {
-            house(x + 10.0f, z + 8.0f, 6.0f, 4.5f, 2.6f, 0.6f, PropStyle::DarkWood, PropStyle::RoofDark);
-            {
-                Site site(*this);
-                for (int k = 0; k < 3; ++k)
-                    groundedBox(x - 9.0f, z + 6.0f + 1.0f * float(k), 2.5f, 0.3f, 0.3f, 0.0f, PropStyle::Wood, SurfaceId::Concrete, 0.3f);
-            }
+            building(cabin, x + 10.0f, z + 8.0f, 0.6f);
+            building({BK::Woodpile, 5.0f, 0, 0, 0, 0}, x - 9.0f, z + 7.0f, 0.0f);
         } else if (p.kind == "lake") {
             const float sx = p.atX, sz = p.atZ;
-            pier(sx + 8.0f, sz - 4.0f, sx + 14.0f, sz - 30.0f, 70.8f, 1.2f);
-            house(sx - 12.0f, sz + 4.0f, 6.0f, 5.0f, 2.8f, 0.2f, PropStyle::Wood, PropStyle::RoofRed);
-        } else if (p.kind == "waterfall") {
-            const float vx = p.atX + 2.0f, vz = p.atZ - 9.0f;
-            {
-                Site site(*this);
-                for (int k = -3; k <= 3; ++k)
-                    groundedBox(vx + 1.5f * float(k), vz + 0.3f * float(k), 0.06f, 0.6f, 0.06f, 0.0f, PropStyle::DarkWood, SurfaceId::Concrete, 0.4f);
-                box(vx, L.heightAt(vx, vz) + 1.0f, vz, 4.6f, 0.05f, 0.05f, -0.2f, PropStyle::Wood);
+            const float dx = p.x - sx, dz = p.z - sz, dl = std::hypot(dx, dz);
+            if (const auto d = shoreDock(sx + 8.0f, sz - 4.0f, dx, dz, 18.0f, 2.4f)) {
+                // Beside the dock, back from the bank until the ground under it is level enough for the plinth.
+                const std::uint16_t type = buildingType(boathouse);
+                for (float back = 4.0f; back <= 30.0f; back += 2.0f) {
+                    const float bx = d->x - dz / dl * 9.0f - dx / dl * back, bz = d->z + dx / dl * 9.0f - dz / dl * back;
+                    const float yaw = faceTo(bx, bz, p.x, p.z);
+                    float spread = 0.0f;
+                    groundFloor(type, bx, bz, yaw, &spread);
+                    if (spread > buildingPlinthDepth(BK::House) - 0.5f || L.waterAt(bx, bz)) continue;
+                    building(boathouse, bx, bz, yaw);
+                    break;
+                }
             }
-            groundedBox(p.atX - 6.0f, p.atZ + 2.0f, 0.9f, 0.25f, 0.3f, 0.3f, PropStyle::Wood, SurfaceId::Concrete, 0.2f);
+            building({BK::Bench, 1.8f, 0, 0, 0, 0}, sx - 8.0f, sz - 3.0f, 2.9f);
+        } else if (p.kind == "waterfall") {
+            building({BK::Fence, 9.0f, 0, 0, 0, 1}, p.atX + 2.0f, p.atZ - 9.0f, -0.2f);
+            building({BK::Bench, 1.8f, 0, 0, 0, 0}, p.atX - 6.0f, p.atZ + 2.0f, 0.3f);
         } else if (p.kind == "radio_tower") {
             {
+                // Mast inside a metal fence.
                 Site site(*this);
-                const float top = gy + 34.0f;
-                for (float sx : {-1.0f, 1.0f})
-                    for (float sz : {-1.0f, 1.0f}) {
-                        // Tapered leg as a thin slanted quad prism (approximated by two boxes).
-                        box(x + sx * 1.6f, gy + 8.0f, z + sz * 1.6f, 0.12f, 8.5f, 0.12f, 0.0f, PropStyle::Rust);
-                        box(x + sx * 0.9f, gy + 25.0f, z + sz * 0.9f, 0.1f, 9.0f, 0.1f, 0.0f, PropStyle::Rust);
-                    }
-                for (int k = 1; k <= 6; ++k) {
-                    const float yy = gy + 5.0f * float(k);
-                    const float r = k < 4 ? 1.6f : 0.9f;
-                    box(x, yy, z + r, r, 0.08f, 0.08f, 0.0f, PropStyle::Metal);
-                    box(x, yy, z - r, r, 0.08f, 0.08f, 0.0f, PropStyle::Metal);
-                    box(x + r, yy, z, 0.08f, 0.08f, r, 0.0f, PropStyle::Metal);
-                    box(x - r, yy, z, 0.08f, 0.08f, r, 0.0f, PropStyle::Metal);
-                }
-                box(x, top + 1.0f, z, 0.08f, 2.0f, 0.08f, 0.0f, PropStyle::Metal);
-                box(x, top + 3.1f, z, 0.25f, 0.25f, 0.25f, 0.0f, PropStyle::Beacon);
+                building({BK::RadioMast, 0, 0, 34.0f, 0, 0}, x, z, 0.0f);
+                building({BK::Fence, 9.0f, 0, 0, 0, 2}, x, z + 4.5f, 0.0f);
+                building({BK::Fence, 9.0f, 0, 0, 0, 2}, x, z - 4.5f, 0.0f);
+                building({BK::Fence, 9.0f, 0, 0, 0, 2}, x + 4.5f, z, 0.5f * kPi);
+                building({BK::Fence, 9.0f, 0, 0, 0, 2}, x - 4.5f, z, 0.5f * kPi);
             }
-            house(x - 7.0f, z + 6.0f, 4.0f, 3.0f, 2.4f, 0.0f, PropStyle::Plaster, PropStyle::RoofDark);
+            building({BK::RadioHut, 4.0f, 3.0f, 0.0f, 0, 0}, x - 8.0f, z + 7.0f, faceTo(x - 8.0f, z + 7.0f, x, z));
         } else if (p.kind == "village") {
-            // Houses around the square (house() keeps them off the roads).
-            const float ring[][4] = {{-40, -30, 9, 7}, {-20, -55, 8, 6}, {25, -50, 10, 7}, {50, -20, 8, 7},
-                                     {55, 25, 9, 6}, {30, 55, 8, 6}, {-10, 60, 9, 7}, {-45, 40, 8, 6},
-                                     {-70, 5, 7, 6}, {75, -45, 7, 6}, {-60, -60, 8, 6}, {10, -80, 9, 6},
-                                     {80, 50, 8, 7}, {-30, 85, 7, 6}};
+            // Houses around the square, fronts toward it, gardens behind some of them.
+            const float ring[][2] = {{-40, -30}, {-20, -55}, {25, -50}, {50, -20}, {55, 25}, {30, 55}, {-10, 60},
+                                     {-45, 40}, {-70, 5}, {75, -45}, {-60, -60}, {10, -80}, {80, 50}, {-30, 85}};
             int k = 0;
             for (const auto& r : ring) {
                 const float hx = x + r[0], hz = z + r[1];
-                const float yaw = std::atan2(-r[0], -r[1]) + 0.15f * float(k % 3);
-                house(hx, hz, r[2], r[3], 3.0f + 0.4f * float(k % 3), yaw, PropStyle::Plaster,
-                      k % 3 == 0 ? PropStyle::RoofDark : PropStyle::RoofRed);
+                const float yaw = faceTo(hx, hz, x, z) + 0.15f * float(k % 3);
+                const BuildingSpec& spec = villageHouses[(k * 5) % 6];
+                Site site(*this);
+                building(spec, hx, hz, yaw);
+                if (k % 3 != 1) {
+                    const float back = 0.5f * spec.d + 4.0f, gx = hx - std::sin(yaw) * back, gz = hz - std::cos(yaw) * back;
+                    building({BK::Garden, 7.0f, 5.0f, 0, 0, k % 4}, gx, gz, yaw);
+                }
                 ++k;
             }
-            // Fuel station by the main road: canopy on four posts, two pumps, kiosk.
+            // Square: well and benches.
+            building({BK::Well, 0, 0, 0, 0, 0}, x + 5.0f, z + 5.0f, 0.4f);
+            for (int b = 0; b < 4; ++b) {
+                const float a = 0.5f * kPi * float(b) + 0.3f, bx = x + 13.0f * std::sin(a), bz = z + 13.0f * std::cos(a);
+                building({BK::Bench, 1.8f, 0, 0, 0, 0}, bx, bz, faceTo(bx, bz, x, z));
+            }
+            // Fuel station by the main road: canopy with two pump islands, shop, price pylon.
             const float fx = x + 22.0f, fz = z - 8.0f;
-            const float fy = L.heightAt(fx, fz);
             {
                 Site site(*this);
-                for (float sx : {-1.0f, 1.0f})
-                    for (float sz : {-1.0f, 1.0f}) groundedBox(fx + sx * 4.0f, fz + sz * 3.0f, 0.15f, 2.6f, 0.15f, 0.0f, PropStyle::Metal);
-                box(fx, fy + 5.1f, fz, 5.0f, 0.25f, 4.0f, 0.0f, PropStyle::Marker);
-                groundedBox(fx - 1.5f, fz, 0.35f, 0.8f, 0.5f, 0.0f, PropStyle::Marker, SurfaceId::Concrete, 0.2f);
-                groundedBox(fx + 1.5f, fz, 0.35f, 0.8f, 0.5f, 0.0f, PropStyle::Marker, SurfaceId::Concrete, 0.2f);
-                house(fx + 9.0f, fz + 1.0f, 4.0f, 5.0f, 2.8f, 0.0f, PropStyle::Plaster, PropStyle::RoofDark);
+                building({BK::FuelCanopy, 10.0f, 8.0f, 4.8f, 0, 0}, fx, fz, 0.0f);
+                building({BK::FuelShop, 8.0f, 6.0f, 0.0f, 0, 0}, fx + 13.0f, fz + 1.0f, -0.5f * kPi);
+                building({BK::Pylon, 0, 0, 6.5f, 0, 0}, fx - 8.5f, fz + 6.5f, 0.0f);
             }
-            // Garage: wide hall with a dark door.
+            // Workshop with a woodpile.
             const float gx = x - 25.0f, gz = z + 12.0f;
             {
                 Site site(*this);
-                house(gx, gz, 11.0f, 8.0f, 4.0f, 0.1f, PropStyle::Metal, PropStyle::RoofDark);
-                box(gx + 5.6f * std::cos(0.1f), L.heightAt(gx, gz) + 1.8f, gz - 5.6f * std::sin(0.1f), 0.05f, 1.6f, 2.4f, 0.1f, PropStyle::DarkWood);
+                building({BK::Garage, 12.0f, 9.0f, 4.4f, 0, 0}, gx, gz, 0.1f + 0.5f * kPi);
+                building({BK::Woodpile, 4.0f, 0, 0, 0, 0}, gx - 2.0f, gz + 6.5f, 0.1f);
+            }
+            // Power line along the nearest road, past the village.
+            const LevelRoad* road = nullptr;
+            std::size_t near = 0;
+            float best = 1e30f;
+            for (const LevelRoad& rd : L.m_roads)
+                for (std::size_t i = 0; i < rd.samples.size(); ++i) {
+                    const float d = std::hypot(rd.samples[i].x - x, rd.samples[i].z - z);
+                    if (d < best) best = d, road = &rd, near = i;
+                }
+            if (road) {
+                std::vector<P2> poles;
+                const float off = 0.5f * road->width + 6.0f;
+                for (int step = -6; step <= 6; ++step) {
+                    const long j = long(near) + long(step) * 18; // samples are ~2 m apart: ~36 m spans
+                    if (j < 0 || j >= long(road->samples.size())) continue;
+                    const RoadSample& q = road->samples[std::size_t(j)];
+                    poles.push_back({q.x + q.dz * off, q.z - q.dx * off});
+                }
+                powerLine(poles, 8.0f);
             }
         } else if (p.kind == "ruins") {
-            const float wy = gy;
+            // Curtain walls (center, half extents: the long side is the wall), two towers, the gate in the south gap.
+            Site site(*this);
             const float walls[][5] = {{-16, -14, 16, 1.2f, 6.0f}, {-16, 14, 9, 1.2f, 3.5f}, {12, 14, 4, 1.2f, 5.0f},
                                       {-17, 0, 1.2f, 13, 4.5f}, {17, -6, 1.2f, 8, 7.0f}};
+            int k = 0;
             for (const auto& w : walls) {
-                const float base = footprintMin(x + w[0], z + w[1], w[2], w[3], 0.0f) - 0.6f;
-                box(x + w[0], 0.5f * (base + wy + w[4]), z + w[1], w[2], 0.5f * (wy + w[4] - base), w[3], 0.0f, PropStyle::Stone);
+                const bool alongX = w[2] > w[3];
+                building({BK::RuinWall, 2.0f * std::max(w[2], w[3]), 0, w[4], 0, k++}, x + w[0], z + w[1], alongX ? 0.0f : 0.5f * kPi);
             }
-            prism(x - 17.0f, wy - 1.0f, z - 14.0f, 3.2f, wy + 10.0f, 8, PropStyle::Stone);
-            prism(x + 17.0f, wy - 1.0f, z + 14.0f, 3.0f, wy + 6.5f, 8, PropStyle::DarkStone, 2.8f);
-            for (int k = 0; k < 6; ++k) {
-                const float rx = x - 8.0f + 3.2f * float(k), rz = z + 10.0f - 2.0f * float(k % 2);
-                rock(Vec3(rx, L.heightAt(rx, rz) - 0.2f, rz), Vec3(0.7f, 0.45f, 0.6f), float(k), 950u + k, PropStyle::Stone);
+            building({BK::RuinTower, 6.4f, 0, 10.0f, 0, 1}, x - 17.0f, z - 14.0f, 0.3f);
+            building({BK::RuinTower, 6.0f, 0, 6.5f, 0, 2}, x + 17.0f, z + 14.0f, 2.1f);
+            building({BK::RuinGate, 4.0f, 0, 6.0f, 0, 0}, x + 0.5f, z + 14.0f, 0.0f);
+            for (int r = 0; r < 6; ++r) {
+                const float rx = x - 8.0f + 3.2f * float(r), rz = z + 10.0f - 2.0f * float(r % 2);
+                rock(Vec3(rx, L.heightAt(rx, rz) - 0.2f, rz), Vec3(0.7f, 0.45f, 0.6f), float(r), 950u + r, PropStyle::Stone);
             }
         } else if (p.kind == "beach_camp") {
-            tent(x + 6.0f, z - 4.0f, 0.4f);
-            tent(x - 6.0f, z - 2.0f, -0.3f);
-            house(x + 14.0f, z - 12.0f, 5.0f, 4.0f, 2.6f, 0.5f, PropStyle::Wood, PropStyle::RoofRed);
-            for (int k = 0; k < 7; ++k) {
-                const float a = 2.0f * kPi * float(k) / 7.0f;
+            {
+                Site site(*this);
+                building({BK::Tent, 0, 0, 0, 0, 0}, x + 6.0f, z - 4.0f, 0.4f);
+                building({BK::Tent, 0, 0, 0, 0, 1}, x - 6.0f, z - 2.0f, -0.3f);
+            }
+            building({BK::Shelter, 5.0f, 4.0f, 0, 0, 0}, x + 14.0f, z - 12.0f, 0.5f);
+            building({BK::Woodpile, 2.0f, 0, 0, 0, 0}, x + 4.5f, z + 8.5f, 0.9f);
+            for (int r = 0; r < 7; ++r) {
+                const float a = 2.0f * kPi * float(r) / 7.0f;
                 const float rx = x + 1.0f + std::cos(a) * 1.0f, rz = z + 6.0f + std::sin(a) * 1.0f;
-                rock(Vec3(rx, L.heightAt(rx, rz) - 0.05f, rz), Vec3(0.22f, 0.16f, 0.2f), a, 970u + k, PropStyle::DarkStone);
+                rock(Vec3(rx, L.heightAt(rx, rz) - 0.05f, rz), Vec3(0.22f, 0.16f, 0.2f), a, 970u + r, PropStyle::DarkStone);
             }
-            pier(x - 18.0f, z + 26.0f, x - 26.0f, z + 80.0f, m_seaLevel + 1.1f, 1.5f);
+            shoreDock(x - 18.0f, z + 26.0f, -8.0f, 54.0f, 22.0f, 3.0f);
         } else if (p.kind == "island_camp") {
-            tent(x + 5.0f, z + 6.0f, 1.2f);
-            tent(x - 4.0f, z + 8.0f, 0.2f);
-            house(x + 12.0f, z + 14.0f, 4.0f, 3.5f, 2.4f, 0.9f, PropStyle::Wood, PropStyle::RoofDark);
             {
                 Site site(*this);
-                groundedBox(x - 8.0f, z - 4.0f, 0.06f, 3.5f, 0.06f, 0.0f, PropStyle::Metal);
-                box(x - 7.4f, L.heightAt(x - 8.0f, z - 4.0f) + 5.6f, z - 4.0f, 0.6f, 0.35f, 0.02f, 0.0f, PropStyle::Marker);
+                building({BK::Tent, 0, 0, 0, 0, 1}, x + 5.0f, z + 6.0f, 1.2f);
+                building({BK::Tent, 0, 0, 0, 0, 0}, x - 4.0f, z + 8.0f, 0.2f);
             }
+            building(shack, x + 12.0f, z + 14.0f, 0.9f);
+            building({BK::Signpost, 0, 0, 0, 0, 1}, x - 8.0f, z - 4.0f, 0.0f);
         } else if (p.kind == "lighthouse") {
-            {
-                Site site(*this);
-                const float base = gy - 0.8f;
-                for (int k = 0; k < 4; ++k)
-                    prism(x, base + 4.4f * float(k), z, 2.6f - 0.2f * float(k), base + 4.4f * float(k + 1), 10,
-                          k % 2 ? PropStyle::RoofRed : PropStyle::Plaster, 2.4f - 0.2f * float(k));
-                prism(x, base + 17.6f, z, 2.2f, base + 18.0f, 10, PropStyle::DarkStone, 2.4f);
-                prism(x, base + 18.0f, z, 1.4f, base + 20.0f, 10, PropStyle::Beacon);
-                prism(x, base + 20.0f, z, 1.6f, base + 21.4f, 10, PropStyle::RoofRed, 0.15f);
-            }
-            house(x - 9.0f, z - 2.0f, 6.0f, 5.0f, 2.8f, 0.2f, PropStyle::Plaster, PropStyle::RoofRed);
+            building({BK::Lighthouse, 0, 0, 18.0f, 0, 0}, x, z, 0.0f);
+            building(keeper, x - 9.5f, z - 2.0f, faceTo(x - 9.5f, z - 2.0f, p.atX, p.atZ));
         } else if (p.kind == "bridge") {
-            {
-                Site site(*this);
-                groundedBox(p.atX + 4.0f, p.atZ + 5.0f, 0.08f, 1.2f, 0.08f, 0.0f, PropStyle::DarkWood);
-                box(p.atX + 4.0f, L.heightAt(p.atX + 4.0f, p.atZ + 5.0f) + 2.0f, p.atZ + 5.0f, 0.8f, 0.25f, 0.04f, 1.4f, PropStyle::Wood);
-            }
+            building({BK::Signpost, 0, 0, 0, 0, 2}, p.atX + 4.0f, p.atZ + 5.0f, 1.4f);
+        }
+    }
+    L.m_stats.buildings = L.m_buildings.size();
+
+    // Trees and rocks baked before the buildings must not stand in them.
+    const auto inStructure = [&](float px, float pz, float margin) {
+        for (std::size_t si : m_structureSites)
+            if (polygonDistance(m_sites[si], px, pz) < margin) return true;
+        return false;
+    };
+    std::erase_if(L.m_trees, [&](const LevelTree& t) { return inStructure(t.x, t.z, 2.0f); });
+    std::erase_if(L.m_rocks, [&](const LevelRock& r) { return inStructure(r.x, r.z, std::max(r.rx, r.rz) + 0.5f); });
+}
+
+std::uint16_t LevelBaker::buildingType(const BuildingSpec& spec) {
+    for (std::size_t k = 0; k < L.m_buildingTypes.size(); ++k)
+        if (L.m_buildingTypes[k].spec == spec) return std::uint16_t(k);
+    BuildingGeometry g = buildBuilding(spec, false);
+    LevelBuildingType t;
+    t.spec = spec;
+    t.boundsMin = g.boundsMin;
+    t.boundsMax = g.boundsMax;
+    t.footprintX = g.footprintX;
+    t.footprintZ = g.footprintZ;
+    L.m_buildingTypes.push_back(t);
+    m_kitGeometry.push_back(std::move(g));
+    return std::uint16_t(L.m_buildingTypes.size() - 1);
+}
+
+void LevelBaker::building(const BuildingSpec& spec, float x, float z, float yaw, float floorY) {
+    const std::uint16_t type = buildingType(spec);
+    const BuildingGeometry& g = m_kitGeometry[type];
+    const float c = std::cos(yaw), sn = std::sin(yaw);
+    const bool structure = buildingIsStructure(spec.kind);
+    const bool onGround = floorY == kGroundFloor;
+    if (onGround) floorY = groundFloor(type, x, z, yaw);
+    Site site(*this);
+    const std::size_t firstTri = L.m_props.geometry.triangleCount();
+    const PropRole role = std::exchange(m_role, structure ? PropRole::Building : PropRole::Prop);
+    const std::size_t triangles = g.collision.size() / 3;
+    for (std::size_t piece = 0; piece < g.pieceStarts.size(); ++piece) {
+        const std::size_t t0 = g.pieceStarts[piece];
+        const std::size_t t1 = piece + 1 < g.pieceStarts.size() ? g.pieceStarts[piece + 1] : triangles;
+        addProp([&](TrackGeometry& tg) {
+            const auto P = [&](const Float3& q) { return Vec3(x + c * q.x + sn * q.z, floorY + q.y, z - sn * q.x + c * q.z); };
+            for (std::size_t k = t0; k < t1; ++k)
+                tg.addTriangle(P(g.collision[3 * k]), P(g.collision[3 * k + 1]), P(g.collision[3 * k + 2]), SurfaceId::Concrete);
+        }, PropStyle::Hidden);
+    }
+    m_role = role;
+    L.m_buildings.push_back({type, x, floorY, z, yaw});
+    m_onGround.push_back(onGround);
+    m_buildingTri.push_back(firstTri);
+}
+
+// Floor of a building standing on the ground, from a 3 x 3 sample grid over its bounds: structures on the highest
+// sample (their plinth reaches down), tents on the lowest, small props in between.
+// spread: highest minus lowest sample.
+float LevelBaker::groundFloor(std::uint16_t type, float x, float z, float yaw, float* spread) const {
+    const LevelBuildingType& t = L.m_buildingTypes[type];
+    const float c = std::cos(yaw), sn = std::sin(yaw);
+    float hi = -1e30f, lo = 1e30f;
+    for (int i = 0; i <= 2; ++i)
+        for (int j = 0; j <= 2; ++j) {
+            const float lx = lerp(t.boundsMin.x, t.boundsMax.x, 0.5f * float(i));
+            const float lz = lerp(t.boundsMin.z, t.boundsMax.z, 0.5f * float(j));
+            const float h = L.heightAt(x + c * lx + sn * lz, z - sn * lx + c * lz);
+            hi = std::max(hi, h), lo = std::min(lo, h);
+        }
+    const BuildingKind k = t.spec.kind;
+    if (spread) *spread = hi - lo;
+    return k == BuildingKind::Tent ? lo - 0.05f : buildingIsStructure(k) ? hi + 0.05f : 0.5f * (hi + lo);
+}
+
+// Plank dock from (x0, z0) toward (x1, z1), deck surface at deckY, posts down into the ground below.
+void LevelBaker::dock(float x0, float z0, float x1, float z1, float deckY, float width) {
+    const float len = std::hypot(x1 - x0, z1 - z0);
+    float lo = deckY;
+    for (int k = 0; k <= 8; ++k) {
+        const float t = float(k) / 8.0f;
+        lo = std::min(lo, L.heightAt(lerp(x0, x1, t), lerp(z0, z1, t)));
+    }
+    const float depth = std::max(1.0f, std::ceil(deckY - lo + 0.8f));
+    building({BuildingKind::Dock, std::round(len), width, depth, 0, 0}, x0, z0, std::atan2(x1 - x0, z1 - z0), deckY);
+}
+
+// Dock starting 3 m before the first water met walking from (x, z) along (dirX, dirZ), reaching `reach` m past
+// it, deck 0.8 m above that water. Returns the dock's shore end; nullopt (nothing placed) if no water within 120 m.
+std::optional<P2> LevelBaker::shoreDock(float x, float z, float dirX, float dirZ, float reach, float width) {
+    const float len = std::hypot(dirX, dirZ);
+    if (len <= 0.0f) return std::nullopt;
+    dirX /= len;
+    dirZ /= len;
+    for (float d = 0.0f; d < 120.0f; d += 0.5f) {
+        const float wx = x + dirX * d, wz = z + dirZ * d;
+        if (const auto w = L.waterAt(wx, wz)) {
+            dock(wx - dirX * 3.0f, wz - dirZ * 3.0f, wx + dirX * reach, wz + dirZ * reach, *w + 0.8f, width);
+            return P2{wx - dirX * 3.0f, wz - dirZ * 3.0f};
+        }
+    }
+    return std::nullopt;
+}
+
+// Wooden poles at the given points (skipping those too near a road, water or a spawn point) with three wires
+// between neighbors less than 50 m apart.
+void LevelBaker::powerLine(const std::vector<P2>& poles, float height) {
+    std::vector<P2> ok;
+    std::vector<bool> joined;
+    for (const P2& p : poles) {
+        const bool clear = siteClear({p}, kPropMargin + 1.0f, false, false) && !L.waterAt(p.x, p.z);
+        if (!clear) {
+            if (!joined.empty()) joined.back() = false;
+            continue;
+        }
+        ok.push_back(p);
+        joined.push_back(true);
+    }
+    for (std::size_t k = 0; k < ok.size(); ++k) {
+        const P2 a = ok[k];
+        const bool span = k + 1 < ok.size() && joined[k] && std::hypot(ok[k + 1].x - a.x, ok[k + 1].z - a.z) < 50.0f;
+        const P2 dirTo = span ? ok[k + 1] : k > 0 ? P2{2.0f * a.x - ok[k - 1].x, 2.0f * a.z - ok[k - 1].z} : P2{a.x, a.z + 1.0f};
+        const float yaw = std::atan2(dirTo.x - a.x, dirTo.z - a.z);
+        const float ya = L.heightAt(a.x, a.z);
+        Site site(*this);
+        building({BuildingKind::PowerPole, 0, 0, height, 0, int(k % 4 == 2)}, a.x, a.z, yaw, ya);
+        if (span) {
+            const P2 b = ok[k + 1];
+            const float yb = L.heightAt(b.x, b.z);
+            building({BuildingKind::Wire, std::hypot(b.x - a.x, b.z - a.z), 0, ya - yb, 0, 0}, a.x, a.z, yaw, ya + height - 0.24f);
         }
     }
 }
