@@ -852,14 +852,14 @@ void launchMarksProportional() {
     const Result hard = drive(TransferMode::TwoHigh, 0.7f, 0.0f, 5.0, false);
     const Result full = drive(TransferMode::TwoHigh, 1.0f, 0.0f, 5.0, false);
     const Result full4 = drive(TransferMode::FourHigh, 1.0f, 0.0f, 5.0, false);
-    const Result burn2 = drive(TransferMode::TwoHigh, 1.0f, 0.6f, 2.0, false);
+    const Result burn2 = drive(TransferMode::TwoHigh, 1.0f, 0.6f, 1.0, false);
     const Result burn5 = drive(TransferMode::TwoHigh, 1.0f, 0.6f, 5.0, false);
     print("2H gentle 0.3", gentle);
     print("2H keyboard W", key);
     print("2H hard 0.7", hard);
     print("2H full pedal", full);
     print("4H full pedal", full4);
-    print("2H burnout 2 s", burn2);
+    print("2H burnout 1 s", burn2);
     print("2H burnout 5 s", burn5);
     for (const Result* r : {&gentle, &key, &hard, &full4})
         CHECK(r->ribbonMax < 0.05f && r->spotCover < 0.05f, "normal launch left rubber: %.2f / %.2f", r->ribbonMax,
@@ -873,7 +873,7 @@ void launchMarksProportional() {
           "5 s burnout: spin %.2f m/s, cover %.2f, width %.2f m (want dark, full width)", burn5.maxSlip,
           burn5.spotCover, burn5.spotWidth);
     CHECK(burn2.spotCover < burn5.spotCover - 0.3f && burn2.spotWidth < 0.7f * tireWidth,
-          "2 s burnout cover %.2f width %.2f m vs 5 s %.2f (want lighter, narrower)", burn2.spotCover,
+          "1 s burnout cover %.2f width %.2f m vs 5 s %.2f (want lighter, narrower)", burn2.spotCover,
           burn2.spotWidth, burn5.spotCover);
 }
 

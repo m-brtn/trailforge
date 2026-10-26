@@ -55,6 +55,8 @@ public:
 
 private:
     std::array<float, kAidWheels> m_pressure{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, kAidWheels> m_breakaway{1.0f, 1.0f, 1.0f, 1.0f}; // ABS pressure at the last release
+    std::array<bool, kAidWheels> m_releasing{};
     std::array<float, kAidWheels> m_tcBrake{};
     std::array<float, kAidWheels> m_slip{}; // low-passed drive slip
     float m_throttleFactor = 1.0f;

@@ -24,7 +24,7 @@
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
         "bumpStop": {"range": 0.0, "frequencyScale": 1.0}
       },
-      "brakeTorque": 3000,
+      "brakeTorque": 4200,
       "handBrakeTorque": 0
     },
     "rear": {
@@ -35,7 +35,7 @@
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
         "bumpStop": {"range": 0.0, "frequencyScale": 1.0}
       },
-      "brakeTorque": 3000,
+      "brakeTorque": 2200,
       "handBrakeTorque": 3500
     }
   },
@@ -91,6 +91,7 @@
     "absApplySlip": 0.08,
     "absReleaseRate": 40,
     "absApplyRate": 8,
+    "absReapplyFraction": 0.85,
     "absMinPressure": 0.0,
     "absMinSpeed": 1.5,
     "tcSlipThreshold": 0.20,

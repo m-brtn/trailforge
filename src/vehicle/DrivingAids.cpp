@@ -7,6 +7,8 @@ namespace tf {
 
 void DrivingAids::reset() {
     m_pressure.fill(1.0f);
+    m_breakaway.fill(1.0f);
+    m_releasing.fill(false);
     m_tcBrake.fill(0.0f);
     m_slip.fill(0.0f);
     m_throttleFactor = 1.0f;
@@ -24,6 +26,8 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
         float& p = m_pressure[i];
         if (!braking) {
             p = 1.0f;
+            m_breakaway[i] = 1.0f;
+            m_releasing[i] = false;
             continue;
         }
         // Rolling speed in the direction of travel; a wheel turning backwards reads as slip > 1.
@@ -33,9 +37,15 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
         if (!w.contact) {
             // In the air: hold the pressure; the slip is measured again on touchdown.
         } else if (slip > t.absReleaseSlip) {
+            if (!m_releasing[i]) m_breakaway[i] = p;
+            m_releasing[i] = true;
             p = std::max(t.absMinPressure, p - t.absReleaseRate * dt);
         } else if (slip < t.absApplySlip) {
-            p = std::min(1.0f, p + t.absApplyRate * dt);
+            m_releasing[i] = false;
+            // Quickly back to just below the pressure that broke the wheel away, then slowly up to find the peak.
+            const float fast = t.absReapplyFraction * m_breakaway[i];
+            const float rate = p < fast ? t.absReleaseRate : t.absApplyRate;
+            p = std::min(1.0f, p < fast ? std::min(fast, p + rate * dt) : p + rate * dt);
         }
         if (p < 0.999f) out.absActive = true;
     }

@@ -551,7 +551,7 @@ void skidGating() {
           rs[1].powerSlide, rs[2].powerSlide);
 
     // The shipped SUV (2H, ABS off) on the flat pad: a full-throttle launch (the keyboard start: ~5 m/s rear wheelspin
-    // at slip ratio ~0.5), light braking and a 0.25 s brake tap (a brief partial rear lock) stay silent; a 0.5 s tap at
+    // at slip ratio ~0.5), light braking and a 0.12 s brake tap (a brief partial lock; the foot brake reaches full pressure in 0.125 s) stay silent; a 0.5 s tap at
     // full pedal locks the rears for ~0.3 s and gives a short squeal that ends within 0.2 s of the slide; lock-up and
     // handbrake slides squeal.
     {
@@ -587,14 +587,14 @@ void skidGating() {
         spawn(50);
         const Run light = drive(5.0, 5.0, {.brake = 0.3f});
         spawn(50);
-        const Run tapShort = drive(2.5, 0.25, {.brake = 1.0f});
+        const Run tapShort = drive(2.5, 0.12, {.brake = 1.0f});
         spawn(50);
         const Run tap = drive(2.5, 0.5, {.brake = 1.0f});
         spawn(50);
         const Run full = drive(5.0, 5.0, {.brake = 1.0f});
         spawn(40);
         const Run handbrake = drive(3.0, 3.0, {.steer = 0.6f, .handBrake = 1.0f});
-        std::printf("    SUV pad skid peak: launch full %.3f (slid until %.2f s), half %.3f, light brake %.3f, 0.25 s brake "
+        std::printf("    SUV pad skid peak: launch full %.3f (slid until %.2f s), half %.3f, light brake %.3f, 0.12 s brake "
                     "tap %.3f | 0.5 s brake tap %.2f (slid until %.2f s, tail %.2f s), full brake %.2f (tail %.2f s), "
                     "handbrake turn %.2f (tail %.2f s)\n",
                     launch.peak, launch.lastSlide, launchHalf.peak, light.peak, tapShort.peak, tap.peak, tap.lastSlide,

@@ -371,6 +371,7 @@ void readAids(Obj& a, DrivingAidTuning& g) {
     if (g.absApplySlip >= g.absReleaseSlip) a.error("aids.absApplySlip", "must be below absReleaseSlip");
     a.num("absReleaseRate", g.absReleaseRate, 1.0, 200.0, "1/s");
     a.num("absApplyRate", g.absApplyRate, 1.0, 200.0, "1/s");
+    a.num("absReapplyFraction", g.absReapplyFraction, 0.0, 1.0, "", false);
     a.num("absMinPressure", g.absMinPressure, 0.0, 1.0, "");
     a.num("absMinSpeed", g.absMinSpeed, 0.0, 10.0, "m/s");
     a.num("tcSlipThreshold", g.tcSlipThreshold, 0.02, 2.0, "");

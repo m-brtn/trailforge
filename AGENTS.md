@@ -69,7 +69,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 `trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
 `trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps); they drive the vehicle of
+`showcase`, `surfaces`, `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any

@@ -24,7 +24,7 @@
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.53, "antiRoll": 400,
         "bumpStop": {"range": 0.04, "frequencyScale": 3.0}
       },
-      "brakeTorque": 3800,
+      "brakeTorque": 4800,
       "handBrakeTorque": 0
     },
     "rear": {
@@ -35,12 +35,12 @@
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.53, "antiRoll": 200,
         "bumpStop": {"range": 0.04, "frequencyScale": 3.0}
       },
-      "brakeTorque": 3200,
+      "brakeTorque": 2400,
       "handBrakeTorque": 4500
     }
   },
   "tires": {
-    "longitudinal": {"peakSlip": 0.10, "peakFriction": 1.00, "slideFriction": 0.80},
+    "longitudinal": {"peakSlip": 0.10, "peakFriction": 1.10, "slideFriction": 0.80},
     "lateral": {"peakSlipAngleDeg": 6.0, "peakFriction": 1.00, "slideFriction": 0.78},
     "staticGrip": true,
     "slipSpeedFloor": 1.0,
@@ -75,6 +75,7 @@
     "absApplySlip": 0.08,
     "absReleaseRate": 40,
     "absApplyRate": 8,
+    "absReapplyFraction": 0.85,
     "absMinPressure": 0.0,
     "absMinSpeed": 1.5,
     "tcSlipThreshold": 0.20,

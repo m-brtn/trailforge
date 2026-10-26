@@ -5,6 +5,7 @@
 //   trailforge_probe susp [feature throttle low secs steer] - per-wheel suspension travel over a track feature
 //   trailforge_probe surfaces         - launches, braking, 15/20 degree climbs per surface
 //   trailforge_probe abs [ellipse]    - 50 / 100 km/h stops per surface, straight and steered, ABS off / on
+//   trailforge_probe brakedetail      - 100 km/h concrete stop, ABS off / on: per axle pressure, torque, grip use, slip
 //   trailforge_probe ellipse          - cornering and launches with the friction ellipse off / on
 //   trailforge_probe tc               - hill starts on the ramps with traction control off / on / off-road
 //   trailforge_probe tcmud            - 15 degree mud hill start sweep (60/120/240 Hz x 3 creep points) per TC mode
@@ -1147,6 +1148,59 @@ void absProbe(int ellipse) {
     }
 }
 
+// Where a full stop from 100 km/h on the concrete lane loses distance against the ideal mu_peak x g stop: per axle
+// time-averaged ABS pressure, commanded brake torque, |longitudinal force| / (combined mu x load) (use of the grip
+// available) and slip, from brake on to 5 km/h. abs: 0 / 1.
+void brakeDetail(int abs) {
+    SimulationSettings s = probeSettings();
+    s.layout = TrackLayout::SurfaceLanes;
+    Simulation sim(s);
+    sim.requestTeleport(0);
+    for (int i = 0; i < 120; ++i) sim.tick();
+    setAids(sim, abs != 0, TractionMode::Off, 0);
+    for (int i = 0; i < int(60.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 100.0f; ++i) {
+        sim.setIntent({.throttle = 1.0f});
+        sim.tick();
+    }
+    const float v0 = sim.vehicle().telemetry().speed;
+    double t = 0, path = 0, n = 0;
+    std::array<double, 2> p{}, torque{}, use{}, slip{}, mu{}, load{}, force{};
+    double sumMuMax = 0;
+    while (sim.vehicle().telemetry().speed > 0.05f && t < 20.0) {
+        sim.setIntent({.brake = 1.0f});
+        sim.tick();
+        t += sim.fixedStep();
+        const auto& tel = sim.vehicle().telemetry();
+        path += tel.speed * sim.fixedStep();
+        if (tel.speed * 3.6f < 5.0f) continue;
+        double fx = 0, avail = 0;
+        for (int i = 0; i < kWheelCount; ++i) {
+            const auto& w = tel.wheels[i];
+            const int a = i < 2 ? 0 : 1;
+            p[a] += 0.5 * w.absPressure;
+            torque[a] += 0.5 * w.brakeTorque;
+            slip[a] += 0.5 * w.longitudinalSlip;
+            if (!w.contact) continue;
+            mu[a] += 0.5 * w.combinedLongFriction;
+            load[a] += w.load;
+            force[a] += std::abs(w.longitudinalForce);
+            use[a] += 0.5 * std::abs(w.longitudinalForce) / std::max(1.0f, w.combinedLongFriction * w.load);
+            fx += std::abs(w.longitudinalForce);
+            avail += w.load;
+        }
+        sumMuMax += fx / std::max(1.0, avail);
+        ++n;
+    }
+    const double g = 9.81, ideal = v0 * v0 / (2.0 * g * 0.95);
+    std::printf("brakedetail ABS %s from %.1f km/h: %.2f m in %.2f s (ideal at mu 0.95: %.2f m); mean sum|Fx| / sum(load) %.3f\n",
+                abs ? "on " : "off", v0 * 3.6f, path, t, ideal, sumMuMax / n);
+    for (int a = 0; a < 2; ++a)
+        std::printf("  %s axle: pressure %.3f, brake torque %6.0f N*m/wheel, load %6.0f N, |Fx| %6.0f N, Fx/load %.3f, "
+                    "mu(curve x surface) %.3f, Fx/(mu load) %.3f, slip %.3f\n",
+                    a ? "rear " : "front", p[a] / n, torque[a] / n, load[a] / n, force[a] / n, force[a] / std::max(1.0, load[a]),
+                    mu[a] / n, use[a] / n, slip[a] / n);
+}
+
 // Traction control: hill starts (creep 8 m up, foot brake to a stop, hold 2 s, full throttle) on the ramps, low range.
 void tcProbe() {
     const char* laneNames[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
@@ -2060,6 +2114,7 @@ int main(int argc, char** argv) {
     else if (mode == "showcase") showcase();
     else if (mode == "surfaces") surfaces();
     else if (mode == "abs") absProbe(argc > 2 ? std::atoi(argv[2]) : -1);
+    else if (mode == "brakedetail") { brakeDetail(0); brakeDetail(1); }
     else if (mode == "ellipse") ellipseProbe();
     else if (mode == "tc") tcProbe();
     else if (mode == "tcmud") tcMudSweep();

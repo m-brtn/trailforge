@@ -339,12 +339,12 @@ void Simulation::resolvePedals(float dt) {
 void Simulation::smoothInput(float dt) {
     const InputSmoothing& s = m_settings.smoothing;
     const DriverIntent& in = m_resolved;
-    auto pedal = [&](float cur, float target) {
-        return approach(cur, std::clamp(target, 0.0f, 1.0f), target > cur ? s.pedalRise : s.pedalFall, dt);
+    auto pedal = [&](float cur, float target, float rise) {
+        return approach(cur, std::clamp(target, 0.0f, 1.0f), target > cur ? rise : s.pedalFall, dt);
     };
-    m_smoothed.throttle = pedal(m_smoothed.throttle, in.throttle);
-    m_smoothed.brake = pedal(m_smoothed.brake, in.brake);
-    m_smoothed.handBrake = pedal(m_smoothed.handBrake, in.handBrake);
+    m_smoothed.throttle = pedal(m_smoothed.throttle, in.throttle, s.pedalRise);
+    m_smoothed.brake = pedal(m_smoothed.brake, in.brake, s.brakeRise);
+    m_smoothed.handBrake = pedal(m_smoothed.handBrake, in.handBrake, s.pedalRise);
     const float target = std::clamp(in.steer, -1.0f, 1.0f);
     const bool returning = std::abs(target) < std::abs(m_smoothed.steer) || target * m_smoothed.steer < 0.0f;
     // The analog stick sets the angle directly, but with a steering rate limit (faster than the keyboard).

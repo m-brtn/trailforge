@@ -84,6 +84,10 @@ struct DrivingAidTuning {
     float absApplySlip = 0.08f;   // slip below which pressure builds up again (between the two: hold)
     float absReleaseRate = 40.0f; // 1/s, pressure drop rate (fast dump valve)
     float absApplyRate = 8.0f;    // 1/s, pressure build-up rate
+    // Pressure memory (the stepped re-apply of real ABS units): after a release the pressure comes back at the
+    // release rate up to this fraction of the pressure at which the wheel last broke away, then at absApplyRate.
+    // 0 = no memory (slow build-up from the dump level).
+    float absReapplyFraction = 0.85f;
     float absMinPressure = 0.0f;  // pressure floor while releasing (Jolt keeps a stopped wheel locked under any brake torque)
     float absMinSpeed = 1.5f;     // m/s, below this the pedal acts directly (a real ABS also drops out near a stop)
 

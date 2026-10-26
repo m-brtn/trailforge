@@ -47,8 +47,9 @@ struct AutoReverseSettings {
 // so it does not depend on FPS.
 // The steering rates belong to the vehicle (VehicleTuning::steerRate / steerReturnRate).
 struct InputSmoothing {
-    float pedalRise = 3.0f;       // 1/s
+    float pedalRise = 3.0f;       // 1/s, throttle and hand brake
     float pedalFall = 6.0f;       // 1/s
+    float brakeRise = 8.0f;       // 1/s, foot brake: full line pressure ~0.13 s after a stamp (booster, brake assist)
 };
 
 struct Pose {

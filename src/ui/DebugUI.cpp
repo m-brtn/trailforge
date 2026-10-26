@@ -720,6 +720,7 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         changed |= ImGui::SliderFloat("Re-apply slip", &d.absApplySlip, 0.0f, 0.4f, "%.2f");
         changed |= ImGui::SliderFloat("Release rate [1/s]", &d.absReleaseRate, 5.0f, 100.0f, "%.0f");
         changed |= ImGui::SliderFloat("Apply rate [1/s]", &d.absApplyRate, 1.0f, 40.0f, "%.1f");
+        changed |= ImGui::SliderFloat("Re-apply memory", &d.absReapplyFraction, 0.0f, 1.0f, "%.2f");
         changed |= ImGui::SliderFloat("ABS min speed [m/s]", &d.absMinSpeed, 0.0f, 5.0f, "%.1f");
         ImGui::SeparatorText("Traction control");
         changed |= ImGui::SliderFloat("Slip threshold (On)", &d.tcSlipThreshold, 0.05f, 1.0f, "%.2f");
@@ -784,6 +785,7 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
             sim.requestTuning(m_tuning);
         ImGui::SliderFloat("Pedal rise [1/s]", &sm.pedalRise, 0.5f, 20.0f, "%.1f");
         ImGui::SliderFloat("Pedal fall [1/s]", &sm.pedalFall, 0.5f, 20.0f, "%.1f");
+        ImGui::SliderFloat("Brake rise [1/s]", &sm.brakeRise, 0.5f, 20.0f, "%.1f");
         ImGui::Checkbox("Auto reverse (S/W at a standstill)", &autoReverse);
         AutoReverseSettings& ar = sim.autoReverse();
         ImGui::SliderFloat("Auto reverse speed [m/s]", &ar.stopSpeed, 0.1f, 1.0f, "%.2f");

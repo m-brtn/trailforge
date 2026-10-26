@@ -177,6 +177,9 @@ Command-line options:
   for one), prints lap and sector times, max speed, max lateral g, steady g in the constant-radius corner, line
   error and time off the asphalt, and a `RESULT` line with the best clean flying lap (`TRAILFORGE_MINITRACK_TRACE=1`
   prints a trace);
+- `brakedetail` — a 100 km/h concrete stop with ABS off and on, averaged per axle while above 5 km/h: pedal / ABS
+  pressure, brake torque, load, |Fx|, μ of the curve × surface, Fx / (μ load) (how much of the available grip is used)
+  and slip;
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
@@ -380,7 +383,7 @@ pedal: the 2H SUV spun its rear wheels on every keyboard launch and locked them 
 (`trailforge_probe keyboard`, concrete lane, instant → ramp): held W max slip 4.80 → 0.92 m/s, sliding 2.23 → 0 s,
 marks 0.77 → 0, 0-30 km/h 1.90 → 1.73 s; a 0.25 s S tap at 50 km/h 7.57 → 1.17 m/s, marks 0.77 → 0; a held S stops in
 1.83 s / 14.5 m instead of 1.75 s / 13.5 m and still locks the rear wheels (equal front / rear brake torque); a
-0.4 s tap (pedal 0.66) still locks them. Gamepad triggers are analog and not ramped; scenarios that set pedal values
+0.4 s tap (pedal 0.66) still locks them. These numbers predate v0.24.0 (front-biased brakes, faster foot-brake rise). Gamepad triggers are analog and not ramped; scenarios that set pedal values
 directly bypass the ramp.
 | Camera: follow → hood → free | C | RB |
 | Camera orbit (follow; swings back behind a moving vehicle 1.75 s after release) / look around (hood; springs back) | — | right stick |
@@ -542,7 +545,9 @@ Frames longer than 0.25 s are clamped, and at most 12 steps run per frame. Dropp
 Rendering interpolates body and wheel poses between the last two ticks (lerp/slerp).
 Input is smoothed inside the tick with a fixed dt, so it does not depend on FPS:
 - steering — 2.2 1/s toward the target and 3.5 1/s back to center;
-- pedals — 3 1/s on press and 6 1/s on release (analog gamepad input is not smoothed).
+- throttle and hand brake — 3 1/s on press and 6 1/s on release; foot brake — 8 1/s on press (full line pressure
+  0.125 s after a stamp, `brakeRise`; 3 1/s before v0.24.0) and 6 1/s on release. This applies to every source
+  (keyboard ramp, gamepad triggers, scenario `pedal`).
 
 The pause menu is a real pause: the accumulator is frozen (no ticks, no accumulated time, the interpolation alpha
 stays put) while rendering continues; Resume continues from the same tick. The debug freeze (P) does the same
@@ -620,8 +625,9 @@ TrailForge EV sits at the light end of that range.
   4.0 kg·m².
 - Retuned for the mass: springs 1.45 Hz (SUV 1.35), damping 0.50 compression / 0.55 rebound (SUV 0.45 / 0.45),
   anti-roll bars 400 / 200 N/m (label units; Jolt's bar acts much stiffer than the label, see the roll angles in the
-  table below), bump stops over the last 4 cm (×3), travel 0.15–0.53 m (SUV 0.55); brakes 3800 N·m front / 3200 N·m
-  rear per wheel (SUV 3000 / 3000).
+  table below), bump stops over the last 4 cm (×3), travel 0.15–0.53 m (SUV 0.55); brakes 4800 N·m front / 2400 N·m
+  rear per wheel (SUV 4200 / 2200; both 3800 / 3200 and 3000 / 3000 before v0.24.0); longitudinal tire peak 1.10
+  (all-terrain tread on concrete; lateral 1.00, SUV mud-terrain 1.00 / 1.00).
 - Driver aids as on the SUV (B, T, X); X locks the per-axle differentials (there is no center differential).
 
 Measured against the SUV with `trailforge_probe compare` (`TRAILFORGE_VEHICLE` selects the vehicle; 120 Hz, TC and
@@ -629,18 +635,22 @@ ABS off unless stated):
 
 | | SUV (2000 kg) | EV (2650 kg) |
 |---|---|---|
-| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.42 / 2.52 / 4.36 s (peak 401 kW, 0.358 kWh) |
-| 50–0 km/h ABS off / on | 13.70 / 13.49 m | 14.95 / 13.88 m (regen 12 / 16 % of the kinetic energy) |
-| 100–0 km/h ABS off / on | 47.57 / 46.42 m | 52.32 / 46.37 m (regen 5 / 9 %) |
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.42 / 2.49 / 4.31 s (peak 401 kW, 0.357 kWh) |
+| 50–0 km/h ABS off / on | 14.06 / 11.97 m | 14.52 / 11.56 m (regen 2 / 4 % of the kinetic energy) |
+| 100–0 km/h ABS off / on | 51.43 / 42.85 m | 50.38 / 39.92 m (regen 1 / 2 %) |
 | lift-off at 80 km/h | 0.63 m/s² (drag, engine braking) | 1.36 m/s² (regen and drag) |
-| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.33 m/s², roll 2.16 / 2.58° |
-| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.88 s (NORMAL), 3.89 s (OFF-ROAD) |
-| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.10 s (NORMAL and OFF-ROAD) |
-| diagonal twister, travel used FL / FR / RL / RR | 0.308 / 0.259 / 0.401 / 0.400 m, 6.07 wheel-s in the air | 0.321 / 0.231 / 0.362 / 0.302 m, 4.22 wheel-s |
+| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.34 m/s², roll 2.16 / 2.59° |
+| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.76 s (NORMAL), 3.77 s (OFF-ROAD) |
+| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.09 s (NORMAL and OFF-ROAD) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.309 / 0.244 / 0.402 / 0.404 m, 6.01 wheel-s in the air | 0.315 / 0.233 / 0.362 / 0.299 m, 4.28 wheel-s |
 | steady 50 / 90 km/h energy | — | 14.2 / 28.9 kWh/100 km (drag, wheel damping, aux; no rolling resistance) |
 
-Measured on v0.23.0 (kit bodies, box collision, 2.80 / 1.80 m; 0–100, 100–0 ABS on, the corner values and the
-twister contact counts equal the v0.14.0 ones). v0.15.0–v0.22.0 (traced
+Measured on v0.24.0 (kit bodies, box collision, 2.80 / 1.80 m; front-biased brakes, ABS re-apply memory, 8 1/s
+foot-brake rise). On v0.23.0 the stops were SUV 50–0 13.70 / 13.49 m, 100–0 47.57 / 46.42 m, EV 14.95 / 13.88 m and
+52.32 / 46.37 m (regen 12 / 16 and 5 / 9 %), the EV 0–100 4.36 s; the corner values and the twister contact counts
+equal the v0.14.0 ones. The SUV's ABS stop uses 0.90 of its load in braking force (`trailforge_probe brakedetail`):
+at μ 0.95 the ideal stop is 41.4 m, so the rest is the mud-terrain tire curve on rigid concrete. Real large SUVs on
+road tires stop from 100 km/h in about 36–40 m, on mud-terrain tires in the low-to-mid 40s. v0.15.0–v0.22.0 (traced
 bodies on the concept wheelbase and track) for comparison: SUV 0–100 9.58 s, 100–0 ABS on 47.31 m, corner 7.39 /
 7.78 m/s²; EV 0–100 4.42 s, 100–0 ABS on 46.43 m, corner 8.24 / 8.15 m/s². On the diagonal twister the box collision
 touches the terrain in 34 (SUV) and 30 (EV) of 1200 ticks, the traced body did in 0 (`trailforge_probe susp 2`).
@@ -1019,8 +1029,10 @@ no forces or velocities are set. They read the previous tick's wheel telemetry; 
 true velocity of its contact point (a real ABS has to estimate it from the wheel speeds). They are not models of a
 specific production unit.
 
-- **ABS** (per wheel, brake pressed, wheel ground speed above 1.5 m/s): brake slip = (v − ωr) / v. Above 0.18 the pressure is dumped at 40 /s, below 0.08 it is re-applied at 8 /s, in between it is
-  held. Pressure goes down to 0, because a Jolt wheel at ω = 0 stays locked under any brake torque. Measured cycle
+- **ABS** (per wheel, brake pressed, wheel ground speed above 1.5 m/s): brake slip = (v − ωr) / v. Above 0.18 the pressure is dumped at 40 /s, below 0.08 it is re-applied, in between it is
+  held. Re-apply has a pressure memory (`absReapplyFraction`, 0.85 on both vehicles, 0 in the C++ defaults): back at the
+  dump rate up to 0.85 × the pressure at the last breakaway, then 8 /s (`absApplyRate`); before v0.24.0 it was 8 /s from
+  0, which left the wheel under-braked for most of each cycle. Pressure goes down to 0, because a Jolt wheel at ω = 0 stays locked under any brake torque. Measured cycle
   9–15 Hz per wheel on straight stops (`trailforge_probe abs`, 120 Hz). At 60 Hz the controller also runs at 60 Hz
   and is coarser: a few short locks, and on dirt the straight stop is up to ~7 % longer than with locked wheels.
 - **Traction control** (On / Off-road): drive slip = (ωr − v) / max(|v|, 2 m/s), low-pass filtered (50 ms, at least
@@ -1045,13 +1057,17 @@ Measured (headless, 120 Hz, Release):
 
   | Surface (peak μ) | 50 → 0 km/h | 100 → 0 km/h | Locked wheel-s at 50 / 100 | ABS cycle 50 / 100 |
   |---|---|---|---|---|
-  | Concrete (0.95) | 14.23 → 13.77 m | 52.48 → 46.59 m | 4.74 → 0.15 / 11.62 → 0.16 | 10.7 / 9.5 Hz |
+  | Concrete (0.95) | 14.08 → 11.99 m | 51.45 → 42.86 m | 5.90 → 0.14 / 12.63 → 0.14 | 16.0 / 11.8 Hz |
   | Rock (0.75) | 18.21 → 16.21 m | 67.30 → 58.53 m | 7.41 → 0.12 / 16.35 → 0.13 | 13.4 / 10.7 Hz |
   | Packed dirt (0.70) | 19.36 → 17.30 m | 71.97 → 61.85 m | 8.03 → 0.10 / 17.65 → 0.08 | 13.1 / 11.1 Hz |
   | Sand (0.55) | 24.40 → 21.47 m | 91.06 → 78.18 m | 10.60 → 0.02 / 22.95 → 0.00 | 14.0 / 10.9 Hz |
   | Grass (0.50) | 27.05 → 23.74 m | 99.88 → 86.13 m | 11.88 → 0.00 / 25.35 → 0.00 | 14.1 / 11.2 Hz |
   | Mud (0.35) | 39.59 → 34.38 m | 141.83 → 117.97 m | 17.67 → 0.00 / 36.68 → 0.00 | 14.6 / 11.7 Hz |
 
+  The concrete row is from v0.24.0 (SUV, front-biased brakes, ABS re-apply memory); the other rows are older. On the
+  current probe only the 50 km/h rock and dirt runs stay in the lane (ABS on 15.54 / 16.60 m); the sand, grass and
+  mud runs and the 100 km/h runs off concrete leave the 5 m lane (dirt never reaches speed), the same before and after
+  the v0.24.0 brake change.
   ABS stops are 3–17 % shorter because the locked tire is on the sliding part of the curve (0.8 × peak); the surfaces
   are rigid, so there is no gravel or snow wedge that makes a locked wheel stop shorter on real loose ground.
   Steering under full braking with 40 % steer, heading change after 1 s (50 km/h; ABS off → on): concrete
@@ -1135,9 +1151,9 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   A **lap timer** (`src/sim/LapTimer`: start / finish line and two sector gates, crossing times interpolated
   within a physics tick, a lap counts only through the gates in order) runs in the HUD (top center) on the proving
   ground: `LAP n`, sector splits, last and best lap. Teleporting (or R) restarts the lap.
-  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 1:04.57 (113 km/h,
-  0.76 g), EV 1:01.25 (141 km/h, 0.79 g), `builtin` 1:06.51 (114 km/h, 0.64 g), `rwd_test` 0:58.62 (124 km/h,
-  0.90 g) (kit bodies, box collision). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
+  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 0:59.69 (114 km/h,
+  0.88 g), EV 1:00.83 (141 km/h, 0.76 g), `builtin` 1:04.22 (115 km/h, 0.75 g), `rwd_test` 0:59.41 (124 km/h,
+  0.90 g) (kit bodies, box collision, v0.24.0 brakes; with the v0.23.0 brakes 1:04.57 / 1:01.25 / 1:06.51 / 0:58.62). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
   hairpin entry (oversteer) and leaves the track.
 
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
@@ -1853,6 +1869,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   nearer render LODs differ from it by the simplification error modelc reports, a few cm to dm per model). Model trees
   collide only with a hexagonal prism along the trunk axis; branches and foliage have no collision. Bushes, ferns and
   dry branches are render-only (the vehicle drives through them). Wind sway moves only the render geometry.
+- Brakes are a torque per wheel (`brakeTorque` × pedal × ABS pressure): no hydraulics, pad friction, fade or
+  temperature, no load-sensing proportioning valve (the front / rear split is the fixed torque ratio). Pedal-to-pressure
+  delay is the 8 1/s foot-brake rise. The concrete peak μ is 0.95 (EV all-terrain longitudinal 1.10 × 0.95), so a
+  100–0 km/h ABS stop is ~40–43 m, at the long end of real large SUVs (~36–40 m on road tires).
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
   at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
   without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire
