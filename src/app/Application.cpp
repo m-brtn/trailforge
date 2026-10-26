@@ -105,6 +105,7 @@ constexpr NamedItem kItemNames[] = {
     {"start", MenuItem::Start},         {"settings", MenuItem::Settings},     {"quit", MenuItem::Quit},
     {"resume", MenuItem::Resume},       {"restart", MenuItem::Restart},       {"quit_to_menu", MenuItem::QuitToMenu},
     {"garage", MenuItem::Garage},       {"quit_game", MenuItem::QuitGame},  {"quality", MenuItem::Quality},       {"render_scale", MenuItem::RenderScale},
+    {"grass_distance", MenuItem::GrassDistance}, {"tree_distance", MenuItem::TreeDistance},
     {"vsync", MenuItem::VSync},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
     {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
     {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
@@ -269,6 +270,8 @@ Application::Application(const AppOptions& options)
 
 Application::~Application() {
     m_audio.reset(); // stop the audio thread first
+    if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
+    if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
     m_menu.release();
@@ -293,7 +296,7 @@ void Application::processEvents() {
                         SDL_GetScancodeName(e.key.scancode));
         m_input.handleEvent(e, io.WantCaptureKeyboard, io.WantCaptureMouse);
     }
-    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, float(std::min(io.DeltaTime, 0.1f)));
+    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, float(std::min(m_frameDt, 0.1)));
 
     if (m_input.pressed(Action::Quit)) m_running = false;
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
@@ -309,7 +312,7 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleHeadlights)) m_gfx.headlights = !m_gfx.headlights;
     if (m_input.pressed(Action::TogglePause)) setPaused(!m_paused);
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
-    if (m_input.pressed(Action::ToggleCamera)) m_camera.toggleMode();
+    if (m_input.pressed(Action::ToggleCamera)) m_camera.cycleMode();
     if (m_input.pressed(Action::ToggleMap)) m_mapOpen = !m_mapOpen && m_sim.level();
     if (m_input.pressed(Action::ToggleDirection)) m_sim.requestToggleDirection();
     if (m_input.pressed(Action::ToggleLowRange)) m_sim.requestToggleLowRange();
@@ -408,7 +411,7 @@ void Application::openGarage() {
         m_flow.closeGarage();
         return;
     }
-    m_garageFollowCamera = m_camera.mode() == Camera::Mode::Follow;
+    m_garageCameraMode = m_camera.mode();
     m_garageCamTime = 0.0;
 }
 
@@ -416,7 +419,7 @@ void Application::closeGarage() {
     SDL_StopTextInput(m_window.get());
     m_input.setModalCapture(false, false);
     m_flow.closeGarage();
-    if (m_garageFollowCamera && m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+    if (m_garageCameraMode != Camera::Mode::Free) m_camera.setMode(m_garageCameraMode);
     if (m_flow.screen() == Screen::MainMenu) m_menuCamTime = 0.0;
 }
 
@@ -501,7 +504,7 @@ void Application::startGameplay() {
     m_sim.requestAidControls(aids);
     if (m_settings.traction < 0) m_sim.requestDefaultTraction();
     m_ui.autoReverse = m_settings.autoReverse;
-    if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+    if (m_camera.mode() == Camera::Mode::Free) m_camera.setMode(Camera::Mode::Follow);
     m_gfx.settings.timeOfDay = m_gameplayTimeOfDay;
     m_gfx.changed = true;
     m_musicTarget = 0.0f;
@@ -525,13 +528,19 @@ void Application::enterMenuWorld(bool restartMusic) {
 
 void Application::applySettings(bool force) {
     const GameSettings& s = m_settings;
-    if (force || s.quality != m_applied.quality || s.renderScale != m_applied.renderScale) {
+    if (force || s.quality != m_applied.quality || s.renderScale != m_applied.renderScale ||
+        s.grassDistance != m_applied.grassDistance || s.treeDistance != m_applied.treeDistance) {
         const QualityPreset preset = QualityPreset(s.quality);
-        RenderSettings r = presetSettings(preset);
+        const RenderSettings p = presetSettings(preset);
+        RenderSettings r = p;
         copyLook(r, m_gfx.settings);
         if (s.renderScale > 0.0f) r.renderScale = s.renderScale;
-        m_gfx.preset = r.renderScale == presetSettings(preset).renderScale ? preset : QualityPreset::Custom;
-        if (!force || r.renderScale != m_gfx.settings.renderScale || m_gfx.preset != QualityPreset::High) {
+        if (s.grassDistance > 0.0f) r.grassDistance = s.grassDistance;
+        if (s.treeDistance > 0.0f) r.treeDetailDistance = s.treeDistance;
+        const bool own = r.renderScale == p.renderScale && r.grassDistance == p.grassDistance &&
+                         r.treeDetailDistance == p.treeDetailDistance;
+        m_gfx.preset = own ? preset : QualityPreset::Custom;
+        if (!force || !own || m_gfx.preset != QualityPreset::High) {
             m_gfx.settings = r;
             m_gfx.changed = true;
         }
@@ -863,13 +872,23 @@ void Application::renderFrame(float frameTime) {
         ci.wheel = m_input.wheel();
         ci.move = m_input.freeCameraMove();
         ci.fast = m_input.fastModifier();
+        ci.stick = m_input.rightStick();
+    }
+    ci.vehicleSpeed = m_sim.vehicle().telemetry().speed;
+    {
+        const VehicleConfig& vc = m_sim.vehicle().config();
+        HoodMount hm;
+        hm.position = glm::vec3(vc.hoodCamera[0], vc.hoodCamera[1], vc.hoodCamera[2]);
+        hm.pitchDeg = vc.hoodCameraPitch;
+        hm.nearPlane = vc.hoodCameraNear;
+        m_camera.setHoodMount(hm);
     }
     const bool vehiclePage = m_flow.screen() == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle;
     if (vehiclePage && !m_vehiclePageCamera) m_garageCamTime = 0.0;
     m_vehiclePageCamera = vehiclePage;
     if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime);
     if (m_flow.screen() == Screen::Garage || vehiclePage) updateGarageCamera(frameTime); // the preview: the live vehicle
-    m_camera.update(frameTime, ci, glm::vec3(bodyM[3]), glm::vec3(bodyM[2]),
+    m_camera.update(frameTime, ci, bodyM,
                     [this](const glm::vec3& from, const glm::vec3& to) {
                         return m_sim.castRayIgnoringVehicle(JPH::Vec3(from.x, from.y, from.z), JPH::Vec3(to.x, to.y, to.z));
                     });
@@ -897,6 +916,7 @@ void Application::renderFrame(float frameTime) {
     // ---- UI
     ImGui_ImplSDLGPU3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    if (m_scenario && !m_perfActive) ImGui::GetIO().DeltaTime = float(m_frameDt); // menu animations on the scenario clock
     ImGui::NewFrame();
     FrameStats stats;
     stats.fps = m_fps;
@@ -907,7 +927,7 @@ void Application::renderFrame(float frameTime) {
     stats.overloaded = m_clock.overloaded();
     stats.paused = m_paused;
     m_ui.menuOpen = m_flow.menuActive();
-    stats.followCamera = m_camera.mode() == Camera::Mode::Follow;
+    stats.cameraMode = m_camera.mode() == Camera::Mode::Follow ? 0 : m_camera.mode() == Camera::Mode::Hood ? 1 : 2;
     stats.gpuDriver = m_renderer->driverName();
     stats.shaderFormat = m_renderer->shaderFormatName();
     stats.gamepad = m_input.gamepadConnected() ? m_input.gamepadName() : "";
@@ -998,7 +1018,7 @@ void Application::renderFrame(float frameTime) {
     frame.proj = m_camera.projection(float(pw) / float(ph > 0 ? ph : 1));
     frame.cameraPos = m_camera.position();
     frame.fovYRadians = glm::radians(m_camera.fovYDeg);
-    frame.nearPlane = m_camera.nearPlane;
+    frame.nearPlane = m_camera.activeNearPlane();
     frame.time = float(m_time);
     frame.draws = m_draws;
     frame.water = &m_waterMesh;
@@ -1285,6 +1305,8 @@ void Application::updateScenario() {
             ++it;
         }
     }
+    // Commands act on the world that is loaded, not on one still waiting for its first tick (the start level too).
+    if (m_sim.levelPending() && simulationRuns()) return;
     const bool running = m_scenario->update(
         m_time, [this] { return m_pushedThisFrame || !m_queuedEvents.empty(); },
         [this](const std::string& n) { return scenarioValue(n); },
@@ -1403,6 +1425,54 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             return Exec::Failed;
         }
         return Exec::Done;
+    }
+    if (c.op == "gamepad") {
+        // gamepad attach | detach | axis leftx|lefty|rightx|righty|lt|rt V (-1..1, triggers 0..1): a virtual SDL gamepad,
+        // read by the input through SDL_GetGamepadAxis like a connected pad (stands in for a real pad in the checks).
+        if (arg == "attach") {
+            if (m_virtualPadId) return Exec::Done;
+            // Scenario runs often have no keyboard focus; SDL drops pad motion of unfocused windows by default.
+            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+            SDL_VirtualJoystickDesc d;
+            SDL_INIT_INTERFACE(&d);
+            d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+            d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+            d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+            d.name = "TrailForge scenario pad";
+            m_virtualPadId = SDL_AttachVirtualJoystick(&d);
+            m_virtualPad = m_virtualPadId ? SDL_OpenJoystick(m_virtualPadId) : nullptr;
+            if (!m_virtualPad) {
+                std::fprintf(stderr, "scenario: virtual gamepad: %s\n", SDL_GetError());
+                return Exec::Failed;
+            }
+            // Report the centred sticks first: SDL takes an axis' first report as its rest value.
+            for (int a = SDL_GAMEPAD_AXIS_LEFTX; a <= SDL_GAMEPAD_AXIS_RIGHTY; ++a) SDL_SetJoystickVirtualAxis(m_virtualPad, a, 0);
+            return Exec::Done;
+        }
+        if (arg == "detach") {
+            if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
+            if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
+            m_virtualPad = nullptr;
+            m_virtualPadId = 0;
+            return Exec::Done;
+        }
+        if (arg == "axis" && c.args.size() > 2 && m_virtualPad) {
+            const std::string& name = c.args[1];
+            const float v = std::clamp(float(std::atof(c.args[2].c_str())), -1.0f, 1.0f);
+            SDL_GamepadAxis axis = SDL_GAMEPAD_AXIS_INVALID;
+            if (name == "leftx") axis = SDL_GAMEPAD_AXIS_LEFTX;
+            else if (name == "lefty") axis = SDL_GAMEPAD_AXIS_LEFTY;
+            else if (name == "rightx") axis = SDL_GAMEPAD_AXIS_RIGHTX;
+            else if (name == "righty") axis = SDL_GAMEPAD_AXIS_RIGHTY;
+            else if (name == "lt") axis = SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+            else if (name == "rt") axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+            if (axis == SDL_GAMEPAD_AXIS_INVALID) return Exec::Failed;
+            const bool trigger = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+            // Triggers span the full raw range: -32768 released, 32767 fully pressed.
+            const float raw = trigger ? -32768.0f + 65535.0f * std::max(v, 0.0f) : 32767.0f * v;
+            return SDL_SetJoystickVirtualAxis(m_virtualPad, axis, Sint16(std::lround(raw))) ? Exec::Done : Exec::Failed;
+        }
+        return Exec::Failed;
     }
     if (c.op == "garage") {
         // garage set KEY V | step KEY DIR | row KEY | save | save_new | rename NAME | delete | select NAME|factory |
@@ -1731,6 +1801,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "exposure") s.exposure = v;
         else if (k == "fog") s.fogDensity = v;
         else if (k == "tree_dist") s.treeDistance = v;
+        else if (k == "tree_detail") s.treeDetailDistance = v;
         else if (k == "terrain_detail") s.terrainDetail = v;
         else if (k == "terrain_tex") s.terrainTextureSize = int(v);
         else {
@@ -1816,8 +1887,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         return Exec::Done;
     }
     if (c.op == "camera") {
-        if (arg == "follow") {
-            if (m_camera.mode() == Camera::Mode::Free) m_camera.toggleMode();
+        if (arg == "follow" || arg == "hood") {
+            m_camera.setMode(arg == "hood" ? Camera::Mode::Hood : Camera::Mode::Follow);
             m_camera.fovYDeg = 60.0f;
             return Exec::Done;
         }
@@ -1963,6 +2034,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         const std::string k = n.substr(8);
         if (k == "quality") return g.quality;
         if (k == "render_scale") return g.renderScale;
+        if (k == "grass_distance") return g.grassDistance;
+        if (k == "tree_distance") return g.treeDistance;
         if (k == "vsync") return g.vsync ? 1.0 : 0.0;
         if (k == "master") return g.masterVolume;
         if (k == "music") return g.musicVolume;
@@ -1985,6 +2058,18 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "controls_callouts") return m_menu.controlsCallouts();
     if (n == "controls_overlaps") return m_menu.controlsOverlaps();
     if (n == "cam_free") return m_camera.mode() == Camera::Mode::Free ? 1.0 : 0.0;
+    if (n == "cam_mode") return m_camera.mode() == Camera::Mode::Follow ? 0.0 : m_camera.mode() == Camera::Mode::Hood ? 1.0 : 2.0;
+    if (n == "cam_orbit_yaw") return glm::degrees(m_camera.orbitYaw());
+    if (n == "cam_orbit_pitch") return glm::degrees(m_camera.orbitPitch());
+    if (n == "cam_look_yaw") return glm::degrees(m_camera.hoodLookYaw());
+    if (n == "cam_look_pitch") return glm::degrees(m_camera.hoodLookPitch());
+    if (n == "grass_dist") return m_gfx.settings.grassDistance;
+    if (n == "tree_detail") return m_gfx.settings.treeDetailDistance;
+    if (n == "tree_dist") return m_gfx.settings.treeDistance;
+    if (n == "pad_connected") return m_input.gamepadConnected() ? 1.0 : 0.0;
+    if (n == "pad_virtual") return m_virtualPadId && m_input.gamepadId() == m_virtualPadId ? 1.0 : 0.0;
+    if (n == "pad_right_x") return m_input.rightStick().x;
+    if (n == "pad_right_y") return m_input.rightStick().y;
     if (n == "ui_visible") return m_ui.visible ? 1.0 : 0.0;
     if (n == "ui_kb") return ImGui::GetIO().WantCaptureKeyboard ? 1.0 : 0.0;
     if (n == "ui_text") return ImGui::GetIO().WantTextInput ? 1.0 : 0.0;
@@ -2213,11 +2298,14 @@ int Application::run() {
     Uint64 last = SDL_GetPerformanceCounter();
     while (m_running) {
         const Uint64 now = SDL_GetPerformanceCounter();
-        const double frameTime = double(now - last) / freq;
+        const double realFrameTime = double(now - last) / freq;
         last = now;
+        const bool fixedStep = m_scenario && !m_perfActive;
+        const double frameTime = fixedStep ? kScenarioFrameStep : realFrameTime;
+        m_frameDt = frameTime;
         m_time += frameTime;
 
-        m_fpsAccum += float(frameTime);
+        m_fpsAccum += float(realFrameTime);
         ++m_fpsFrames;
         if (m_fpsAccum >= 0.5f) {
             m_fps = float(m_fpsFrames) / m_fpsAccum;
@@ -2239,7 +2327,7 @@ int Application::run() {
         const double workMs = 1000.0 * double(SDL_GetPerformanceCounter() - now) / freq;
         m_cpuMs = std::max(0.0, workMs - m_renderer->stats().acquireWaitMs);
         if (m_perfActive) {
-            m_perfFrameMs.push_back(frameTime * 1000.0);
+            m_perfFrameMs.push_back(realFrameTime * 1000.0);
             m_perfCpuSum += m_cpuMs;
             if (m_renderer->stats().gpuMs > 0.0) {
                 m_perfGpuSum += m_renderer->stats().gpuMs;
@@ -2247,6 +2335,11 @@ int Application::run() {
             }
         }
 
+        if (fixedStep) {
+            // Never faster than real time (vsync off): background work such as tile streaming keeps its real pace.
+            const double spent = double(SDL_GetPerformanceCounter() - now) / freq;
+            if (spent < kScenarioFrameStep) SDL_DelayPrecise(Uint64((kScenarioFrameStep - spent) * 1e9));
+        }
         if (m_options.quitAfterSeconds > 0.0 && m_time >= m_options.quitAfterSeconds) {
             const auto p = m_sim.currentSnapshot().body.position;
             std::printf("TrailForge: auto-quit after %.1f s, %llu physics ticks, body at (%.2f %.2f %.2f), "

@@ -116,6 +116,8 @@ public:
     // Switches the world: a baked level, or nullptr for the proving ground (SimulationSettings::layout). The vehicle
     // keeps its configuration and driver aid switches and starts at the new spawn point.
     void requestLevel(std::shared_ptr<const Level> level) { m_pendingLevel = std::move(level); }
+    // A level switch is waiting for the next tick (it drops teleports and places requested before it runs).
+    bool levelPending() const { return m_pendingLevel.has_value(); }
     // Driver aid switches: B (ABS on/off), T (TC Off -> On -> Off-road), X (lockers none -> rear -> rear + center ->
     // all), or a direct setting (UI, scenarios). ABS and TC survive a reset/rebuild; the lockers reset like low range.
     void requestToggleAbs() { m_pendingAbsToggle = true; }

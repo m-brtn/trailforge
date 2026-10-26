@@ -118,6 +118,8 @@ const char* Input::gamepadName() const {
     return m_gamepad ? SDL_GetGamepadName(m_gamepad) : "";
 }
 
+SDL_JoystickID Input::gamepadId() const { return m_gamepad ? SDL_GetGamepadID(m_gamepad) : 0; }
+
 PadType Input::gamepadType() const { return m_gamepad ? PadType(SDL_GetGamepadType(m_gamepad)) : PadType::None; }
 
 void Input::beginFrame() {
@@ -219,12 +221,23 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         }
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!m_gamepad) m_gamepad = SDL_OpenGamepad(e.gdevice.which);
+        // The most recently connected pad drives (picking up a second pad just works).
+        if (SDL_Gamepad* pad = SDL_OpenGamepad(e.gdevice.which)) {
+            if (m_gamepad && m_gamepad != pad) SDL_CloseGamepad(m_gamepad);
+            m_gamepad = pad;
+        }
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (m_gamepad && SDL_GetGamepadID(m_gamepad) == e.gdevice.which) {
             SDL_CloseGamepad(m_gamepad);
             m_gamepad = nullptr;
+            // Fall back to another connected pad.
+            int n = 0;
+            if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
+                for (int i = n - 1; i >= 0 && !m_gamepad; --i)
+                    if (ids[i] != e.gdevice.which) m_gamepad = SDL_OpenGamepad(ids[i]);
+                SDL_free(ids);
+            }
         }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
@@ -277,6 +290,7 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
     }
     DriverIntent in;
     m_freeMove = glm::vec3(0.0f);
+    m_rightStick = glm::vec2(0.0f);
     m_fast = false;
     const auto keyHeld = [this](Key k) { return m_held[scancode(k)] ? 1.0f : 0.0f; };
     const DriveKeyMap drive = driveKeyMap(m_driveKeys), cam = freeCameraKeyMap(m_driveKeys);
@@ -304,6 +318,9 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
             in.analog = true;
         }
         if (SDL_GetGamepadButton(m_gamepad, SDL_GAMEPAD_BUTTON_SOUTH)) in.handBrake = 1.0f;
+        const StickValue rs = rightStickValue(float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_RIGHTX)) / 32767.0f,
+                                              float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_RIGHTY)) / 32767.0f);
+        m_rightStick = glm::vec2(rs.x, rs.y);
     }
     in.throttle = std::max(in.throttle, m_scriptThrottle);
     in.brake = std::max(in.brake, m_scriptBrake);

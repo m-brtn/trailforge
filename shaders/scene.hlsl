@@ -707,6 +707,13 @@ SamplerState maskSampler : SMP(2);
 
 float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     if (dot(f.clipPlane.xyz, vin.worldPos) + f.clipPlane.w < 0.0) discard;
+    // Tree LOD cross-fade (mudMode < 0, see tree_vs): the nearer LOD keeps the pixels with dither < k, the farther one
+    // the rest, so both together cover the tree once while it moves through the band.
+    if (vin.mudMode < 0.0) {
+        const float code = -vin.mudMode;
+        const float d = frac(52.9829189 * frac(dot(vin.position.xy, float2(0.06711056, 0.00583715))));
+        if (code < 1.5 ? d >= code : d < code - 2.0) discard;
+    }
     const int mat = int(vin.material.x + 0.5);
     float3 N = normalize(vin.normal);
     const float3 V = normalize(f.cameraPos.xyz - vin.worldPos);
@@ -1129,7 +1136,8 @@ LitOut tree_vs(LitIn vin, uint iid : SV_InstanceID) {
     vout.material = float4(vin.material.xyz, 0.0);
     vout.localPos = vin.position;
     vout.localNormal = vin.normal;
-    vout.mudMode = 0.0;
+    // params.w: LOD cross-fade code (0 none, (0, 1] nearer LOD keeps that share, [2, 3] farther LOD from w - 2 up).
+    vout.mudMode = -t.params.w;
     vout.soil = ((float4)(0.0));
     vout.soilParams = ((float2)(0.0));
     vout.soilExtra = ((float2)(0.0));

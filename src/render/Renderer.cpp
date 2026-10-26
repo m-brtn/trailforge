@@ -52,6 +52,9 @@ constexpr int kTerrainPatch = 64;          // cells per terrain chunk side
 constexpr int kTerrainLevels = 4;          // steps 8, 4, 2, 1
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
 constexpr int kGrassSegs[3] = {4, 2, 1};
+// Outer edges of the two dense grass LODs: a longer grass distance only adds sparse far-LOD rings.
+constexpr float kGrassLod0Max = 18.0f;
+constexpr float kGrassLod1Max = 40.0f;
 constexpr float kGrassNearCanopy[4] = {0.6f, 0.5f, 0.35f, 0.3f};
 // Full quads per segment, so cut shapes (ears, seed heads, flower heads) get a wide top; the far LOD is one triangle.
 constexpr int grassTriangles(int lod) { return lod >= 2 ? 1 : 2 * kGrassSegs[lod]; }
@@ -308,7 +311,9 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.shadowFilter = std::clamp(s.shadowFilter, 0, 2);
     s.reflectionScale = std::clamp(s.reflectionScale, 0.2f, 1.0f);
     s.grassLevel = std::clamp(s.grassLevel, 0, 4);
-    s.grassDistance = std::clamp(s.grassDistance, 5.0f, 120.0f);
+    s.grassDistance = std::clamp(s.grassDistance, 5.0f, 250.0f);
+    s.treeDetailDistance = std::clamp(s.treeDetailDistance, 100.0f, 2000.0f);
+    s.treeDistance = std::clamp(s.treeDistance, s.treeDetailDistance, 6000.0f);
     s.flowerDensity = std::clamp(s.flowerDensity, 0.0f, 1.0f);
     s.exposure = std::clamp(s.exposure, 0.1f, 8.0f);
     s.timeOfDay = std::fmod(std::fmod(s.timeOfDay, 24.0f) + 24.0f, 24.0f);
@@ -879,8 +884,8 @@ void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const Tre
     if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
     m_treeBuffer = nullptr;
     m_treeTransfer = nullptr;
-    // Main view, reflection and shadow lists can each hold every tree.
-    m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 3);
+    // Main view (twice: LOD cross-fade copies), reflection and shadow lists can each hold every tree.
+    m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 4);
     SDL_GPUBufferCreateInfo bi{};
     bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
     bi.size = m_treeCapacity * sizeof(TreeInstance);
@@ -1060,7 +1065,10 @@ std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewP
     if (m_trees.empty()) return 0;
     const Frustum fr(viewProj);
     const glm::vec3 cam = frame.cameraPos;
-    constexpr float kLod0 = 55.0f, kLod1 = 140.0f, kLod2 = 380.0f;
+    // LOD boundaries scale with the detail distance (where the last mesh LOD hands over to the far cards); in a band
+    // before each boundary a tree is drawn in both LODs with complementary dither (no popping).
+    const float detail = m_settings.treeDetailDistance;
+    const float bounds[3] = {0.145f * detail, 0.37f * detail, detail};
     const float maxD = m_settings.treeDistance;
     for (auto& l : m_treeLod) l.clear();
     for (const TreeInstance& t : m_trees) {
@@ -1070,7 +1078,22 @@ std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewP
         const glm::vec3 dc = c - cam;
         const float d2 = glm::dot(dc, dc);
         if (d2 > maxD * maxD || !fr.sphere(c, 0.6f * h)) continue;
-        m_treeLod[d2 < kLod0 * kLod0 ? 0 : d2 < kLod1 * kLod1 ? 1 : d2 < kLod2 * kLod2 ? 2 : 3].push_back(t);
+        const float d = std::sqrt(d2);
+        int l = 0;
+        while (l < 3 && d >= bounds[l]) ++l;
+        if (l < 3 && d > bounds[l] * (1.0f - kTreeFadeBand)) {
+            // Nearer LOD l keeps share k, the next LOD the rest.
+            const float k = std::clamp((bounds[l] - d) / (bounds[l] * kTreeFadeBand), 0.02f, 1.0f);
+            TreeInstance a = t, b = t;
+            a.params.w = k;
+            b.params.w = 2.0f + k;
+            m_treeLod[std::size_t(l)].push_back(a);
+            m_treeLod[std::size_t(l + 1)].push_back(b);
+        } else {
+            TreeInstance a = t;
+            a.params.w = 0.0f;
+            m_treeLod[std::size_t(l)].push_back(a);
+        }
     }
     const auto& lod = m_treeLod;
     for (int l = 0; l < 4; ++l) {
@@ -1158,7 +1181,7 @@ std::uint32_t Renderer::cullGrass(const FrameDesc& frame, const glm::mat4& viewP
     if (s.grassLevel <= 0 || m_grassChunks.empty()) return 0;
     const Frustum fr(viewProj);
     const float D = s.grassDistance;
-    const float radii[3] = {D * 0.3f, D * 0.6f, D};
+    const float radii[3] = {std::min(D * 0.3f, kGrassLod0Max), std::min(D * 0.6f, kGrassLod1Max), D};
     std::vector<glm::vec4> lists[3];
     const glm::vec2 cam(frame.cameraPos.x, frame.cameraPos.z);
     for (const GrassBucket& b : m_grassBuckets) {
@@ -1800,7 +1823,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             const float fine = kGrassCells[s.grassLevel - 1];
             const int perSide0 = int(std::lround(kGrassChunk / fine));
             const float D = s.grassDistance;
-            const float radii[3] = {D * 0.3f, D * 0.6f, D};
+            const float radii[3] = {std::min(D * 0.3f, kGrassLod0Max), std::min(D * 0.6f, kGrassLod1Max), D};
             const float grassPixel = 2.0f * std::tan(0.5f * frame.fovYRadians) / float(std::max(m_stats.renderH, 1u));
             std::uint32_t first = 0;
             for (int l = 0; l < 3; ++l) {

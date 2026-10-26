@@ -99,6 +99,7 @@ public:
 private:
     struct Row {
         MenuItem item;
+        int index; // position on the page (rows scrolled out of view are not in m_rows)
         float x0, y0, x1, y1;
         float arrowL0 = 0, arrowL1 = 0, arrowR0 = 0, arrowR1 = 0; // x ranges of the value arrows (0 = none)
     };
@@ -107,6 +108,8 @@ private:
     struct Box {
         float x0, y0, x1, y1;
     };
+    void drawBackButton(ImDrawList* dl, float x0, float titleRuleY, bool selected, float alpha);
+    Box m_backBox{};
     // Controls page diagrams; both add their callout boxes and obstacles (key caps, controller outline) for the
     // overlap count.
     void drawKeyboard(ImDrawList* dl, float x, float y, float u, const MenuView& view, float alpha);

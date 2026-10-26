@@ -87,7 +87,8 @@ struct KeyBinding {
     std::string label; // callout text (uppercase)
     BindingGroup group;
 };
-// Every bound key with its callout, for the given drive layout. Each key appears once.
+// Every bound gameplay key with its callout, for the given drive layout. Each key appears once. Menu navigation
+// (Return / Backspace / arrows) is left out: the menu footers name it.
 std::vector<KeyBinding> keyboardBindings(DriveKeys layout);
 
 const char* actionLabel(Action a);
@@ -132,8 +133,16 @@ struct PadBinding {
     std::string label;
     BindingGroup group;
 };
-// Every bound gamepad control with its callout (unbound controls are absent). Each control appears once.
+// Every bound gameplay control with its callout (unbound controls and menu-only buttons are absent). Each control
+// appears once.
 std::vector<PadBinding> padBindings();
+
+// Right stick (camera): a radial dead zone rescaled to 0..1, then a squared response for fine aim near the centre.
+struct StickValue {
+    float x = 0.0f, y = 0.0f;
+};
+inline constexpr float kRightStickDeadZone = 0.15f;
+StickValue rightStickValue(float x, float y);
 
 // ------------------------------------------------------------------ callout placement
 

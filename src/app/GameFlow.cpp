@@ -13,6 +13,16 @@ namespace tf {
 namespace {
 
 constexpr float kScaleSteps[] = {0.0f, 0.5f, 0.6f, 0.67f, 0.75f, 0.85f, 1.0f};
+// 0 = the preset's own distance.
+constexpr float kGrassSteps[] = {0.0f, 30.0f, 40.0f, 55.0f, 70.0f, 90.0f, 110.0f, 135.0f, 160.0f, 200.0f, 250.0f};
+constexpr float kTreeSteps[] = {0.0f, 250.0f, 380.0f, 500.0f, 650.0f, 800.0f, 900.0f, 1100.0f, 1400.0f, 2000.0f};
+
+float step(const float* steps, int n, float v, int dir) {
+    int best = 0;
+    for (int i = 0; i < n; ++i)
+        if (std::abs(steps[i] - v) < std::abs(steps[best] - v)) best = i;
+    return steps[std::clamp(best + dir, 0, n - 1)];
+}
 
 int wrap(int v, int n) { return ((v % n) + n) % n; }
 
@@ -39,7 +49,8 @@ const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
     static const std::vector<MenuItem> kMain = {M::Start, M::LevelChoice, M::Garage, M::Settings, M::Quit};
     static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
                                                  M::QuitGame};
-    static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::VSync,     M::MasterVolume,
+    static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::GrassDistance, M::TreeDistance,
+                                                    M::VSync,         M::MasterVolume,
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
                                                     M::Back};
@@ -213,7 +224,8 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
     }
     // Volumes change only with left / right; choices and switches also cycle on accept.
     const bool slider = item == M::MasterVolume || item == M::MusicVolume || item == M::EffectsVolume ||
-                        item == M::UiVolume || item == M::RenderScale;
+                        item == M::UiVolume || item == M::RenderScale || item == M::GrassDistance ||
+                        item == M::TreeDistance;
     if (dir == 0 && slider) return {};
     if (!adjustSetting(item, settings, dir == 0 ? 1 : dir)) return {};
     return {MenuCommand::SettingsChanged, MenuSound::Adjust};
@@ -285,6 +297,8 @@ const char* menuLabel(MenuItem item) {
     case M::QuitGame: return "QUIT GAME";
     case M::Quality: return "QUALITY PRESET";
     case M::RenderScale: return "RESOLUTION SCALE";
+    case M::GrassDistance: return "GRASS DISTANCE";
+    case M::TreeDistance: return "TREE DETAIL DISTANCE";
     case M::VSync: return "VSYNC";
     case M::MasterVolume: return "MASTER VOLUME";
     case M::MusicVolume: return "MUSIC";
@@ -348,6 +362,14 @@ std::string menuValue(MenuItem item, const GameSettings& s, const std::string& d
         if (s.renderScale <= 0.0f)
             return "PRESET (" + percent(presetSettings(QualityPreset(std::clamp(s.quality, 0, 3))).renderScale) + ")";
         return percent(s.renderScale);
+    case M::GrassDistance: {
+        const float v = s.grassDistance > 0.0f ? s.grassDistance : presetSettings(QualityPreset(std::clamp(s.quality, 0, 3))).grassDistance;
+        return s.grassDistance > 0.0f ? std::to_string(int(v)) + " M" : "PRESET (" + std::to_string(int(v)) + " M)";
+    }
+    case M::TreeDistance: {
+        const float v = s.treeDistance > 0.0f ? s.treeDistance : presetSettings(QualityPreset(std::clamp(s.quality, 0, 3))).treeDetailDistance;
+        return s.treeDistance > 0.0f ? std::to_string(int(v)) + " M" : "PRESET (" + std::to_string(int(v)) + " M)";
+    }
     case M::VSync: return s.vsync ? "ON" : "OFF";
     case M::MasterVolume: return percent(s.masterVolume);
     case M::MusicVolume: return percent(s.musicVolume);
@@ -384,6 +406,8 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
         s.renderScale = kScaleSteps[std::clamp(best + dir, 0, int(std::size(kScaleSteps)) - 1)];
         break;
     }
+    case M::GrassDistance: s.grassDistance = step(kGrassSteps, int(std::size(kGrassSteps)), s.grassDistance, dir); break;
+    case M::TreeDistance: s.treeDistance = step(kTreeSteps, int(std::size(kTreeSteps)), s.treeDistance, dir); break;
     case M::VSync: s.vsync = !s.vsync; break;
     case M::MasterVolume: stepVolume(s.masterVolume, dir); break;
     case M::MusicVolume: stepVolume(s.musicVolume, dir); break;

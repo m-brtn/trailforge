@@ -96,7 +96,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
             ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
         else
             ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
-        ImGui::TextDisabled("C camera  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("C camera (follow / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
                             stats.renderH, TRAILFORGE_VERSION);
@@ -269,7 +269,9 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         edited |= ImGui::SliderFloat("##reflscale", &s.reflectionScale, 0.25f, 1.0f, "%.2fx res");
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
-        edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 90.0f, "%.0f");
+        edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 250.0f, "%.0f");
+        edited |= ImGui::SliderFloat("Tree detail distance [m]", &s.treeDetailDistance, 100.0f, 2000.0f, "%.0f");
+        edited |= ImGui::SliderFloat("Tree distance [m]", &s.treeDistance, 500.0f, 6000.0f, "%.0f");
         edited |= ImGui::SliderFloat("Flowers", &s.flowerDensity, 0.0f, 1.0f, "%.2f");
         edited |= ImGui::Checkbox("Grass detail (awns, seed heads)", &s.grassDetail);
         edited |= ImGui::Checkbox("Bloom", &s.bloom);
@@ -449,7 +451,9 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
         ImGui::TextDisabled("Dropped sim time: total %.1f ms (frame clamp / step cap)", stats.droppedTotalMs);
     if (sim.hadPhysicsError()) ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), "Jolt reported an update error (buffers full)");
     ImGui::Text("Gamepad: %s   Camera: %s", stats.gamepad[0] ? stats.gamepad : "not connected",
-                stats.followCamera ? "follow" : "free (arrows, PgUp/PgDn, RMB look)");
+                stats.cameraMode == 0 ? "follow (RMB / right stick orbit)"
+                : stats.cameraMode == 1 ? "hood (RMB / right stick look)"
+                                        : "free (arrows, PgUp/PgDn, RMB look)");
     if (ImGui::Button(stats.paused ? "Resume (P)" : "Freeze (P)")) req.togglePause = true;
     ImGui::SameLine();
     ImGui::BeginDisabled(!stats.paused);

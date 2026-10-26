@@ -51,6 +51,7 @@ expect menu_cursor == 3        # Start, Level, Garage, Settings
 tap Return
 wait 0.1
 expect menu_page == 2
+expect menu_cursor == 0        # the page opens on its first option, not on BACK
 wait 0.6
 expect menu_blur > 0.7         # the start-menu scene is blurred under Settings
 capture /tmp/trailforge_menu_04_settings.png
@@ -69,8 +70,36 @@ expect setting_tc == 0
 tap Left
 wait 0.1
 expect setting_tc == -1
+# draw distances: PRESET -> explicit metres, applied to the renderer, back to PRESET
+expect grass_dist == 110
+expect tree_detail == 650
+menu select grass_distance
+tap Right
+wait 0.1
+expect setting_grass_distance == 30
+expect grass_dist == 30
+menu select tree_distance
+tap Left                        # PRESET is the left end
+wait 0.1
+expect setting_tree_distance == 0
+tap Right
+wait 0.1
+expect setting_tree_distance == 250
+expect tree_detail == 250
+capture /tmp/trailforge_menu_04b_distances.png
+tap Left
+wait 0.1
+expect setting_tree_distance == 0
+expect tree_detail == 650
+menu select grass_distance
+tap Left
+wait 0.1
+expect setting_grass_distance == 0
+expect grass_dist == 110
 
 # mouse: click a row
+menu select controls            # the last row: the cursor scrolls it into view
+wait 0.5
 click menu:controls
 wait 0.4
 expect menu_page == 3
@@ -78,30 +107,96 @@ capture /tmp/trailforge_menu_05_controls.png
 tap Escape
 wait 0.1
 expect menu_page == 2
-# mouse wheel: the Settings rows overflow the window; wheel down / up scrolls, keys keep the cursor in view
+# mouse wheel scrolls the Settings rows (they do not fit at 16:10)
 menu select music
-wheel 10
-wait 0.5
-expect menu_scroll == 0
 wheel -3
 wait 0.5
-log menu_wheel_down
-expect menu_scroll > 20         # to the end of the list (it overflows by a few rows at 16:10)
-capture /tmp/trailforge_menu_05b_settings_scrolled.png
+expect menu_scroll > 20
+capture /tmp/trailforge_menu_05b_settings_rows.png
 wait 0.1
-wheel 10
+menu select quality
 wait 0.5
-expect menu_scroll == 0
-menu select back
+tap Up                          # BACK sits above the page title (top left): Up from the first row
 wait 0.5
-expect menu_scroll > 0          # the last Settings row was scrolled into view by the cursor
-wheel 20
-wait 0.5
-expect menu_scroll == 0
+expect menu_cursor == 14
+expect menu_scroll == 0         # outside the scrolling list
+capture /tmp/trailforge_menu_05c_settings_back.png
+wait 0.1
+tap Down                        # and Down from BACK returns to the first row
+wait 0.1
+expect menu_cursor == 0
 tap Escape
 wait 0.1
 expect menu_page == 0
 expect menu_screen == 1
+
+# ---------------------------------------------------------------- BACK row by mouse on every page
+# Start menu -> Settings -> Controls; BACK returns to Settings, then to the start menu.
+menu select settings
+tap Return
+wait 0.3
+expect menu_page == 2
+menu select controls            # the last row: the cursor scrolls it into view
+wait 0.5
+click menu:controls
+wait 0.3
+expect menu_page == 3
+expect menu_cursor == 0
+tap Up                          # keyboard: Up to BACK, Return goes back
+wait 0.1
+expect menu_cursor == 2
+tap Return
+wait 0.3
+expect menu_page == 2
+click menu:controls
+wait 0.3
+expect menu_page == 3
+capture /tmp/trailforge_menu_05d_controls_back.png
+wait 0.1
+click menu:back
+wait 0.3
+expect menu_page == 2
+wheel 20
+wait 0.5
+expect menu_scroll == 0
+click menu:back                 # BACK is clickable whatever the list scroll
+wait 0.3
+expect menu_page == 0
+expect menu_screen == 1
+expect menu_cursor == 3         # back on SETTINGS
+# Start -> vehicle page; BACK returns to the start menu.
+menu select start
+tap Return
+wait 0.3
+expect menu_page == 4
+expect menu_cursor == 0
+capture /tmp/trailforge_menu_05e_vehicle_back.png
+wait 0.1
+click menu:back
+wait 0.3
+expect menu_page == 0
+expect menu_screen == 1
+# Garage: BACK above the title as well; Up from the first row selects it.
+menu select garage
+tap Return
+wait 0.5
+expect garage_open == 1
+expect garage_scroll == 0
+expect garage_cursor == 0
+tap Up
+wait 0.3
+expect garage_scroll == 0
+capture /tmp/trailforge_menu_10_garage_back.png
+wait 0.1
+tap Down
+wait 0.1
+expect garage_cursor == 0
+click garage:back
+wait 0.3
+expect garage_open == 0
+expect garage_scroll == 0       # the click did not need to scroll the list
+expect menu_screen == 1
+expect menu_cursor == 2         # back on GARAGE
 
 # ---------------------------------------------------------------- Start -> vehicle page -> gameplay
 menu select start
@@ -151,9 +246,11 @@ wait 0.3
 expect menu_page == 2
 expect d_ticks == 0
 capture /tmp/trailforge_menu_07_pause_settings.png
-tap Escape
 wait 0.1
+click menu:back                 # BACK from the pause Settings returns to the pause menu
+wait 0.3
 expect menu_page == 1
+expect d_ticks == 0
 tap Escape
 wait 0.6
 expect menu_screen == 2

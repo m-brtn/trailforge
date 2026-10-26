@@ -32,6 +32,10 @@ GameSettings sanitized(GameSettings s) {
     s.quality = std::clamp(s.quality, 0, 3);
     if (!std::isfinite(s.renderScale) || s.renderScale < 0.5f) s.renderScale = 0.0f;
     s.renderScale = std::min(s.renderScale, 1.0f);
+    if (!std::isfinite(s.grassDistance) || s.grassDistance < 20.0f) s.grassDistance = 0.0f;
+    s.grassDistance = std::min(s.grassDistance, 250.0f);
+    if (!std::isfinite(s.treeDistance) || s.treeDistance < 150.0f) s.treeDistance = 0.0f;
+    s.treeDistance = std::min(s.treeDistance, 2000.0f);
     s.masterVolume = volume(s.masterVolume);
     s.musicVolume = volume(s.musicVolume);
     s.effectsVolume = volume(s.effectsVolume);
@@ -58,6 +62,8 @@ std::string serializeSettings(const GameSettings& in) {
                   "# TrailForge settings (written by the game; unknown keys are ignored)\n"
                   "quality = %d\n"
                   "render_scale = %.2f\n"
+                  "grass_distance = %.0f\n"
+                  "tree_distance = %.0f\n"
                   "vsync = %d\n"
                   "volume_master = %.2f\n"
                   "volume_music = %.2f\n"
@@ -69,7 +75,7 @@ std::string serializeSettings(const GameSettings& in) {
                   "auto_reverse = %d\n"
                   "drive_keys = %d\n"
                   "pad_glyphs = %d\n",
-                  s.quality, double(s.renderScale), s.vsync ? 1 : 0, double(s.masterVolume), double(s.musicVolume),
+                  s.quality, double(s.renderScale), double(s.grassDistance), double(s.treeDistance), s.vsync ? 1 : 0, double(s.masterVolume), double(s.musicVolume),
                   double(s.effectsVolume), double(s.uiVolume), s.abs ? 1 : 0, s.traction, s.diffLocks,
                   s.autoReverse ? 1 : 0, s.driveKeys, s.padGlyphs);
     std::string out = buf;
@@ -114,6 +120,8 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
         const int i = int(std::lround(std::clamp(v, -1e6, 1e6)));
         if (k == "quality") s.quality = i;
         else if (k == "render_scale") s.renderScale = float(v);
+        else if (k == "grass_distance") s.grassDistance = float(v);
+        else if (k == "tree_distance") s.treeDistance = float(v);
         else if (k == "vsync") s.vsync = i != 0;
         else if (k == "volume_master") s.masterVolume = float(v);
         else if (k == "volume_music") s.musicVolume = float(v);

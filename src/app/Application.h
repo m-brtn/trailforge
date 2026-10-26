@@ -135,7 +135,7 @@ private:
     MenuUI m_menu;        // releases its logo texture explicitly before the renderer (see ~Application)
     GameFlow m_flow;
     std::unique_ptr<Garage> m_garage; // vehicle setups; null when no vehicle definition loaded
-    bool m_garageFollowCamera = false; // camera mode to restore when the garage closes
+    Camera::Mode m_garageCameraMode = Camera::Mode::Follow; // camera mode to restore when the garage closes
     double m_garageCamTime = 0.0;
     std::vector<VehicleCard> m_vehicleCards; // vehicle page (catalog order)
     float m_vehicleWheel = 0.0f;             // vehicle page: wheel steps not yet turned into a vehicle change
@@ -152,6 +152,9 @@ private:
     // Scenario-only overrides for the Controls page captures: key cap wording and the connected pad type.
     std::optional<KeyboardStyle> m_keyboardOverride;
     std::optional<PadType> m_padTypeOverride;
+    // Scenario `gamepad attach`: an SDL virtual gamepad that the input opens like a real one (axes set by the script).
+    SDL_JoystickID m_virtualPadId = 0;
+    SDL_Joystick* m_virtualPad = nullptr;
     KeyboardStyle keyboardStyle() const { return m_keyboardOverride.value_or(nativeKeyboardStyle()); }
     PadType padType() const { return m_padTypeOverride.value_or(m_input.gamepadType()); }
     float m_musicTarget = 0.0f;
@@ -195,7 +198,11 @@ private:
     bool m_stepOnce = false;
     bool m_captured = false;
     int m_stepsThisFrame = 0;
-    double m_time = 0.0;
+    double m_time = 0.0;     // application time: real, or the fixed scenario frame steps
+    // Scenario runs advance by a fixed step per frame (paced to at most real time), so input, waits and conditions
+    // land on the same physics ticks at any display refresh rate. perf_begin..perf_end measures in real time.
+    static constexpr double kScenarioFrameStep = 1.0 / 120.0;
+    double m_frameDt = 0.0;  // the step of the current frame
     float m_fpsAccum = 0.0f;
     int m_fpsFrames = 0;
     float m_fps = 0.0f;

@@ -1,6 +1,7 @@
 #include "input/ControlLayout.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace tf {
 
@@ -128,7 +129,7 @@ const char* actionLabel(Action a) {
     case Action::ToggleDirection: return "FWD / REV";
     case Action::ToggleLowRange: return "LOW RANGE";
     case Action::Reset: return "RESET";
-    case Action::ToggleCamera: return "CAMERA VIEW";
+    case Action::ToggleCamera: return "CAMERA: FOLLOW / HOOD / FREE";
     case Action::ToggleDebugUI: return "DIAGNOSTICS";
     case Action::ToggleGraphicsUI: return "GRAPHICS";
     case Action::ToggleAudioUI: return "AUDIO";
@@ -175,8 +176,6 @@ std::vector<KeyBinding> keyboardBindings(DriveKeys layout) {
         {Key::PageDown, "CAMERA DOWN", BindingGroup::Camera},
         {Key::LeftShift, "FAST CAMERA", BindingGroup::Camera},
         {Key::Escape, "PAUSE MENU", BindingGroup::System},
-        {Key::Return, "MENU SELECT", BindingGroup::System},
-        {Key::Backspace, "MENU BACK", BindingGroup::System},
     };
     for (const KeyAction& a : keyActions()) b.push_back({a.key, actionLabel(a.action), actionGroup(a.action)});
     return b;
@@ -269,12 +268,20 @@ std::vector<PadBinding> padBindings() {
         {PadControl::RightTrigger, "THROTTLE", BindingGroup::Drive},
         {PadControl::LeftTrigger, "BRAKE / REVERSE", BindingGroup::Drive},
         {PadControl::LeftStick, "STEER", BindingGroup::Drive},
-        {PadControl::South, "HANDBRAKE / MENU SELECT", BindingGroup::Drive},
-        {PadControl::East, "MENU BACK", BindingGroup::System},
+        {PadControl::South, "HANDBRAKE", BindingGroup::Drive},
+        {PadControl::RightStick, "CAMERA ORBIT / LOOK", BindingGroup::Camera},
         {PadControl::Start, "PAUSE MENU", BindingGroup::System},
     };
     for (const PadAction& a : padActions()) b.push_back({a.control, actionLabel(a.action), actionGroup(a.action)});
     return b;
+}
+
+StickValue rightStickValue(float x, float y) {
+    const float m = std::hypot(x, y);
+    if (m <= kRightStickDeadZone) return {};
+    const float t = std::min(1.0f, (m - kRightStickDeadZone) / (1.0f - kRightStickDeadZone));
+    const float scale = t * t / m;
+    return {x * scale, y * scale};
 }
 
 std::vector<float> spreadLabels(const std::vector<float>& wanted, const std::vector<float>& sizes, float pad, float lo,

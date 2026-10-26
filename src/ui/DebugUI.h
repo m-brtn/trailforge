@@ -29,7 +29,7 @@ struct FrameStats {
     double droppedTotalMs = 0.0;
     bool overloaded = false;
     bool paused = false;
-    bool followCamera = true;
+    int cameraMode = 0; // 0 follow, 1 hood, 2 free
     const char* gpuDriver = "";
     const char* shaderFormat = "";
     const char* gamepad = ""; // empty: not connected
