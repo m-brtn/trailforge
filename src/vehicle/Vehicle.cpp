@@ -679,7 +679,7 @@ bool Vehicle::setTransfer(TransferMode mode) {
 void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
     m_tickDt = dt;
     const VehicleTuning& vt = m_config.tuning;
-    const DrivingAidTuning& at = vt.aids;
+    const DrivingAidTuning& at = m_tireTuning.aids;
     const float driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
     EvInput ev;
     ev.throttle = cmd.throttle;
@@ -789,7 +789,7 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     in.brake = cmd.brake;
     in.driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
     in.dt = dt;
-    m_aidOut = m_aids.update(m_config.tuning.aids, m_controls, in);
+    m_aidOut = m_aids.update(m_tireTuning.aids, m_controls, in);
     float maxTorque = 0.0f;
     for (int i = 0; i < kWheelCount; ++i) maxTorque = std::max(maxTorque, m_aidOut.brakeTorque[i]);
     for (int i = 0; i < kWheelCount; ++i) m_wheelSettings[i]->mMaxBrakeTorque = m_aidOut.brakeTorque[i];
@@ -974,6 +974,12 @@ VehicleTuning Vehicle::tireSetTuning(const VehicleTuning& base, TireSet set) {
     t.tireSlideLongFriction *= c.slideRatioScale;
     t.tireSlideLatFriction *= c.slideRatioScale;
     for (std::size_t i = 0; i < kSurfaceCount; ++i) t.tireSurfaceGrip[i] *= c.surfaceGrip[i];
+    // The ABS and traction control slip targets are set for the vehicle's own tire: they move with the peak slip
+    // ratio, or a set that peaks at smaller slip would be braked and driven beyond its peak.
+    t.aids.absReleaseSlip *= c.peakSlipScale;
+    t.aids.absApplySlip *= c.peakSlipScale;
+    t.aids.tcSlipThreshold *= c.peakSlipScale;
+    t.aids.tcOffRoadSlipThreshold *= c.peakSlipScale;
     return t;
 }
 
@@ -1018,6 +1024,8 @@ void Vehicle::updateTireThermal(float dt) {
             in.load = std::max(w.load, 0.0f);
             in.slidingPower = std::abs(w.longitudinalForce * c.longitudinalSlipSpeed) + std::abs(w.lateralForce) * lateralSlipSpeed;
             in.rollingSpeed = std::abs(w.rollingSpeed);
+            in.shearForce = std::abs(w.longitudinalForce) + std::abs(w.lateralForce);
+            in.groundSpeed = std::abs(w.groundSpeed);
             in.groundC = surfaceGroundTemperature(w.surface, m_ambientC);
             in.groundEffusivity = surfaceEffusivity(w.surface);
             in.slidingShare = surfaceSlidingHeatFactor(w.surface);

@@ -869,18 +869,20 @@ void tireThermalModel() {
                 base.surfaceCapacity, base.coreCapacity, base.surfaceCoreConductance, base.treadArea, base.sidewallArea);
     CHECK(base.surfaceCapacity > 3000.0f && base.surfaceCapacity < 6000.0f, "surface capacity %.0f", base.surfaceCapacity);
 
-    // 1. Energy: no losses, 10 kW of sliding for 10 s -> the stored heat is the tire's share of 100 kJ.
+    // 1. Energy: no losses, 10 kW of sliding for 10 s -> the stored heat is the tire's share of 100 kJ, plus the
+    //    deflection heat of 4 kN of tire force at 20 m/s.
     {
         TireThermalParams p = base;
         p.convection = false;
         p.rimConductance = 0.0f;
         TireThermalState s;
         s.reset(20.0f);
-        TireThermalInput in{.contact = true, .load = 5000.0f, .slidingPower = 10000.0f, .rollingSpeed = 0.0f};
+        TireThermalInput in{.contact = true, .load = 5000.0f, .slidingPower = 10000.0f, .rollingSpeed = 0.0f,
+                            .shearForce = 4000.0f, .groundSpeed = 20.0f};
         const float dt = 1.0f / 120.0f;
         for (int i = 0; i < 1200; ++i) stepTireThermal(p, in, dt, s);
         const double stored = double(p.surfaceCapacity) * (s.surfaceC - 20.0) + double(p.coreCapacity) * (s.coreC - 20.0);
-        const double expected = double(p.slidingHeatShare) * 10000.0 * 10.0;
+        const double expected = (double(p.slidingHeatShare) * 10000.0 + double(p.deflectionLoss) * 4000.0 * 20.0) * 10.0;
         std::printf("    energy: stored %.0f J, expected %.0f J (surface %.1f C, core %.1f C)\n", stored, expected, s.surfaceC, s.coreC);
         CHECK(std::abs(stored - expected) < 0.002 * expected, "energy balance off: %.0f vs %.0f J", stored, expected);
         CHECK(s.surfaceC > s.coreC, "the patch heats the surface first");
@@ -939,6 +941,16 @@ void tireThermalModel() {
 void tireSets() {
     const VehicleDefinition suv = loadOne(kAssets, "trailforge_suv");
     CHECK(Vehicle::tireSetTuning(suv.config.tuning, TireSet::Offroad) == suv.config.tuning, "off-road set changes the tire");
+    {
+        const VehicleTuning slickTuning = Vehicle::tireSetTuning(suv.config.tuning, TireSet::Slick);
+        const float scale = tireCompound(TireSet::Slick).peakSlipScale;
+        CHECK(std::abs(slickTuning.aids.absReleaseSlip - suv.config.tuning.aids.absReleaseSlip * scale) < 1e-6f &&
+                  std::abs(slickTuning.aids.tcSlipThreshold - suv.config.tuning.aids.tcSlipThreshold * scale) < 1e-6f,
+              "ABS / TC slip targets do not follow the slick's peak slip");
+        CHECK(tireThermalParams(0.4f, 0.3f, 35.0f, tireCompound(TireSet::Slick)).coreCapacity <
+                  tireThermalParams(0.4f, 0.3f, 35.0f, tireCompound(TireSet::Offroad)).coreCapacity,
+              "slick construction not lighter than the off-road tire");
+    }
 
     // 60-0 km/h with ABS on the asphalt (lane 0) and gravel (lane 2) lanes; tires preheated or at the air temperature.
     auto stop = [&](TireSet set, int lane, bool warm, float* surfaceAfter) {

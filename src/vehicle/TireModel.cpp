@@ -47,13 +47,19 @@ const TireCompound kCompounds[kTireSetCount] = {
      .optimumLowC = 40.0f, .optimumHighC = 95.0f, .coldLoss = 0.20f, .coldWidthC = 45.0f,
      .hotLoss = 0.15f, .hotWidthC = 40.0f,
      // Passenger car radials: 0.008-0.012 (Gillespie ch. 4; TRB Special Report 286, 2006).
-     .rollingResistance = 0.010f},
+     .rollingResistance = 0.010f,
+     // Street construction against a 10-ply light-truck mud-terrain tire of the same size: published weights per
+     // diameter x width, Michelin Pilot Sport All Season 4 305/40 R22 (31.6 x 12.3 in, 41 lb) against BFGoodrich
+     // Mud-Terrain T/A KM3 35x12.50 R20 LT (34.5 x 12.5 in, 74.5 lb; tiresize.com spec tables): 0.61.
+     .massScale = 0.6f},
     {.surfaceGrip = {1.35f, 0.75f, 0.85f, 0.90f, 0.35f, 0.55f, 0.65f, 0.40f, 1.40f, 0.70f},
      .peakSlipScale = 0.7f, .peakSlipAngleScale = 0.65f, .slideRatioScale = 0.90f,
      .optimumLowC = 80.0f, .optimumHighC = 110.0f, .coldLoss = 0.40f, .coldWidthC = 60.0f,
      .hotLoss = 0.25f, .hotWidthC = 40.0f,
      // High-hysteresis racing compound: hand-tuned above the street tire.
-     .rollingResistance = 0.014f},
+     .rollingResistance = 0.014f,
+     // Racing radial: Hoosier 29.5/11.5 R18 (29.8 x 11.6 in, 29 lb; Hoosier spec sheet) against the KM3 above: 0.49.
+     .massScale = 0.5f},
 };
 
 float smoothStep01(float x) {
@@ -88,35 +94,42 @@ float compoundTemperatureState(const TireCompound& c, float t) {
     return 0.0f;
 }
 
+// Structure and coefficients follow the lumped tread / carcass models fitted to measured tread temperatures: Kelly &
+// Sharp (Veh. Syst. Dyn. 50, 2012), Tremlett & Limebeer (Veh. Syst. Dyn. 54, 2016), West & Limebeer (Veh. Syst. Dyn.
+// 59, 2021, "Optimal tyre management for a high-performance race car", Table 3) and the parameter survey and TTC fit
+// of a Politecnico di Torino thesis (webthesis.biblio.polito.it/32743, Tables 4.2-4.6, "2DOF EVO").
 // Material values: filled tread rubber k 0.2-0.3 W/(m K), rho 1100-1200 kg/m^3, c 1.7-2.0 kJ/(kg K) (Gent & Walter,
-// The Pneumatic Tire, NHTSA 2006, ch. 7 / 14); the carcass with steel belts and cords has a lower mean specific heat
-// (steel 0.49 kJ/(kg K)). Geometry of the nodes: a 2 mm surface layer over the tread band (its diffusion time
-// d^2 / alpha ~ 35 s is the time scale on which it follows the core), the rest of the
-// tire as the core; tire mass about 60 % of the wheel + tire mass of the vehicle config (an LT 285/70 R17 all-terrain
-// weighs ~22 kg on a ~14 kg rim). The node distance for the conduction is 6 mm, the rim path 5 W/K (rim, hub and
-// inner air at ambient: brake heat is not modeled). Hand-tuned: the 2 mm layer, the 60 % mass share, the rim path,
-// the 6 mm distance, the sliding and hysteresis shares below.
+// The Pneumatic Tire, NHTSA 2006, ch. 7 / 14; the fitted models use 1.8-2.4 for the tread, 1.6-1.8 for the
+// carcass). Geometry of the nodes: a 2 mm surface layer over the tread band, the rest of the tire as the core; tire
+// mass about 60 % of the wheel + tire mass of the vehicle config (an LT 285/70 R17 all-terrain weighs ~22 kg on a
+// ~14 kg rim) x the set's massScale. Surface - core: 200 W/(m^2 K) over the tread band (West & Limebeer fit 182-311;
+// the TTC fit 64-80 W/K on a 0.3 m^2 FSAE band, 210-270). The rim path 5 W/K (rim, hub and inner air at ambient:
+// brake heat is not modeled). Hand-tuned: the 2 mm layer (the fitted tread nodes correspond to 0.3-0.6 mm of rubber;
+// with 0.6 mm the lap temperatures change by 1-3 K and the grip follows every corner), the 60 % mass share, the rim
+// path, the hysteresis share below.
 TireThermalParams tireThermalParams(float radius, float width, float wheelMass, const TireCompound& compound) {
     TireThermalParams p;
-    constexpr float kRho = 1150.0f, kTreadC = 1800.0f, kCoreC = 1500.0f, kRubberK = 0.25f;
-    constexpr float kLayer = 0.002f, kNodeDistance = 0.006f;
+    constexpr float kRho = 1150.0f, kTreadC = 1800.0f, kCoreC = 1500.0f;
+    constexpr float kLayer = 0.002f, kSurfaceCore = 200.0f;
+    p.surfaceLayer = kLayer;
     p.treadArea = 2.0f * kPi * radius * width;
     const float surfaceMass = p.treadArea * kLayer * kRho;
-    const float tireMass = std::max(0.6f * wheelMass, 3.0f * surfaceMass);
+    const float tireMass = std::max(0.6f * wheelMass * compound.massScale, 3.0f * surfaceMass);
     p.surfaceCapacity = surfaceMass * kTreadC;
     p.coreCapacity = (tireMass - surfaceMass) * kCoreC;
-    p.surfaceCoreConductance = kRubberK * p.treadArea / kNodeDistance;
+    p.surfaceCoreConductance = kSurfaceCore * p.treadArea;
     const float rim = 0.6f * radius; // sidewall height ~40 % of the radius
     p.sidewallArea = 2.0f * kPi * (radius * radius - rim * rim);
     p.rimConductance = 5.0f;
     p.diameter = 2.0f * radius;
-    // Sliding friction heat at a sharp interface divides between the bodies by their effusivities (Blok's partition:
-    // about 0.35-0.45 into rubber on asphalt / concrete), but on rough road surfaces rubber friction is mostly
-    // hysteresis: the asperities deform the rubber and that energy is dissipated inside the tread (Persson, Theory of
-    // rubber friction and contact mechanics, J. Chem. Phys. 115, 2001). 0.85 into the tire is hand-tuned on that.
-    p.slidingHeatShare = 0.85f;
-    // Rolling loss: the tread carries 60-70 % of it (TRB Special Report 286, 2006, ch. 2), the 2 mm surface layer a
-    // fraction of that.
+    // Share of the patch friction power that heats the tread (the rest heats the road): fitted 0.49-0.68 (West &
+    // Limebeer, Table 3), 0.4 (Tremlett & Limebeer), 0.40-0.55 (TTC fit with a deflection term).
+    p.slidingHeatShare = 0.6f;
+    // Carcass deflection heat speed x (Ex |Fx| + Ey |Fy|): 0.03 (Kelly & Sharp), 0.01 (Tremlett & Limebeer), 0.05
+    // (West & Limebeer), fitted 0.02 / 0.025 on TTC data. The Ez |Fz| term of those models is rollingResistance.
+    p.deflectionLoss = 0.03f;
+    // Rolling and deflection loss: the tread carries 60-70 % of the rolling loss (TRB Special Report 286, 2006,
+    // ch. 2), the 2 mm surface layer a fraction of that; the fitted models put the deflection heat in the carcass.
     p.hysteresisSurfaceShare = 0.2f;
     p.rollingResistance = compound.rollingResistance;
     p.coldPressureKPa = 240.0f; // typical SUV placard pressure, gauge
@@ -154,7 +167,9 @@ float patchContactConductance(float tireEffusivity, float groundEffusivity, floa
 void stepTireThermal(const TireThermalParams& p, const TireThermalInput& in, float dt, TireThermalState& s) {
     // Heat sources.
     s.heatSliding = in.contact ? p.slidingHeatShare * std::clamp(in.slidingShare, 0.0f, 1.0f) * std::max(in.slidingPower, 0.0f) : 0.0f;
-    s.heatRolling = in.contact ? p.rollingResistance * std::max(in.load, 0.0f) * std::abs(in.rollingSpeed) : 0.0f;
+    s.heatRolling = in.contact ? p.rollingResistance * std::max(in.load, 0.0f) * std::abs(in.rollingSpeed) +
+                                     p.deflectionLoss * std::max(in.shearForce, 0.0f) * std::abs(in.groundSpeed)
+                               : 0.0f;
 
     // Convection: tread band from the surface node, sidewalls from the core.
     const float h = p.convection ? p.naturalConvection + tireForcedConvection(p.diameter, in.airSpeed) : 0.0f;
@@ -176,7 +191,7 @@ void stepTireThermal(const TireThermalParams& p, const TireThermalInput& in, flo
         // area is a fraction of the footprint): 30 %, hand-tuned.
         constexpr float kRealContact = 0.3f;
         const float patch = patchContactConductance(kTireRubberEffusivity, in.groundEffusivity, contactTime) * s.patchArea * kRealContact;
-        const float layer = 0.25f * p.treadArea / 0.001f; // rubber k over half the 2 mm layer
+        const float layer = 0.25f * p.treadArea / (0.5f * p.surfaceLayer); // rubber k over half the layer
         const float g = patch * layer / (patch + layer);
         s.toGround = g * (s.surfaceC - in.groundC);
     }

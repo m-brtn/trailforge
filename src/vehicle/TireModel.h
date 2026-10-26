@@ -36,6 +36,9 @@ struct TireCompound {
     // Rolling resistance coefficient: the hysteresis heat of a rolling tire (Crr x load x speed). Heat only: the
     // paved-road rolling resistance force itself is not applied (README "Physics simplifications").
     float rollingResistance = 0.012f;
+    // Tire mass x this against the vehicle's own (off-road) tire of the same size: lighter street and racing
+    // constructions heat up faster.
+    float massScale = 1.0f;
 };
 
 const TireCompound& tireCompound(TireSet s);
@@ -46,11 +49,11 @@ float compoundTemperatureState(const TireCompound& c, float surfaceTempC);
 
 // Two-node lumped thermal model of one tire: the tread surface layer (what touches the road and sets the grip) and
 // the core (rest of the tread, belts, carcass, sidewalls). Heat flows:
-//   surface: + share of the contact patch sliding power + share of the rolling hysteresis
+//   surface: + share of the contact patch sliding power + share of the rolling and deflection hysteresis
 //            - conduction to the core - convection to the air - conduction into the ground in the patch
-//   core:    + rest of the rolling hysteresis - conduction to the surface (sign) - convection from the sidewalls
-//            - conduction through the rim (rim at ambient)
-// Explicit Euler per physics tick (the smallest time constant is tens of seconds, the step 1/120 s).
+//   core:    + rest of the rolling and deflection hysteresis - conduction to the surface (sign) - convection from
+//            the sidewalls - conduction through the rim (rim at ambient)
+// Explicit Euler per physics tick (the smallest time constant is over ten seconds, the step 1/120 s).
 struct TireThermalParams {
     float surfaceCapacity = 0.0f;  // J/K, tread surface layer
     float coreCapacity = 0.0f;     // J/K
@@ -59,9 +62,11 @@ struct TireThermalParams {
     float sidewallArea = 0.0f;     // m^2, both sidewalls (convection of the core)
     float rimConductance = 0.0f;   // W/K, core -> rim -> ambient
     float diameter = 0.0f;         // m, for the convection correlation
+    float surfaceLayer = 0.002f;   // m, thickness of the surface node
     float slidingHeatShare = 0.0f; // share of the patch sliding power that heats the tire (rest heats the road)
     float hysteresisSurfaceShare = 0.0f; // share of the rolling hysteresis heat in the surface layer
     float rollingResistance = 0.0f;
+    float deflectionLoss = 0.0f;   // Ex = Ey: carcass deflection heat (|Fx| + |Fy|) x speed x this
     float coldPressureKPa = 0.0f;  // gauge, set at the start temperature
     float naturalConvection = 0.0f; // W/(m^2 K), still-air floor added to the forced convection
     bool convection = true;         // tests: false = no air cooling
@@ -76,6 +81,8 @@ struct TireThermalInput {
     float load = 0.0f;           // N
     float slidingPower = 0.0f;   // W, |Fx * slip speed x| + |Fy * slip speed y| in the patch
     float rollingSpeed = 0.0f;   // m/s, |w * r|
+    float shearForce = 0.0f;     // N, |Fx| + |Fy| (deflection heat of the carcass)
+    float groundSpeed = 0.0f;    // m/s, |wheel center speed along the tire| (deflection heat)
     float airSpeed = 0.0f;       // m/s, vehicle speed through the air (still air)
     float ambientC = 20.0f;      // air temperature
     float groundC = 20.0f;       // ground temperature under the patch

@@ -969,13 +969,21 @@ Fundamentals of Vehicle Dynamics; TRB Special Report 286). Rubber friction peaks
 glass transition (Grosch 1963), hence a window per compound; the window limits and losses are hand-tuned.
 
 **Thermal model (per wheel, every physics tick, explicit Euler).** Two nodes: a 2 mm tread surface layer (S) and the
-core (C: the rest of the tread, belts and carcass; 0.6 × the wheel mass).
+core (C: the rest of the tread, belts and carcass; 0.6 × the wheel mass × the set's construction mass: OFF-ROAD 1,
+ROAD 0.6, SLICK 0.5 from published tire weights per diameter × width: BFGoodrich KM3 35x12.50 R20 LT 74.5 lb,
+Michelin Pilot Sport All Season 4 305/40 R22 41 lb, Hoosier 29.5/11.5 R18 radial 29 lb). The structure and the
+coefficients follow the lumped tread / carcass models fitted to measured tread temperatures (Kelly & Sharp 2012;
+Tremlett & Limebeer 2016; West & Limebeer 2021; the parameter survey and FSAE TTC fit in a Politecnico di Torino thesis,
+webthesis.biblio.polito.it/32743, Tables 4.2–4.6).
 
-- Heat in: sliding power in the patch P = |Fx·Vsx| + |Fy|·|V|·sin|α| (Jolt's forces and slip of the step). On paved
-  ground 0.85 of it stays in the tire (rubber friction on rough roads is mostly hysteresis inside the tread, Persson
-  2001); on loose or wet ground less (dirt / low grip 0.6, gravel / grass 0.4, sand 0.3, mud / snow 0.2: the slip is
-  soil shear, Wong ch. 2; hand-tuned). Rolling hysteresis Crr·N·|v|: 20 % into S, 80 % into C.
-- S ↔ C: conduction k·A/d (rubber k 0.25 W/(m K), tread band area, d = 6 mm).
+- Heat in: friction power in the patch P = |Fx·Vsx| + |Fy|·|V|·sin|α| (Jolt's forces and slip of the step). On paved
+  ground λ = 0.6 of it heats the tread (fitted 0.49–0.68 by West & Limebeer, 0.4 by Tremlett & Limebeer, 0.40–0.55
+  on TTC data), the rest the road; on loose or wet ground less (× dirt / low grip 0.6, gravel / grass 0.4, sand 0.3,
+  mud / snow 0.2: the slip is soil shear, Wong ch. 2; hand-tuned). Carcass deflection and rolling hysteresis
+  (Ex·|Fx| + Ey·|Fy|)·|v_ground| + Crr·N·|v_roll|, Ex = Ey = 0.03 (Kelly & Sharp; 0.01–0.05 in the other fits; the
+  fits' Ez·|Fz| term is the set's Crr): 20 % into S, 80 % into C. Like the set's Crr, the deflection loss only heats
+  the tire; no matching drag force is applied.
+- S ↔ C: 200 W/(m² K) over the tread band (West & Limebeer fit 182–311; the TTC fit 64–80 W/K on a 0.3 m² band).
 - S → air over the tread band, C → air over the sidewalls: h = 5 + Churchill–Bernstein for a cylinder of the tire
   diameter at the vehicle speed (still air).
 - S → ground: patch area = load / inflation pressure, contact time = patch length / rolling speed (≥ 0.5 m/s);
@@ -990,7 +998,7 @@ core (C: the rest of the tread, belts and carcass; 0.6 × the wheel mass).
   window, a smoothstep down to (1 − loss) over the cold / hot width outside it. The factor computed after a tick is
   used in the next one.
 
-SUV tire (R 0.40 m, 0.30 m wide, 35 kg wheel): surface 3121 J/K, core 28899 J/K, S ↔ C 31.4 W/K, tread band 0.754 m²,
+Test tire (R 0.40 m, 0.30 m wide, 35 kg wheel, OFF-ROAD): surface 3121 J/K, core 28899 J/K, S ↔ C 150.8 W/K, tread band 0.754 m²,
 sidewalls 0.643 m². Air temperature: `level.json` `ambientTemperature` (−40..50 C, default 20 C), the Tuning panel
 slider, or `tires ambient C`. Tires start at the air temperature on spawn, reset and every rebuild; the Tuning panel
 and `tires warm` put them in the middle of the window (as if taken off tire warmers). Telemetry shows a 2×2 grid
@@ -998,9 +1006,14 @@ and `tires warm` put them in the middle of the window (as if taken off tire warm
 the wheel table the heat flows; the drive HUD shows a compact grid with the set name. The wheel mesh has a road tread
 (shallow grooves) or no tread (slick) per set at the same physics size.
 
-Measured with `trailforge_probe tires` (see "Verification results"). With the autopilot on the mini track and
-Suncoast Raceway the treads settle at 30–45 C after a few laps, so slicks fitted cold stay below their window and are
-not faster than road tires there; taken off warmers they cool toward that level within about a lap.
+ABS and traction control slip targets follow the set's peak slip ratio (× 0.8 ROAD, × 0.7 SLICK), so they keep the
+same place relative to the curve's peak as on the vehicle's own tire.
+
+Measured with `trailforge_probe tires` (see "Verification results"). The racing autopilot spends only 10–40 % of a lap
+with a tire at ≥ 0.8 of its peak slip, so in autopilot laps from cold the treads reach 42–61 C after 3–5 laps and cold
+slicks stay below their window (grip ×0.72–0.86). Held at the limit on a 40 m circle (`tires circle`) the tread
+average reaches 49–79 C after 150 s (hottest tire 66–124 C). Taken off warmers, slicks keep a 68–78 C tread after one
+lap; a slow lap from 95 C ends at 69–70 C.
 
 ## Vehicle data format
 
@@ -2262,10 +2275,12 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   temperatures in the patch, wear, graining, blistering, rubber laid on the road, sun-heated or wet ground (the
   ground is at the air temperature), brake heat reaching the tire through the rim, cooling by water or mud. The
   pressure is computed (ideal gas) but changes neither stiffness nor the patch size used by the curves; the set's
-  rolling resistance only heats the tire (the rolling resistance force applied to the vehicle is still the
-  surface's). Many coefficients are estimates (heat share of sliding power, real contact area, convection inside a
-  wheel arch): the resulting temperatures (30–45 C in autopilot laps) are lower than typical track measurements, so
-  cold slicks in this model rarely reach their window.
+  rolling resistance and the carcass deflection loss only heat the tire (the rolling resistance force applied to the
+  vehicle is still the surface's). The heat partition, deflection loss and tread–carcass conductance are taken from
+  published fits (F1 and FSAE tires, not these tires); the 2 mm layer, real contact area and convection (free stream,
+  no wheel-arch model) are estimates. In autopilot laps the treads reach 40–60 C, below typical track-day readings,
+  mainly because the autopilot is at the limit for only 10–40 % of a lap; cold slicks reach their window only at a
+  sustained limit (EV on the 40 m circle) or off warmers.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
   sinkage, flotation or bulldozing; puddles have no water physics. `Gravel` (mini track traps, the level's main
@@ -2550,6 +2565,19 @@ Everything below was actually run on macOS 27 / M-series.
   tire model; `abs` (mud, dirt and grass lanes, runs cut for leaving the lane) and unclean `minitrack` rows differ
   because sustained wheelspin there heats a tread past 100 C, where the off-road compound loses grip too (with the
   grip factor pinned to 1 the outputs are identical).
+- **Tire thermal calibration** (`trailforge_probe tires`, Release, 20 C air, 2026-10-27; literature coefficients, ABS / TC
+  slip targets per set, see "Tire sets and temperature"). Grip use of the limit driver (`tires limit`: lateral budget =
+  k × g × the μ the tires offer at that moment, best clean k): 9–41 % of a clean lap with a tire at ≥ 0.8 of its peak
+  slip. On the 40 m limit circle (`tires circle`, 150 s from 20 C) tread average / hottest: SUV OFF-ROAD 49 / 66 C,
+  ROAD 57 / 85 C, SLICK 66 / 93 C; EV 66 / 90, 72 / 106, 79 / 124 C (before: SUV 70 / 101, 69 / 110, 65 / 91 C).
+  Fixed-budget laps from cold, mini track after 5 laps: SUV OFF-ROAD 41.7 C, ROAD 45.6 C, SLICK 47.5 C (grip x0.72),
+  EV SLICK 61.4 C (x0.86); best clean flying laps SUV 59.35 / 56.80 / 58.86 s, EV 58.56 / 55.03 / 55.06 s; Suncoast
+  SUV 112.27 / 107.53 / 108.12 s, SLICK 47.0 C after 3 laps. Slicks off warmers: 67.8–77.9 C after one lap (before
+  52–62 C); slow lap (budget 3 m/s²) from 95 C ends at 68.5 / 70.0 C (before 54.7 / 53.9 C). 60-0 warm slick SUV
+  13.30 m (1.06 g): the front brakes are at full pressure with 0.016 slip, i.e. the SUV's brake torque is the limit,
+  not the ABS (×1.5 brake torque gives 11.71 m, 1.21 g). Off-road: `brake`, `compare`, `surfacecmp`, `surfaces`, `tc`,
+  `lap`, `minitrack` print exactly what they printed before the tire model; `abs` differs only on the dirt 100 km/h
+  run-up (it does not reach 100 km/h in any version; its tread passes 100 C).
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;
