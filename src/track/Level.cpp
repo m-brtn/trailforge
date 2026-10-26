@@ -2457,9 +2457,10 @@ std::shared_ptr<const Level> Level::load(const std::string& path, std::string* e
 }
 
 float Level::heightAt(float x, float z) const {
-    const float fx = std::clamp((x - m_origin) / m_cell, 0.0f, float(m_n - 1) - 1e-4f);
-    const float fz = std::clamp((z - m_origin) / m_cell, 0.0f, float(m_n - 1) - 1e-4f);
-    const int i = int(fx), j = int(fz);
+    // The cell index is clamped as an integer: float(m_n - 1) - 1e-4 rounds back to m_n - 1 for large grids.
+    const float fx = std::clamp((x - m_origin) / m_cell, 0.0f, float(m_n - 1));
+    const float fz = std::clamp((z - m_origin) / m_cell, 0.0f, float(m_n - 1));
+    const int i = std::min(int(fx), m_n - 2), j = std::min(int(fz), m_n - 2);
     const float u = fx - float(i), v = fz - float(j);
     const float h00 = heightSample(i, j), h10 = heightSample(i + 1, j), h01 = heightSample(i, j + 1),
                 h11 = heightSample(i + 1, j + 1);
