@@ -210,6 +210,13 @@ void writeNumber(std::string& out, double v) {
         return;
     }
     char buf[40];
+    // Whole numbers without an exponent: glTF readers (cgltf) parse integer fields such as byte offsets with
+    // strtol and would read "1.63958e+06" as 1.
+    if (v == std::floor(v) && std::abs(v) < 9.0e15) {
+        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(v));
+        out += buf;
+        return;
+    }
     for (int precision = 6; precision <= 17; ++precision) {
         std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
         if (std::strtod(buf, nullptr) == v) break;
