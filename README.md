@@ -9,7 +9,9 @@ vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs.
 All geometry is procedural. External assets: the sounds in `assets/audio/` (Freesound recordings, see [Audio](#audio)
 and `assets/audio/CREDITS.md`) and the CC0 photo-scanned ground materials of the open-world level in
 `assets/textures/terrain/` (Poly Haven, BC7 KTX2 in Git LFS, see [Terrain textures](#terrain-textures) and
-`assets/textures/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass, trees) is procedural.
+`assets/textures/CREDITS.md`), and the CC0 trees, ground cover, rocks, cliffs and logs of that level in
+`assets/models/` (Poly Haven glTF converted to glb LODs + BC7 KTX2 in Git LFS, see [Level models](#level-models) and
+`assets/models/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass) is procedural.
 
 ![Showcase](docs/showcase.jpg)
 
@@ -58,8 +60,8 @@ Trying Windows or Linux (please report what happens):
   libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev libasound2-dev
   libpulse-dev libudev-dev libdbus-1-dev`, the list used in `.github/workflows/ci.yml`).
 - Git LFS (`brew install git-lfs`, then `git lfs install` once) before cloning, or `git lfs pull` after: the terrain
-  textures are LFS objects (~168 MB). Without them the level falls back to the procedural ground and the
-  `terrain_textures_assets` test fails.
+  textures (~168 MB) and the level models (~84 MB) are LFS objects. Without them the level falls back to the
+  procedural ground and pines and the `terrain_textures_assets` test fails.
 - Internet access for the first configure. Dependencies are downloaded via FetchContent as archives
   of exact commits with SHA256 verification:
 
@@ -484,6 +486,7 @@ tools/        SimProbe — headless measurements; scenarios/ — scripts for --s
 assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format")
 assets/levels/ <id>/level.json — open-world level definitions (see "Exploration Peaks")
 assets/textures/ terrain/ — terrain.json, 12 BC7 KTX2 maps (Git LFS), sources.lock.json; CREDITS.md
+assets/models/ <folder>/*.glb + BC7 KTX2 level models (Git LFS), models.json, sources.lock.json; CREDITS.md
 assets/audio/ WAV sounds (48 kHz / 16-bit), manifest.json (per-file metadata), CREDITS.md (sources and licenses)
 assets/music/ intro.mp3 (intro and start menu), assets/fonts/ Rajdhani Medium / SemiBold + OFL.txt,
               assets/images/ (CREDITS.md; logo.png is copied from external_assets/images/Logo.png into the build tree)
@@ -993,7 +996,7 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
 
 ### Shader pipeline
 
-`shaders/scene.hlsl` holds all 29 entry points (12 vertex, 17 fragment). Each entry's resources are declared inside
+`shaders/scene.hlsl` holds all 36 entry points (15 vertex, 21 fragment). Each entry's resources are declared inside
 `#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
 in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
 fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
@@ -1060,6 +1063,41 @@ procedural materials.
 - **Cost** (2880 × 1800, Metal, vsync off, village view, same process textured vs Off; `terrain_textures.txt`): GPU
   ms per frame Low 4.78 vs 4.45, Medium 6.79 vs 5.89, High 9.73 vs 8.99, Ultra 13.78 vs 13.16; FPS Low 207.6 vs
   215.1, Medium 171.5 vs 190.7, High 128.3 vs 136.0, Ultra 97.9 vs 99.5.
+
+### Level models
+
+Exploration Peaks places CC0 [Poly Haven](https://polyhaven.com) models (list and authors in
+`assets/models/CREDITS.md`): fir trees, fir saplings and two broadleaf trees, shrubs and ferns, boulders and mossy
+rocks, two rock faces, a dead trunk, a stump and dry branches. The level's `vegetation` block names them; the bake
+picks a species per tree (broadleaf near water, the village and on low ground, saplings among the smaller trees, firs
+elsewhere), places model rocks and logs with collision, and scatters render-only ground cover off the roads.
+
+- **Rebuild:** `python3 tools/models/fetch_models.py` (all) or `--only <asset>` downloads the glTF sources through the
+  Poly Haven API (checked against `sources.lock.json`) and runs `trailforge_modelc` (`tools/texc`: cgltf +
+  meshoptimizer + the BC7 encoder). Per model: a glb with 2–3 mesh LODs, an optional collision mesh (one of the LODs),
+  an 8-view impostor atlas for trees, and the material maps as BC7 KTX2 (`<mat>_albedo`, `<mat>_nra`).
+- **Tree foliage:** the source crowns are 0.4–4.2 M needle / leaf triangles. modelc splits them into spatial clusters
+  (one quad per cluster on its fitted plane, tilted outward) and bakes 64 of the clusters into a per-model atlas the
+  quads sample; the impostor is rendered from the full source foliage.
+- **Drawing:** instanced, 64 m buckets culled against the view and the shadow cascades, LOD by distance with the same
+  dithered cross-fade as the grass and pines; ranges scale with TREE DETAIL DISTANCE (trees: mesh LODs to 0.07 /
+  0.19 / 0.55 of it, impostors beyond, out to the tree distance). Foliage is alpha-tested (alpha to coverage with MSAA)
+  and sways in the wind (render only).
+- **Cliff faces:** the two rock faces (turned by modelc so their mean face normal is +Z) clad walls of 50° and steeper
+  with at least 8 m of drop: a 9 m jittered grid, tilted into the slope and turned downhill, kept only where every
+  edge point stays within the slab depth of the ground (no fins past a rim). Collision is their collision mesh in the
+  tile compound, like the other model rocks.
+
+### Canyon and waterfalls
+
+- **Banks:** river banks are carved as cones around each 2 m river segment; two 3×3 smoothing passes over the carved
+  cells (outside the water) remove the creases where the cones of neighbouring segments meet and round the rim.
+  Banks steeper than 1.5 (the Falls River canyon, 2.2) are terraced: a ledge about every 16 m of height, with a
+  position-dependent phase. Collision is the same heightfield.
+- **Waterfalls** are render-only meshes generated wherever the river surface drops 2 m or more between two samples: a
+  sheet on the ballistic path from the lip (launch speed from the river width), streaks that scroll with the fall time
+  and tear toward the foot, a foam disc on the pool and three crossed mist cards that fade edge-on, at the ground and
+  near the camera (`waterfall_fs`). No water flow is simulated.
 
 ### Grass, flowers and wheat
 
@@ -1391,12 +1429,17 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
   message (the only teleports besides R, the teleport buttons / map and scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
-  the play limit is inside the bake).
+  the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;
+  the river surface is a stepped level per sample, not a flow simulation.
 - The terrain textures are render-only: their height and normal maps shade the ground and pick which layer shows
   where layers meet; they never change the collision (the heightfield samples) or the surface friction (the baked
   per-sample material).
 - Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
   the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
+- Level models: rocks, cliffs, logs and stumps collide with their model's collision mesh (a simplified LOD; the
+  nearer render LODs differ from it by the simplification error modelc reports, a few cm to dm per model). Model trees
+  collide only with a hexagonal prism along the trunk axis; branches and foliage have no collision. Bushes, ferns and
+  dry branches are render-only (the vehicle drives through them). Wind sway moves only the render geometry.
 - Static tire grip: Jolt caps the longitudinal tire force at μ(slip of the previous step) × load, and the curve is 0
   at zero slip. A tire below the peak slip ratio may therefore pass up to the peak friction (`tireStaticGrip`);
   without it a gripping wheel alternated between grip and free spin every step (wheelspin on every launch). The tire

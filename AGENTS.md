@@ -8,15 +8,20 @@ TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 
 SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
-procedural, and so are all textures except the level ground. External assets: the sounds in `assets/audio/`
+procedural except the level's CC0 models (trees, plants, rocks, cliffs, logs), and so are all textures except the
+level ground and those models. External assets: the sounds in `assets/audio/`
 (licenses in `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY`
 from the environment — never write the key into any file) and the CC0 PBR ground materials in
 `assets/textures/terrain/` (Poly Haven, BC7 KTX2 up to 4096², rebuilt reproducibly by
 `tools/textures/fetch_textures.py` against `sources.lock.json`; credits in `assets/textures/CREDITS.md`). Further
 textures must also be CC0 (Poly Haven / ambientCG), go through that script and `tools/texc`, and be listed in the
-CREDITS file. `*.ktx2` under `assets/textures/` are Git LFS objects (`.gitattributes`; run `git lfs pull` after
-cloning). Keep the LFS total small (currently 167.8 MB; GitHub's LFS storage and bandwidth quota is shared with CI,
-which caches `.git/lfs`), and report size changes in the devlog.
+CREDITS file. 3D models (trees, ground cover, rocks, cliffs, logs) are CC0 Poly Haven glTF only, fetched by
+`tools/models/fetch_models.py` (manifest `assets/models/models.json`, md5 lock `sources.lock.json`) and converted by
+`trailforge_modelc` (`tools/texc`) to `assets/models/<folder>/*.glb` + BC7 KTX2; credits in `assets/models/CREDITS.md`.
+`*.ktx2` under `assets/textures/` and `*.glb` / `*.ktx2` under `assets/models/` are Git LFS objects (`.gitattributes`;
+run `git lfs pull` after cloning). Keep the LFS total small (currently 252.1 MB: textures 167.8 MB, models 84.3 MB;
+GitHub's LFS storage and bandwidth quota is shared with CI, which caches `.git/lfs`), and report size changes in the
+devlog.
 
 Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on the same Mac as a test of the
 SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
@@ -46,7 +51,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
 
-Shaders: `shaders/scene.hlsl` is the only shader source (29 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
+Shaders: `shaders/scene.hlsl` is the only shader source (36 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
 register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
 tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
 MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->

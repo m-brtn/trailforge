@@ -1,0 +1,191 @@
+# World look on Exploration Peaks: fixed free-camera viewpoints at a fixed time of day, one capture per view in the
+# High preset, then GPU / CPU frame times per quality preset at every view (VSync off):
+#   ./build/release/trailforge --script tools/scenarios/beauty_views.txt --no-audio
+# Captures /tmp/trailforge_beauty_*.png (compare before / after with tools/render/compare_captures.py). Prints one
+# "PERF <preset>_<view> ..." line per run. The camera poses are absolute (terrain heights from the level bake).
+set ui 0
+set hud 0
+set auto_reverse 0
+level exploration_peaks
+until level == 1 10
+quality High
+time 16.5
+set vsync 0
+wait 1.5
+
+# ---------------------------------------------------------------- captures (High, 16:30)
+place -470 395 120
+wait 1.5
+camera -430 27 330 -505 22 385
+wait 2.0
+capture /tmp/trailforge_beauty_01_village.png
+wait 0.3
+place -748 -228 210
+wait 1.5
+camera -728 104 -218 -770 107 -262
+wait 2.0
+capture /tmp/trailforge_beauty_02_forest.png
+wait 0.3
+place -170 62 160
+wait 1.5
+camera -200 66 70 -110 69 -140
+wait 2.0
+capture /tmp/trailforge_beauty_03_lake_shore.png
+wait 0.3
+place 515 -418 180
+wait 1.5
+camera 515 111 -420 513 96 -598
+wait 2.0
+capture /tmp/trailforge_beauty_04_waterfall.png
+wait 0.3
+camera 530 122 -470 505 86 -575
+wait 2.0
+capture /tmp/trailforge_beauty_05_falls_pool.png
+wait 0.3
+camera 680 104 -330 600 70 -390
+wait 2.0
+capture /tmp/trailforge_beauty_06_canyon.png
+wait 0.3
+camera -650 420 -480 -760 250 -850
+wait 2.0
+capture /tmp/trailforge_beauty_07_peaks.png
+wait 0.3
+camera -300 160 -60 -120 70 -150
+wait 2.0
+capture /tmp/trailforge_beauty_08_lake_overview.png
+wait 0.3
+camera 0 1150 2050 0 40 -150
+wait 2.0
+capture /tmp/trailforge_beauty_09_overview.png
+wait 0.3
+camera 0 2900 60 0 0 0
+wait 2.0
+capture /tmp/trailforge_beauty_10_top.png
+wait 0.3
+place -300 443 88
+wait 1.5
+camera follow
+wait 2.0
+capture /tmp/trailforge_beauty_11_chase_road.png
+wait 0.3
+
+# ---------------------------------------------------------------- frame times per preset and view
+place -470 395 120
+wait 1.0
+camera -430 27 330 -505 22 385
+quality High
+wait 4
+quality Low
+wait 1.5
+perf_begin low_village
+wait 3
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_village
+wait 3
+perf_end
+quality High
+wait 1.5
+perf_begin high_village
+wait 3
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_village
+wait 3
+perf_end
+place -748 -228 210
+wait 1.0
+camera -728 104 -218 -770 107 -262
+quality Low
+wait 1.5
+perf_begin low_forest
+wait 3
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_forest
+wait 3
+perf_end
+quality High
+wait 1.5
+perf_begin high_forest
+wait 3
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_forest
+wait 3
+perf_end
+place -170 62 160
+wait 1.0
+camera -300 160 -60 -120 70 -150
+quality Low
+wait 1.5
+perf_begin low_lake
+wait 3
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_lake
+wait 3
+perf_end
+quality High
+wait 1.5
+perf_begin high_lake
+wait 3
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_lake
+wait 3
+perf_end
+place 515 -418 180
+wait 1.0
+camera 515 111 -420 513 96 -598
+quality Low
+wait 1.5
+perf_begin low_canyon
+wait 3
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_canyon
+wait 3
+perf_end
+quality High
+wait 1.5
+perf_begin high_canyon
+wait 3
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_canyon
+wait 3
+perf_end
+camera -650 420 -480 -760 250 -850
+quality Low
+wait 1.5
+perf_begin low_peaks
+wait 3
+perf_end
+quality Medium
+wait 1.5
+perf_begin med_peaks
+wait 3
+perf_end
+quality High
+wait 1.5
+perf_begin high_peaks
+wait 3
+perf_end
+quality Ultra
+wait 1.5
+perf_begin ultra_peaks
+wait 3
+perf_end
+quality High
+set vsync 1
+camera follow
+quit
