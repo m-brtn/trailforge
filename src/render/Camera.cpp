@@ -142,14 +142,21 @@ void Camera::updateFollow(float dt, const CameraInput& in, const glm::mat4& body
         const float length = m_boundsMax.z - m_boundsMin.z;
         const float pivotY = c.pivotHeight * m_boundsMax.y;
         const float back = -m_boundsMin.z + c.gapPerLength * length;  // behind the body origin
-        const float rise = m_boundsMax.y + c.roofClearance - pivotY; // above the pivot
+        const float camY = m_boundsMax.y * (1.0f + c.roofRise);       // above the body origin
+        const float rise = camY - pivotY;
         pivot = target + glm::vec3(0.0f, pivotY, 0.0f);
         distance = std::hypot(back, rise);
         basePitch = std::atan2(rise, back);
         // The look target ahead of the car moves back onto the car as the orbit swings away from behind it.
         const float ahead = (m_boundsMax.z + c.lookAhead * length) * std::max(0.0f, std::cos(m_orbitYaw)) *
                             std::cos(m_orbitPitch);
-        look = target + glm::vec3(0.0f, c.lookHeight * m_boundsMax.y, 0.0f) + dirFromYawPitch(yaw, 0.0f) * ahead;
+        // The rig tilts with the body's (smoothed) pitch, so the roof hides as much of the road on a climb as on
+        // flat ground.
+        const float carPitch = std::asin(std::clamp(forward.y, -1.0f, 1.0f));
+        m_closePitch = m_initialized ? m_closePitch + (carPitch - m_closePitch) * k : carPitch;
+        basePitch -= m_closePitch;
+        const float lookY = camY - std::tan(glm::radians(c.pitchDeg)) * (back + ahead);
+        look = target + glm::vec3(0.0f, lookY, 0.0f) + dirFromYawPitch(yaw, m_closePitch) * ahead;
     }
     const float pitch = std::clamp(basePitch + m_orbitPitch, -0.2f, 1.35f);
     glm::vec3 desired = pivot - dirFromYawPitch(yaw, -pitch) * distance;

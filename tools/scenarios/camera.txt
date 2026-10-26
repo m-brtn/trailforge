@@ -16,19 +16,22 @@ log follow_suv
 tap C
 wait 1.5
 expect cam_mode == 1
-expect cam_behind > 3.0          # SUV: 0.8 body lengths (4.8 m) behind the rear bumper
-expect cam_behind < 4.6
-expect cam_height > 1.2          # above the body origin: roof + 0.12 m
-expect cam_height < 1.7
-expect cam_clearance > 1.7
-expect cam_clearance < 2.6
+expect cam_behind > 2.4          # SUV: 0.565 body lengths (4.6 m) behind the rear bumper
+expect cam_behind < 2.8
+expect cam_height > 2.0          # above the body origin: 1.65 x the roof height (1.30 m)
+expect cam_height < 2.3
+expect cam_clearance > 2.6
+expect cam_clearance < 3.0
+expect cam_road_ahead >= 0       # the road ahead shows over the roof (collision shape, in the view)
+expect cam_road_ahead < 15
 log close_suv
 capture /tmp/trailforge_cam_10_close_suv.png
 wait 0.2
 pedal throttle 0.4
 wait 2.5
-expect cam_behind > 2.5
-expect cam_behind < 5.0
+expect cam_behind > 1.8
+expect cam_behind < 4.0
+expect cam_road_ahead >= 0
 capture /tmp/trailforge_cam_11_close_suv_driving.png
 wait 0.2
 pedal throttle 0
@@ -137,6 +140,9 @@ expect cam_look_yaw < 3
 gamepad detach
 wait 0.5
 expect pad_virtual == 0
+gamepad attach                   # idle virtual pad for the rest: a real pad on the test Mac cannot drive
+wait 0.5
+expect pad_virtual == 1
 
 # ---------------------------------------------------------------- EV hood view
 vehicle trailforge_ev
@@ -160,10 +166,12 @@ wait 1.0
 camera close
 wait 1.5
 expect cam_mode == 1
-expect cam_behind > 3.0
-expect cam_behind < 4.6
-expect cam_clearance > 1.7
-expect cam_clearance < 2.6
+expect cam_behind > 2.4
+expect cam_behind < 2.8
+expect cam_clearance > 2.6
+expect cam_clearance < 3.0
+expect cam_road_ahead >= 0
+expect cam_road_ahead < 15
 log close_ev
 capture /tmp/trailforge_cam_13_close_ev.png
 wait 0.2
@@ -206,12 +214,13 @@ tap L
 wait 0.1
 pedal throttle 0.5
 reset_stats
-until z > -37 10
+until tilt > 10 10                # mid-climb (at z -37 the crest hides the road beyond it)
+wait 0.6
 capture /tmp/trailforge_cam_14_close_suv_slope.png
 wait 0.2
 expect tilt > 5
 expect cam_clearance > 0.5
-expect cam_behind > 2.0
+expect cam_behind > 1.5
 expect min_cam_clearance > 0.3
 log close_suv_slope
 pedal throttle 0
@@ -227,12 +236,13 @@ tap L
 wait 0.1
 pedal throttle 0.5
 reset_stats
-until z > -37 10
+until tilt > 10 10                # mid-climb (at z -37 the crest hides the road beyond it)
+wait 0.6
 capture /tmp/trailforge_cam_15_close_ev_slope.png
 wait 0.2
 expect tilt > 5
 expect cam_clearance > 0.5
-expect cam_behind > 2.0
+expect cam_behind > 1.5
 expect min_cam_clearance > 0.3
 log close_ev_slope
 pedal throttle 0
@@ -242,5 +252,6 @@ pedal brake 0
 vehicle trailforge_suv
 wait 1.0
 camera follow
+gamepad detach
 wait 1.0
 log camera_done

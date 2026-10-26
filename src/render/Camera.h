@@ -27,14 +27,14 @@ struct HoodMount {
 };
 
 // Close chase view, sized from the vehicle's collision bounds in body space (+Z forward, +Y up): the camera sits
-// gapPerLength body lengths behind the rear bumper and roofClearance above the roof and looks over the roof at a
-// point lookAhead body lengths ahead of the front bumper, lookHeight of the roof height above the body origin.
+// gapPerLength body lengths behind the rear bumper and roofRise roof heights above the roof, and looks pitchDeg down
+// at a point lookAhead body lengths ahead of the front bumper, so the road ahead shows over the roof.
 struct CloseChaseTuning {
-    float gapPerLength = 0.8f;
-    float roofClearance = 0.12f; // m
+    float gapPerLength = 0.565f;
+    float roofRise = 0.65f;
     float lookAhead = 0.5f;
-    float lookHeight = 0.3f;
-    float pivotHeight = 0.5f;    // orbit pivot above the body origin, fraction of the roof height
+    float pitchDeg = 12.0f;
+    float pivotHeight = 0.5f; // orbit pivot above the body origin, fraction of the roof height
 };
 
 // Right-stick behaviour (gamepad orbit / hood look-around).
@@ -107,6 +107,7 @@ private:
     float m_stickIdle = 1e9f;    // s since the right stick last moved the follow orbit
     bool m_stickOrbit = false;   // the orbit offset came from the stick (only that one recenters)
     float m_hoodYaw = 0.0f, m_hoodPitch = 0.0f; // rad, hood look-around
+    float m_closePitch = 0.0f;   // rad, smoothed body pitch (close follow)
     bool m_initialized = false;
     float m_freeYaw = 0.0f, m_freePitch = -0.3f;
     HoodMount m_hood;

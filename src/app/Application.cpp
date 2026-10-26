@@ -2474,6 +2474,30 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "controls_overlaps") return m_menu.controlsOverlaps();
     if (n == "cam_free") return m_camera.mode() == Camera::Mode::Free ? 1.0 : 0.0;
     if (n == "cam_mode") return double(int(m_camera.mode())); // 0 follow, 1 close follow, 2 hood, 3 free
+    if (n == "cam_road_ahead") {
+        // Nearest ground point straight ahead of the front bumper (0.25 m steps, up to 40 m) that is in the view and
+        // not hidden by the vehicle's collision shape, m ahead of the bumper; -1 if none.
+        const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+        const glm::vec3 fwd = toGlm(m_sim.currentSnapshot().body.rotation) * glm::vec3(0.0f, 0.0f, 1.0f);
+        const glm::vec3 flat = glm::normalize(glm::vec3(fwd.x, 0.0f, fwd.z));
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(m_window.get(), &pw, &ph);
+        const glm::mat4 vp = m_camera.projection(float(pw) / float(std::max(ph, 1))) * m_camera.view();
+        const glm::vec3 cam = m_camera.position();
+        const float front = m_sim.vehicle().bodyBounds().mMax.GetZ();
+        for (float a = 0.0f; a <= 40.0f; a += 0.25f) {
+            const glm::vec3 xz = car + flat * (front + a);
+            const JPH::Vec3 above(xz.x, xz.y + 20.0f, xz.z), below(xz.x, xz.y - 20.0f, xz.z);
+            const auto g = m_sim.castRayIgnoringVehicle(above, below);
+            if (!g) continue;
+            const glm::vec3 p(xz.x, above.GetY() + (below.GetY() - above.GetY()) * *g + 0.02f, xz.z);
+            const glm::vec4 clip = vp * glm::vec4(p, 1.0f);
+            if (clip.w <= 0.0f || std::abs(clip.x / clip.w) > 1.0f || std::abs(clip.y / clip.w) > 1.0f) continue;
+            if (m_sim.castRayAtVehicle(JPH::Vec3(cam.x, cam.y, cam.z), JPH::Vec3(p.x, p.y, p.z))) continue;
+            return a;
+        }
+        return -1.0;
+    }
     if (n == "cam_behind" || n == "cam_height") {
         // Camera behind the rear bumper (along the vehicle's level heading) / above the body origin, m.
         const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);

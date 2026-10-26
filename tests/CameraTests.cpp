@@ -5,6 +5,7 @@
 
 #include "input/ControlLayout.h"
 #include "render/Camera.h"
+#include "vehicle/VehicleShape.h"
 #include "render/TimeOfDay.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -193,7 +194,7 @@ void closeFollow() {
         glm::vec3 min, max;
     };
     const Size sizes[] = {{"small", {-0.85f, -0.3f, -1.9f}, {0.85f, 1.05f, 1.9f}},
-                          {"suv", {-1.0f, -0.35f, -2.4f}, {1.0f, 1.35f, 2.4f}},
+                          {"suv", {-0.95f, -0.30f, -2.30f}, {0.95f, 1.30f, 2.30f}},
                           {"large", {-1.1f, -0.4f, -3.0f}, {1.1f, 1.7f, 3.0f}}};
     const glm::mat4 body = bodyPose({5.0f, 0.8f, -10.0f}, 40.0f, 0.0f, 0.0f);
     const glm::vec3 fwd = glm::vec3(body[2]);
@@ -210,19 +211,70 @@ void closeFollow() {
         const CloseChaseTuning& t = close.closeChase;
         CHECK(std::abs(behind - t.gapPerLength * length) < 0.01f, "%s: %.3f m behind the bumper (want %.3f)", sz.name,
               behind, t.gapPerLength * length);
-        CHECK(std::abs(d.y - (sz.max.y + t.roofClearance)) < 0.01f, "%s: %.3f m above the origin", sz.name, d.y);
+        CHECK(std::abs(d.y - sz.max.y * (1.0f + t.roofRise)) < 0.01f, "%s: %.3f m above the origin", sz.name, d.y);
         const float followDist = glm::length(follow.position() - glm::vec3(body[3]));
-        // The follow view does not scale with the vehicle: nearer than it up to SUV size, lower for all sizes.
-        CHECK((length > 5.0f || glm::length(d) < followDist - 0.8f) && d.y < follow.position().y - body[3].y - 0.8f,
+        // The follow view does not scale with the vehicle: up to SUV size the close view is nearer and lower.
+        CHECK(length > 5.0f || (glm::length(d) < followDist - 1.5f && d.y < follow.position().y - body[3].y - 0.4f),
               "%s: close %.2f m / %.2f m up, follow %.2f m / %.2f m up", sz.name, glm::length(d), d.y, followDist,
               follow.position().y - body[3].y);
         const glm::vec3 f = viewForward(close.view());
         const float down = glm::degrees(-std::asin(f.y));
-        CHECK(down > 2.0f && down < 10.0f && glm::dot(f, fwd) > 0.99f, "%s: view %.2f deg down, heading dot %.4f",
+        CHECK(std::abs(down - t.pitchDeg) < 0.3f && glm::dot(f, fwd) > 0.97f, "%s: view %.2f deg down, heading dot %.4f",
               sz.name, down, glm::dot(f, fwd));
-        std::printf("  %s (%.1f m long, roof %.2f m): %.2f m behind the bumper, %.2f m above the origin, %.1f deg down; "
-                    "follow %.2f m up\n",
-                    sz.name, length, sz.max.y, behind, d.y, down, follow.position().y - body[3].y);
+        // SUV (the kit boxes of VehicleShape.h, ground 0.71 m below the body origin as on the start pad): the
+        // nearest ground point in front of the bumper that no box hides and that is in a 16:10 view.
+        float road = -1.0f;
+        if (std::strcmp(sz.name, "suv") == 0) {
+            const glm::vec3 camB = glm::vec3(glm::inverse(body) * glm::vec4(close.position(), 1.0f));
+            const glm::mat4 vp = glm::perspective(glm::radians(close.fovYDeg), 1.6f, 0.1f, 600.0f) * close.view();
+            for (float a = 0.0f; a < 40.0f && road < 0.0f; a += 0.25f) {
+                const glm::vec3 pB(0.0f, -0.71f, sz.max.z + a);
+                const glm::vec3 dir = pB - camB;
+                bool hidden = false;
+                for (const BodyBox& b : kBodyBoxes) {
+                    // Segment against the box: the slab intervals overlap inside (0, 1).
+                    float t0 = 0.0f, t1 = 1.0f;
+                    for (int k = 0; k < 3; ++k) {
+                        const float lo = b.center[k] - b.halfExtents[k], hi = b.center[k] + b.halfExtents[k];
+                        if (std::abs(dir[k]) < 1e-6f) {
+                            if (camB[k] < lo || camB[k] > hi) t0 = 2.0f;
+                            continue;
+                        }
+                        float ta = (lo - camB[k]) / dir[k], tb = (hi - camB[k]) / dir[k];
+                        if (ta > tb) std::swap(ta, tb);
+                        t0 = std::max(t0, ta);
+                        t1 = std::min(t1, tb);
+                    }
+                    hidden |= t0 < t1;
+                }
+                const glm::vec4 clip = vp * (body * glm::vec4(pB, 1.0f));
+                const bool inView = clip.w > 0.0f && std::abs(clip.y / clip.w) < 1.0f && std::abs(clip.x / clip.w) < 1.0f;
+                if (!hidden && inView) road = a;
+            }
+            CHECK(road >= 0.0f && road < 15.0f, "%s: road visible from %.2f m ahead of the bumper", sz.name, road);
+        }
+        std::printf("  %s (%.1f m long, roof %.2f m): %.2f m behind the bumper, %.2f m above the origin, %.1f deg down, "
+                    "road over the kit boxes from %.2f m ahead (SUV only, else -1); follow %.2f m up\n",
+                    sz.name, length, sz.max.y, behind, d.y, down, road, follow.position().y - body[3].y);
+    }
+    // On a 12 deg climb the rig tilts with the body: the camera keeps its body-space offset (within the vertical
+    // pivot offset, which stays world-up).
+    {
+        Camera flatCam, climbCam;
+        flatCam.setMode(Camera::Mode::CloseFollow);
+        climbCam.setMode(Camera::Mode::CloseFollow);
+        const glm::mat4 level = bodyPose({0.0f, 0.8f, 0.0f}, 0.0f, 0.0f, 0.0f);
+        const glm::mat4 climb = bodyPose({0.0f, 0.8f, 0.0f}, 0.0f, -12.0f, 0.0f);
+        run(flatCam, CameraInput{}, level, 3.0, 60.0f);
+        run(climbCam, CameraInput{}, climb, 3.0, 60.0f);
+        const glm::vec3 a = glm::vec3(glm::inverse(level) * glm::vec4(flatCam.position(), 1.0f));
+        const glm::vec3 b = glm::vec3(glm::inverse(climb) * glm::vec4(climbCam.position(), 1.0f));
+        CHECK(climb[2].y > 0.2f && glm::length(a - b) < 0.25f, "climb: body-space offset %.3f %.3f %.3f vs flat %.3f %.3f %.3f",
+              b.x, b.y, b.z, a.x, a.y, a.z);
+        const float viewPitch = glm::degrees(std::asin(viewForward(climbCam.view()).y));
+        CHECK(std::abs(viewPitch - (12.0f - climbCam.closeChase.pitchDeg)) < 1.0f, "climb: view pitch %.2f deg", viewPitch);
+        std::printf("  12 deg climb: body-space offset differs by %.3f m from flat, view pitch %+.2f deg\n",
+                    glm::length(a - b), viewPitch);
     }
     // A wall of ground 1 m behind the rear bumper: the camera stays on the car's side of it.
     Camera cam;

@@ -3,6 +3,8 @@
 #include "track/MiniTrack.h"
 
 #include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 
@@ -503,6 +505,15 @@ std::optional<float> Simulation::castRayIgnoringVehicle(JPH::Vec3Arg from, JPH::
     const JPH::IgnoreSingleBodyFilter filter(m_vehicle->bodyId());
     if (m_world->system().GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter))
         return hit.mFraction;
+    return std::nullopt;
+}
+
+std::optional<float> Simulation::castRayAtVehicle(JPH::Vec3Arg from, JPH::Vec3Arg to) const {
+    const JPH::BodyLockRead lock(m_world->system().GetBodyLockInterface(), m_vehicle->bodyId());
+    if (!lock.Succeeded()) return std::nullopt;
+    const JPH::RRayCast ray(JPH::RVec3(from), to - from);
+    JPH::RayCastResult hit;
+    if (lock.GetBody().GetTransformedShape().CastRay(ray, hit)) return hit.mFraction;
     return std::nullopt;
 }
 

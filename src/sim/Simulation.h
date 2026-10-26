@@ -202,6 +202,8 @@ public:
 
     // Ray against static geometry and other bodies except the vehicle. Returns the path fraction [0,1] to the hit.
     std::optional<float> castRayIgnoringVehicle(JPH::Vec3Arg from, JPH::Vec3Arg to) const;
+    // Ray against the vehicle body's collision shape only: from -> to, returns the hit fraction.
+    std::optional<float> castRayAtVehicle(JPH::Vec3Arg from, JPH::Vec3Arg to) const;
 
 private:
     // config by value: the old vehicle (and its config) is destroyed inside.
