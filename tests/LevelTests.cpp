@@ -25,6 +25,7 @@
 #include <Jolt/Physics/Body/BodyFilter.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1835,6 +1836,58 @@ void levelStaticScene() {
     CHECK(drift.enabled && drift.area.size() >= 20 && wallZones == 4 && clips >= 6 && outside == 0,
           "drift: enabled %d, area %zu, wall zones %d, clips %d, outside %d", int(drift.enabled), drift.area.size(),
           wallZones, clips, outside);
+
+    // The whole drift area (the oval and the infield) is asphalt: rays onto the physics every 1 m may hit only the
+    // Asphalt meshes or the structures (Concrete: walls, tyre stacks and blocks standing on it), and the height grid
+    // under it is the asphalt class. The grass verges and the dirt path lie outside the area; the area runs 0.5 m
+    // behind the wall face (onto the verge under the barrier), so the sweep keeps 1 m inside its boundary.
+    auto rimDistance = [&](float x, float z) {
+        float best = 1e9f;
+        for (std::size_t k = 0; k < drift.area.size(); ++k) {
+            const DriftPoint& a = drift.area[k];
+            const DriftPoint& b = drift.area[(k + 1) % drift.area.size()];
+            const float ex = b.x - a.x, ez = b.z - a.z;
+            const float t = std::clamp(((x - a.x) * ex + (z - a.z) * ez) / std::max(ex * ex + ez * ez, 1e-6f), 0.0f, 1.0f);
+            best = std::min(best, std::hypot(x - a.x - t * ex, z - a.z - t * ez));
+        }
+        return best;
+    };
+    float ax0 = 1e9f, ax1 = -1e9f, az0 = 1e9f, az1 = -1e9f;
+    for (const DriftPoint& q : drift.area) {
+        ax0 = std::min(ax0, q.x), ax1 = std::max(ax1, q.x);
+        az0 = std::min(az0, q.z), az1 = std::max(az1, q.z);
+    }
+    std::array<int, kSurfaceCount> hits{};
+    int sampled = 0, missed = 0, gridOff = 0;
+    for (float z = std::floor(az0) + 0.5f; z < az1; z += 1.0f)
+        for (float x = std::floor(ax0) + 0.5f; x < ax1; x += 1.0f) {
+            if (!area.contains(x, z) || rimDistance(x, z) < 1.0f) continue;
+            ++sampled;
+            gridOff += lv.surfaceAt(x, z) != SurfaceId::Asphalt;
+            const JPH::RRayCast ray(JPH::RVec3(x, 40.0f, z), JPH::Vec3(0, -80.0f, 0));
+            JPH::RayCastResult hit;
+            if (!world.system().GetNarrowPhaseQuery().CastRay(ray, hit)) {
+                ++missed;
+                continue;
+            }
+            JPH::BodyLockRead lock(world.system().GetBodyLockInterface(), hit.mBodyID);
+            const SurfaceId sf = surfaces.lookup(lock.GetBody().GetShape()->GetMaterial(hit.mSubShapeID2));
+            if (std::size_t(sf) < kSurfaceCount) ++hits[std::size_t(sf)];
+            if (sf != SurfaceId::Asphalt && sf != SurfaceId::Concrete)
+                std::printf("    %s at (%.1f, %.1f)\n", surfaces.get(sf).name, double(x), double(z));
+        }
+    int other = 0;
+    std::printf("  drift area surfaces (%d rays, 1 m):", sampled);
+    for (std::size_t k = 0; k < kSurfaceCount; ++k) {
+        if (hits[k] == 0) continue;
+        std::printf(" %s %d", surfaces.get(SurfaceId(k)).name, hits[k]);
+        if (SurfaceId(k) != SurfaceId::Asphalt && SurfaceId(k) != SurfaceId::Concrete) other += hits[k];
+    }
+    std::printf(", missed %d, grid cells not asphalt %d\n", missed, gridOff);
+    CHECK(sampled > 10000 && other == 0 && missed == 0 && gridOff == 0 &&
+              hits[std::size_t(SurfaceId::Concrete)] < sampled / 20,
+          "drift area: %d rays, %d not asphalt / concrete, %d missed, %d grid cells not asphalt, %d concrete", sampled,
+          other, missed, gridOff, hits[std::size_t(SurfaceId::Concrete)]);
 
     SimulationSettings s;
     s.level = stadiumLevel();

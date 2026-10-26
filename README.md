@@ -1633,7 +1633,7 @@ repository is private (see the note at the top; it must be removed or replaced b
 - **Conversion** (`tools/levels/blender/convert_stadium.py`, headless Blender 5.3 Beta, ~10 s): the meshes of the
   source scene grouped by material into seven static models (`trailforge_modelc` kind `static`, one LOD, BC7 KTX2
   albedo at most 2048² for the track asphalt and 1024² otherwise, no normal maps, constant roughness):
-  asphalt 12,725 triangles, grass 2,723, gravel 128, structures (walls, tyre stacks, stands, buildings, poles)
+  asphalt 13,421 triangles, grass 2,027, gravel 128, structures (walls, tyre stacks, stands, buildings, poles)
   161,915, markers (cones, clipping-point boards) 4,816, decals (lines, tyre marks, banners) 60,830, vegetation
   cards 5,088. The real venue name is painted out of the textures.
 - **Collision = render:** asphalt, grass, gravel and structures collide with exactly their render triangles (one
@@ -1641,6 +1641,14 @@ repository is private (see the note at the top; it must be removed or replaced b
   `level_static_scene` checks the triangle order against LOD0). Surfaces per material: `Asphalt` (μ 1.00),
   `Grass` (rigid, μ 0.50), `Gravel` (rigid, loose μ), structures `Concrete`. Markers, decals and the vegetation
   cards are render-only (the source's collision naming did not survive the export, and its cones are props).
+  The whole floor inside the walls (oval, infield and its two worn-asphalt islands) is `Asphalt`; grass is only the
+  verges outside the walls, gravel only the dirt path west of the oval behind the barrier. CTest
+  `level_static_scene` casts a ray every 1 m over the drift area and allows only `Asphalt` and the `Concrete`
+  structures standing on it (measured: 14,401 asphalt, 118 concrete, nothing else).
+  The whole floor inside the walls (oval, infield and its two worn-asphalt islands) is `Asphalt`; grass is only the
+  verges outside the walls, gravel only the dirt path west of the oval behind the barrier. CTest
+  `level_static_scene` casts a ray every 1 m over the drift area and allows only `Asphalt` and the `Concrete`
+  structures standing on it (measured: 14,401 asphalt, 118 concrete, nothing else).
 - **Height grid:** a 513² heightmap rasterised 0.5 m under the lowest mesh ground (it carries the map, the grass
   colour and the far terrain; spawns and resets ray-cast onto the meshes), ramped to flat land outside. No grass
   blades (`"grassBlades": false`): they would grow on the grid under the meshes.
