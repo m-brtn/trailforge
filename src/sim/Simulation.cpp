@@ -305,6 +305,8 @@ void Simulation::processCommands() {
         const bool ok = m_vehicle->toggleLowRange();
         if (m_vehicle->config().isElectric())
             setMessage("No low range: single fixed reduction per motor");
+        else if (m_vehicle->config().lowRangeRatio <= 1.0f)
+            setMessage("No low range on this vehicle");
         else if (ok && m_vehicle->config().layout == DriveLayout::PartTime)
             setMessage(m_vehicle->telemetry().transfer == TransferMode::FourLow ? "4L: low range, center locked"
                                                                                 : "4H: front axle engaged, center locked");

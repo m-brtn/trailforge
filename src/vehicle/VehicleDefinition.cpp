@@ -389,7 +389,9 @@ void readAids(Obj& a, DrivingAidTuning& g) {
 
 } // namespace
 
-bool knownVisualModel(const std::string& id) { return id == "trailforge_suv" || id == "trailforge_ev"; }
+bool knownVisualModel(const std::string& id) {
+    return id == "trailforge_suv" || id == "trailforge_ev" || id == "trailforge_patrol";
+}
 bool knownAudioProfile(const std::string& id) {
     TireSoundProfile p;
     return tireSoundPreset(id, p);
@@ -421,7 +423,7 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         if (c.id.empty() || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
             root.error("id", "must be non-empty lowercase letters, digits and '_'");
         if (!c.visualModel.empty() && !knownVisualModel(c.visualModel))
-            root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv, trailforge_ev)");
+            root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv, trailforge_ev, trailforge_patrol)");
         if (c.bodyShape != "kit" && c.bodyShape != "traced")
             root.error("bodyShape", "unknown shape '" + c.bodyShape + "' (known: kit, traced)");
         if (!c.audioProfile.empty() && !knownAudioProfile(c.audioProfile))

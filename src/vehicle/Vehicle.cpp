@@ -155,8 +155,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     const VehicleConfig& c = m_config;
 
     // ---- Body shape: the convex collision pieces of a Blender-authored body (body.glb COL_*), else convex hulls of
-    // the traced blueprint body (bodyShape "traced", the render model's data), else the three boxes of VehicleShape.h
-    // that the kit body is built around
+    // the traced blueprint body (bodyShape "traced", the render model's data), else the boxes of VehicleShape.h that
+    // the kit body of the visual model is built around
     StaticCompoundShapeSettings compound;
     if (!c.bodyHulls.empty()) {
         for (const auto& hull : c.bodyHulls) {
@@ -173,7 +173,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
             compound.AddShape(Vec3::sZero(), Quat::sIdentity(), new ConvexHullShapeSettings(points, kBodyConvexRadius));
         }
     } else {
-        for (const BodyBox& b : kBodyBoxes)
+        for (const BodyBox& b : kitBodyBoxes(c.visualModel))
             compound.AddShape(Vec3(b.center[0], b.center[1], b.center[2]), Quat::sIdentity(),
                               new BoxShape(Vec3(b.halfExtents[0], b.halfExtents[1], b.halfExtents[2]), kBodyConvexRadius));
     }
@@ -645,6 +645,7 @@ bool Vehicle::toggleLowRange() {
     if (m_electric != nullptr) return false; // single fixed reduction, no low range
     if (m_config.layout == DriveLayout::PartTime)
         return setTransfer(m_transfer == TransferMode::FourLow ? TransferMode::FourHigh : TransferMode::FourLow);
+    if (m_config.lowRangeRatio <= 1.0f) return false; // no transfer case reduction
     if (std::abs(m_telemetry.forwardSpeed) > kShiftSpeedLimit) return false;
     m_lowRange = !m_lowRange;
     applyDifferentials();

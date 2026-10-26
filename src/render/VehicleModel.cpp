@@ -55,6 +55,9 @@ public:
         }
         v.parts = std::move(m_parts);
     }
+    void forEachMesh(const std::function<void(MeshData&)>& fn) {
+        for (MeshData& m : m_meshes) fn(m);
+    }
 
 private:
     std::vector<VehiclePart> m_parts;
@@ -801,6 +804,378 @@ void buildEv(VehicleVisual& v, const VehicleConfig& cfg) {
     v.mudArch.y = W.axleZ[1];
     v.headlightLens = {0.64f, 0.45f, 2.23f};
 }
+
+// ================================================================ kit trailforge_patrol
+// Tube-frame patrol buggy. Its proportions (wheelbase, track, tires, cage and roof line, seat, hood and bed heights,
+// coil-over towers) were measured from a purchased reference model; every triangle is built here. Sand
+// powder-coated cage and frame, satin black panels, orange coils; mid engine under the cargo bed. Collision:
+// kPatrolBoxes (vehicle/VehicleShape.h). Laid out for the shipped wheels (track 1.35, wheelbase 2.068, r 0.33);
+// fitToWheels pushes whatever a bigger tire would sweep through out of its way.
+namespace patrol {
+
+constexpr float kGround = -0.613f; // ground below the body origin at rest (vehicle.json trailforge_patrol)
+constexpr float kHubRest = kGround + 0.33f;
+constexpr float kFitGap = 0.03f;   // body clearance to the wheel sweeps after the fit
+float H(float h) { return kGround + h; } // height above the ground -> body y
+
+// Moves p out of the wheel sweeps: up above the hub centre, toward the centre line below it.
+glm::vec3 pushOut(const std::array<WheelSweep, 4>& S, glm::vec3 p, float gap) {
+    const glm::vec3 dir = p.y > kHubRest ? glm::vec3(0, 1, 0) : glm::vec3(p.x >= 0.0f ? -1.0f : 1.0f, 0, 0);
+    float moved = 0.0f;
+    for (float c = wheelSweepClearance(S, p.x, p.y, p.z); c < gap && moved < 0.6f; c = wheelSweepClearance(S, p.x, p.y, p.z)) {
+        const float step = std::max(0.004f, gap - c);
+        p += dir * step;
+        moved += step;
+    }
+    return p;
+}
+
+// Shock tower position clear of the sweeps: moved inboard, so the coil-over keeps its length on larger tires.
+glm::vec3 pushInboard(const std::array<WheelSweep, 4>& S, glm::vec3 p, float gap) {
+    const float dx = p.x >= 0.0f ? -0.004f : 0.004f;
+    for (int k = 0; k < 60 && wheelSweepClearance(S, p.x, p.y, p.z) < gap; ++k) p.x += dx;
+    return p;
+}
+
+// Splits the triangles that come closer than `gap` to a wheel sweep (vertices, edge midpoints, centroid) down to
+// 3 cm and pushes their vertices out; the moved triangles get flat normals.
+bool fitPass(MeshData& m, const std::array<WheelSweep, 4>& S, float gap) {
+    auto bad = [&](const glm::vec3& p) { return wheelSweepClearance(S, p.x, p.y, p.z) < gap; };
+    auto nearSweep = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
+        const glm::vec3 lo = glm::min(a, glm::min(b, c)) - gap, hi = glm::max(a, glm::max(b, c)) + gap;
+        for (const WheelSweep& w : S) {
+            const float reach = std::sqrt(w.radius * w.radius + w.halfWidth * w.halfWidth);
+            if (hi.x > w.x - reach && lo.x < w.x + reach && hi.z > w.z - reach && lo.z < w.z + reach &&
+                hi.y > w.hubLow - w.radius && lo.y < w.hubHigh + w.radius)
+                return true;
+        }
+        return false;
+    };
+    auto mid = [](const LitVertex& a, const LitVertex& b) {
+        LitVertex r = a;
+        r.position = 0.5f * (a.position + b.position);
+        const glm::vec3 n = a.normal + b.normal;
+        r.normal = glm::length(n) > 1e-6f ? glm::normalize(n) : a.normal;
+        r.color = 0.5f * (a.color + b.color);
+        return r;
+    };
+    std::vector<LitVertex> out;
+    out.reserve(m.vertices.size());
+    bool changed = false;
+    std::function<void(const LitVertex&, const LitVertex&, const LitVertex&, int)> emit =
+        [&](const LitVertex& a, const LitVertex& b, const LitVertex& c, int depth) {
+            const glm::vec3 &pa = a.position, &pb = b.position, &pc = c.position;
+            const bool hit = nearSweep(pa, pb, pc) && (bad(pa) || bad(pb) || bad(pc) || bad(0.5f * (pa + pb)) || bad(0.5f * (pb + pc)) ||
+                             bad(0.5f * (pc + pa)) || bad((pa + pb + pc) / 3.0f));
+            const float longest = std::max({glm::length(pb - pa), glm::length(pc - pb), glm::length(pa - pc)});
+            changed = changed || hit;
+            if (!hit || depth >= 7 || longest < 0.03f) {
+                out.push_back(a);
+                out.push_back(b);
+                out.push_back(c);
+                return;
+            }
+            const LitVertex ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
+            emit(a, ab, ca, depth + 1);
+            emit(ab, b, bc, depth + 1);
+            emit(ca, bc, c, depth + 1);
+            emit(ab, bc, ca, depth + 1);
+        };
+    for (std::size_t i = 0; i + 2 < m.vertices.size(); i += 3) emit(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2], 0);
+    if (!changed) return false;
+    for (std::size_t i = 0; i + 2 < out.size(); i += 3) {
+        bool moved = false;
+        for (std::size_t k = 0; k < 3; ++k) {
+            glm::vec3& p = out[i + k].position;
+            if (!bad(p)) continue;
+            p = pushOut(S, p, kFitGap + 0.005f);
+            moved = true;
+        }
+        if (!moved) continue;
+        const glm::vec3 n = glm::cross(out[i + 1].position - out[i].position, out[i + 2].position - out[i].position);
+        if (glm::length(n) < 1e-9f) continue;
+        for (std::size_t k = 0; k < 3; ++k) out[i + k].normal = glm::normalize(n);
+    }
+    m.vertices = std::move(out);
+    return true;
+}
+
+// Body geometry is kept out of the wheel sweeps (larger tires than the shipped ones). Vertices move independently,
+// so a pushed triangle can still cross a sweep (frame tubes the tire would need moved): those are dropped.
+void fitToWheels(MeshData& m, const std::array<WheelSweep, 4>& S) {
+    fitPass(m, S, kFitGap);
+    auto inside = [&](const glm::vec3& p) { return wheelSweepClearance(S, p.x, p.y, p.z) < kBodyClearance; };
+    std::vector<LitVertex> kept;
+    kept.reserve(m.vertices.size());
+    for (std::size_t i = 0; i + 2 < m.vertices.size(); i += 3) {
+        const glm::vec3 &a = m.vertices[i].position, &b = m.vertices[i + 1].position, &c = m.vertices[i + 2].position;
+        if (inside(a) || inside(b) || inside(c) || inside(0.5f * (a + b)) || inside(0.5f * (b + c)) ||
+            inside(0.5f * (c + a)) || inside((a + b + c) / 3.0f))
+            continue;
+        kept.insert(kept.end(), m.vertices.begin() + std::ptrdiff_t(i), m.vertices.begin() + std::ptrdiff_t(i + 3));
+    }
+    m.vertices = std::move(kept);
+}
+
+glm::vec3 side(const glm::vec3& p, float sx) { return {sx * p.x, p.y, p.z}; }
+
+// Steering wheel: rim of `segs` tube pieces around `axis` (pointing at the driver), three spokes, hub.
+void steeringWheel(MeshData& m, const glm::vec3& c, const glm::vec3& axis, float r, const Material& rim,
+                   const Material& hub) {
+    const glm::vec3 a = glm::normalize(axis);
+    const glm::vec3 u = glm::normalize(glm::cross(a, glm::vec3(1, 0, 0)));
+    const glm::vec3 w = glm::cross(a, u);
+    constexpr int segs = 18;
+    for (int k = 0; k < segs; ++k) {
+        const float t0 = 2.0f * kPi * float(k) / segs, t1 = 2.0f * kPi * float(k + 1) / segs;
+        m.addCylinder(c + r * (std::cos(t0) * u + std::sin(t0) * w), c + r * (std::cos(t1) * u + std::sin(t1) * w),
+                      0.016f, 8, rim);
+    }
+    for (float t : {0.5f * kPi, 0.5f * kPi + 2.0944f, 0.5f * kPi + 4.1888f})
+        m.addCylinder(c, c + 0.92f * r * (std::cos(t) * u + std::sin(t) * w), 0.011f, 6, hub, false);
+    m.addCylinder(c - 0.02f * a, c + 0.03f * a, 0.045f, 14, hub);
+}
+
+void buildPatrol(VehicleVisual& v, const VehicleConfig& cfg) {
+    const style::Livery L = style::desertPatrol();
+    const WheelFit W = fitWheels(cfg);
+    const auto S = wheelSweeps(cfg);
+    const float zF = W.axleZ[0], zR = W.axleZ[1];
+    const Material& tubeMat = L.roof;
+    const Material head = style::led(MatId::Headlight, {1.0f, 0.95f, 0.88f});
+    const Material barLed = style::led(MatId::Headlight, {0.85f, 0.92f, 1.0f});
+    const Material brake = style::led(MatId::BrakeLight, {1.0f, 0.04f, 0.02f});
+    const Material reverse = style::led(MatId::ReverseLight, {1.0f, 1.0f, 1.0f});
+    const Material amber = style::led(MatId::Amber, {1.0f, 0.42f, 0.04f});
+    const Material seat = style::plastic(style::srgb(0.09f, 0.09f, 0.10f), 0.80f, 0.5f);
+    const Material canvas = style::plastic(style::srgb(0.60f, 0.52f, 0.38f), 0.88f, 0.9f);
+    const Material iron{MatId::Generic, {0.06f, 0.06f, 0.06f}, 0.50f, 0.5f, 1.0f};
+    const glm::vec3 up(0, 1, 0), fwd(0, 0, 1);
+    constexpr float rMain = 0.024f, rBrace = 0.018f;
+
+    Parts P;
+    MeshData& chassis = P.add("chassis", "", {0, 0, 0}, false, false);
+    MeshData& cage = P.add("cage", "chassis", {0, H(0.92f), -0.10f}, true, false);
+    MeshData& front = P.add("front_frame", "chassis", {0, H(0.60f), 1.0f}, true, false);
+    MeshData& rear = P.add("rear_frame", "chassis", {0, H(0.60f), -1.0f}, true, false);
+    MeshData& hood = P.add("hood", "front_frame", {0, H(0.96f), 0.60f}, true, true); // hinge at the cowl
+    auto tube = [&](MeshData& m, const glm::vec3& a, const glm::vec3& b, float r) { m.addCylinder(a, b, r, 12, tubeMat); };
+
+    // ---- Cage: B hoop, roof, A pillars, sills, door bars, cross tubes
+    const glm::vec3 S0(0.60f, H(0.38f), -0.48f), S1(0.60f, H(0.38f), 0.62f);
+    const glm::vec3 B1(0.64f, H(0.92f), -0.47f), B2(0.50f, H(1.45f), -0.47f);
+    const glm::vec3 A2(0.50f, H(1.40f), 0.27f), A1(0.60f, H(0.93f), 0.60f), D1(0.60f, H(0.57f), 0.60f);
+    const glm::vec3 harness = glm::mix(B1, B2, (1.05f - 0.92f) / (1.45f - 0.92f));
+    for (float sx : {1.0f, -1.0f}) {
+        tube(cage, side(S0, sx), side(B1, sx), rMain);
+        tube(cage, side(B1, sx), side(B2, sx), rMain);
+        tube(cage, side(B2, sx), side(A2, sx), rMain);
+        tube(cage, side(A2, sx), side(A1, sx), rMain);
+        tube(cage, side(A1, sx), side(S1, sx), rMain);
+        tube(cage, side(S0, sx), side(S1, sx), 0.026f);
+        tube(cage, side(B1, sx), side(D1, sx), rBrace);
+    }
+    for (const glm::vec3& n : {S0, S1, B2, A2, A1, harness}) tube(cage, side(n, 1.0f), side(n, -1.0f), n == S0 || n == S1 ? 0.022f : rMain);
+    tube(cage, glm::mix(B2, A2, 0.5f), side(glm::mix(B2, A2, 0.5f), -1.0f), rBrace);
+    for (float sx : {1.0f, -1.0f}) tube(cage, side(B2, sx), side(glm::mix(B2, A2, 0.5f), -sx), rBrace); // roof X
+
+    // ---- Front frame: upper and lower rails, nose hoop, shock towers
+    const glm::vec3 FU(0.36f, H(0.80f), 1.32f), FL0(0.24f, H(0.30f), 0.80f), FL1(0.24f, H(0.30f), 1.40f);
+    const glm::vec3 TF = pushInboard(S, {0.38f, H(0.795f), zF + 0.016f}, 0.09f);
+    for (float sx : {1.0f, -1.0f}) {
+        tube(front, side(A1, sx), side(FU, sx), rMain);
+        tube(front, side(S1, sx), side(FL0, sx), rMain);
+        tube(front, side(FL0, sx), side(FL1, sx), rMain);
+        tube(front, side(FL1, sx), side(FU, sx), rMain);
+        const float t = (TF.z - A1.z) / (FU.z - A1.z);
+        tube(front, side({FL0.x, FL0.y, TF.z}, sx), side(TF, sx), rBrace); // tower post on the lower rail
+        tube(front, side(TF, sx), side(glm::mix(A1, FU, t), sx), rBrace);    // brace to the upper rail
+        front.addBeveledBox(side(TF + glm::vec3(0.0f, 0.016f, 0.0f), sx), {0.055f, 0.010f, 0.05f}, 0.003f, L.steel);
+    }
+    for (const glm::vec3& n : {FU, FL1, TF}) tube(front, side(n, 1.0f), side(n, -1.0f), n == TF ? rBrace : rMain);
+    front.addBox({0.0f, H(0.62f), 1.30f}, {0.22f, 0.15f, 0.025f}, L.gunmetal); // radiator
+
+    // ---- Rear frame: bed rails, braces to the roof, lower rails, uprights, shock towers
+    const glm::vec3 BR1(0.64f, H(0.92f), -1.40f), RD(0.62f, H(0.92f), -1.20f);
+    const glm::vec3 RL0(0.24f, H(0.30f), -0.70f), RL1(0.24f, H(0.30f), -1.42f), RLow(0.50f, H(0.45f), -1.44f);
+    const glm::vec3 TR = pushInboard(S, {0.383f, H(0.792f), zR + 0.014f}, 0.09f);
+    for (float sx : {1.0f, -1.0f}) {
+        tube(rear, side(B1, sx), side(BR1, sx), rMain);
+        tube(rear, side(B2, sx), side(RD, sx), rMain);
+        tube(rear, side(S0, sx), side(RL0, sx), rMain);
+        tube(rear, side(RL0, sx), side(RL1, sx), rMain);
+        tube(rear, side(BR1, sx), side(RLow, sx), rMain);
+        tube(rear, side(RLow, sx), side(RL1, sx), rBrace);
+        tube(rear, side({RL0.x, RL0.y, TR.z}, sx), side(TR, sx), rBrace);      // tower post on the lower rail
+        tube(rear, side(TR, sx), side({TR.x, H(0.90f), TR.z}, sx), rBrace);      // up to the bed floor
+        rear.addBeveledBox(side(TR + glm::vec3(0.0f, 0.016f, 0.0f), sx), {0.055f, 0.010f, 0.05f}, 0.003f, L.steel);
+    }
+    for (const glm::vec3& n : {BR1, RL1, TR}) tube(rear, side(n, 1.0f), side(n, -1.0f), n == TR ? rBrace : rMain);
+
+    // ---- Chassis: floor pan, tunnel, sill skirts, engine, transaxle, exhaust
+    chassis.addBox({0.0f, H(0.345f), 0.07f}, {0.58f, 0.012f, 0.55f}, L.underbody);
+    chassis.addBox({0.0f, H(0.42f), 0.07f}, {0.10f, 0.065f, 0.52f}, L.trim);
+    for (float sx : {1.0f, -1.0f})
+        chassis.addBox({sx * 0.605f, H(0.43f), 0.07f}, {0.008f, 0.05f, 0.53f}, L.body);
+    {
+        MeshData& e = P.add("engine", "chassis", {0, H(0.55f), -0.86f}, false, false);
+        e.addBeveledBox({0.0f, H(0.55f), -0.86f}, {0.24f, 0.15f, 0.22f}, 0.02f, L.gunmetal);
+        e.addBeveledBox({0.0f, H(0.73f), -0.86f}, {0.20f, 0.03f, 0.16f}, 0.01f, L.accent); // cam cover
+        e.addBeveledBox({0.0f, H(0.43f), -1.12f}, {0.16f, 0.08f, 0.10f}, 0.01f, iron);     // sequential transaxle
+        for (int k = 0; k < 4; ++k) {
+            const float z = -0.98f + 0.08f * float(k);
+            e.addCylinder({-0.24f, H(0.62f), z}, {-0.30f, H(0.50f), -1.10f}, 0.016f, 8, L.alu);
+        }
+        e.addCylinder({-0.30f, H(0.50f), -1.10f}, {-0.30f, H(0.58f), -1.28f}, 0.024f, 10, L.alu);
+        e.addCylinder({-0.30f, H(0.60f), -1.26f}, {-0.30f, H(0.60f), -1.46f}, 0.06f, 16, L.alu); // silencer
+    }
+
+    // ---- Hood with nose face, grille and head lamps (no fenders: wheels and suspension stay exposed)
+    {
+        const float zs[] = {0.60f, 0.80f, 1.05f, 1.30f, 1.40f};
+        const float hw[] = {0.52f, 0.50f, 0.45f, 0.37f, 0.33f};
+        const float ys[] = {H(0.96f), H(0.955f), H(0.935f), H(0.875f), H(0.835f)};
+        const float cross[] = {-1.0f, -0.4f, 0.4f, 1.0f};
+        const float crown[] = {0.0f, 0.022f, 0.022f, 0.0f};
+        for (int i = 0; i + 1 < 5; ++i) {
+            for (int k = 0; k + 1 < 4; ++k) {
+                const glm::vec3 a(hw[i] * cross[k], ys[i] + crown[k], zs[i]), b(hw[i] * cross[k + 1], ys[i] + crown[k + 1], zs[i]);
+                const glm::vec3 c(hw[i + 1] * cross[k + 1], ys[i + 1] + crown[k + 1], zs[i + 1]),
+                    d(hw[i + 1] * cross[k], ys[i + 1] + crown[k], zs[i + 1]);
+                glm::vec3 n = glm::normalize(glm::cross(b - a, d - a));
+                if (n.y < 0.0f) n = -n;
+                style::face(hood, a, b, c, d, n, L.body);
+            }
+            for (float sx : {1.0f, -1.0f}) { // side skirts
+                const glm::vec3 a(sx * hw[i], ys[i], zs[i]), b(sx * hw[i + 1], ys[i + 1], zs[i + 1]);
+                style::face(hood, a, b, b - glm::vec3(0, 0.06f, 0), a - glm::vec3(0, 0.06f, 0), {sx, 0, 0}, L.body);
+            }
+        }
+        // Hood scoop and nose face.
+        hood.addBeveledBox({0.0f, H(0.975f), 0.90f}, {0.13f, 0.018f, 0.16f}, 0.008f, L.trim);
+        const glm::vec3 n0(-0.33f, H(0.835f), 1.40f), n1(0.33f, H(0.835f), 1.40f), n2(0.30f, H(0.62f), 1.43f),
+            n3(-0.30f, H(0.62f), 1.43f);
+        style::face(hood, n0, n1, n2, n3, glm::normalize(glm::vec3(0.0f, 0.14f, 1.0f)), L.body);
+        hood.addBox({0.0f, H(0.70f), 1.425f}, {0.12f, 0.06f, 0.008f}, L.liner); // grille opening
+        for (int k = 0; k < 3; ++k)
+            hood.addBox({0.0f, H(0.665f) + 0.035f * float(k), 1.434f}, {0.115f, 0.006f, 0.004f}, L.gunmetal);
+        for (float sx : {1.0f, -1.0f}) {
+            MeshData& hl = P.add(sided("headlight", sx), "hood", {sx * 0.235f, H(0.74f), 1.42f}, false, true);
+            hl.addBeveledBox({sx * 0.235f, H(0.74f), 1.418f}, {0.085f, 0.065f, 0.012f}, 0.006f, L.trim);
+            style::roundLamp(hl, {sx * 0.235f, H(0.74f), 1.445f}, fwd, 0.052f, 0.02f, L.gunmetal, head);
+            hood.addBox({sx * 0.33f, H(0.80f), 1.402f}, {0.012f, 0.012f, 0.003f}, amber); // marker
+        }
+    }
+
+    // ---- Front guard, skid plate, tow hooks
+    {
+        MeshData& g = P.add("bumper_front", "front_frame", {0, H(0.55f), 1.47f}, true, true);
+        auto gt = [&](const glm::vec3& a, const glm::vec3& b) { g.addCylinder(a, b, 0.022f, 12, L.steel); };
+        for (float sx : {1.0f, -1.0f}) {
+            gt(side({0.30f, H(0.36f), 1.49f}, sx), side({0.30f, H(0.80f), 1.49f}, sx));
+            gt(side({0.30f, H(0.80f), 1.49f}, sx), side({0.46f, H(0.84f), 1.42f}, sx));
+            gt(side({0.46f, H(0.84f), 1.42f}, sx), side({0.48f, H(0.86f), 1.28f}, sx));
+            gt(side({0.30f, H(0.36f), 1.49f}, sx), side(FL1, sx));
+            gt(side({0.30f, H(0.58f), 1.49f}, sx), side({0.24f, H(0.58f), 1.41f}, sx));
+            g.addBox(side({0.40f, H(0.86f), 1.40f}, sx), {0.02f, 0.012f, 0.012f}, amber);
+            style::shackle(P.add(sided("tow_hook_front", sx), "bumper_front", {sx * 0.22f, H(0.33f), 1.50f}, false, true),
+                           {sx * 0.22f, H(0.33f), 1.50f}, fwd, L.hooks);
+        }
+        gt({-0.30f, H(0.36f), 1.49f}, {0.30f, H(0.36f), 1.49f});
+        gt({-0.30f, H(0.80f), 1.49f}, {0.30f, H(0.80f), 1.49f});
+        gt({-0.30f, H(0.58f), 1.49f}, {0.30f, H(0.58f), 1.49f});
+        P.add("skid_plate", "front_frame", {0, H(0.30f), 1.40f}, true, true)
+            .addBar({0.0f, H(0.31f), 1.48f}, {0.0f, H(0.28f), 0.80f}, 0.27f, 0.006f, up, L.alu, 0.003f);
+    }
+
+    // ---- Cockpit: floor-mounted bucket seats with harnesses, dash, steering wheel, mirrors
+    for (float sx : {1.0f, -1.0f}) {
+        MeshData& s = P.add(sided("seat", sx), "chassis", {sx * 0.32f, H(0.50f), -0.10f}, false, true);
+        s.addBeveledBox({sx * 0.32f, H(0.55f), -0.10f}, {0.21f, 0.05f, 0.20f}, 0.025f, seat);
+        s.addBar({sx * 0.32f, H(0.58f), -0.33f}, {sx * 0.32f, H(1.24f), -0.38f}, 0.21f, 0.045f, fwd, seat, 0.02f);
+        for (float bx : {0.19f, -0.19f}) // side bolsters
+            s.addBar({sx * 0.32f + bx, H(0.62f), -0.29f}, {sx * 0.32f + bx, H(1.05f), -0.33f}, 0.025f, 0.06f, fwd, seat, 0.01f);
+        for (float bx : {0.07f, -0.07f}) // harness straps
+            s.addBar({sx * 0.32f + bx, H(0.62f), -0.282f}, {sx * 0.32f + bx, H(1.16f), -0.326f}, 0.018f, 0.003f, fwd,
+                     L.accent);
+        s.addBeveledBox({sx * 0.32f, H(0.40f), -0.10f}, {0.16f, 0.05f, 0.16f}, 0.01f, L.steel); // seat base
+        style::mirror(P.add(sided("mirror", sx), "cage", glm::mix(A1, A2, 0.36f) * glm::vec3(sx, 1, 1), false, true), sx,
+                      glm::mix(A1, A2, 0.36f) * glm::vec3(sx, 1, 1) + glm::vec3(sx * 0.03f, 0, 0), L.trim, L.alu);
+    }
+    {
+        MeshData& d = P.add("dash", "cage", {0, H(0.86f), 0.56f}, false, false);
+        d.addBeveledBox({0.0f, H(0.86f), 0.55f}, {0.55f, 0.06f, 0.06f}, 0.015f, L.trim);
+        d.addBeveledBox({0.32f, H(0.905f), 0.50f}, {0.09f, 0.035f, 0.012f}, 0.006f, L.liner); // instrument pod
+        MeshData& w = P.add("steering_wheel", "dash", {0.32f, H(0.95f), 0.30f}, false, true);
+        w.addCylinder({0.32f, H(0.95f), 0.30f}, {0.32f, H(0.84f), 0.52f}, 0.02f, 10, L.gunmetal);
+        steeringWheel(w, {0.32f, H(0.96f), 0.29f}, {0.0f, 0.45f, -1.0f}, 0.165f, L.trim, L.gunmetal);
+    }
+
+    // ---- Cargo bed with strapped cases and the spare lying flat
+    {
+        MeshData& bed = P.add("cargo_bed", "rear_frame", {0, H(0.905f), -0.95f}, true, true);
+        bed.addBox({0.0f, H(0.905f), -0.95f}, {0.62f, 0.008f, 0.46f}, L.steel);
+        for (float z : {-0.60f, -0.95f, -1.30f}) bed.addBox({0.0f, H(0.915f), z}, {0.60f, 0.003f, 0.012f}, L.gunmetal);
+        for (float sx : {1.0f, -1.0f}) {
+            MeshData& c = P.add(sided("case", sx), "cargo_bed", {sx * 0.47f, H(0.92f), -0.95f}, false, true);
+            style::cargoCase(c, {sx * 0.47f, H(0.913f) + 0.11f, -0.95f}, {0.13f, 0.11f, 0.36f}, canvas, L.trim);
+        }
+        style::spareCarrier(P.add("spare_carrier", "cargo_bed", {0, H(0.913f), -0.98f}, false, true),
+                            {0.0f, H(0.913f), -0.98f}, up, 0.22f, L.steel);
+        v.spares.push_back({"spare_bed", "spare_carrier", {0.0f, H(0.913f) + 0.004f, -0.98f}, up, true});
+    }
+
+    // ---- Rear: bumper, rack bars, tail lamps, tow hooks
+    {
+        MeshData& b = P.add("bumper_rear", "rear_frame", {0, H(0.45f), -1.50f}, true, true);
+        auto bt = [&](const glm::vec3& a, const glm::vec3& c) { b.addCylinder(a, c, 0.024f, 12, L.steel); };
+        bt({-0.55f, H(0.45f), -1.50f}, {0.55f, H(0.45f), -1.50f});
+        for (float sx : {1.0f, -1.0f}) {
+            bt(side({0.55f, H(0.45f), -1.50f}, sx), side(RLow, sx));
+            bt(side({0.30f, H(0.45f), -1.50f}, sx), side({0.30f, H(0.91f), -1.46f}, sx)); // rack bars
+            MeshData& tl = P.add(sided("taillight", sx), "bumper_rear", {sx * 0.44f, H(0.62f), -1.50f}, false, true);
+            tl.addBeveledBox({sx * 0.44f, H(0.62f), -1.505f}, {0.07f, 0.045f, 0.016f}, 0.006f, L.trim);
+            tl.addBox({sx * 0.44f, H(0.635f), -1.522f}, {0.055f, 0.022f, 0.002f}, brake);
+            tl.addBox({sx * 0.44f, H(0.598f), -1.522f}, {0.055f, 0.008f, 0.002f}, reverse);
+            tl.addBox({sx * 0.513f, H(0.62f), -1.50f}, {0.003f, 0.02f, 0.012f}, amber);
+            style::shackle(P.add(sided("tow_hook_rear", sx), "bumper_rear", {sx * 0.22f, H(0.40f), -1.52f}, false, true),
+                           {sx * 0.22f, H(0.40f), -1.52f}, -fwd, L.hooks);
+        }
+        bt({-0.30f, H(0.91f), -1.46f}, {0.30f, H(0.91f), -1.46f});
+    }
+
+    // ---- LED light bar on the front roof tube
+    {
+        MeshData& lb = P.add("light_bar", "cage", {0, A2.y, A2.z}, false, true);
+        style::lightBar(lb, {0.0f, A2.y + 0.062f, A2.z + 0.03f}, 0.42f, L.trim, barLed);
+        for (float sx : {1.0f, -1.0f}) lb.addBox({sx * 0.30f, A2.y + 0.03f, A2.z + 0.01f}, {0.012f, 0.03f, 0.02f}, L.steel);
+    }
+
+    P.forEachMesh([&](MeshData& m) { fitToWheels(m, S); });
+    P.finish(v);
+
+    // Coil-overs from the tower eyes to the lower arms; the arms pivot on the lower frame rails.
+    for (int a = 0; a < 2; ++a) {
+        const AxleConfig& ax = cfg.axles[std::size_t(a)];
+        const glm::vec3& T = a == 0 ? TF : TR;
+        SuspensionMounts& m = v.mounts[a];
+        m.set = true;
+        m.shockTopX = T.x;
+        m.shockTopY = T.y;
+        m.shockTopDZ = T.z - W.axleZ[a];
+        m.shockLowX = 0.5f * ax.track - 0.5f * ax.wheelWidth - (a == 0 ? 0.11f : 0.07f);
+        m.armPivotX = FL0.x;
+        m.armPivotY = FL0.y;
+        m.armPivotHalfZ = 0.20f;
+        m.armOuterInset = 0.14f;
+        m.armOuterDrop = a == 0 ? 0.06f : 0.05f;
+    }
+    v.headlightLens = {0.235f, H(0.74f), 1.45f};
+    v.mudArch = {zF, zR, kHubRest, 0.42f};
+    v.mudBody = {0.64f, 1.30f, -1.35f, 0.0f};
+}
+
+} // namespace patrol
 
 } // namespace kit
 
@@ -1657,6 +2032,13 @@ VehicleVisual buildVehicleVisual(const VehicleConfig& config) {
         v = VehicleVisual{};
         wheelStyle(v, ev);
     }
+    if (config.visualModel == "trailforge_patrol") {
+        // No traced blueprint: the kit body for both body shapes.
+        v.wheel.beadlock = true;
+        v.wheel.spokes = 10;
+        kit::patrol::buildPatrol(v, config);
+        return v;
+    }
     if (config.bodyShape == "traced") {
         // The blueprints are embedded at build time.
         if (const VehicleBlueprint* bp = findVehicleBlueprint(ev ? "trailforge_ev" : "trailforge_suv")) {
@@ -1777,17 +2159,17 @@ MeshData buildShockShaftMesh() {
     return m;
 }
 
-SuspensionPose suspensionPose(const glm::vec3& hub, float attachZ) {
+SuspensionPose suspensionPose(const glm::vec3& hub, float attachZ, const SuspensionMounts& m) {
     SuspensionPose s;
     const float sx = hub.x >= 0.0f ? 1.0f : -1.0f;
     const float zc = attachZ;
-    s.shockTop = {sx * 0.585f, 0.29f, zc};
-    s.armPivotA = {sx * 0.22f, -0.27f, zc + 0.24f};
-    s.armPivotB = {sx * 0.22f, -0.27f, zc - 0.24f};
-    s.armOuter = {hub.x - sx * 0.11f, hub.y - 0.11f, hub.z};
-    const glm::vec3 pivotMid(sx * 0.22f, -0.27f, zc);
-    const float span = std::abs(s.armOuter.x) - 0.22f;
-    const float t = span > 1e-3f ? std::clamp((0.585f - 0.22f) / span, 0.0f, 1.0f) : 1.0f;
+    s.shockTop = {sx * m.shockTopX, m.shockTopY, zc + m.shockTopDZ};
+    s.armPivotA = {sx * m.armPivotX, m.armPivotY, zc + m.armPivotHalfZ};
+    s.armPivotB = {sx * m.armPivotX, m.armPivotY, zc - m.armPivotHalfZ};
+    s.armOuter = {hub.x - sx * m.armOuterInset, hub.y - m.armOuterDrop, hub.z};
+    const glm::vec3 pivotMid(sx * m.armPivotX, m.armPivotY, zc);
+    const float span = std::abs(s.armOuter.x) - m.armPivotX;
+    const float t = span > 1e-3f ? std::clamp((m.shockLowX - m.armPivotX) / span, 0.0f, 1.0f) : 1.0f;
     s.shockLow = glm::mix(pivotMid, s.armOuter, t) + glm::vec3(0.0f, 0.03f, 0.0f);
     s.shaftInner = {sx * 0.13f, -0.24f, zc};
     s.shaftOuter = {hub.x - sx * 0.09f, hub.y, hub.z};

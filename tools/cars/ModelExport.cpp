@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
         std::printf("wheel %d hub %.4f %.4f %.4f\n", w, hub.GetX(), hub.GetY(), hub.GetZ());
         // Suspension as the app draws it (Application::buildDraws).
         const glm::vec3 h(hub.GetX(), hub.GetY(), hub.GetZ());
-        const SuspensionPose p = suspensionPose(h, h.z);
+        const SuspensionPose p = suspensionPose(h, h.z, visual.mounts[std::size_t(w / 2)]);
         const glm::vec3 dir = glm::normalize(p.shockTop - p.shockLow);
         const std::string n = std::to_string(w);
         writeMesh(f, arm, 0, arm.vertices.size(), segmentMatrix(p.armPivotA, p.armOuter), "arm_a_" + n, base);

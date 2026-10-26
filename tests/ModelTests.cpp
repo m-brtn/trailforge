@@ -3,6 +3,7 @@
 // Usage: trailforge_model_tests <test_name>
 
 #include "render/VehicleModel.h"
+#include "vehicle/VehicleBlueprint.h"
 #include "vehicle/VehicleBody.h"
 #include "vehicle/VehicleConfig.h"
 #include "vehicle/VehicleDefinition.h"
@@ -34,23 +35,69 @@ int g_failures = 0;
     } while (0)
 
 // Base configuration of every catalog vehicle (one per visual model at least), each also with the traced body
-// (bodyShape "traced"; the shipped vehicles use the kit body).
+// (bodyShape "traced"; the shipped vehicles use the kit body) when its model has a blueprint (the patrol buggy has
+// none and draws the kit body for both).
 std::vector<VehicleConfig> catalogConfigs() {
     std::vector<std::string> errors;
     std::vector<VehicleConfig> out;
     for (const VehicleDefinition& d : loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors)) {
         CHECK(d.config.bodyShape == "kit", "%s: bodyShape '%s'", d.config.id.c_str(), d.config.bodyShape.c_str());
         out.push_back(d.config);
+        if (!findVehicleBlueprint(d.config.visualModel)) continue;
         out.push_back(d.config);
         out.back().bodyShape = "traced";
     }
-    CHECK(errors.empty() && out.size() >= 4, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
+    CHECK(errors.empty() && out.size() >= 5, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
     return out;
+}
+
+// Front- (zs = 1) or rearmost (zs = -1) reach of a part's outward-facing triangles spanning the center line.
+float bumperReach(const VehicleVisual& v, const char* name, float zs) {
+    const VehiclePart* p = v.find(name);
+    float r = -1e9f;
+    for (std::size_t i = p ? p->firstVertex : 0; p && i + 2 < p->firstVertex + p->vertexCount; i += 3) {
+        const glm::vec3 &a = v.mesh.vertices[i].position, &b = v.mesh.vertices[i + 1].position,
+                        &d = v.mesh.vertices[i + 2].position;
+        const glm::vec3 n = glm::cross(b - a, d - a);
+        if (std::fmin(a.x, std::fmin(b.x, d.x)) > 0.0f || std::fmax(a.x, std::fmax(b.x, d.x)) < 0.0f) continue;
+        if (zs * n.z <= 0.0f) continue;
+        r = std::fmax(r, zs * (a.z + b.z + d.z) / 3.0f);
+    }
+    return r;
+}
+
+// The tube-frame buggy: open cage, no doors, tailgate or fenders (wheels and coil-overs exposed); the bumpers
+// ahead of / behind the frame, hood and bed.
+void checkPatrolParts(const VehicleConfig& c, const VehicleVisual& v) {
+    for (const char* n : {"hood", "bumper_front", "bumper_rear", "cargo_bed"}) {
+        const VehiclePart* p = v.find(n);
+        CHECK(p && p->deformable && p->detachable, "patrol: '%s' should be deformable and detachable", n);
+    }
+    for (const char* n : {"mirror_left", "headlight_right", "tow_hook_front_left", "taillight_left", "light_bar",
+                          "steering_wheel", "spare_carrier"}) {
+        const VehiclePart* p = v.find(n);
+        CHECK(p && p->detachable, "patrol: '%s' should be detachable", n);
+    }
+    for (const char* n : {"cage", "front_frame", "rear_frame", "engine", "skid_plate", "seat_left", "seat_right", "dash"})
+        CHECK(v.find(n), "patrol: missing part '%s'", n);
+    for (const char* n : {"tailgate", "door_front_left", "winch", "snorkel", "ladder", "battery_pack", "roof_rails"})
+        CHECK(!v.find(n), "patrol: unexpected part '%s'", n);
+    for (const VehiclePart& p : v.parts)
+        CHECK(p.name.find("fender") == std::string::npos && p.name.find("flare") == std::string::npos &&
+                  p.name.find("arch") == std::string::npos,
+              "patrol: part '%s' (the buggy has no fenders)", p.name.c_str());
+    const float front = bumperReach(v, "bumper_front", 1.0f), rear = bumperReach(v, "bumper_rear", -1.0f);
+    for (const char* n : {"hood", "front_frame"})
+        CHECK(front >= bumperReach(v, n, 1.0f) - 0.01f, "patrol (%s): bumper_front (%.3f) behind '%s' (%.3f)",
+              c.bodyShape.c_str(), front, n, bumperReach(v, n, 1.0f));
+    for (const char* n : {"rear_frame", "cargo_bed"})
+        CHECK(rear >= bumperReach(v, n, -1.0f) - 0.01f, "patrol (%s): bumper_rear (%.3f) ahead of '%s' (%.3f)",
+              c.bodyShape.c_str(), rear, n, bumperReach(v, n, -1.0f));
 }
 
 void checkParts(const VehicleConfig& c) {
     const VehicleVisual v = buildVehicleVisual(c);
-    const bool ev = c.visualModel == "trailforge_ev";
+    const bool ev = c.visualModel == "trailforge_ev", patrol = c.visualModel == "trailforge_patrol";
     CHECK(!v.parts.empty(), "no parts");
     std::set<std::string> names;
     std::size_t next = 0;
@@ -64,50 +111,41 @@ void checkParts(const VehicleConfig& c) {
     for (const VehiclePart& p : v.parts)
         CHECK(p.parent.empty() || names.count(p.parent), "part '%s' has unknown parent '%s'", p.name.c_str(),
               p.parent.c_str());
-    for (const char* n : {"hood", "tailgate", "door_front_left", "door_rear_right", "bumper_front", "fender_front_left",
-                          "flare_rear_right", "roof_rails"}) {
-        const VehiclePart* p = v.find(n);
-        CHECK(p && p->deformable && p->detachable, "'%s' should be deformable and detachable", n);
-    }
-    for (const char* n : {"mirror_left", "headlight_right", "tow_hook_front_left", "taillight_left", "light_bar"}) {
-        const VehiclePart* p = v.find(n);
-        CHECK(p && p->detachable, "'%s' should be detachable", n);
-    }
-    for (const char* n : ev ? std::vector<const char*>{"front_panel", "battery_pack", "motor_front", "motor_rear"}
-                            : std::vector<const char*>{"winch", "jerry_can_left", "grille", "skid_plate"})
-        CHECK(v.find(n), "%s: missing part '%s'", c.visualModel.c_str(), n);
-    // Only what the concept sheet shows: no snorkel or ladder on either model (v0.15).
-    for (const char* n : ev ? std::vector<const char*>{"winch", "snorkel", "grille", "jerry_can_left", "ladder"}
-                            : std::vector<const char*>{"battery_pack", "motor_front", "snorkel", "ladder"})
-        CHECK(!v.find(n), "%s: unexpected part '%s'", c.visualModel.c_str(), n);
-    // The bumpers are the front- and rearmost body panels on the center line (outward-facing triangles spanning
-    // x = 0), ahead of the grille / front panel and behind the tailgate.
-    auto reach = [&](const char* name, float zs) {
-        const VehiclePart* p = v.find(name);
-        float r = -1e9f;
-        for (std::size_t i = p ? p->firstVertex : 0; p && i + 2 < p->firstVertex + p->vertexCount; i += 3) {
-            const glm::vec3 &a = v.mesh.vertices[i].position, &b = v.mesh.vertices[i + 1].position,
-                            &d = v.mesh.vertices[i + 2].position;
-            const glm::vec3 n = glm::cross(b - a, d - a);
-            if (std::fmin(a.x, std::fmin(b.x, d.x)) > 0.0f || std::fmax(a.x, std::fmax(b.x, d.x)) < 0.0f) continue;
-            if (zs * n.z <= 0.0f) continue;
-            r = std::fmax(r, zs * (a.z + b.z + d.z) / 3.0f);
+    if (patrol) {
+        checkPatrolParts(c, v);
+    } else {
+        for (const char* n : {"hood", "tailgate", "door_front_left", "door_rear_right", "bumper_front", "fender_front_left",
+                              "flare_rear_right", "roof_rails"}) {
+            const VehiclePart* p = v.find(n);
+            CHECK(p && p->deformable && p->detachable, "'%s' should be deformable and detachable", n);
         }
-        return r;
-    };
-    const float front = reach("bumper_front", 1.0f), rear = reach("bumper_rear", -1.0f);
-    for (const char* n : {"body_shell", "hood", ev ? "front_panel" : "grille"})
-        CHECK(front >= reach(n, 1.0f) - 0.01f, "%s: bumper_front (%.3f) behind '%s' (%.3f)", c.visualModel.c_str(),
-              front, n, reach(n, 1.0f));
-    for (const char* n : {"body_shell", "tailgate"})
-        CHECK(rear >= reach(n, -1.0f) - 0.01f, "%s: bumper_rear (%.3f) ahead of '%s' (%.3f)", c.visualModel.c_str(), rear,
-              n, reach(n, -1.0f));
+        for (const char* n : {"mirror_left", "headlight_right", "tow_hook_front_left", "taillight_left", "light_bar"}) {
+            const VehiclePart* p = v.find(n);
+            CHECK(p && p->detachable, "'%s' should be detachable", n);
+        }
+        for (const char* n : ev ? std::vector<const char*>{"front_panel", "battery_pack", "motor_front", "motor_rear"}
+                                : std::vector<const char*>{"winch", "jerry_can_left", "grille", "skid_plate"})
+            CHECK(v.find(n), "%s: missing part '%s'", c.visualModel.c_str(), n);
+        // Only what the concept sheet shows: no snorkel or ladder on either model (v0.15).
+        for (const char* n : ev ? std::vector<const char*>{"winch", "snorkel", "grille", "jerry_can_left", "ladder"}
+                                : std::vector<const char*>{"battery_pack", "motor_front", "snorkel", "ladder"})
+            CHECK(!v.find(n), "%s: unexpected part '%s'", c.visualModel.c_str(), n);
+        // The bumpers are the front- and rearmost body panels on the center line, ahead of the grille / front
+        // panel and behind the tailgate.
+        const float front = bumperReach(v, "bumper_front", 1.0f), rear = bumperReach(v, "bumper_rear", -1.0f);
+        for (const char* n : {"body_shell", "hood", ev ? "front_panel" : "grille"})
+            CHECK(front >= bumperReach(v, n, 1.0f) - 0.01f, "%s: bumper_front (%.3f) behind '%s' (%.3f)",
+                  c.visualModel.c_str(), front, n, bumperReach(v, n, 1.0f));
+        for (const char* n : {"body_shell", "tailgate"})
+            CHECK(rear >= bumperReach(v, n, -1.0f) - 0.01f, "%s: bumper_rear (%.3f) ahead of '%s' (%.3f)",
+                  c.visualModel.c_str(), rear, n, bumperReach(v, n, -1.0f));
+    }
     // No antennas or mud flaps on any model (style rule).
     for (const VehiclePart& p : v.parts)
         CHECK(p.name.find("antenna") == std::string::npos && p.name.find("mud_flap") == std::string::npos,
               "%s: part '%s' is not allowed", c.visualModel.c_str(), p.name.c_str());
     CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
-    CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (the concept has one on the SUV tailgate only)",
+    CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (SUV tailgate, patrol cargo bed, none on the EV)",
           v.spares.size());
     for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
     std::printf("  %s (%s): %zu parts, %zu triangles\n", c.visualModel.c_str(), c.bodyShape.c_str(), v.parts.size(),
@@ -192,6 +230,61 @@ void modelWheelClearance() {
         }
         CHECK(hits == 0, "%s r %.2f w %.2f: %d body points inside the wheel sweep", c.visualModel.c_str(),
               c.axles[0].wheelRadius, c.axles[0].wheelWidth, hits);
+    }
+}
+
+// The procedural coil-overs of every catalog vehicle at full droop, rest and full bump over the steering range:
+// body and shaft overlap (the shock is one piece between its eyes), the shaft shows, the top eye of a frame-mounted
+// shock (patrol) sits on frame geometry, and the coil spring clears the tire.
+void modelSuspensionMounts() {
+    for (const VehicleConfig& c : wheelVariants()) {
+        if (c.bodyShape != "kit") continue;
+        const VehicleVisual v = buildVehicleVisual(c);
+        const auto sweeps = wheelSweeps(c);
+        float minCoil = 1e9f, minLen = 1e9f, maxLen = 0.0f, maxTopGap = 0.0f;
+        for (int w = 0; w < 4; ++w) {
+            const WheelSweep& S = sweeps[std::size_t(w)];
+            const SuspensionMounts& m = v.mounts[std::size_t(w / 2)];
+            for (float f : {0.0f, 0.5f, 1.0f}) {
+                const glm::vec3 hub(S.x, S.hubLow + f * (S.hubHigh - S.hubLow), S.z);
+                const SuspensionPose p = suspensionPose(hub, S.z, m);
+                const float len = glm::length(p.shockTop - p.shockLow);
+                minLen = std::fmin(minLen, len);
+                maxLen = std::fmax(maxLen, len);
+                if (m.set) {
+                    float gap = 1e9f;
+                    for (const LitVertex& mv : v.mesh.vertices) gap = std::fmin(gap, glm::length(mv.position - p.shockTop));
+                    maxTopGap = std::fmax(maxTopGap, gap);
+                }
+                const glm::vec3 dir = (p.shockTop - p.shockLow) / len;
+                const glm::vec3 u = glm::normalize(glm::cross(dir, std::fabs(dir.y) < 0.9f ? glm::vec3(0, 1, 0)
+                                                                                           : glm::vec3(1, 0, 0)));
+                const glm::vec3 b = glm::cross(dir, u);
+                for (int k = 0; k <= 12; ++k) {
+                    const float t = kSpringPerch + (len - kSpringPerch) * float(k) / 12.0f;
+                    for (int j = 0; j < 16; ++j) {
+                        const float a = 2.0f * 3.14159265f * float(j) / 16.0f;
+                        const glm::vec3 q = p.shockLow + dir * t + 0.064f * (std::cos(a) * u + std::sin(a) * b) - hub;
+                        for (int si = -4; si <= 4; ++si) {
+                            const float s = S.steer * float(si) / 4.0f;
+                            const float lx = std::cos(s) * q.x - std::sin(s) * q.z, lz = std::sin(s) * q.x + std::cos(s) * q.z;
+                            const float gap = std::fmax(std::fabs(lx) - S.halfWidth,
+                                                        std::sqrt(q.y * q.y + lz * lz) - S.radius);
+                            minCoil = std::fmin(minCoil, gap);
+                        }
+                    }
+                }
+            }
+        }
+        std::printf("  %s r %.2f w %.2f (%zu triangles): shock %.3f..%.3f m, top eye to frame %.3f m, coil to tire %.3f m\n",
+                    c.visualModel.c_str(), c.axles[0].wheelRadius, c.axles[0].wheelWidth, v.mesh.vertices.size() / 3,
+                    minLen, maxLen, maxTopGap, minCoil);
+        CHECK(minLen >= kShockBodyLength + 0.01f && maxLen <= kShockBodyLength + kShockShaftLength - 0.03f,
+              "%s: shock length %.3f..%.3f outside %.2f..%.2f", c.visualModel.c_str(), minLen, maxLen,
+              kShockBodyLength + 0.01f, kShockBodyLength + kShockShaftLength - 0.03f);
+        CHECK(maxTopGap <= 0.06f, "%s: shock top eye %.3f m from the frame", c.visualModel.c_str(), maxTopGap);
+        if (c.visualModel == "trailforge_patrol" && c.axles[0].wheelRadius == 0.33f)
+            CHECK(minCoil >= 0.005f, "%s: coil %.3f m from the tire", c.visualModel.c_str(), minCoil);
     }
 }
 
@@ -281,6 +374,7 @@ int main(int argc, char** argv) {
         {"model_parts", modelParts},
         {"model_wheel_size", modelWheelSize},
         {"model_wheel_clearance", modelWheelClearance},
+        {"model_suspension_mounts", modelSuspensionMounts},
         {"model_body_glb", modelBodyGlb},
     };
     int ran = 0;

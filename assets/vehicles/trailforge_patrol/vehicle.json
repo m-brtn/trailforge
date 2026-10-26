@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "id": "trailforge_patrol",
+  "name": "Desert Patrol Buggy",
+  "description": "Two-seat tube-frame patrol buggy: mid-mounted 1.0 L high-revving inline-four, fast sequential six-speed, on-demand AWD, 32 cm of suspension travel, cargo bed with the spare.",
+  "visualModel": "trailforge_patrol",
+  "audioProfile": "sporty",
+  "body": {
+    "mass": 750,
+    "inertiaScale": 1.0,
+    "inertia": [510, 550, 205],
+    "centerOfMass": {"frontWeightFraction": 0.42, "height": -0.07},
+    "friction": 0.5,
+    "angularDamping": 0.02
+  },
+  "camera": {"hood": {"position": [0.0, 0.60, 0.10], "pitch": -4, "nearPlane": 0.05}},
+  "geometry": {"wheelBase": 2.068, "attachHeight": 0.10},
+  "axles": {
+    "front": {
+      "track": 1.35,
+      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain"},
+      "suspension": {
+        "frequency": 1.35, "compressionDamping": 0.35, "reboundDamping": 0.55,
+        "preload": 0.0, "minLength": 0.1855, "maxLength": 0.503, "antiRoll": 300,
+        "bumpStop": {"range": 0.03, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 900,
+      "handBrakeTorque": 0
+    },
+    "rear": {
+      "track": 1.35,
+      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain"},
+      "suspension": {
+        "frequency": 1.55, "compressionDamping": 0.35, "reboundDamping": 0.55,
+        "preload": 0.0, "minLength": 0.1925, "maxLength": 0.510, "antiRoll": 0,
+        "bumpStop": {"range": 0.03, "frequencyScale": 3.0}
+      },
+      "brakeTorque": 550,
+      "handBrakeTorque": 600
+    }
+  },
+  "tires": {
+    "longitudinal": {"peakSlip": 0.12, "peakFriction": 1.00, "slideFriction": 0.85},
+    "lateral": {"peakSlipAngleDeg": 6.0, "peakFriction": 0.90, "slideFriction": 0.78},
+    "staticGrip": true,
+    "slipSpeedFloor": 1.0,
+    "frictionEllipse": true,
+    "surfaceGrip": {"concrete": 1, "packed_dirt": 1, "rock": 1, "low_grip": 1, "mud": 1, "grass": 1, "sand": 1, "snow": 1, "asphalt": 1, "gravel": 1}
+  },
+  "steering": {"maxAngleDeg": 33, "rate": 2.5, "returnRate": 4.0, "ackermann": 0.8},
+  "engine": {
+    "type": "combustion",
+    "maxTorque": 112,
+    "torqueCurve": [[0.0, 0.55], [0.35, 0.78], [0.70, 1.0], [0.917, 0.92], [1.0, 0.80]],
+    "idleRPM": 1300,
+    "maxRPM": 12000,
+    "revLimitRPM": 11800,
+    "inertia": 0.06,
+    "angularDamping": 0.08
+  },
+  "gearbox": {
+    "mode": "auto",
+    "ratios": [3.30, 2.35, 1.85, 1.52, 1.30, 1.15],
+    "reverseRatios": [-3.00],
+    "finalDrive": 8.0,
+    "lowRange": 1.0,
+    "shiftUpRPM": 11500,
+    "shiftDownRPM": 7000,
+    "shiftTime": 0.05,
+    "clutchReleaseTime": 0.08,
+    "shiftLatency": 0.05,
+    "clutchStrength": 10,
+    "launchClutchLimit": true,
+    "creepTorque": 15
+  },
+  "drivetrain": {
+    "layout": "on_demand",
+    "frontTorqueShare": 0.1,
+    "frontDiff": "lsd",
+    "rearDiff": "locked",
+    "centerDiff": "lsd",
+    "limitedSlipRatio": 1.4,
+    "centerLimitedSlipRatio": 1.4,
+    "lockedSlipRatio": 1.05
+  },
+  "aero": {"dragArea": 1.9, "airDensity": 1.225},
+  "aids": {
+    "absEnabled": false,
+    "traction": "off",
+    "absReleaseSlip": 0.18,
+    "absApplySlip": 0.08,
+    "absReleaseRate": 40,
+    "absApplyRate": 8,
+    "absReapplyFraction": 0.85,
+    "absMinPressure": 0.0,
+    "absMinSpeed": 1.5,
+    "tcSlipThreshold": 0.15,
+    "tcOffRoadSlipThreshold": 0.35,
+    "tcMinSpeed": 2.0,
+    "tcSlipFilterTime": 0.05,
+    "tcBrakeGain": 3000,
+    "tcMaxBrakeTorque": 1500,
+    "tcBrakeRate": 8000,
+    "tcCutRate": 4,
+    "tcRecoverRate": 2.5,
+    "tcMinThrottle": 0.05,
+    "tcOffRoadMinThrottle": 0.1,
+    "tcSpinSpeed": 0.3,
+    "tcRollbackSpeed": 0.3
+  },
+  "garage": {"ranges": {}},
+  "kits": []
+}

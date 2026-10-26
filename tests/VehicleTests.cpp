@@ -3,6 +3,7 @@
 #include "sim/Simulation.h"
 #include "vehicle/VehicleDefinition.h"
 #include "vehicle/VehicleSetup.h"
+#include "vehicle/VehicleShape.h"
 
 #include <algorithm>
 #include <cmath>
@@ -100,10 +101,16 @@ void vehicleCatalogSweep() {
             CHECK(b.mMin.GetZ() < -1.0f && b.mMax.GetZ() > 1.0f && b.mMin.GetY() < 0.0f && b.mMax.GetY() > 0.6f &&
                       b.mMax.GetZ() - b.mMin.GetZ() < 7.0f,
                   "%s: body bounds not in body space", def.id.c_str());
-            if (c.bodyHulls.empty() && c.bodyShape == "kit")
-                CHECK(std::abs(b.mMax.GetY() - 1.30f) < 1e-3f && std::abs(b.mMin.GetZ() + 2.30f) < 1e-3f,
-                      "%s: kit bounds top %.4f rear %.4f (boxes 1.30 / -2.30 m)", def.id.c_str(), b.mMax.GetY(),
-                      b.mMin.GetZ());
+            if (c.bodyHulls.empty() && c.bodyShape == "kit") {
+                float top = -1e9f, rear = 1e9f;
+                for (const BodyBox& k : kitBodyBoxes(c.visualModel)) {
+                    top = std::max(top, k.center[1] + k.halfExtents[1]);
+                    rear = std::min(rear, k.center[2] - k.halfExtents[2]);
+                }
+                CHECK(std::abs(b.mMax.GetY() - top) < 1e-3f && std::abs(b.mMin.GetZ() - rear) < 1e-3f,
+                      "%s: kit bounds top %.4f rear %.4f (boxes %.2f / %.2f m)", def.id.c_str(), b.mMax.GetY(),
+                      b.mMin.GetZ(), top, rear);
+            }
         }
         {
             // Launch on the concrete lane up to 50 km/h, then a full stop.

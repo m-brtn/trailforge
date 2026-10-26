@@ -1429,7 +1429,7 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
         m_draws.back().soilStick = soil.stick;
         m_draws.back().wheelRadius = vc.axles[axle].wheelRadius;
 
-        const SuspensionPose p = suspensionPose(hub, hub.z);
+        const SuspensionPose p = suspensionPose(hub, hub.z, m_vehicleVisual.mounts[axle]);
         const glm::vec3 dir = glm::normalize(p.shockTop - p.shockLow);
         add(m_armMesh, bodyM * segmentMatrix(p.armPivotA, p.armOuter), true, false);
         add(m_armMesh, bodyM * segmentMatrix(p.armPivotB, p.armOuter), true, false);
@@ -2862,10 +2862,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         SDL_GetWindowSizeInPixels(m_window.get(), &w, &h);
         return n == "px_w" ? w : h;
     }
-    if (n == "susp_spread") { // longest minus shortest suspension length of the four wheels, m
+    if (n == "susp_spread" || n == "susp_min" || n == "susp_max") { // suspension lengths of the four wheels, m
         float lo = 1e9f, hi = -1e9f;
         for (const auto& w : t.wheels) lo = std::min(lo, w.suspensionLength), hi = std::max(hi, w.suspensionLength);
-        return double(hi - lo);
+        return double(n == "susp_min" ? lo : n == "susp_max" ? hi : hi - lo);
     }
     if (n == "air" || n == "lowgrip_wheels" || n == "max_slip" || n == "load_sum") {
         double air = 0, low = 0, slip = 0, load = 0;

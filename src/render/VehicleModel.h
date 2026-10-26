@@ -33,6 +33,16 @@ struct SpareMount {
     bool detachable = true;
 };
 
+// Coil-over and lower-arm mounts of one axle where a model's frame carries them (body space, x as the distance from
+// the centre line, mirrored per side; z relative to the hub). Unset = the procedural layout under the SUV bodies.
+struct SuspensionMounts {
+    bool set = false;
+    float shockTopX = 0.585f, shockTopY = 0.29f, shockTopDZ = 0.0f; // upper eye on the frame (shock tower)
+    float shockLowX = 0.585f;                                          // lower eye on the lower arm
+    float armPivotX = 0.22f, armPivotY = -0.27f, armPivotHalfZ = 0.24f; // the two frame pivots of the lower arm
+    float armOuterInset = 0.11f, armOuterDrop = 0.11f;                  // ball joint: inboard of / below the hub
+};
+
 // Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The kit body (bodyShape "kit", the default) is
 // lofted from StyleKit panels around the collision boxes of vehicle/VehicleShape.h; the traced body (bodyShape
 // "traced") is meshed from the blueprint (BlueprintBody), the same data its collision hulls come from; see README
@@ -46,11 +56,12 @@ struct VehicleVisual {
     glm::vec4 mudArch{1.40f, -1.40f, -0.20f, 0.545f}; // BodyMud shading: axle z front / rear, arch centre y, radius
     glm::vec4 mudBody{0.88f, 2.15f, -2.10f, 0.0f};    // BodyMud shading: body side |x|, bumper zones from z front / rear
     Material coil{MatId::Generic, {0.16f, 0.025f, 0.012f}, 0.40f, 0.1f, 0.8f}; // coil spring colour
+    SuspensionMounts mounts[2];    // front, rear
     const VehiclePart* find(const std::string& name) const;
 };
 
 // Builds `config.visualModel` (known: "trailforge_suv", gasoline expedition SUV, Cars.png car #1;
-// "trailforge_ev", dual-motor electric SUV, Cars.png car #2). Arches and
+// "trailforge_ev", dual-motor electric SUV, Cars.png car #2; "trailforge_patrol", tube-frame patrol buggy). Arches and
 // flares are fitted to the physics wheels (radius, width, track, travel, steering), so rebuild on a wheel change.
 VehicleVisual buildVehicleVisual(const VehicleConfig& config);
 // Wheel style of an axle: the model's materials with the axle's visual rim ratio and tread.
@@ -86,7 +97,7 @@ struct SuspensionPose {
     glm::vec3 shaftInner; // differential output
     glm::vec3 shaftOuter; // hub side
 };
-SuspensionPose suspensionPose(const glm::vec3& hubBody, float attachZ);
+SuspensionPose suspensionPose(const glm::vec3& hubBody, float attachZ, const SuspensionMounts& mounts = {});
 
 // Matrix that maps local z = 0..1 of a unit mesh onto the segment a..b (non-uniform scale along z).
 glm::mat4 segmentMatrix(const glm::vec3& a, const glm::vec3& b);

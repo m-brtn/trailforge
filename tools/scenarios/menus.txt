@@ -218,7 +218,7 @@ menu select start
 tap Return
 wait 0.3
 expect menu_page == 4                # SELECT VEHICLE (the catalog has more than one vehicle)
-expect vehicle_cards == 2
+expect vehicle_cards == 3
 expect setting_vehicle == 0          # default vehicle first
 capture /tmp/trailforge_menu_09_vehicle_page.png
 tap Return

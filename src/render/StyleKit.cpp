@@ -65,6 +65,18 @@ Livery arcticElectric() {
     return l;
 }
 
+Livery desertPatrol() {
+    Livery l = oliveExpedition();
+    l.body = paint(srgb(0.11f, 0.115f, 0.12f), 0.48f);            // satin black panels
+    l.roof = paint(srgb(0.76f, 0.66f, 0.48f), 0.55f, 0.8f);       // sand powder-coated tube frame
+    l.accent = paint(srgb(0.96f, 0.50f, 0.13f), 0.36f);           // orange
+    l.stripe = l.accent;
+    l.trim = {MatId::Cladding, lin(0.08f), 0.82f, 0.0f, 1.0f};
+    l.steel = {MatId::Generic, lin(0.10f), 0.55f, 0.30f, 1.0f};
+    l.hooks = {MatId::Generic, srgb(0.96f, 0.50f, 0.13f), 0.42f, 0.0f, 0.5f};
+    return l;
+}
+
 // ---------------------------------------------------------------- panels
 
 void face(MeshData& m, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& d,
