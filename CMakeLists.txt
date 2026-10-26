@@ -39,6 +39,7 @@ add_library(trailforge_sim STATIC
     src/vehicle/VehicleDefinition.cpp
     src/vehicle/VehicleSetup.cpp
     src/sim/Simulation.cpp
+    src/sim/Autopilot.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
     src/sim/WheelSpray.cpp
@@ -191,6 +192,7 @@ if(TRAILFORGE_BUILD_TESTS)
             level_bridges
             level_placement
             level_grass_clear
+            autopilot_loops
             terrain_textures_ktx2
             terrain_textures_assets)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})

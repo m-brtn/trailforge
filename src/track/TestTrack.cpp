@@ -156,6 +156,37 @@ TrackBounds TestTrack::bounds() { return {kXMin, kXMax, kZMin, kZMax}; }
 
 TrackBounds TestTrack::wheatPatch() { return {-46.0f, -28.0f, 56.0f, 76.0f}; }
 
+DriveRoute TestTrack::attractRoute() {
+    // A rounded rectangle on level ground, counterclockwise seen from above: east over the start pad, north between
+    // lanes A and C (x = 12, clear of the bumps, the twister, the side slope and the rock field), west past the north
+    // end of the low grip patch, south between lanes B and A (x = -13, clear of the climbs).
+    const float x0 = -13.0f, x1 = 12.0f, z0 = -38.0f, z1 = 44.0f, r = 11.0f, step = 2.0f;
+    DriveRoute route;
+    route.name = "Proving ground loop";
+    route.cruiseSpeed = 8.0f;
+    auto line = [&](float ax, float az, float bx, float bz) {
+        const int n = std::max(1, int(std::lround(std::hypot(bx - ax, bz - az) / step)));
+        for (int k = 0; k < n; ++k) route.points.push_back({ax + (bx - ax) * float(k) / float(n), az + (bz - az) * float(k) / float(n)});
+    };
+    auto arc = [&](float cx, float cz, float a0) {
+        const int n = std::max(1, int(std::lround(0.5f * kPi * r / step)));
+        for (int k = 0; k < n; ++k) {
+            const float a = a0 + 0.5f * kPi * float(k) / float(n);
+            route.points.push_back({cx + r * std::cos(a), cz + r * std::sin(a)});
+        }
+    };
+    line(0.0f, z0, x1 - r, z0);
+    arc(x1 - r, z0 + r, -0.5f * kPi);
+    line(x1, z0 + r, x1, z1 - r);
+    arc(x1 - r, z1 - r, 0.0f);
+    line(x1 - r, z1, x0 + r, z1);
+    arc(x0 + r, z1 - r, 0.5f * kPi);
+    line(x0, z1 - r, x0, z0 + r);
+    arc(x0 + r, z0 + r, kPi);
+    line(x0 + r, z0, 0.0f, z0);
+    return route;
+}
+
 WaterInfo TestTrack::water() {
     int n = 0;
     const Puddle* p = puddles(n);

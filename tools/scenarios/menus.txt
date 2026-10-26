@@ -6,6 +6,9 @@
 # ---------------------------------------------------------------- scenarios start in gameplay
 wait 1.0
 expect menu_screen == 2
+expect autopilot == 0
+mark x                          # the spawn: Start puts the vehicle back here after the attract drive
+mark z
 expect menu_font == 1
 expect menu_logo == 1
 expect cam_free == 0
@@ -24,9 +27,19 @@ expect menu_fade < 0.9
 capture /tmp/trailforge_menu_02_intro_fade.png
 until menu_fade == 1 6          # menu time is clamped to 0.1 s per frame (slow Debug frames take longer)
 expect cam_free == 1           # cinematic camera behind the start menu
-expect paused == 0             # the world runs behind the start menu (the vehicle idles at the start)
+expect paused == 0             # the world runs behind the start menu
+expect autopilot == 1          # the vehicle drives the attract route on its own pedals and steering
 capture /tmp/trailforge_menu_03_start_menu.png
 wait 0.1                       # the capture is taken at the end of the next frame
+wait 5.0
+log attract
+expect fwd_kmh > 10            # moving forward along the route at a gentle speed
+expect fwd_kmh < 40
+expect autopilot_driven > 25
+expect autopilot_lateral < 4
+expect autopilot_resets == 0
+capture /tmp/trailforge_menu_03b_attract_drive.png
+wait 0.1
 
 # any key skips the intro
 menu intro
@@ -170,6 +183,7 @@ tap Return
 wait 0.3
 expect menu_page == 4
 expect menu_cursor == 0
+expect autopilot == 2           # the vehicle page holds the vehicle still for the preview
 capture /tmp/trailforge_menu_05e_vehicle_back.png
 wait 0.1
 click menu:back
@@ -181,6 +195,7 @@ menu select garage
 tap Return
 wait 0.5
 expect garage_open == 1
+expect autopilot == 2
 expect garage_scroll == 0
 expect garage_cursor == 0
 tap Up
@@ -210,6 +225,11 @@ tap Return
 wait 0.2
 expect menu_screen == 2
 expect cam_free == 0
+expect autopilot == 0
+expect d_x > -1                 # back at the spawn
+expect d_x < 1
+expect d_z > -1
+expect d_z < 1
 wait 1.5
 down W
 wait 1.2

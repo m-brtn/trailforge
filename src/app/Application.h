@@ -90,7 +90,7 @@ private:
     void enterMenuWorld(bool restartMusic);
     void applySettings(bool force);
     void saveSettings();
-    void updateMenuCamera(float dt);
+    void updateMenuCamera(float dt, const glm::mat4& body);
     void updateGarageCamera(float dt);
     void handleGarage();
     void openGarage();
@@ -161,6 +161,8 @@ private:
     float m_musicFade = 0.3f;
     int m_musicRestart = 0;
     double m_menuCamTime = 0.0;
+    float m_menuCamHeading = 0.0f;   // smoothed vehicle heading the menu camera follows
+    glm::vec3 m_menuCamOffset{0.0f}; // smoothed camera offset from the vehicle
     float m_gameplayTimeOfDay = 9.0f; // restored when gameplay starts (the menus use a sunset)
     float m_menuBlur = 0.0f;          // eased blur of the 3D frame under the pause / settings menus
     FixedStepClock m_clock;

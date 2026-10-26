@@ -304,6 +304,14 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
     if (m_flow.screen() == Screen::Garage) handleGarage();
     else handleMenu();
+    // Behind the intro and the start menu the vehicle drives the attract route on its own pedals and steering; the
+    // garage and the vehicle page hold it still for the preview.
+    const Screen screen = m_flow.screen();
+    AutopilotMode autopilot = AutopilotMode::Off;
+    if (screen == Screen::Intro || screen == Screen::MainMenu) autopilot = AutopilotMode::Drive;
+    if (screen == Screen::Garage || (screen == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle))
+        autopilot = AutopilotMode::Hold;
+    m_sim.setAutopilot(autopilot);
     if (m_flow.menuActive()) {
         // Menus own the input: no gameplay actions, no pedals.
         m_sim.setIntent(DriverIntent{});
@@ -496,7 +504,7 @@ void Application::handleGarage() {
 // selection will come before this), the driving aid defaults from the settings, the follow camera, and the gameplay
 // time of day. The music fades out.
 void Application::startGameplay() {
-    m_sim.requestReset();
+    m_sim.requestTeleport(0); // the spawn, wherever the attract drive left the vehicle
     AidControls aids;
     aids.abs = m_settings.abs;
     aids.traction = TractionMode(std::max(m_settings.traction, 0));
@@ -516,7 +524,7 @@ void Application::enterMenuWorld(bool restartMusic) {
     if (restartMusic) {
         ++m_musicRestart;
         m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
-        m_sim.requestReset();
+        m_sim.requestTeleport(0);
     }
     m_gfx.settings.timeOfDay = kMenuTimeOfDay;
     m_gfx.timeLapse = false;
@@ -572,21 +580,38 @@ void Application::saveSettings() {
     else std::printf("Settings: %s\n", error.c_str());
 }
 
-// Slow cinematic camera for the intro and the start menu: a slow arc behind the vehicle into the low sun (the vehicle
-// and the sun right of the menu column). Read-only like the follow camera; a ray keeps it above the ground.
-void Application::updateMenuCamera(float dt) {
+// Slow cinematic camera for the intro and the start menu while the vehicle drives the attract route: a lazy chase
+// that swings between a rear and a front three-quarter view (the vehicle right of the menu column). The heading
+// it follows and its position are smoothed over seconds, so curves and bumps turn into slow drifts. Read-only like
+// the follow camera; a ray keeps it above the ground.
+void Application::updateMenuCamera(float dt, const glm::mat4& body) {
+    const bool fresh = m_menuCamTime == 0.0;
     m_menuCamTime += dt;
     const double t = m_menuCamTime;
-    const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
-    const float yaw = -0.3f + 0.35f * float(std::sin(t * 6.2831853 / 70.0));
-    const float radius = 8.0f + 1.2f * float(std::sin(t * 6.2831853 / 47.0 + 1.0));
-    const float height = 1.25f + 0.35f * float(std::sin(t * 6.2831853 / 39.0));
-    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, height, -std::cos(yaw) * radius);
+    const glm::vec3 car(body[3]);
+    const glm::vec3 fwd3(body[2]);
+    if (std::hypot(fwd3.x, fwd3.z) > 0.2f) {
+        const float heading = std::atan2(fwd3.x, fwd3.z);
+        if (fresh) m_menuCamHeading = heading;
+        float d = heading - m_menuCamHeading;
+        d = std::atan2(std::sin(d), std::cos(d));
+        m_menuCamHeading += d * (1.0f - std::exp(-dt / 3.5f));
+    }
+    // Behind the vehicle, swinging out to its right side and back over about 80 s.
+    const float swing = 0.5f + 0.9f * float(0.5 - 0.5 * std::cos(t * 6.2831853 / 80.0));
+    const float yaw = m_menuCamHeading + 3.14159265f - swing;
+    const float radius = 9.0f + 1.5f * float(std::sin(t * 6.2831853 / 47.0 + 1.0));
+    const float height = 1.8f + 0.5f * float(std::sin(t * 6.2831853 / 39.0));
+    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, height, std::cos(yaw) * radius);
     const JPH::Vec3 above(pos.x, pos.y + 20.0f, pos.z), below(pos.x, pos.y - 20.0f, pos.z);
     if (auto hit = m_sim.castRayIgnoringVehicle(above, below)) {
         const float ground = above.GetY() + (below.GetY() - above.GetY()) * *hit;
-        pos.y = std::max(pos.y, ground + 0.9f);
+        pos.y = std::max(pos.y, ground + 1.0f);
     }
+    // The offset from the vehicle is smoothed, not the world position: the camera keeps up at any speed.
+    const glm::vec3 offset = pos - car;
+    m_menuCamOffset = fresh ? offset : glm::mix(m_menuCamOffset, offset, 1.0f - std::exp(-dt / 0.6f));
+    pos = car + m_menuCamOffset;
     const glm::vec3 fwd = glm::normalize(glm::vec3(car.x - pos.x, 0.0f, car.z - pos.z));
     const glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0, 1, 0)));
     const glm::vec3 target = car + glm::vec3(0.0f, 0.75f, 0.0f) - right * 2.6f;
@@ -886,7 +911,7 @@ void Application::renderFrame(float frameTime) {
     const bool vehiclePage = m_flow.screen() == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle;
     if (vehiclePage && !m_vehiclePageCamera) m_garageCamTime = 0.0;
     m_vehiclePageCamera = vehiclePage;
-    if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime);
+    if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime, bodyM);
     if (m_flow.screen() == Screen::Garage || vehiclePage) updateGarageCamera(frameTime); // the preview: the live vehicle
     m_camera.update(frameTime, ci, bodyM,
                     [this](const glm::vec3& from, const glm::vec3& to) {
@@ -2003,6 +2028,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "frozen") return m_paused ? 1.0 : 0.0;
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
     if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls, 4 vehicle
+    if (n == "autopilot") return double(int(m_sim.autopilotMode())); // 0 off, 1 drive, 2 hold
+    if (n == "autopilot_driven") return m_sim.autopilot().distanceDriven(); // m along the route since it took over
+    if (n == "autopilot_progress") return m_sim.autopilot().progress();     // m from the route start
+    if (n == "autopilot_lateral") return m_sim.autopilot().lateralError();
+    if (n == "autopilot_resets") return m_sim.autopilotResets();
     if (n == "vehicle_index") return m_garage ? m_garage->vehicleIndex() : 0.0; // catalog order, 0 = default vehicle
     if (n == "vehicle_choice") return m_flow.vehicleIndex(m_settings);         // the vehicle page's choice
     if (n == "vehicle_cards") return double(m_menu.vehicleCardCount());

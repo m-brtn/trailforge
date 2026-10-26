@@ -9,6 +9,14 @@
   "snow": { "line": 182, "noise": 16, "eastRise": 0.06, "eastFrom": -380 },
   "rockSlopeDeg": 40,
   "spawn": { "x": -488, "z": 236, "towards": [-470, 180] },
+  "attractRoute": {
+    "name": "Village loop", "speedKmh": 32,
+    "legs": [
+      { "road": "Valley Road", "from": [-500, 300], "to": [-385, -140] },
+      { "road": "Lake Trail", "from": [-385, -140], "to": [-745, -238] },
+      { "road": "Forest Trail", "from": [-745, -238], "to": [-500, 300] }
+    ]
+  },
   "detail": {
     "mountainLow": 75, "mountainHigh": 175, "ridgeAmplitude": 30, "ridgeScale": 140,
     "hillAmplitude": 9.0, "hillScale": 110, "fineAmplitude": 1.2, "fineScale": 24
