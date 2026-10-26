@@ -47,6 +47,15 @@ struct LitVertex {
 };
 
 // Instance of a unit-height tree mesh. Layout matches the instance buffer read by tree_vs (two float4).
+// One placed object of a level model file (Renderer::setModels).
+struct ModelPlacement {
+    int model = 0;            // index into the paths given to setModels
+    glm::vec3 position{0.0f}; // model origin in the world (tree base, rock center)
+    glm::vec3 scale{1.0f};    // per model axis
+    float yaw = 0.0f;         // about +Y: x' = c x + s z, z' = -s x + c z (as the collision, track/Level.h)
+    float pitch = 0.0f;       // about the model x axis before the yaw: y' = c y - s z, z' = s y + c z
+};
+
 struct TreeInstance {
     glm::vec4 baseHeight; // xyz: trunk base, w: height (m)
     glm::vec4 params;     // x: yaw (rad), y: color variation 0..1, z: width scale, w: unused

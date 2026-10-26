@@ -94,6 +94,22 @@ struct TreeUniforms {
     glm::vec4 info; // x: first instance in the per-frame instance buffer, y: time (s)
 };
 
+struct ModelUniforms {
+    glm::vec4 info;   // x: first instance, y: time (s), z: wind strength, w: model height (m, unit scale)
+    glm::vec4 params; // x: sway amplitude (share of the height), y: flutter amplitude (m), z: impostor views, w: radius
+};
+
+struct ModelMaterialUniforms {
+    glm::vec4 params; // x: alpha test, y: foliage, z: alpha to coverage, w: normal map strength (impostors: views)
+    glm::vec4 tint;   // rgb: albedo multiplier, w: per-instance hue variation
+};
+
+struct ModelInstance {
+    glm::vec4 posFade;  // xyz: model origin, w: LOD cross-fade code (as TreeInstance::params.w)
+    glm::vec4 scaleYaw; // xyz: scale per model axis, w: yaw (rad)
+    glm::vec4 tilt;     // x: pitch (rad) about the model x axis, after the scale and before the yaw
+};
+
 struct PostUniforms {
     glm::vec4 texel;
     glm::vec4 params;
@@ -159,6 +175,7 @@ struct FrameDesc {
     float time = 0.0f;         // s, drives wind, clouds and ripples
     std::span<const DrawItem> draws;
     const GpuMesh* water = nullptr; // water surfaces (identity transform): puddles, or a level's lakes, rivers and sea
+    const GpuMesh* waterfalls = nullptr; // level waterfalls (identity transform, waterfall_fs)
     bool waterReflection = true;    // planar reflection at the ground maps' water level (puddles only)
     bool skyMountains = true;       // stylized mountain silhouettes in the sky (off where real distant terrain exists)
     bool deepOutsideGround = false; // water beyond the ground maps is open sea (no floor height there)
@@ -216,6 +233,15 @@ struct RenderStats {
     std::uint64_t terrainTexBytes = 0;          // GPU bytes of the two texture arrays
     double terrainTexLoadMs = 0.0;              // last load (read + upload)
     int terrainTexLoads = 0;
+    int models = 0;                             // level model files loaded (meshes on the GPU)
+    std::uint64_t modelGpuBytes = 0;            // their vertex, index and texture bytes
+    double modelLoadMs = 0.0;
+    int modelInstances = 0;                     // mesh instances drawn (main view, cross-fade copies included)
+    int modelImpostors = 0;                     // impostor cards drawn
+    std::uint64_t modelTriangles = 0;           // main view
+    int modelShadowInstances = 0;               // summed over the cascades
+    std::uint64_t modelShadowTriangles = 0;
+    int modelDraws = 0;                         // draw calls (main view)
 };
 
 // Level terrain for the renderer: the physics height grid and the per-cell splat weights (render-only copy).
@@ -253,6 +279,10 @@ public:
     void setTerrainTextureDir(const std::string& dir) { m_terrainTexDir = dir; m_terrainTexWanted = -1; }
     // Instanced trees: one unit-height mesh per LOD (near, mid, far, crossed cards) and the static instance list.
     void setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances);
+    // Instanced level models (core/ModelAsset .glb: mesh LODs, BC7 materials, impostor atlas) and their static
+    // placements. Files that fail to load are skipped with a log line (their placements are not drawn).
+    // Returns the number of models loaded.
+    int setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements);
 
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
@@ -372,6 +402,7 @@ private:
     SDL_GPUGraphicsPipeline* m_skyPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_grassPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_waterPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_waterfallPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_linePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_lineOnTopPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
@@ -440,6 +471,77 @@ private:
     SDL_GPUBuffer* m_treeBuffer = nullptr;
     SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
     std::uint32_t m_treeCapacity = 0; // instances
+
+    // Level models. Instances are sorted into square buckets for culling; every frame the visible ones are sorted by
+    // (model, LOD) into m_modelScratch (main view, then the shadow cascades) and drawn per material.
+    struct GpuModelLod {
+        SDL_GPUBuffer* vertices = nullptr;
+        SDL_GPUBuffer* indices = nullptr;
+        struct Primitive {
+            std::uint32_t firstIndex, indexCount;
+            int material;
+        };
+        std::vector<Primitive> primitives;
+        std::uint32_t triangles = 0;
+    };
+    struct GpuModelMaterial {
+        int albedo = -1, nra = -1; // m_modelTextures
+        bool alphaTest = false;
+    };
+    struct GpuModel {
+        std::string kind;
+        float height = 0.0f, radius = 0.0f;
+        glm::vec3 center{0.0f}; // bounds center, unit scale
+        float boundRadius = 0.0f;
+        std::vector<GpuModelLod> lods;
+        std::vector<GpuModelMaterial> materials;
+        int impostorAlbedo = -1, impostorNra = -1, impostorViews = 0;
+        bool foliage = false; // any alpha-tested material (trees, bushes)
+    };
+    struct ModelObject {
+        glm::vec3 position, scale;
+        float yaw, pitch;
+        glm::vec3 center; // world bounding sphere
+        float radius;
+        int model;
+    };
+    struct ModelBucket {
+        glm::vec3 bmin, bmax; // of the bounding spheres
+        std::uint32_t first, count;
+    };
+    struct ModelDraw {
+        int model, lod; // lod -1: impostor cards
+        std::uint32_t first, count;
+    };
+    // Per kind and settings: end distance of each mesh LOD (m), the farthest distance drawn, impostors beyond the last
+    // mesh LOD, cascades the model casts into (cascade 0 from LOD 1, the others from the last LOD).
+    struct ModelRange {
+        std::array<float, 4> bounds{};
+        float maxDistance = 0.0f;
+        bool impostor = false;
+        int shadowCascades = 0;
+    };
+    ModelRange modelRange(const GpuModel& m) const;
+    int loadModelTexture(const std::string& path, bool srgb, std::uint64_t& bytes);
+    void releaseModels();
+    // Fills m_modelScratch and the draw lists. Returns the total instance count.
+    std::uint32_t cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj);
+    std::vector<GpuModel> m_models;
+    std::vector<Texture> m_modelTextures;
+    std::vector<ModelObject> m_modelObjects;
+    std::vector<ModelBucket> m_modelBuckets;
+    std::vector<ModelInstance> m_modelScratch;
+    std::vector<std::vector<ModelInstance>> m_modelBins; // per (model, LOD slot) while culling
+    std::vector<ModelDraw> m_modelDraws;
+    std::array<std::vector<ModelDraw>, 4> m_modelShadowDraws;
+    SDL_GPUBuffer* m_modelBuffer = nullptr;
+    SDL_GPUTransferBuffer* m_modelTransfer = nullptr;
+    std::uint32_t m_modelCapacity = 0; // instances
+    SDL_GPUGraphicsPipeline* m_modelShadowPipe = nullptr; // static
+    SDL_GPUGraphicsPipeline* m_modelPipe = nullptr;       // scene: opaque, back faces culled
+    SDL_GPUGraphicsPipeline* m_modelFoliagePipe = nullptr; // scene: alpha tested, two-sided, alpha to coverage
+    SDL_GPUGraphicsPipeline* m_impostorPipe = nullptr;    // scene
+    bool m_modelA2C = false;
 
     // Wheel spray: all live particles are uploaded every frame (at most kMaxSpray).
     static constexpr std::uint32_t kMaxSpray = 8192;

@@ -7,6 +7,8 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/ScaledShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
 #include <algorithm>
 #include <chrono>
@@ -50,6 +52,23 @@ TerrainTiles::TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, st
         }
     for (std::size_t i = 0; i < L.rocks().size(); ++i)
         if (const int b = bucket(L.rocks()[i].x, L.rocks()[i].z); b >= 0) m_tileRocks[std::size_t(b)].push_back(std::uint32_t(i));
+    // One collision mesh per model (unit scale); instances share it through a ScaledShape in the tile compound.
+    JPH::PhysicsMaterialList materials;
+    for (std::size_t i = 0; i < kSurfaceCount; ++i) materials.push_back(m_surfaces.material(SurfaceId(i)));
+    m_modelShapes.resize(L.models().size());
+    for (std::size_t i = 0; i < L.models().size(); ++i) {
+        const LevelModel& m = L.models()[i];
+        if (m.collision.size() < 3) continue;
+        const JPH::uint32 surface = JPH::uint32(levelModelSurface(m));
+        JPH::TriangleList tris;
+        tris.reserve(m.collision.size() / 3);
+        for (std::size_t k = 0; k + 2 < m.collision.size(); k += 3)
+            tris.emplace_back(m.collision[k], m.collision[k + 1], m.collision[k + 2], surface);
+        JPH::MeshShapeSettings ms(tris, materials);
+        JPH::ShapeSettings::ShapeResult mr = ms.Create();
+        if (mr.HasError()) throw std::runtime_error("MeshShape (model " + m.id + "): " + mr.GetError().c_str());
+        m_modelShapes[i] = mr.Get();
+    }
     if (m_settings.async) m_worker = std::thread([this] { workerLoop(); });
 }
 
@@ -115,9 +134,21 @@ TerrainTiles::Built TerrainTiles::build(int index) const {
     b.index = index;
     b.terrain = hr.Get();
 
+    // Trunks and procedural boulders: one mesh; model instances: the shared model mesh with the instance transform
+    // of addLevelRock (scale per axis, pitch about x, yaw about +Y, then the position).
     TrackGeometry g;
-    for (std::uint32_t t : m_tileTrees[std::size_t(index)]) addLevelTrunk(g, L.trees()[t]);
-    for (std::uint32_t r : m_tileRocks[std::size_t(index)]) addLevelRock(g, L.rocks()[r]);
+    for (std::uint32_t t : m_tileTrees[std::size_t(index)]) addLevelTrunk(g, L.trees()[t], L.models());
+    JPH::StaticCompoundShapeSettings compound;
+    for (std::uint32_t ri : m_tileRocks[std::size_t(index)]) {
+        const LevelRock& r = L.rocks()[ri];
+        if (r.model >= 0 && std::size_t(r.model) < m_modelShapes.size() && m_modelShapes[std::size_t(r.model)]) {
+            compound.AddShape(JPH::Vec3(r.x, r.y, r.z),
+                              JPH::Quat::sRotation(JPH::Vec3::sAxisY(), r.yaw) * JPH::Quat::sRotation(JPH::Vec3::sAxisX(), r.pitch),
+                              new JPH::ScaledShape(m_modelShapes[std::size_t(r.model)], JPH::Vec3(r.sx, r.sy, r.sz)));
+        } else {
+            addLevelRock(g, r, L.models());
+        }
+    }
     if (g.triangleCount() > 0) {
         JPH::TriangleList tris;
         tris.reserve(g.triangleCount());
@@ -126,7 +157,13 @@ TerrainTiles::Built TerrainTiles::build(int index) const {
         JPH::MeshShapeSettings ms(tris, materials);
         JPH::ShapeSettings::ShapeResult mr = ms.Create();
         if (mr.HasError()) throw std::runtime_error(std::string("MeshShape (tile props): ") + mr.GetError().c_str());
-        b.props = mr.Get();
+        if (compound.mSubShapes.empty()) b.props = mr.Get();
+        else compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), mr.Get());
+    }
+    if (!b.props && !compound.mSubShapes.empty()) {
+        JPH::ShapeSettings::ShapeResult cr = compound.Create();
+        if (cr.HasError()) throw std::runtime_error(std::string("StaticCompoundShape (tile props): ") + cr.GetError().c_str());
+        b.props = cr.Get();
     }
     b.ms = msSince(t0);
     return b;

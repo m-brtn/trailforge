@@ -78,8 +78,9 @@ MeshData buildLevelPropsMesh(const Level& level) {
     }
     TrackGeometry rocks;
     for (const LevelRock& r : level.rocks()) {
+        if (r.model >= 0) continue; // drawn from the model library (Renderer::setModels)
         const std::size_t first = rocks.triangleCount();
-        addLevelRock(rocks, r);
+        addLevelRock(rocks, r, level.models());
         Material mat = styleMaterial(r.style);
         mat.id = MatId::Rock;
         addFlat(m, rocks, first, rocks.triangleCount(), mat);
@@ -175,6 +176,8 @@ MeshData buildLevelWaterMesh(const Level& level) {
         if (wetCorners == 0) return;
         const float mean = sum / float(wetCorners);
         for (int k = 0; k < 4; ++k) y[k] = wet(ci[k], cj[k]) ? waterAt(ci[k], cj[k]) : mean;
+        // Steps of the river surface (waterfalls) get the falling sheet of buildLevelWaterfallMesh instead.
+        if (std::max({y[0], y[1], y[2], y[3]}) - std::min({y[0], y[1], y[2], y[3]}) > 1.0f) return;
         const glm::vec3 a(px(ci[0]), y[0], px(cj[0])), bb(px(ci[1]), y[1], px(cj[1]));
         const glm::vec3 c(px(ci[2]), y[2], px(cj[2])), d(px(ci[3]), y[3], px(cj[3]));
         m.addTri(a, bb, c, up, up, up, mat);
@@ -194,6 +197,78 @@ MeshData buildLevelWaterMesh(const Level& level) {
     quad(-far, -far, far, -e);
     quad(e, -e, far, e);
     quad(-far, -e, -e, e);
+    return m;
+}
+
+MeshData buildLevelWaterfallMesh(const Level& level) {
+    MeshData m;
+    constexpr float kG = 9.81f, kPi = 3.14159265f;
+    auto push = [&](const glm::vec3& p, const glm::vec3& n, const glm::vec3& c, const glm::vec4& mat) {
+        m.vertices.push_back({p, n, c, mat});
+    };
+    auto quad = [&](const glm::vec3 p[4], const glm::vec3 n[4], const glm::vec3 c[4], const glm::vec4& mat) {
+        for (int k : {0, 1, 2, 0, 2, 3}) push(p[k], n[k], c[k], mat);
+    };
+    int index = 0;
+    for (const LevelWaterfall& w : level.waterfalls()) {
+        const float drop = w.y0 - w.y1;
+        glm::vec2 d(w.x1 - w.x0, w.z1 - w.z0);
+        d = glm::length(d) > 1e-3f ? glm::normalize(d) : glm::vec2(0.0f, 1.0f);
+        const glm::vec3 dir(d.x, 0.0f, d.y), across(-d.y, 0.0f, d.x), up(0.0f, 1.0f, 0.0f);
+        const float seed = float(index++) * 0.37f;
+        const glm::vec4 mat(drop, w.width, seed, 0.0f);
+        // Sheet: ballistic from the lip (speed v0 along the river), widening a little as it falls.
+        const float v0 = 1.6f + 0.06f * w.width, T = std::sqrt(2.0f * (drop + 0.3f) / kG);
+        const glm::vec3 lip(w.x0 + d.x * 0.6f, w.y0 + 0.05f, w.z0 + d.y * 0.6f);
+        const int rows = std::clamp(int(drop * 1.2f), 6, 40), cols = std::max(4, int(w.width / 1.5f));
+        auto at = [&](float u, float s) {
+            const float t = s * T;
+            return lip + dir * (v0 * t) + across * (u * w.width * (1.0f + 0.25f * s)) - up * (0.5f * kG * t * t);
+        };
+        auto normal = [&](float s) {
+            const glm::vec3 tangent = dir * v0 - up * (kG * s * T);
+            return glm::normalize(glm::cross(tangent, across));
+        };
+        for (int r = 0; r < rows; ++r)
+            for (int c = 0; c < cols; ++c) {
+                const float s0 = float(r) / float(rows), s1 = float(r + 1) / float(rows);
+                const float u0 = float(c) / float(cols) - 0.5f, u1 = float(c + 1) / float(cols) - 0.5f;
+                const glm::vec3 p[4] = {at(u0, s0), at(u1, s0), at(u1, s1), at(u0, s1)};
+                const glm::vec3 n[4] = {normal(s0), normal(s0), normal(s1), normal(s1)};
+                const glm::vec3 col[4] = {{u0 + 0.5f, s0, 0.0f}, {u1 + 0.5f, s0, 0.0f}, {u1 + 0.5f, s1, 0.0f}, {u0 + 0.5f, s1, 0.0f}};
+                quad(p, n, col, mat);
+            }
+        // Foam on the pool around the impact, and crossed mist cards rising from it.
+        const glm::vec3 foot = at(0.0f, 1.0f);
+        const glm::vec3 centre(foot.x, w.y1 + 0.04f, foot.z);
+        const float R = 0.55f * w.width + 0.12f * drop;
+        constexpr int kSeg = 24, kRings = 3;
+        for (int ring = 0; ring < kRings; ++ring)
+            for (int sgm = 0; sgm < kSeg; ++sgm) {
+                const float r0 = R * float(ring) / kRings, r1 = R * float(ring + 1) / kRings;
+                const float a0 = 2.0f * kPi * float(sgm) / kSeg, a1 = 2.0f * kPi * float(sgm + 1) / kSeg;
+                const glm::vec2 q[4] = {{r0 * std::cos(a0), r0 * std::sin(a0)}, {r0 * std::cos(a1), r0 * std::sin(a1)},
+                                        {r1 * std::cos(a1), r1 * std::sin(a1)}, {r1 * std::cos(a0), r1 * std::sin(a0)}};
+                glm::vec3 p[4], n[4], col[4];
+                for (int k = 0; k < 4; ++k) {
+                    p[k] = centre + glm::vec3(q[k].x, 0.0f, q[k].y);
+                    n[k] = up;
+                    col[k] = glm::vec3(0.5f + 0.5f * q[k].x / R, 0.5f + 0.5f * q[k].y / R, 1.0f);
+                }
+                quad(p, n, col, mat);
+            }
+        const float mistH = 3.0f + 0.45f * drop, mistW = std::min(2.2f * R, 1.2f * w.width);
+        for (int k = 0; k < 3; ++k) {
+            const float a = kPi * float(k) / 3.0f + seed;
+            const glm::vec3 side(std::cos(a), 0.0f, std::sin(a)), n(-side.z, 0.0f, side.x);
+            const glm::vec3 base = centre - up * 0.5f;
+            const glm::vec3 p[4] = {base - side * (0.5f * mistW), base + side * (0.5f * mistW),
+                                    base + side * (0.5f * mistW) + up * mistH, base - side * (0.5f * mistW) + up * mistH};
+            const glm::vec3 nn[4] = {n, n, n, n};
+            const glm::vec3 col[4] = {{0.0f, 0.0f, 2.0f}, {1.0f, 0.0f, 2.0f}, {1.0f, 1.0f, 2.0f}, {0.0f, 1.0f, 2.0f}};
+            quad(p, nn, col, mat);
+        }
+    }
     return m;
 }
 
@@ -303,12 +378,32 @@ std::vector<TreeInstance> buildLevelTreeInstances(const Level& level) {
     std::vector<TreeInstance> out;
     out.reserve(level.trees().size());
     for (const LevelTree& t : level.trees()) {
+        if (t.model >= 0) continue;
         TreeInstance i;
         i.baseHeight = glm::vec4(t.x, t.y, t.z, t.height);
         i.params = glm::vec4(t.yaw, t.hue, t.width, 0.0f);
         out.push_back(i);
     }
     return out;
+}
+
+void buildLevelModelPlacements(const Level& level, std::vector<std::string>& paths, std::vector<ModelPlacement>& out) {
+    paths.clear();
+    out.clear();
+    for (const LevelModel& m : level.models()) paths.push_back(m.path);
+    if (paths.empty()) return;
+    out.reserve(level.trees().size() + level.rocks().size() + level.scatter().size());
+    for (const LevelTree& t : level.trees()) {
+        if (t.model < 0) continue;
+        const float xz = t.scale * t.width;
+        out.push_back({t.model, glm::vec3(t.x, t.y, t.z), glm::vec3(xz, t.scale, xz), t.yaw});
+    }
+    for (const LevelRock& r : level.rocks()) {
+        if (r.model < 0) continue;
+        out.push_back({r.model, glm::vec3(r.x, r.y, r.z), glm::vec3(r.sx, r.sy, r.sz), r.yaw, r.pitch});
+    }
+    for (const LevelScatter& c : level.scatter())
+        out.push_back({c.model, glm::vec3(c.x, c.y, c.z), glm::vec3(c.scale), c.yaw});
 }
 
 } // namespace tf

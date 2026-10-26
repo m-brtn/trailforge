@@ -102,6 +102,7 @@ struct DrawUniforms {
 // The frame uniforms are uniform slot 0 of almost every entry point. The entry points whose slot 0 holds other
 // uniforms do not read them; there `f` is parked on an unused slot and the compiler drops it.
 #if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs) || defined(TF_ENTRY_terrain_shadow_vs) || \
+    defined(TF_ENTRY_model_shadow_vs) || \
     defined(TF_ENTRY_bloom_down_fs) || \
     defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs) || \
     defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs)
@@ -1152,6 +1153,237 @@ float4 tree_shadow_vs(LitIn vin, uint iid : SV_InstanceID) : SV_Position {
 }
 #endif
 
+// ---------------------------------------------------------------- instanced level models (assets/models, render side)
+// Trees, bushes, rocks and logs from core/ModelAsset .glb files: per (model, LOD, material) one indexed instanced
+// draw; far trees as impostor cards from the baked 8-view atlas. The transform matches the collision of the same
+// objects (track/Level.cpp addLevelRock / addLevelTrunk): scale per axis, pitch about the model x axis
+// (y' = c y - s z, z' = s y + c z; cliff faces only), yaw about +Y (x' = c x + s z, z' = -s x + c z), then the position.
+
+struct ModelUniforms {
+    float4 info;   // x: first instance, y: time (s), z: wind strength, w: model height (m, unit scale)
+    float4 params; // x: sway amplitude (share of the height), y: flutter amplitude (m), z: impostor views, w: radius (m)
+};
+
+struct ModelMaterialUniforms {
+    float4 params; // x: alpha test (0/1), y: foliage (0/1), z: alpha to coverage (0/1), w: normal map strength
+    float4 tint;   // rgb: albedo multiplier, w: per-instance hue variation
+};
+
+struct ModelInstance {
+    float4 posFade;  // xyz: origin (tree base / rock center), w: LOD cross-fade code (as TreeInstance.params.w)
+    float4 scaleYaw; // xyz: scale per model axis, w: yaw (rad)
+    float4 tilt;     // x: pitch (rad) about the model x axis, after the scale and before the yaw
+};
+
+struct ModelIn {
+    [[vk::location(0)]] float3 position : TEXCOORD0;
+    [[vk::location(1)]] float3 normal : TEXCOORD1;
+    [[vk::location(2)]] float2 uv : TEXCOORD2;
+    [[vk::location(3)]] float2 wind : TEXCOORD3; // x: bend weight (0 at the base, 1 at the top), y: flutter weight
+};
+
+struct ModelOut {
+    float4 position : SV_Position;
+    [[vk::location(0)]] float3 worldPos : TEXCOORD0;
+    [[vk::location(1)]] float3 normal : TEXCOORD1;
+    [[vk::location(2)]] float2 uv : TEXCOORD2;
+    [[vk::location(3)]] nointerpolation float2 fadeHue : TEXCOORD3; // x: cross-fade code, y: hue variation 0..1
+    [[vk::location(4)]] float3 modelView : TEXCOORD4; // impostors: horizontal camera direction in model space
+};
+
+float3 modelRotate(float3 v, float c, float s) { return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+float3 modelPitch(float3 v, float c, float s) { return float3(v.x, c * v.y - s * v.z, s * v.y + c * v.z); }
+
+#if defined(TF_ENTRY_model_vs) || defined(TF_ENTRY_model_shadow_vs) || defined(TF_ENTRY_impostor_vs)
+ConstantBuffer<ModelUniforms> mu : UBO(1);
+StructuredBuffer<ModelInstance> modelInstances : TEX(0);
+
+// Wind: the whole crown bends with the gusts (weight wind.x grows with height), leaves and needle tips flutter.
+float3 modelWind(float3 world, float2 w, float3 origin, float height) {
+    const float t = mu.info.y;
+    const float phase = origin.x * 0.13 + origin.z * 0.11;
+    const float gust = sin(t * 0.9 + phase) * 0.6 + sin(t * 1.7 + origin.x * 0.31) * 0.25 + 0.35;
+    float3 p = world;
+    p.xz += float2(0.8, 0.6) * gust * mu.params.x * mu.info.z * height * w.x;
+    const float flutter = sin(t * 6.3 + dot(world, float3(1.7, 2.3, 1.9))) * mu.params.y * mu.info.z * w.y;
+    p += float3(0.6, 0.35, -0.7) * flutter;
+    return p;
+}
+#endif
+
+#if defined(TF_ENTRY_model_shadow_vs)
+ConstantBuffer<ShadowUniforms> su : UBO(0);
+#endif
+
+#if defined(TF_ENTRY_model_vs) || defined(TF_ENTRY_model_shadow_vs)
+ModelOut modelTransform(ModelIn vin, uint iid, float4x4 viewProj) {
+    const ModelInstance m = modelInstances[uint(mu.info.x) + iid];
+    const float c = cos(m.scaleYaw.w), s = sin(m.scaleYaw.w), cp = cos(m.tilt.x), sp = sin(m.tilt.x);
+    const float3 world = m.posFade.xyz + modelRotate(modelPitch(vin.position * m.scaleYaw.xyz, cp, sp), c, s);
+    const float3 p = modelWind(world, vin.wind, m.posFade.xyz, mu.info.w * m.scaleYaw.y);
+    ModelOut o;
+    o.position = mul(viewProj, float4(p, 1.0));
+    o.worldPos = p;
+    o.normal = modelRotate(modelPitch(vin.normal / m.scaleYaw.xyz, cp, sp), c, s);
+    o.uv = vin.uv;
+    o.fadeHue = float2(m.posFade.w, hash12(m.posFade.xz));
+    o.modelView = ((float3)(0.0));
+    return o;
+}
+#endif
+
+#if defined(TF_ENTRY_model_vs)
+ModelOut model_vs(ModelIn vin, uint iid : SV_InstanceID) { return modelTransform(vin, iid, f.viewProj); }
+#endif
+
+#if defined(TF_ENTRY_model_shadow_vs)
+ModelOut model_shadow_vs(ModelIn vin, uint iid : SV_InstanceID) { return modelTransform(vin, iid, su.lightViewProj); }
+#endif
+
+// Impostor card (6 vertices per instance, no vertex buffer): upright, turned toward the camera about the trunk axis,
+// width 2 x radius, height = model height (scaled). The atlas view nearest to the camera direction is chosen in the
+// fragment shader from the card's facing.
+#if defined(TF_ENTRY_impostor_vs)
+ModelOut impostor_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    const ModelInstance m = modelInstances[uint(mu.info.x) + iid];
+    const float2 corners[6] = {float2(-1, 0), float2(1, 0), float2(1, 1), float2(-1, 0), float2(1, 1), float2(-1, 1)};
+    const float2 k = corners[vid];
+    float3 toCam = f.cameraPos.xyz - m.posFade.xyz;
+    toCam.y = 0.0;
+    toCam = length(toCam) > 1e-3 ? normalize(toCam) : float3(0, 0, 1);
+    const float3 right = float3(toCam.z, 0.0, -toCam.x);
+    const float w = mu.params.w * m.scaleYaw.x, h = mu.info.w * m.scaleYaw.y;
+    float3 p = m.posFade.xyz + right * (k.x * w) + float3(0, k.y * h, 0);
+    p = modelWind(p, float2(k.y * k.y, 0.0), m.posFade.xyz, h);
+    ModelOut o;
+    o.position = mul(f.viewProj, float4(p, 1.0));
+    o.worldPos = p;
+    o.normal = toCam;
+    o.uv = float2(k.x * 0.5 + 0.5, 1.0 - k.y);
+    o.fadeHue = float2(m.posFade.w, hash12(m.posFade.xz));
+    // The camera direction turned back by the yaw (for the view selection).
+    const float c = cos(m.scaleYaw.w), s = sin(m.scaleYaw.w);
+    o.modelView = float3(c * toCam.x - s * toCam.z, 0.0, s * toCam.x + c * toCam.z);
+    return o;
+}
+#endif
+
+bool modelDitherDiscard(float code, float2 pixel) {
+    if (code <= 0.0) return false;
+    const float d = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+    return code < 1.5 ? d >= code : d < code - 2.0;
+}
+
+#if defined(TF_ENTRY_model_fs) || defined(TF_ENTRY_impostor_fs) || defined(TF_ENTRY_model_shadow_fs)
+ConstantBuffer<ModelMaterialUniforms> mm : UBO(1);
+
+// Alpha-tested coverage: with alpha to coverage the edge is sharpened to about one pixel (the MSAA samples blend it);
+// without, a plain cut at 0.5.
+float modelCoverage(float a) {
+    if (mm.params.z > 0.5) {
+        const float sharp = saturate((a - 0.5) / max(fwidth(a), 1e-4) + 0.5);
+        if (sharp <= 0.0) discard;
+        return sharp;
+    }
+    if (a < 0.5) discard;
+    return 1.0;
+}
+#endif
+
+#if defined(TF_ENTRY_model_shadow_fs)
+Texture2D<float4> modelAlbedo : TEX(0);
+SamplerState modelAlbedoSampler : SMP(0);
+void model_shadow_fs(ModelOut vin) {
+    if (mm.params.x > 0.5 && modelAlbedo.Sample(modelAlbedoSampler, vin.uv).a < 0.5) discard;
+}
+#endif
+
+#if defined(TF_ENTRY_model_fs) || defined(TF_ENTRY_impostor_fs)
+Texture2DArray<float> shadowMap : TEX(0);
+SamplerComparisonState shadowSampler : SMP(0);
+Texture2D<float4> noiseTex : TEX(1);
+SamplerState noiseSampler : SMP(1);
+Texture2D<float4> modelAlbedo : TEX(2);
+SamplerState modelAlbedoSampler : SMP(2);
+Texture2D<float4> modelNra : TEX(3);
+SamplerState modelNraSampler : SMP(3);
+
+// Foliage and bark share the lighting; leaves get a soft wrap and light through them when backlit.
+float3 shadeModel(float3 albedo, float rough, float ao, float3 N, float3 Ng, float3 P, bool foliage) {
+    const float3 V = normalize(f.cameraPos.xyz - P);
+    ShadeInput s;
+    s.albedo = albedo;
+    s.roughness = rough;
+    s.metallic = 0.0;
+    s.N = N;
+    s.V = V;
+    s.ao = ao;
+    s.specOcclusion = foliage ? 0.5 * ao : ao;
+    s.emissive = ((float3)(0.0));
+    s.clearCoat = 0.0;
+    s.lamp = headlightIrradiance(P, N);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, Ng);
+    if (foliage) {
+        const float back = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
+        s.emissive = albedo * f.sunColor.rgb * s.shadow * (0.05 + 0.35 * back) * ao;
+    }
+    return applyFog(shade(s), P, f.cameraPos.xyz);
+}
+
+float3 modelHue(float3 albedo, float hue) {
+    const float k = mm.tint.w;
+    return albedo * mm.tint.rgb * lerp((float3)(1.0), lerp(float3(1.12, 1.06, 0.82), float3(0.86, 0.97, 1.06), hue) *
+                                                          (0.88 + 0.24 * frac(hue * 7.31)), k);
+}
+#endif
+
+#if defined(TF_ENTRY_model_fs)
+float4 model_fs(ModelOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
+    if (modelDitherDiscard(vin.fadeHue.x, vin.position.xy)) discard;
+    const float4 a = modelAlbedo.Sample(modelAlbedoSampler, vin.uv);
+    const float coverage = mm.params.x > 0.5 ? modelCoverage(a.a) : 1.0;
+    const float4 nra = modelNra.Sample(modelNraSampler, vin.uv);
+    float3 Ng = normalize(vin.normal);
+    if (!front) Ng = -Ng;
+    // Cotangent frame from the screen derivatives (no tangents in the vertex format); DirectX normal maps: +y
+    // follows +v.
+    const float3 dp1 = ddx(vin.worldPos), dp2 = ddy(vin.worldPos);
+    const float2 duv1 = ddx(vin.uv), duv2 = ddy(vin.uv);
+    const float3 dp2perp = cross(dp2, Ng), dp1perp = cross(Ng, dp1);
+    const float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    const float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    const float inv = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-20));
+    const float2 nxy = (nra.rg * 2.0 - 1.0) * mm.params.w;
+    const float3 N = normalize(T * inv * nxy.x + B * inv * nxy.y + Ng * sqrt(saturate(1.0 - dot(nxy, nxy))));
+    const bool foliage = mm.params.y > 0.5;
+    const float3 albedo = modelHue(a.rgb, vin.fadeHue.y);
+    return float4(shadeModel(albedo, nra.b, nra.a, N, Ng, vin.worldPos, foliage), coverage);
+}
+#endif
+
+#if defined(TF_ENTRY_impostor_fs)
+// Atlas: mu.params.z views side by side; view k was rendered from the azimuth a = 2 pi k / views (camera along
+// (sin a, 0, cos a) in model space, card +u along (cos a, 0, -sin a)). Normals in the atlas: x along the card's +u,
+// y up, z toward the viewer. mm.params.w: number of views.
+float4 impostor_fs(ModelOut vin) : SV_Target0 {
+    if (modelDitherDiscard(vin.fadeHue.x, vin.position.xy)) discard;
+    const float views = max(1.0, round(mm.params.w));
+    const float az = atan2(vin.modelView.x, vin.modelView.z);
+    float k = round(az / (2.0 * PI) * views);
+    k = k - views * floor(k / views);
+    const float2 uv = float2((k + clamp(vin.uv.x, 0.002, 0.998)) / views, vin.uv.y);
+    const float4 a = modelAlbedo.Sample(modelAlbedoSampler, uv);
+    const float coverage = modelCoverage(a.a);
+    const float4 nra = modelNra.Sample(modelNraSampler, uv);
+    const float3 toCam = normalize(vin.normal);
+    const float3 right = float3(toCam.z, 0.0, -toCam.x);
+    const float2 nxy = nra.rg * 2.0 - 1.0;
+    const float3 N = normalize(right * nxy.x + float3(0, nxy.y, 0) + toCam * sqrt(saturate(1.0 - dot(nxy, nxy))));
+    const float3 albedo = modelHue(a.rgb, vin.fadeHue.y);
+    return float4(shadeModel(albedo, nra.b, nra.a, N, toCam, vin.worldPos, true), coverage);
+}
+#endif
+
 // ---------------------------------------------------------------- level terrain (render copy of the physics grid)
 
 // One shared patch of 64 x 64 cells (+ skirt) drawn per quadtree chunk. LitIn.position = (column, skirt 0/1, row).
@@ -1418,6 +1650,91 @@ float4 water_fs(LitOut vin) : SV_Target0 {
     const float4 fog = fogAt(P, f.cameraPos.xyz);
     src = src * (1.0 - fog.a) + fog.rgb * fog.a * srcAlpha;
     return float4(src, srcAlpha);
+}
+#endif
+
+// ---------------------------------------------------------------- waterfalls (render-only)
+// Mesh from render/LevelScene buildLevelWaterfallMesh: color.xy piece coordinates, color.z kind (0 sheet, 1 foam,
+// 2 mist); material x: drop (m), y: river width (m), z: seed. Premultiplied alpha, no depth write.
+
+#if defined(TF_ENTRY_waterfall_fs)
+Texture2DArray<float> shadowMap : TEX(0);
+SamplerComparisonState shadowSampler : SMP(0);
+Texture2D<float4> noiseTex : TEX(1);
+SamplerState ns : SMP(1);
+Texture2D<float4> heightTex : TEX(2);
+SamplerState cs : SMP(2);
+
+float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
+    const float3 P = vin.worldPos;
+    const float t = f.cameraPos.w;
+    const float kind = vin.color.z;
+    const float drop = vin.material.x, width = vin.material.y, seed = vin.material.z;
+    const float3 V = normalize(f.cameraPos.xyz - P);
+    float3 N = normalize(vin.normal);
+    if (!front) N = -N;
+    float alpha, white, translucency;
+    if (kind < 0.5) {
+        // Sheet: streaks stretched along the fall, scrolling with the water (the coordinate is the fall time, so the
+        // pattern accelerates like the water). Thin film near the lip, aerated and torn toward the foot.
+        const float u = vin.color.x, s = vin.color.y;
+        const float T = sqrt(2.0 * (drop + 0.3) / 9.81);
+        const float2 q = float2(u * width * 0.5 + seed * 13.0, (s * T - t) * 1.3);
+        const float n1 = noiseTex.Sample(ns, float2(q.x * 0.09, q.y * 0.045)).g;
+        const float n2 = noiseTex.Sample(ns, float2(q.x * 0.31 + 0.37, q.y * 0.16)).g;
+        const float n3 = noiseTex.Sample(ns, float2(q.x * 0.9 + 0.11, q.y * 0.5)).g;
+        const float streak = saturate(n1 * 0.7 + n2 * 0.45 + n3 * 0.25 - 0.2);
+        const float rag = 0.08 + 0.22 * n2;
+        const float edge = smoothstep(0.0, rag, u) * smoothstep(1.0, 1.0 - rag, u);
+        const float torn = smoothstep(0.35, 1.0, s);
+        const float lip = smoothstep(0.0, 0.05, s);
+        alpha = saturate(lerp(0.35 + 0.45 * streak, streak * 1.4 - 0.25, torn)) * edge * lip;
+        white = saturate(0.1 + 0.6 * streak + 0.8 * s);
+        translucency = 0.6;
+    } else if (kind < 1.5) {
+        // Foam: churned water spreading outward from the impact.
+        const float2 l = vin.color.xy * 2.0 - 1.0;
+        const float r = length(l);
+        const float a = atan2(l.y, l.x);
+        const float R = 0.55 * width + 0.12 * drop;
+        const float n1 = noiseTex.Sample(ns, float2(a * 0.6 + seed, r * R * 0.08 - t * 0.12)).g;
+        const float n2 = noiseTex.Sample(ns, P.xz * 0.21 + float2(t * 0.03, -t * 0.02)).g;
+        const float foam = saturate(n1 * 0.8 + n2 * 0.6 - 0.25);
+        alpha = saturate(foam * 1.6 + 0.6 * (1.0 - r)) * smoothstep(1.0, 0.45, r) * 0.9;
+        white = 0.85 + 0.15 * foam;
+        translucency = 0.2;
+        N = float3(0, 1, 0);
+    } else {
+        // Mist: soft rising spray, faded at the card edges, edge-on, against the ground and close to the camera.
+        const float u = vin.color.x, v = vin.color.y;
+        const float n1 = noiseTex.Sample(ns, float2(u * 0.55 + seed, v * 0.35 - t * 0.05)).g;
+        const float n2 = noiseTex.Sample(ns, float2(u * 1.3 - t * 0.02, v * 0.9 - t * 0.11 + seed)).g;
+        const float puff = saturate(n1 * 0.9 + n2 * 0.5 - 0.35);
+        const float terrain = heightTex.SampleLevel(cs, groundUV(P.xz), 0).r;
+        const float dist = length(f.cameraPos.xyz - P);
+        const float facing = saturate(abs(dot(N, V)) * 1.6 - 0.2);
+        alpha = puff * sin(3.14159 * u) * smoothstep(0.0, 0.2, v) * (1.0 - v) * (1.0 - v) * 0.32 * facing *
+                saturate((P.y - terrain) * 0.5) * saturate((dist - 3.0) / 10.0) * saturate(drop / 12.0);
+        white = 0.95;
+        translucency = 1.0;
+        N = V;
+    }
+    if (alpha < 0.002) discard;
+    // Light: wrapped sun diffuse with forward scattering through the water, sky ambient, a small sun glint.
+    const float shadow = shadowFactor(shadowMap, shadowSampler, P, N);
+    const float3 L = f.sunDir.xyz;
+    const float wrap = saturate((dot(N, L) + 0.5) / 1.5);
+    const float forward = pow(saturate(dot(-V, L)), 6.0) * translucency;
+    const float3 skyUp = lerp(f.skyHorizon.rgb, f.skyZenith.rgb, 0.5);
+    const float3 albedo = lerp(float3(0.20, 0.30, 0.30), float3(0.86, 0.90, 0.92), white);
+    float3 col = albedo * (skyUp * 0.9 + f.sunColor.rgb * shadow * (wrap * 0.30 + forward * 0.5));
+    if (kind < 0.5) {
+        const float3 H = normalize(L + V);
+        col += f.sunColor.rgb * shadow * ggxSpec(saturate(dot(N, H)), max(saturate(dot(N, V)), 1e-3), saturate(dot(N, L)), 0.18) * 0.04;
+    }
+    const float4 fog = fogAt(P, f.cameraPos.xyz);
+    col = col * (1.0 - fog.a) + fog.rgb * fog.a;
+    return float4(col * alpha, alpha);
 }
 #endif
 

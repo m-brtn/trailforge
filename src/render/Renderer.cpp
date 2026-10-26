@@ -1,5 +1,6 @@
 #include "render/Renderer.h"
 
+#include "core/ModelAsset.h"
 #include "core/TerrainTextureSet.h"
 #include "render/GroundMaps.h"
 #include "render/ShaderBlobs.h"
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,8 +38,9 @@ namespace {
     throw std::runtime_error(what + ": " + SDL_GetError());
 }
 
-enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2 };
-enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4 };
+enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2, kLayoutModel = 3 };
+// kBlendCoverage: no blending, alpha to coverage (alpha-tested foliage on MSAA targets).
+enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4, kBlendCoverage = 5 };
 // Shadow casters: positive slope bias, no depth clip. Decals: pulled toward the camera so they win against the
 // surface they lie on. The scene uses reversed depth (near 1, far 0, compare GREATER_OR_EQUAL) for precision over
 // kilometres; the shadow maps keep the standard 0..1 depth.
@@ -254,9 +257,11 @@ Renderer::~Renderer() {
     releaseScenePipelines();
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
                                        m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe,
-                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe})
+                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe,
+                                       m_modelShadowPipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
     for (GpuMesh& m : m_treeMeshes) m.release();
+    releaseModels();
     m_terrainPatch.release();
     releaseTexture(m_terrainHeight);
     releaseTexture(m_terrainSplat);
@@ -375,12 +380,19 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
         attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LineVertex, position))};
         attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, std::uint32_t(offsetof(LineVertex, color))};
         numAttrs = 2;
+    } else if (vertexLayout == kLayoutModel) {
+        vb.pitch = sizeof(ModelVertex);
+        attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(ModelVertex, pos))};
+        attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(ModelVertex, normal))};
+        attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, std::uint32_t(offsetof(ModelVertex, uv))};
+        attrs[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, std::uint32_t(offsetof(ModelVertex, wind))};
+        numAttrs = 4;
     }
 
     SDL_GPUColorTargetDescription ct{};
     ct.format = color;
     SDL_GPUColorTargetBlendState& b = ct.blend_state;
-    if (blend != kBlendNone) {
+    if (blend != kBlendNone && blend != kBlendCoverage) {
         b.enable_blend = true;
         b.color_blend_op = SDL_GPU_BLENDOP_ADD;
         b.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
@@ -430,6 +442,7 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
         pi.rasterizer_state.depth_bias_clamp = 0.0f;
     }
     pi.multisample_state.sample_count = samples;
+    pi.multisample_state.enable_alpha_to_coverage = blend == kBlendCoverage;
     pi.depth_stencil_state.enable_depth_test = depthTest;
     pi.depth_stencil_state.enable_depth_write = depthWrite;
     pi.depth_stencil_state.compare_op =
@@ -480,6 +493,9 @@ void Renderer::createStaticPipelines() {
     m_terrainShadowPipe = createPipeline("terrain_shadow_vs", "shadow_fs", 2, 0, 1, 0, 0, kLayoutLit, none, s1, true,
                                          true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone,
                                          SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
+    m_modelShadowPipe = createPipeline("model_shadow_vs", "model_shadow_fs", 2, 2, 0, 1, 1, kLayoutModel, none, s1, true,
+                                       true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+                                       kBiasShadow);
 }
 
 void Renderer::createScenePipelines() {
@@ -497,6 +513,8 @@ void Renderer::createScenePipelines() {
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
     m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
+    m_waterfallPipe = createPipeline("lit_vs", "waterfall_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, sc, true, false,
+                                     SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
     m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
     m_lineOnTopPipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, false, false,
@@ -506,13 +524,21 @@ void Renderer::createScenePipelines() {
     // Skirts hang down from both sides of a chunk edge, so the terrain is drawn without culling.
     m_terrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, sc, true, true,
                                    SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_modelA2C = m_settings.msaa > 1;
+    const int foliageBlend = m_modelA2C ? kBlendCoverage : kBlendNone;
+    m_modelPipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, sc, true, true,
+                                 SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
+    m_modelFoliagePipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, sc, true, true,
+                                        SDL_GPU_CULLMODE_NONE, ccw, foliageBlend);
+    m_impostorPipe = createPipeline("impostor_vs", "impostor_fs", 2, 2, 0, 4, 1, kLayoutNone, kHdrFormat, sc, true, true,
+                                    SDL_GPU_CULLMODE_NONE, ccw, foliageBlend);
     m_sceneMsaa = m_settings.msaa;
 }
 
 void Renderer::releaseScenePipelines() {
     for (SDL_GPUGraphicsPipeline** p :
          {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe,
-          &m_sprayPipe, &m_terrainPipe}) {
+          &m_sprayPipe, &m_terrainPipe, &m_modelPipe, &m_modelFoliagePipe, &m_impostorPipe, &m_waterfallPipe}) {
         if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
         *p = nullptr;
     }
@@ -897,6 +923,391 @@ void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const Tre
     if (!m_treeBuffer || !m_treeTransfer) fail("tree buffers");
     SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
             m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3, m_treeMeshes[3].vertexCount() / 3);
+}
+
+// ---------------------------------------------------------------- level models
+
+void Renderer::releaseModels() {
+    for (GpuModel& m : m_models)
+        for (GpuModelLod& l : m.lods) {
+            if (l.vertices) SDL_ReleaseGPUBuffer(m_device, l.vertices);
+            if (l.indices) SDL_ReleaseGPUBuffer(m_device, l.indices);
+        }
+    m_models.clear();
+    for (Texture& t : m_modelTextures) releaseTexture(t);
+    m_modelTextures.clear();
+    m_modelObjects.clear();
+    m_modelBuckets.clear();
+    m_modelScratch.clear();
+    m_modelDraws.clear();
+    for (auto& d : m_modelShadowDraws) d.clear();
+    if (m_modelBuffer) SDL_ReleaseGPUBuffer(m_device, m_modelBuffer);
+    if (m_modelTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_modelTransfer);
+    m_modelBuffer = nullptr;
+    m_modelTransfer = nullptr;
+    m_modelCapacity = 0;
+    m_stats.models = 0;
+    m_stats.modelGpuBytes = 0;
+}
+
+int Renderer::loadModelTexture(const std::string& path, bool srgb, std::uint64_t& bytes) {
+    ktx2::Image img;
+    std::string error;
+    const std::uint32_t want = srgb ? ktx2::kVkFormatBc7Srgb : ktx2::kVkFormatBc7Unorm;
+    if (!ktx2::readFile(path, img, error) || img.vkFormat != want) {
+        if (error.empty()) error = path + ": expected a BC7 " + (srgb ? "sRGB" : "UNORM") + " texture";
+        SDL_Log("TrailForge: model texture unavailable (%s)", error.c_str());
+        return srgb ? 0 : 1; // placeholders
+    }
+    // Levels narrower than one 4 x 4 block on either side are dropped: uploads of the 4 x 1 / 2 x 1 tails of the
+    // non-square impostor atlases corrupted the frame on Metal.
+    std::size_t keep = 0;
+    while (keep < img.levels.size() && img.levels[keep].width >= 4 && img.levels[keep].height >= 4) ++keep;
+    img.levels.resize(std::max<std::size_t>(keep, 1));
+    const auto fmt = srgb ? SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB : SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM;
+    Texture t = makeTexture(img.width, img.height, fmt, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, 1,
+                            std::uint32_t(img.levels.size()));
+    std::size_t total = 0;
+    for (const ktx2::Level& lv : img.levels) total += lv.data.size();
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = std::uint32_t(total);
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
+    if (!tb) fail("model texture transfer buffer");
+    auto* mapped = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, tb, false));
+    std::size_t offset = 0;
+    for (const ktx2::Level& lv : img.levels) {
+        std::memcpy(mapped + offset, lv.data.data(), lv.data.size());
+        offset += lv.data.size();
+    }
+    SDL_UnmapGPUTransferBuffer(m_device, tb);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    offset = 0;
+    for (std::size_t level = 0; level < img.levels.size(); ++level) {
+        const ktx2::Level& lv = img.levels[level];
+        SDL_GPUTextureTransferInfo src{};
+        src.transfer_buffer = tb;
+        src.offset = std::uint32_t(offset);
+        SDL_GPUTextureRegion region{};
+        region.texture = t.tex;
+        region.mip_level = std::uint32_t(level);
+        region.w = lv.width;
+        region.h = lv.height;
+        region.d = 1;
+        SDL_UploadToGPUTexture(copy, &src, &region, false);
+        offset += lv.data.size();
+    }
+    SDL_EndGPUCopyPass(copy);
+    SDL_SubmitGPUCommandBuffer(cmd);
+    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+    bytes += total;
+    m_modelTextures.push_back(t);
+    return int(m_modelTextures.size()) - 1;
+}
+
+int Renderer::setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements) {
+    SDL_WaitForGPUIdle(m_device);
+    releaseModels();
+    if (paths.empty()) return 0;
+    const Uint64 start = SDL_GetPerformanceCounter();
+    constexpr auto kAlbedoFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB;
+    if (!SDL_GPUTextureSupportsFormat(m_device, kAlbedoFmt, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+        SDL_Log("TrailForge: level models unavailable (BC7 textures are not supported by this GPU)");
+        return 0;
+    }
+    // Placeholders for missing maps: 0 white albedo, 1 flat normal / rough / no occlusion.
+    {
+        const std::uint8_t white[4] = {255, 255, 255, 255}, flat[4] = {128, 128, 230, 255};
+        for (const std::uint8_t* px : {white, flat}) {
+            Texture t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+            uploadTexture(t.tex, px, 1, 1, 4);
+            m_modelTextures.push_back(t);
+        }
+    }
+    std::uint64_t bytes = 0;
+    std::map<std::string, int> textures;
+    auto texture = [&](const std::string& path, bool srgb) {
+        const auto it = textures.find(path);
+        if (it != textures.end()) return it->second;
+        const int i = loadModelTexture(path, srgb, bytes);
+        textures[path] = i;
+        return i;
+    };
+    auto buffer = [&](SDL_GPUBufferUsageFlags usage, const void* data, std::size_t size) {
+        SDL_GPUBufferCreateInfo bi{};
+        bi.usage = usage;
+        bi.size = std::uint32_t(size);
+        SDL_GPUBuffer* b = SDL_CreateGPUBuffer(m_device, &bi);
+        SDL_GPUTransferBufferCreateInfo ti{};
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = bi.size;
+        SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
+        if (!b || !tb) fail("model buffers");
+        std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), data, size);
+        SDL_UnmapGPUTransferBuffer(m_device, tb);
+        SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+        SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+        SDL_GPUTransferBufferLocation src{tb, 0};
+        SDL_GPUBufferRegion region{b, 0, bi.size};
+        SDL_UploadToGPUBuffer(copy, &src, &region, false);
+        SDL_EndGPUCopyPass(copy);
+        SDL_SubmitGPUCommandBuffer(cmd);
+        SDL_ReleaseGPUTransferBuffer(m_device, tb);
+        bytes += size;
+        return b;
+    };
+
+    std::vector<int> remap(paths.size(), -1);
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        ModelAsset a;
+        std::string error;
+        if (!a.load(paths[i], true, &error) || a.lods.empty()) {
+            SDL_Log("TrailForge: model unavailable (%s)", error.empty() ? paths[i].c_str() : error.c_str());
+            continue;
+        }
+        const std::size_t slash = paths[i].find_last_of('/');
+        const std::string dir = slash == std::string::npos ? std::string() : paths[i].substr(0, slash + 1);
+        GpuModel g;
+        g.kind = a.kind;
+        g.height = a.height;
+        g.radius = a.radius;
+        const glm::vec3 lo(a.boundsMin[0], a.boundsMin[1], a.boundsMin[2]);
+        const glm::vec3 hi(a.boundsMax[0], a.boundsMax[1], a.boundsMax[2]);
+        g.center = 0.5f * (lo + hi);
+        g.boundRadius = 0.5f * glm::length(hi - lo);
+        for (const ModelMaterial& mat : a.materials) {
+            GpuModelMaterial gm;
+            gm.alphaTest = mat.alphaTest;
+            gm.albedo = mat.albedo.empty() ? 0 : texture(dir + mat.albedo, true);
+            gm.nra = mat.nra.empty() ? 1 : texture(dir + mat.nra, false);
+            g.foliage = g.foliage || mat.alphaTest;
+            g.materials.push_back(gm);
+        }
+        for (const ModelLod& lod : a.lods) {
+            GpuModelLod gl;
+            gl.vertices = buffer(SDL_GPU_BUFFERUSAGE_VERTEX, lod.vertices.data(), lod.vertices.size() * sizeof(ModelVertex));
+            gl.indices = buffer(SDL_GPU_BUFFERUSAGE_INDEX, lod.indices.data(), lod.indices.size() * sizeof(std::uint32_t));
+            for (const ModelPrimitive& p : lod.primitives)
+                if (p.material >= 0 && std::size_t(p.material) < g.materials.size())
+                    gl.primitives.push_back({p.firstIndex, p.indexCount, p.material});
+            gl.triangles = std::uint32_t(lod.triangles());
+            g.lods.push_back(std::move(gl));
+        }
+        if (!a.impostorAlbedo.empty() && a.impostorViews > 0) {
+            g.impostorAlbedo = texture(dir + a.impostorAlbedo, true);
+            g.impostorNra = texture(dir + a.impostorNra, false);
+            g.impostorViews = a.impostorViews;
+        }
+        remap[i] = int(m_models.size());
+        m_models.push_back(std::move(g));
+    }
+
+    for (const ModelPlacement& p : placements) {
+        if (p.model < 0 || std::size_t(p.model) >= remap.size() || remap[std::size_t(p.model)] < 0) continue;
+        const int mi = remap[std::size_t(p.model)];
+        const GpuModel& g = m_models[std::size_t(mi)];
+        const float c = std::cos(p.yaw), s = std::sin(p.yaw), cp = std::cos(p.pitch), sp = std::sin(p.pitch);
+        const glm::vec3 ls = g.center * p.scale;
+        const glm::vec3 lc(ls.x, cp * ls.y - sp * ls.z, sp * ls.y + cp * ls.z);
+        ModelObject o;
+        o.position = p.position;
+        o.scale = p.scale;
+        o.yaw = p.yaw;
+        o.pitch = p.pitch;
+        o.center = p.position + glm::vec3(c * lc.x + s * lc.z, lc.y, -s * lc.x + c * lc.z);
+        o.radius = g.boundRadius * std::max({p.scale.x, p.scale.y, p.scale.z});
+        o.model = mi;
+        m_modelObjects.push_back(o);
+    }
+    // Buckets of kModelBucket x kModelBucket m (row-major over the objects' extent).
+    constexpr float kModelBucket = 64.0f;
+    if (!m_modelObjects.empty()) {
+        glm::vec2 lo(1e30f), hi(-1e30f);
+        for (const ModelObject& o : m_modelObjects) {
+            lo = glm::min(lo, glm::vec2(o.position.x, o.position.z));
+            hi = glm::max(hi, glm::vec2(o.position.x, o.position.z));
+        }
+        const int nx = std::max(1, int(std::ceil((hi.x - lo.x) / kModelBucket)) + 1);
+        auto key = [&](const ModelObject& o) {
+            const int bx = int((o.position.x - lo.x) / kModelBucket), bz = int((o.position.z - lo.y) / kModelBucket);
+            return bz * nx + bx;
+        };
+        std::stable_sort(m_modelObjects.begin(), m_modelObjects.end(),
+                         [&](const ModelObject& a, const ModelObject& b) { return key(a) < key(b); });
+        for (std::uint32_t i = 0; i < m_modelObjects.size();) {
+            const int k = key(m_modelObjects[i]);
+            ModelBucket b{glm::vec3(1e30f), glm::vec3(-1e30f), i, 0};
+            for (; i < m_modelObjects.size() && key(m_modelObjects[i]) == k; ++i) {
+                const ModelObject& o = m_modelObjects[i];
+                b.bmin = glm::min(b.bmin, o.center - glm::vec3(o.radius));
+                b.bmax = glm::max(b.bmax, o.center + glm::vec3(o.radius));
+                ++b.count;
+            }
+            m_modelBuckets.push_back(b);
+        }
+    }
+    m_stats.models = int(m_models.size());
+    m_stats.modelGpuBytes = bytes;
+    m_stats.modelLoadMs = 1000.0 * double(SDL_GetPerformanceCounter() - start) / double(SDL_GetPerformanceFrequency());
+    SDL_Log("TrailForge: %zu / %zu level models, %zu instances in %zu buckets, %zu textures, %.1f MB, %.0f ms",
+            m_models.size(), paths.size(), m_modelObjects.size(), m_modelBuckets.size(), m_modelTextures.size() - 2,
+            double(bytes) / 1e6, m_stats.modelLoadMs);
+    return int(m_models.size());
+}
+
+Renderer::ModelRange Renderer::modelRange(const GpuModel& m) const {
+    const RenderSettings& s = m_settings;
+    // Distances at the High preset (tree detail distance 650 m); they scale with the tree detail distance. Trees hand
+    // over to the impostor cards at the end of their last mesh LOD and keep them to the tree distance.
+    const float k = s.treeDetailDistance / 650.0f;
+    ModelRange r;
+    std::array<float, 3> b{};
+    float maxD = 0.0f;
+    if (m.kind == "tree") {
+        b = {45.0f * k, 125.0f * k, 360.0f * k};
+        maxD = s.treeDistance;
+        r.impostor = m.impostorAlbedo >= 0;
+        r.shadowCascades = 4;
+    } else if (m.kind == "bush") {
+        b = {35.0f * k, 220.0f * k, 220.0f * k};
+        maxD = 220.0f * k;
+        r.shadowCascades = 1;
+    } else if (m.kind == "debris") {
+        b = {20.0f * k, 70.0f * k, 70.0f * k};
+        maxD = 70.0f * k;
+    } else if (m.kind == "log") {
+        b = {30.0f * k, 100.0f * k, 420.0f * k};
+        maxD = 420.0f * k;
+        r.shadowCascades = 2;
+    } else if (m.kind == "cliff") {
+        b = {120.0f * k, 400.0f * k, s.treeDistance};
+        maxD = s.treeDistance;
+        r.shadowCascades = 4;
+    } else { // rock
+        b = {40.0f * k, 140.0f * k, 1400.0f * k};
+        maxD = 1400.0f * k;
+        r.shadowCascades = 4;
+    }
+    const int n = std::min<int>(int(m.lods.size()), 4);
+    for (int l = 0; l < n; ++l) r.bounds[std::size_t(l)] = l < 3 ? b[std::size_t(l)] : maxD;
+    if (n > 0 && !r.impostor) r.bounds[std::size_t(n - 1)] = maxD;
+    r.maxDistance = maxD;
+    return r;
+}
+
+std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj) {
+    m_modelScratch.clear();
+    m_modelDraws.clear();
+    for (auto& d : m_modelShadowDraws) d.clear();
+    m_stats.modelInstances = m_stats.modelImpostors = m_stats.modelShadowInstances = m_stats.modelDraws = 0;
+    m_stats.modelTriangles = m_stats.modelShadowTriangles = 0;
+    if (m_modelObjects.empty()) return 0;
+    constexpr int kSlots = 5; // mesh LODs 0..3, impostor
+    const std::size_t nm = m_models.size();
+    const int cascades = std::min(m_settings.shadowCascades, 4);
+    m_modelBins.resize(nm * kSlots * std::size_t(1 + cascades));
+    for (auto& b : m_modelBins) b.clear();
+    auto bin = [&](int view, int model, int slot) -> std::vector<ModelInstance>& {
+        return m_modelBins[(std::size_t(view) * nm + std::size_t(model)) * kSlots + std::size_t(slot)];
+    };
+    std::vector<ModelRange> ranges(nm);
+    float maxRange = 0.0f;
+    for (std::size_t i = 0; i < nm; ++i) {
+        ranges[i] = modelRange(m_models[i]);
+        maxRange = std::max(maxRange, ranges[i].maxDistance);
+    }
+    const Frustum fr(viewProj);
+    const glm::vec3 cam = frame.cameraPos;
+    const float shadowR = m_settings.shadowDistance * frame.shadowScale + 25.0f;
+    std::array<glm::vec2, 4> lightScale{};
+    for (int c = 0; c < cascades; ++c) {
+        const glm::mat4& lv = lightViewProj[c];
+        lightScale[std::size_t(c)] = glm::vec2(glm::length(glm::vec3(lv[0][0], lv[1][0], lv[2][0])),
+                                               glm::length(glm::vec3(lv[0][1], lv[1][1], lv[2][1])));
+    }
+    for (const ModelBucket& b : m_modelBuckets) {
+        const glm::vec3 nearest = glm::clamp(cam, b.bmin, b.bmax);
+        const float nd = glm::length(nearest - cam);
+        const glm::vec2 nxz(nearest.x - cam.x, nearest.z - cam.z);
+        const bool inShadow = cascades > 0 && glm::length(nxz) < shadowR;
+        const bool inView = nd < maxRange && fr.box(b.bmin, b.bmax);
+        if (!inView && !inShadow) continue;
+        for (std::uint32_t i = b.first; i < b.first + b.count; ++i) {
+            const ModelObject& o = m_modelObjects[i];
+            const ModelRange& r = ranges[std::size_t(o.model)];
+            const int nl = std::min<int>(int(m_models[std::size_t(o.model)].lods.size()), 4);
+            const ModelInstance base{glm::vec4(o.position, 0.0f), glm::vec4(o.scale, o.yaw), glm::vec4(o.pitch, 0.0f, 0.0f, 0.0f)};
+            const float d = glm::length(o.center - cam);
+            if (inView && d < r.maxDistance && fr.sphere(o.center, o.radius)) {
+                int l = 0;
+                while (l < nl && d >= r.bounds[std::size_t(l)]) ++l;
+                if (l < nl || r.impostor) {
+                    const float end = l < nl ? r.bounds[std::size_t(l)] : r.maxDistance;
+                    const bool last = l == nl || (l == nl - 1 && !r.impostor);
+                    const int slot = l < nl ? l : 4;
+                    if (d > end * (1.0f - kTreeFadeBand)) {
+                        // Nearer LOD keeps share k, the next one (if any) the rest; the last one dissolves.
+                        const float k = std::clamp((end - d) / (end * kTreeFadeBand), 0.02f, 1.0f);
+                        ModelInstance a = base;
+                        a.posFade.w = k;
+                        bin(0, o.model, slot).push_back(a);
+                        if (!last) {
+                            a.posFade.w = 2.0f + k;
+                            bin(0, o.model, l + 1 < nl ? l + 1 : 4).push_back(a);
+                        }
+                    } else {
+                        bin(0, o.model, slot).push_back(base);
+                    }
+                }
+            }
+            if (!inShadow || r.shadowCascades == 0) continue;
+            const glm::vec2 dxz(o.center.x - cam.x, o.center.z - cam.z);
+            if (glm::dot(dxz, dxz) > (shadowR + o.radius) * (shadowR + o.radius)) continue;
+            for (int c = 0; c < std::min(cascades, r.shadowCascades); ++c) {
+                const glm::vec4 p = lightViewProj[c] * glm::vec4(o.center, 1.0f);
+                const glm::vec2 ls = lightScale[std::size_t(c)];
+                if (std::abs(p.x) > 1.0f + o.radius * ls.x || std::abs(p.y) > 1.0f + o.radius * ls.y) continue;
+                bin(1 + c, o.model, c == 0 ? std::min(1, nl - 1) : nl - 1).push_back(base);
+            }
+        }
+    }
+    auto collect = [&](int view, std::vector<ModelDraw>& out) {
+        for (std::size_t m = 0; m < nm; ++m)
+            for (int slot = 0; slot < kSlots; ++slot) {
+                const std::vector<ModelInstance>& v = bin(view, int(m), slot);
+                if (v.empty()) continue;
+                out.push_back({int(m), slot == 4 ? -1 : slot, std::uint32_t(m_modelScratch.size()), std::uint32_t(v.size())});
+                m_modelScratch.insert(m_modelScratch.end(), v.begin(), v.end());
+                const std::uint64_t tris = slot == 4 ? 2 : m_models[m].lods[std::size_t(slot)].triangles;
+                if (view == 0) {
+                    (slot == 4 ? m_stats.modelImpostors : m_stats.modelInstances) += int(v.size());
+                    m_stats.modelTriangles += tris * v.size();
+                } else {
+                    m_stats.modelShadowInstances += int(v.size());
+                    m_stats.modelShadowTriangles += tris * v.size();
+                }
+            }
+    };
+    collect(0, m_modelDraws);
+    for (int c = 0; c < cascades; ++c) collect(1 + c, m_modelShadowDraws[std::size_t(c)]);
+
+    const std::uint32_t total = std::uint32_t(m_modelScratch.size());
+    if (total > m_modelCapacity) {
+        if (m_modelBuffer) SDL_ReleaseGPUBuffer(m_device, m_modelBuffer);
+        if (m_modelTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_modelTransfer);
+        m_modelCapacity = std::max<std::uint32_t>(4096, total + total / 2);
+        SDL_GPUBufferCreateInfo bi{};
+        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+        bi.size = m_modelCapacity * std::uint32_t(sizeof(ModelInstance));
+        m_modelBuffer = SDL_CreateGPUBuffer(m_device, &bi);
+        SDL_GPUTransferBufferCreateInfo ti{};
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = bi.size;
+        m_modelTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
+        if (!m_modelBuffer || !m_modelTransfer) fail("model instance buffers");
+    }
+    return total;
 }
 
 void Renderer::clearTrample() {
@@ -1447,6 +1858,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
     TreeLists trees;
     const std::uint32_t treeTotal = cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, trees);
+    const std::uint32_t modelTotal = cullModels(frame, viewProj, lightViewProj);
     for (int l = 0; l < 4; ++l) m_stats.trees[l] = int(trees.count[l]);
     m_stats.shadowTrees = int(trees.shadowCount);
     const TireMarks* marks = frame.tireMarks;
@@ -1469,7 +1881,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         m_sprayTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
         if (!m_sprayBuffer || !m_sprayTransfer) fail("wheel spray buffers");
     }
-    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || markSync || sprayCount > 0) {
+    if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || modelTotal > 0 || markSync || sprayCount > 0) {
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
         if (markSync) m_stats.markUploadBytes = uploadMarks(copy, *marks);
         if (sprayCount > 0) {
@@ -1507,6 +1919,15 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_GPUBufferRegion region{m_treeBuffer, 0, bytes};
             SDL_UploadToGPUBuffer(copy, &src, &region, true);
         }
+        if (modelTotal > 0) {
+            const std::uint32_t bytes = modelTotal * std::uint32_t(sizeof(ModelInstance));
+            void* dst = SDL_MapGPUTransferBuffer(m_device, m_modelTransfer, true);
+            std::memcpy(dst, m_modelScratch.data(), bytes);
+            SDL_UnmapGPUTransferBuffer(m_device, m_modelTransfer);
+            SDL_GPUTransferBufferLocation src{m_modelTransfer, 0};
+            SDL_GPUBufferRegion region{m_modelBuffer, 0, bytes};
+            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+        }
         SDL_EndGPUCopyPass(copy);
     }
     if (frame.ui) ImGui_ImplSDLGPU3_PrepareDrawData(frame.ui, cmd);
@@ -1533,6 +1954,75 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_GPUBufferBinding binding{mesh.buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
         SDL_DrawGPUPrimitives(pass, mesh.vertexCount(), count, 0, 0);
+    };
+    // Level models: the pipeline's vertex / fragment uniform slot 0 must already be set. Draws the primitives of one
+    // kind (opaque or alpha-tested) of every listed (model, LOD); impostor entries only with impostors = true.
+    auto modelUniforms = [&](const GpuModel& g, const ModelDraw& d) {
+        const bool tree = g.kind == "tree", bush = g.kind == "bush";
+        ModelUniforms mu{glm::vec4(float(d.first), frame.time, fu.options.z, g.height),
+                         glm::vec4(tree ? 0.010f : bush ? 0.020f : 0.0f, tree || bush ? 0.035f : 0.0f,
+                                   float(g.impostorViews), g.radius)};
+        SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
+    };
+    auto drawModels = [&](SDL_GPURenderPass* pass, const std::vector<ModelDraw>& draws, bool alphaTested,
+                          bool shadow) {
+        int drawn = 0;
+        for (const ModelDraw& d : draws) {
+            if (d.lod < 0) continue;
+            const GpuModel& g = m_models[std::size_t(d.model)];
+            const GpuModelLod& lod = g.lods[std::size_t(d.lod)];
+            bool bound = false;
+            for (const GpuModelLod::Primitive& p : lod.primitives) {
+                const GpuModelMaterial& mat = g.materials[std::size_t(p.material)];
+                if (!shadow && mat.alphaTest != alphaTested) continue;
+                if (!bound) {
+                    modelUniforms(g, d);
+                    SDL_BindGPUVertexStorageBuffers(pass, 0, &m_modelBuffer, 1);
+                    SDL_GPUBufferBinding vb{lod.vertices, 0};
+                    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
+                    SDL_GPUBufferBinding ib{lod.indices, 0};
+                    SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+                    bound = true;
+                }
+                const float hue = g.kind == "tree" || g.kind == "bush" ? (mat.alphaTest ? 0.6f : 0.2f) : 0.15f;
+                ModelMaterialUniforms mm{glm::vec4(mat.alphaTest ? 1.0f : 0.0f, mat.alphaTest ? 1.0f : 0.0f,
+                                                   m_modelA2C ? 1.0f : 0.0f, 1.0f),
+                                         glm::vec4(1.0f, 1.0f, 1.0f, hue)};
+                SDL_PushGPUFragmentUniformData(cmd, 1, &mm, sizeof(mm));
+                const SDL_GPUTextureSamplerBinding albedo{m_modelTextures[std::size_t(mat.albedo)].tex, m_repeatSampler};
+                if (shadow) {
+                    SDL_BindGPUFragmentSamplers(pass, 0, &albedo, 1);
+                } else {
+                    const SDL_GPUTextureSamplerBinding tex[4] = {
+                        {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, albedo,
+                        {m_modelTextures[std::size_t(mat.nra)].tex, m_repeatSampler}};
+                    SDL_BindGPUFragmentSamplers(pass, 0, tex, 4);
+                }
+                SDL_DrawGPUIndexedPrimitives(pass, p.indexCount, d.count, p.firstIndex, 0, 0);
+                ++drawn;
+            }
+        }
+        return drawn;
+    };
+    auto drawImpostors = [&](SDL_GPURenderPass* pass) {
+        int drawn = 0;
+        for (const ModelDraw& d : m_modelDraws) {
+            if (d.lod >= 0) continue;
+            const GpuModel& g = m_models[std::size_t(d.model)];
+            modelUniforms(g, d);
+            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_modelBuffer, 1);
+            ModelMaterialUniforms mm{glm::vec4(1.0f, 1.0f, m_modelA2C ? 1.0f : 0.0f, float(g.impostorViews)),
+                                     glm::vec4(1.0f, 1.0f, 1.0f, 0.6f)};
+            SDL_PushGPUFragmentUniformData(cmd, 1, &mm, sizeof(mm));
+            const SDL_GPUTextureSamplerBinding tex[4] = {
+                {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler},
+                {m_modelTextures[std::size_t(g.impostorAlbedo)].tex, m_clampSampler},
+                {m_modelTextures[std::size_t(g.impostorNra)].tex, m_clampSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, tex, 4);
+            SDL_DrawGPUPrimitives(pass, 6, d.count, 0, 0);
+            ++drawn;
+        }
+        return drawn;
     };
 
     // Level terrain chunks: main view (frustum, LOD by distance) and shadow casters (coarser, around the camera).
@@ -1617,6 +2107,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
             drawTrees(pass, m_treeMeshes[1], trees.shadowFirst, trees.shadowCount);
             ++m_stats.shadowDraws;
+        }
+        if (!m_modelShadowDraws[std::size_t(c)].empty()) {
+            SDL_BindGPUGraphicsPipeline(pass, m_modelShadowPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &su, sizeof(su));
+            m_stats.shadowDraws += drawModels(pass, m_modelShadowDraws[std::size_t(c)], false, true);
         }
         SDL_EndGPURenderPass(pass);
     }
@@ -1778,6 +2274,24 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             ++m_stats.drawCalls;
         }
 
+        // Level models: opaque parts, alpha-tested foliage (two-sided, alpha to coverage with MSAA), impostor cards.
+        if (!m_modelDraws.empty()) {
+            const std::pair<SDL_GPUGraphicsPipeline*, bool> passes[2] = {{m_modelPipe, false}, {m_modelFoliagePipe, true}};
+            for (const auto& [pipe, alpha] : passes) {
+                SDL_BindGPUGraphicsPipeline(pass, pipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+                SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+                m_stats.modelDraws += drawModels(pass, m_modelDraws, alpha, false);
+            }
+            if (m_stats.modelImpostors > 0) {
+                SDL_BindGPUGraphicsPipeline(pass, m_impostorPipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+                SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+                m_stats.modelDraws += drawImpostors(pass);
+            }
+            m_stats.drawCalls += m_stats.modelDraws;
+        }
+
         // Trees (one instanced draw per LOD).
         if (trees.count[0] + trees.count[1] + trees.count[2] + trees.count[3] > 0) {
             SDL_BindGPUGraphicsPipeline(pass, m_treePipe);
@@ -1868,6 +2382,21 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUFragmentSamplers(pass, 0, wtex, 4);
             DrawItem wd;
             wd.mesh = frame.water;
+            drawLit(pass, wd);
+            ++m_stats.drawCalls;
+        }
+
+        // Waterfalls (sheets, foam, mist) over the water.
+        if (frame.waterfalls && frame.waterfalls->vertexCount() > 0) {
+            SDL_BindGPUGraphicsPipeline(pass, m_waterfallPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            SDL_GPUTextureSamplerBinding ftex[3] = {{m_shadow.tex, m_cmpSampler},
+                                                    {m_noise.tex, m_repeatSampler},
+                                                    {m_height.tex, m_clampSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, ftex, 3);
+            DrawItem wd;
+            wd.mesh = frame.waterfalls;
             drawLit(pass, wd);
             ++m_stats.drawCalls;
         }

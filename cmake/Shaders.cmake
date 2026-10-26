@@ -22,11 +22,12 @@ file(MAKE_DIRECTORY ${_gen_dir})
 # entry:stage. Resource counts are given where the pipelines are created (src/render/Renderer.cpp).
 set(TRAILFORGE_SHADER_ENTRIES
     lit_vs:vertex lit_fs:fragment shadow_vs:vertex shadow_fs:fragment tree_vs:vertex tree_shadow_vs:vertex
-    fullscreen_vs:vertex sky_fs:fragment water_fs:fragment grass_vs:vertex grass_fs:fragment mark_vs:vertex
+    fullscreen_vs:vertex sky_fs:fragment water_fs:fragment waterfall_fs:fragment grass_vs:vertex grass_fs:fragment mark_vs:vertex
     mark_fs:fragment mark_mask_vs:vertex mark_mask_fs:fragment spray_vs:vertex spray_fs:fragment line_vs:vertex
     line_fs:fragment bloom_down_fs:fragment bloom_up_fs:fragment tonemap_fs:fragment fxaa_fs:fragment
     blur_down_fs:fragment blur_up_fs:fragment blur_composite_fs:fragment terrain_vs:vertex terrain_shadow_vs:vertex
-    terrain_fs:fragment)
+    terrain_fs:fragment model_vs:vertex model_fs:fragment model_shadow_vs:vertex model_shadow_fs:fragment
+    impostor_vs:vertex impostor_fs:fragment)
 
 set(_metal_ok OFF)
 if(APPLE)

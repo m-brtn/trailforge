@@ -30,7 +30,8 @@ struct TerrainStreamingStats {
 };
 
 // Physics of an open-world level in square tiles: one HeightFieldShape per tile (the baked height grid, per-cell
-// surface materials) plus one MeshShape with the tree trunks and boulders whose centers are inside the tile. Shapes are
+// surface materials) plus one StaticCompoundShape with the tree trunks and boulders whose centers are inside the tile
+// (model rocks, logs and cliffs: the model's shared collision MeshShape, scaled and placed per instance). Shapes are
 // built on a worker thread; bodies are added and removed only by update(), which the simulation calls between physics
 // steps. Tiles near the focus that are not ready are built synchronously (counted as stalls), so the vehicle never
 // drives onto a missing tile.
@@ -101,6 +102,7 @@ private:
     std::vector<Tile> m_tiles;
     std::vector<std::vector<std::uint32_t>> m_tileTrees, m_tileRocks; // per tile: indices into the level lists
     std::size_t m_trunkCount = 0;
+    std::vector<JPH::Ref<JPH::Shape>> m_modelShapes; // per level model: unit-scale collision mesh (null: none)
     TerrainStreamingStats m_stats;
 
     std::mutex m_mutex;

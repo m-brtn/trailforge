@@ -177,7 +177,7 @@ private:
     void fillTireMarks();
 
     // m_sceneryMesh: the proving ground backdrop, or the render-only horizon ring of a level.
-    GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_bodyMesh, m_wheelMesh, m_rearWheelMesh; // wheels: front, rear axle
+    GpuMesh m_trackMesh, m_sceneryMesh, m_waterMesh, m_waterfallMesh, m_bodyMesh, m_wheelMesh, m_rearWheelMesh; // wheels: front, rear axle
     GpuMesh m_springMesh, m_armMesh, m_halfShaftMesh, m_shockBodyMesh, m_shockShaftMesh;
     std::optional<VehicleConfig> m_visualFit;  // config the body and wheel meshes were built for
     std::array<glm::vec2, 2> m_wheelVisualSize{}; // measured wheel mesh (outer radius, width) per axle

@@ -149,6 +149,44 @@ void levelHeightfieldSampling() {
     CHECK(surfaceBad == 0, "%d", surfaceBad);
     CHECK(seamBad == 0, "%d", seamBad);
 
+    // Model rocks, logs and cliffs: the tile compound (shared model mesh, scaled and turned) is the triangles of
+    // addLevelRock. Rays straight down near the instance centre hit both at the same height.
+    int rockRays = 0, rockSame = 0, rockBelow = 0, rockCovered = 0;
+    for (std::size_t i = 0; i < L.rocks().size() && rockRays < 300; i += 2) {
+        const LevelRock& r = L.rocks()[i];
+        if (r.model < 0) continue;
+        TrackGeometry g;
+        addLevelRock(g, r, L.models());
+        const float x = r.x + rng.range(-0.3f, 0.3f) * r.rx, z = r.z + rng.range(-0.3f, 0.3f) * r.rz;
+        float triY = -1e9f;
+        for (std::size_t t = 0; t < g.triangleCount(); ++t) {
+            const JPH::Vec3 a(g.positions[3 * t]), b(g.positions[3 * t + 1]), c(g.positions[3 * t + 2]);
+            // Vertical ray: barycentric coordinates in the xz projection.
+            const float d = (b.GetX() - a.GetX()) * (c.GetZ() - a.GetZ()) - (c.GetX() - a.GetX()) * (b.GetZ() - a.GetZ());
+            if (std::abs(d) < 1e-9f) continue;
+            const float u = ((x - a.GetX()) * (c.GetZ() - a.GetZ()) - (c.GetX() - a.GetX()) * (z - a.GetZ())) / d;
+            const float v = ((b.GetX() - a.GetX()) * (z - a.GetZ()) - (x - a.GetX()) * (b.GetZ() - a.GetZ())) / d;
+            if (u < 0.0f || v < 0.0f || u + v > 1.0f) continue;
+            triY = std::max(triY, a.GetY() + u * (b.GetY() - a.GetY()) + v * (c.GetY() - a.GetY()));
+        }
+        if (triY < -1e8f) continue;
+        const JPH::RRayCast ray(JPH::RVec3(x, 600.0f, z), JPH::Vec3(0.0f, -800.0f, 0.0f));
+        JPH::RayCastResult hit;
+        if (!world.system().GetNarrowPhaseQuery().CastRay(ray, hit)) continue;
+        const float y = 600.0f - 800.0f * hit.mFraction;
+        ++rockRays;
+        rockSame += std::abs(y - triY) < 0.01f;
+        rockBelow += y < triY - 0.01f;
+        rockCovered += y > triY + 0.01f && std::abs(y - L.heightAt(x, z)) < 0.01f;
+    }
+    std::printf("  %d model rock rays: %d at the addLevelRock height, %d under the ground, %d below it\n", rockRays,
+                rockSame, rockCovered, rockBelow);
+    CHECK(rockRays > 50, "model rock rays %d", rockRays);
+    CHECK(rockBelow == 0, "%d rays passed through a model rock", rockBelow);
+    CHECK(rockSame * 10 >= rockRays * 8, "only %d of %d rays at the rock surface", rockSame, rockRays);
+    CHECK((rockSame + rockCovered) * 20 >= rockRays * 19, "only %d + %d of %d rays at the rock or the ground", rockSame,
+          rockCovered, rockRays);
+
     // Deterministic bake: a second bake with a different thread count is identical.
     std::string err;
     auto again = Level::load(kLevel, &err, 3);
@@ -550,20 +588,49 @@ void levelPropWinding() {
         badTris += bad;
     }
     CHECK(inverted == 0, "%d of %d prop pieces have %d inward triangles", inverted, pieces, badTris);
-    int rocks = 0, trunks = 0;
+    int rocks = 0, trunks = 0, modelRocks = 0, cliffs = 0;
     for (const LevelRock& r : L.rocks()) {
         TrackGeometry g;
-        addLevelRock(g, r);
-        rocks += inwardTriangles(g, 0, g.triangleCount()) > 0;
+        addLevelRock(g, r, L.models());
+        if (r.model < 0) {
+            rocks += inwardTriangles(g, 0, g.triangleCount()) > 0;
+            continue;
+        }
+        ++modelRocks;
+        if (L.models()[std::size_t(r.model)].kind == "cliff") {
+            // Cliff faces are open shells: their area-weighted normal must face out of the wall (the placement's
+            // pitched +Z, which leans toward the downhill side) and away from the ground.
+            JPH::Vec3 n = JPH::Vec3::sZero();
+            for (std::size_t t = 0; t < g.triangleCount(); ++t) {
+                const JPH::Vec3 a(g.positions[3 * t]), b(g.positions[3 * t + 1]), d(g.positions[3 * t + 2]);
+                n += (b - a).Cross(d - a);
+            }
+            n = n.NormalizedOr(JPH::Vec3::sZero());
+            const JPH::Vec3 face(std::sin(r.yaw) * std::cos(r.pitch), -std::sin(r.pitch), std::cos(r.yaw) * std::cos(r.pitch));
+            ++cliffs;
+            rocks += n.Dot(face) < 0.6f || n.GetY() < 0.0f;
+            continue;
+        }
+        // Model rocks are not convex: the enclosed signed volume must be positive (wound outward) and close to
+        // the scaled model volume order of magnitude (not a flat or inverted shell).
+        const JPH::Vec3 c(r.x, r.y, r.z);
+        double vol = 0.0;
+        for (std::size_t t = 0; t < g.triangleCount(); ++t) {
+            const JPH::Vec3 a = JPH::Vec3(g.positions[3 * t]) - c, b = JPH::Vec3(g.positions[3 * t + 1]) - c,
+                            d = JPH::Vec3(g.positions[3 * t + 2]) - c;
+            vol += double(a.Dot(b.Cross(d))) / 6.0;
+        }
+        rocks += vol < 0.05 * double(r.rx * r.ry * r.rz);
     }
     for (std::size_t i = 0; i < L.trees().size(); i += 7) {
         TrackGeometry g;
-        addLevelTrunk(g, L.trees()[i]);
+        addLevelTrunk(g, L.trees()[i], L.models());
         trunks += inwardTriangles(g, 0, g.triangleCount()) > 0;
     }
     CHECK(rocks == 0 && trunks == 0, "inverted rocks %d, trunks %d", rocks, trunks);
-    std::printf("  %d prop pieces, %zu rocks, %zu trunks (every 7th) wound outward\n", pieces, L.rocks().size(),
-                (L.trees().size() + 6) / 7);
+    std::printf("  %d prop pieces, %zu rocks (%d models, %d cliff faces), %zu trunks (every 7th) wound outward\n", pieces,
+                L.rocks().size(), modelRocks, cliffs, (L.trees().size() + 6) / 7);
+    CHECK(L.models().empty() || cliffs > 50, "only %d cliff faces", cliffs);
 }
 
 // Placement: no building, prop, rock or tree trunk within its margin of a road (bridges excepted: they carry the

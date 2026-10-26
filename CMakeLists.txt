@@ -27,6 +27,7 @@ include(cmake/Dependencies.cmake)
 add_library(trailforge_sim STATIC
     src/core/Json.cpp
     src/core/Ktx2.cpp
+    src/core/ModelAsset.cpp
     src/core/TerrainTextureSet.cpp
     src/physics/PhysicsWorld.cpp
     src/track/SurfaceProperties.cpp
@@ -45,6 +46,7 @@ add_library(trailforge_sim STATIC
     src/sim/BodyMud.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
+target_include_directories(trailforge_sim SYSTEM PRIVATE ${cgltf_SOURCE_DIR})
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_sim PRIVATE -Wall -Wextra)
 endif()

@@ -275,7 +275,7 @@ Application::~Application() {
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
     m_menu.release();
-    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_rearWheelMesh, &m_springMesh,
+    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_waterfallMesh, &m_bodyMesh, &m_wheelMesh, &m_rearWheelMesh, &m_springMesh,
                        &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
         m->release();
     m_imgui.reset();
@@ -652,7 +652,7 @@ bool Application::selectLevel(const std::string& requested) {
 void Application::buildWorldContent() {
     const Uint64 t0 = SDL_GetPerformanceCounter();
     SDL_WaitForGPUIdle(m_renderer->device());
-    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh}) m->release();
+    for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_waterfallMesh}) m->release();
     const Level* level = m_sim.level();
     m_contentLevel = level;
     m_contentBuilt = true;
@@ -661,6 +661,8 @@ void Application::buildWorldContent() {
     if (level) {
         m_trackMesh = m_renderer->upload(buildLevelPropsMesh(*level));
         m_waterMesh = m_renderer->upload(buildLevelWaterMesh(*level));
+        if (const MeshData falls = buildLevelWaterfallMesh(*level); !falls.vertices.empty())
+            m_waterfallMesh = m_renderer->upload(falls);
         m_sceneryMesh = m_renderer->upload(buildLevelHorizonMesh(*level));
         m_renderer->setGround(buildLevelGroundMaps(*level), 0.0f);
         TerrainSource src;
@@ -670,8 +672,17 @@ void Application::buildWorldContent() {
         src.heights = level->heights().data();
         src.splat = level->splatTexels().data();
         m_renderer->setTerrain(&src);
+        std::vector<std::string> modelPaths;
+        std::vector<ModelPlacement> placements;
+        buildLevelModelPlacements(*level, modelPaths, placements);
+        const int models = m_renderer->setModels(modelPaths, placements);
+        if (models < int(modelPaths.size()))
+            std::printf("Levels: %d of %zu level models loaded (see the log)\n", models, modelPaths.size());
+        if (!level->modelError().empty())
+            std::printf("Levels: model library unavailable (%s); procedural trees and rocks\n",
+                        level->modelError().c_str());
         const std::vector<TreeInstance> inst = buildLevelTreeInstances(*level);
-        trees = inst.size();
+        trees = inst.size() + placements.size();
         m_renderer->setTrees(buildPineMeshes(), inst);
         m_camera.farPlane = 1.1f * kHorizonSea; // the sea reaches the horizon
     } else {
@@ -680,12 +691,13 @@ void Application::buildWorldContent() {
         m_waterMesh = m_renderer->upload(buildWaterMesh());
         m_renderer->setTerrain(nullptr);
         m_renderer->setGround(buildGroundMaps(m_sim.track()), TestTrack::water().level);
+        m_renderer->setModels({}, {});
         const std::vector<TreeInstance> inst = buildTreeInstances();
         trees = inst.size();
         m_renderer->setTrees(buildPineMeshes(), inst);
         m_camera.farPlane = Camera{}.farPlane;
     }
-    std::printf("World: %s, render triangles: props/track %u, scenery/horizon %u, water %u, trees %zu, build %.0f ms\n",
+    std::printf("World: %s, render triangles: props/track %u, scenery/horizon %u, water %u, trees + models %zu, build %.0f ms\n",
                 level ? level->name().c_str() : "Proving Ground", m_trackMesh.vertexCount() / 3,
                 m_sceneryMesh.vertexCount() / 3, m_waterMesh.vertexCount() / 3, trees,
                 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
@@ -1022,6 +1034,7 @@ void Application::renderFrame(float frameTime) {
     frame.time = float(m_time);
     frame.draws = m_draws;
     frame.water = &m_waterMesh;
+    frame.waterfalls = &m_waterfallMesh;
     if (m_sim.level()) {
         // Open world: thinner fog over kilometers, longer shadow cascades, no planar puddle reflection.
         frame.fogDensity = 0.00045f;

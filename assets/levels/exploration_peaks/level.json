@@ -183,6 +183,20 @@
     { "name": "Wheat Field", "kind": "wheat",
       "polygon": [[-700, 250], [-612, 252], [-604, 362], [-690, 372]] }
   ],
+  "vegetation": {
+    "dir": "../../models",
+    "conifers": ["fir_tree_01/fir_tree_01_a", "fir_tree_01/fir_tree_01_b", "fir_tree_01/fir_tree_01_c"],
+    "saplings": ["fir_sapling_medium/fir_sapling_medium_a", "fir_sapling_medium/fir_sapling_medium_b",
+                 "fir_sapling_medium/fir_sapling_medium_c"],
+    "broadleaf": ["tree_small_02/tree_small_02", "island_tree_01/island_tree_01"],
+    "bushes": ["shrub_02/shrub_02_a", "shrub_02/shrub_02_b", "shrub_02/shrub_02_c", "shrub_02/shrub_02_d"],
+    "ferns": ["fern_02/fern_02_a", "fern_02/fern_02_b", "fern_02/fern_02_c", "fern_02/fern_02_d"],
+    "debris": ["logs/dry_branches_a", "logs/dry_branches_b", "logs/dry_branches_c"],
+    "rocks": ["rocks/boulder_01", "rocks/boulder_02", "rocks/boulder_05", "rocks/rock_moss_01", "rocks/rock_moss_02",
+              "rocks/rock_moss_03", "rocks/rock_moss_04", "rocks/rock_moss_05", "rocks/rock_moss_06"],
+    "logs": ["logs/dead_tree_trunk", "logs/tree_stump_01"],
+    "cliffs": ["cliffs/rock_face_01", "cliffs/rock_face_02"]
+  },
   "pois": [
     { "id": 1, "name": "Snowy Peaks", "kind": "peak", "x": -753, "z": -845, "at": [-748, -838] },
     { "id": 2, "name": "Mountain Pass", "kind": "pass", "x": 51, "z": -865, "at": [48, -858] },

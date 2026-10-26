@@ -59,23 +59,64 @@ struct LevelRiver {
     std::vector<LevelRiverSample> samples;
 };
 
+// A step in a river's surface (render-only water): the surface drops from the lip sample to the foot sample.
+// The renderer draws a falling sheet, foam and mist there; the carved channel below is ordinary rigid ground.
+struct LevelWaterfall {
+    float x0 = 0.0f, z0 = 0.0f, y0 = 0.0f; // lip: water surface above the step
+    float x1 = 0.0f, z1 = 0.0f, y1 = 0.0f; // foot: water surface below
+    float width = 8.0f;                    // river width (m)
+};
+
+// A converted model of assets/models used by the level (core/ModelAsset): its measurements and collision.
+struct LevelModel {
+    std::string id, kind, path;     // path: the .glb file (the renderer loads the meshes from it)
+    float height = 0.0f, radius = 0.0f;
+    float trunkRadius = 0.0f;       // trees, unit scale
+    JPH::Float3 trunkTop{0, 0, 0};  // trees: trunk axis at 0.3 x height, unit scale (the base is the origin)
+    JPH::Float3 boundsMin{0, 0, 0}, boundsMax{0, 0, 0};
+    // Collision triangles at unit scale (3 positions per triangle, wound outward): the model's collision mesh, its
+    // LOD collisionLod (rocks, logs, stumps, cliffs); the nearer render LODs differ from it by collisionError.
+    std::vector<JPH::Float3> collision;
+    int collisionLod = -1;
+    float collisionError = 0.0f;    // m at unit scale: simplification error of the collision LOD (modelc)
+};
+
+enum class TreeKind : std::uint8_t { Conifer = 0, Sapling, Broadleaf };
+
 struct LevelTree {
     float x = 0.0f, y = 0.0f, z = 0.0f; // trunk base
     float height = 10.0f, yaw = 0.0f, hue = 0.5f, width = 1.0f;
+    std::int16_t model = -1;            // Level::models() index; -1: the procedural pine (no model library)
+    TreeKind kind = TreeKind::Conifer;
+    float scale = 1.0f;                 // model scale (height = model height x scale; x / z also x width)
 };
 
 struct LevelRock {
     float x = 0.0f, y = 0.0f, z = 0.0f; // center
-    float rx = 1.0f, ry = 1.0f, rz = 1.0f, yaw = 0.0f;
+    float rx = 1.0f, ry = 1.0f, rz = 1.0f, yaw = 0.0f; // half extents
     std::uint32_t seed = 0;
     PropStyle style = PropStyle::DarkStone;
+    std::int16_t model = -1;            // Level::models() index (rock, log, stump); -1: procedural rock
+    float sx = 1.0f, sy = 1.0f, sz = 1.0f; // model scale per axis (model space, before the pitch and yaw)
+    float pitch = 0.0f;                    // rad about the model x axis, before the yaw (cliff faces)
+};
+
+// Render-only ground cover: bushes, ferns and dry branches (no collision; the vehicle drives through them).
+struct LevelScatter {
+    float x = 0.0f, y = 0.0f, z = 0.0f, yaw = 0.0f, scale = 1.0f;
+    std::int16_t model = 0;
 };
 
 // Collision and render geometry of level objects; both sides call these, so the triangles are identical.
-void addLevelRock(TrackGeometry& g, const LevelRock& r);
-// Tree trunk: the hexagonal prism of the LOD0 pine trunk (render/Scenery buildPineMeshes, shader treeWorld):
-// radius 0.022 h w, from -0.02 h to 0.32 h above the base. Wind sway moves it by < 2 cm and is ignored.
-void addLevelTrunk(TrackGeometry& g, const LevelTree& t);
+// Model rocks: the model's collision mesh, scaled and turned; procedural rocks: TrackGeometry::addRock.
+void addLevelRock(TrackGeometry& g, const LevelRock& r, const std::vector<LevelModel>& models);
+// Collision surface of a model's mesh (logs and stumps: the trunk material, everything else rock).
+SurfaceId levelModelSurface(const LevelModel& m);
+// Tree trunk. Model trees: a hexagonal prism of the model's trunk radius x scale x width from the base along the
+// model's trunk axis to 0.3 x height (the visual trunk follows the axis; branches and leaves have no collision).
+// Procedural pines: the prism of the LOD0 pine trunk (render/Scenery buildPineMeshes, shader treeWorld), radius
+// 0.022 h w, from -0.02 h to 0.32 h. Wind sway moves the visual trunk by a few cm and is ignored.
+void addLevelTrunk(TrackGeometry& g, const LevelTree& t, const std::vector<LevelModel>& models);
 
 // What a prop piece belongs to (placement rules: bridges sit on the roads, everything else keeps off them).
 enum class PropRole : std::uint8_t { Bridge, Building, Prop, Rock };
@@ -103,7 +144,7 @@ struct LevelBridge {
 struct LevelBakeStats {
     double totalMs = 0.0;
     int samples = 0;       // per side
-    std::size_t trees = 0, rocks = 0, propTriangles = 0;
+    std::size_t trees = 0, rocks = 0, propTriangles = 0, scatter = 0;
     int propsMoved = 0, propsRemoved = 0; // placed objects shifted / dropped to keep off the roads
     float minHeight = 0.0f, maxHeight = 0.0f;
 };
@@ -114,8 +155,10 @@ public:
 
     // Loads and bakes. Returns nullptr and an error message on failure. threads <= 0: hardware concurrency.
     static std::shared_ptr<const Level> load(const std::string& path, std::string* error = nullptr, int threads = 0);
+    // baseDir: folder of the level file (resolves the model library of "vegetation"; empty: procedural trees and
+    // rocks only).
     static std::shared_ptr<const Level> fromJsonText(const std::string& text, std::string* error = nullptr,
-                                                     int threads = 0);
+                                                     int threads = 0, const std::string& baseDir = {});
 
     const std::string& id() const { return m_id; }
     const std::string& name() const { return m_name; }
@@ -151,9 +194,14 @@ public:
     const std::vector<LevelPoi>& pois() const { return m_pois; }
     const std::vector<LevelRoad>& roads() const { return m_roads; }
     const std::vector<LevelRiver>& rivers() const { return m_rivers; }
+    const std::vector<LevelWaterfall>& waterfalls() const { return m_waterfalls; }
     const std::vector<LevelBridge>& bridges() const { return m_bridges; }
     const std::vector<LevelTree>& trees() const { return m_trees; }
     const std::vector<LevelRock>& rocks() const { return m_rocks; }
+    const std::vector<LevelScatter>& scatter() const { return m_scatter; }
+    // Model library of the level (empty when the level has none or a model failed to load, see modelError()).
+    const std::vector<LevelModel>& models() const { return m_models; }
+    const std::string& modelError() const { return m_modelError; }
     const LevelProps& props() const { return m_props; }
     float snowLine() const { return m_snowLine; }
 
@@ -180,9 +228,13 @@ private:
     std::vector<LevelPoi> m_pois;
     std::vector<LevelRoad> m_roads;
     std::vector<LevelRiver> m_rivers;
+    std::vector<LevelWaterfall> m_waterfalls;
     std::vector<LevelBridge> m_bridges;
     std::vector<LevelTree> m_trees;
     std::vector<LevelRock> m_rocks;
+    std::vector<LevelScatter> m_scatter;
+    std::vector<LevelModel> m_models;
+    std::string m_modelError;
     LevelProps m_props;
     float m_spawnX = 0.0f, m_spawnZ = 0.0f, m_spawnTowardX = 0.0f, m_spawnTowardZ = 1.0f;
     LevelBakeStats m_stats;
