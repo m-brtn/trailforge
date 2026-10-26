@@ -1233,7 +1233,9 @@ the development level and is what scenarios and `--demo` start on.
   both LODs, so trees do not pop; drawn out to 2 / 3 / 3.5 / 4.5 km per preset); grass, flowers, wheat, trees, rocks
   and props keep clear of every road corridor and of bridge decks with their ramps (a 1.5–3 m fade from the edge,
   CTest `level_grass_clear`); a render-only horizon ring outside the bake (ridged hills that continue the bake edge, a northern range from
-  ~1 km out, vertex colors) and the open sea
+  ~1 km out; the edge heights are averaged over a window that grows with the distance and the material continues the
+  bake's ground colors at the edge, then a per-pixel grass / rock / snow / sand palette from noise, so the bake square
+  does not read from above) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
 - **Map (M / LB):** see [Map, waypoint and compass](#map-waypoint-and-compass). No fast travel: teleports are in the

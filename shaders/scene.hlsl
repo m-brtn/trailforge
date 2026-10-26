@@ -46,6 +46,7 @@ static const int MAT_SNOW = 16;
 static const int MAT_TERRAIN = 17; // level terrain: splat weights rock / sand / snow in the color, the rest is dirt + mask
 static const int MAT_CLADDING = 18; // grained unpainted plastic (body cladding, bumpers, flares)
 static const int MAT_ASPHALT = 19;  // road finishes of the mini handling track: vertex color + aggregate noise
+static const int MAT_HORIZON = 20;  // level horizon ring: palette from world-space noise, vertex colour = bake edge tone
 
 // BodyMudRegion (src/sim/BodyMud.h).
 static const int kMudArchRearShader = 0;
@@ -880,6 +881,25 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
             s.roughness = saturate(s.roughness + 0.15 * (grain - 0.5));
             N = perturbNormal(N, P, grain * 0.02, 0.3);
             s.ao = vehicleAO(P);
+        } else if (mat == MAT_HORIZON) {
+            // Per pixel, so the long radial ring quads do not smear a per-vertex palette into streaks: grass and
+            // forest patches, rock on steep or high ground, snow on gentle faces above a noisy line, sand at the
+            // waterline. It fades from the edge tone in the vertex colour (half within ~400 m of the bake edge along
+            // a noisy line, the rest by ~3 km), so the ring starts in the colour the baked ground ends with.
+            const float n1 = noiseTex.Sample(noiseSampler, P.xz / 5600.0).r * 0.65 + noiseTex.Sample(noiseSampler, P.xz / 1900.0).g * 0.35;
+            const float n2 = noiseTex.Sample(noiseSampler, P.xz / 2100.0 + 0.37).g * 0.6 + noiseTex.Sample(noiseSampler, P.xz / 640.0).r * 0.4;
+            const float slope = 1.0 - N.y;
+            float3 c = lerp(float3(0.085, 0.092, 0.040), float3(0.150, 0.122, 0.062), smoothstep(0.35, 0.75, n1));
+            c = lerp(c, float3(0.045, 0.060, 0.030), 0.7 * smoothstep(0.50, 0.70, n2)); // forest
+            const float3 rockC = lerp(float3(0.115, 0.105, 0.095), float3(0.205, 0.190, 0.170), n2);
+            c = lerp(c, rockC, max(smoothstep(0.18, 0.32, slope), smoothstep(380.0, 560.0, P.y)));
+            const float snowLine = 720.0 + 260.0 * (n1 - 0.5);
+            c = lerp(c, float3(0.72, 0.74, 0.78), smoothstep(snowLine, snowLine + 120.0, P.y) * (1.0 - smoothstep(0.22, 0.36, slope)));
+            c = lerp(c, float3(0.36, 0.31, 0.21), 1.0 - smoothstep(1.5, 5.0, P.y));
+            const float r = max(abs(P.x), abs(P.z)) + f.groundRect.x; // past the bake edge (the rings scale the square)
+            const float3 edgeTone = vin.color * (0.80 + 0.40 * n2);
+            s.albedo = lerp(edgeTone, c, 0.45 * smoothstep(0.0, 400.0, r + (n2 - 0.5) * 500.0) + 0.55 * smoothstep(300.0, 3000.0, r));
+            s.metallic = 0.0;
         } else if (mat == MAT_CLADDING) {
             // Stippled plastic: noise fixed to the vehicle, projected along the dominant local axis.
             const float3 an = abs(vin.localNormal);
@@ -1879,7 +1899,8 @@ float4 water_fs(LitOut vin) : SV_Target0 {
             ruv = suv;
             zb = depthLin.SampleLevel(dls, ruv, 0).r;
         }
-        const float path = outside && f.worldParams.y > 0.5 ? 1e4 : max(zb - zw, 0.0) * dist / max(zw, 1e-3);
+        // Outside the baked square the horizon seabed is under the open sea quads, so the path is measured the same way.
+        const float path = max(zb - zw, 0.0) * dist / max(zw, 1e-3);
         const float3 tint = vin.color / max(max(vin.color.r, vin.color.g), max(vin.color.b, 1e-4));
         const float3 sigma = ((1.0 - tint) * 2.5 + 1.2) / vin.material.y;
         const float3 T = lerp((float3)1.0, exp(-sigma * min(path, 1e3)), vin.material.z);

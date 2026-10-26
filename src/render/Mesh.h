@@ -30,6 +30,7 @@ enum class MatId : int {
     Snow = 16,
     Cladding = 18,    // grained unpainted plastic
     Asphalt = 19,     // road finishes (asphalt, paint, curbs, gravel): vertex color with fine aggregate noise
+    Horizon = 20,     // level horizon ring: per-pixel palette, vertex colour = bake edge tone
 };
 
 struct Material {

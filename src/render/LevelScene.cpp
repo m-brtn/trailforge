@@ -49,7 +49,7 @@ struct WaterLook {
 
 WaterLook waterLook(WaterKind k) {
     switch (k) {
-    case WaterKind::Sea: return {{0.012f, 0.040f, 0.055f}, 7.0f, 0.95f};
+    case WaterKind::Sea: return {{0.012f, 0.040f, 0.055f}, 7.0f, 1.0f};
     case WaterKind::Lake: return {{0.015f, 0.045f, 0.050f}, 5.0f, 0.93f};
     case WaterKind::River: return {{0.035f, 0.050f, 0.045f}, 1.6f, 0.88f};
     case WaterKind::None: break;
@@ -273,6 +273,13 @@ MeshData buildLevelWaterfallMesh(const Level& level) {
     return m;
 }
 
+// Far-view albedo of the textured ground layers (grass: the far canopy tone of terrain_fs) and a correction for the
+// ring's lighting (no ground AO, more sky light), set so the ring next to the bake edge matches the bake's mean
+// pixel colour in top-down captures at 10:00.
+constexpr glm::vec3 kEdgeGrass(0.090f, 0.108f, 0.030f), kEdgeSoil(0.150f, 0.118f, 0.078f), kEdgeRock(0.190f, 0.175f, 0.160f),
+                    kEdgeSand(0.360f, 0.310f, 0.210f), kEdgeSnow(0.720f, 0.740f, 0.780f);
+constexpr glm::vec3 kEdgeLight(1.15f, 1.05f, 0.69f);
+
 MeshData buildLevelHorizonMesh(const Level& level) {
     const int n = level.samples();
     const float e = -level.origin(); // half side of the baked square
@@ -309,7 +316,21 @@ MeshData buildLevelHorizonMesh(const Level& level) {
     static constexpr float kRings[] = {0,    8,    24,   50,   90,   150,  220,  300,  400,  520,  660,  820,  1000, 1200,
                                        1450, 1750, 2100, 2500, 3000, 3600, 4300, 5100, 6100, 7300, 8700, 10300, 12100, 14000};
     constexpr int nr = int(std::size(kRings));
-    auto heightAt = [&](const Column& col, float r) {
+    // The bake edge profile (hills, cut walls) would run outward as radial ridges while it fades: it is averaged along
+    // the edge over a window that grows with the distance (about +-r/2), so the ring loses it smoothly.
+    std::vector<double> prefix(std::size_t(nc) + 1, 0.0);
+    for (int c = 0; c < nc; ++c) prefix[std::size_t(c) + 1] = prefix[std::size_t(c)] + double(cols[std::size_t(c)].h0);
+    const auto edgeHeight = [&](int c, float r) {
+        const int half = std::clamp(int(r / (2.0f * float(kStride) * level.cell())), 0, nc / 8);
+        double sum = 0.0;
+        const int a = c - half, b = c + half; // inclusive, may wrap around the loop
+        const auto range = [&](int lo, int hi) { return prefix[std::size_t(hi) + 1] - prefix[std::size_t(lo)]; };
+        if (a < 0) sum = range(0, b) + range(nc + a, nc - 1);
+        else if (b >= nc) sum = range(a, nc - 1) + range(0, b - nc);
+        else sum = range(a, b);
+        return float(sum / double(2 * half + 1));
+    };
+    auto heightAt = [&](int c, const Column& col, float r) {
         const glm::vec2 p = col.p * ((e + r) / e);
         const float w = glm::smoothstep(0.0f, 1200.0f, r);
         // Ridged hills everywhere on land (they rise out of the valley haze right past the edge); to the north (-Z)
@@ -323,14 +344,14 @@ MeshData buildLevelHorizonMesh(const Level& level) {
         const float land = glm::mix(hills, std::max(hills, range), north);
         const float seabed = -18.0f - 12.0f * glm::smoothstep(0.0f, 2500.0f, r);
         const float target = glm::mix(seabed, land, col.land);
-        return glm::mix(col.h0, target, w);
+        return glm::mix(edgeHeight(c, r), target, w);
     };
     std::vector<glm::vec3> pos(std::size_t(nc + 1) * nr);
     for (int c = 0; c <= nc; ++c)
         for (int k = 0; k < nr; ++k) {
             const Column& col = cols[std::size_t(c % nc)];
             const glm::vec2 p = col.p * ((e + kRings[k]) / e);
-            pos[std::size_t(c) * nr + k] = glm::vec3(p.x, heightAt(col, kRings[k]), p.y);
+            pos[std::size_t(c) * nr + k] = glm::vec3(p.x, heightAt(c % nc, col, kRings[k]), p.y);
         }
     auto P = [&](int c, int k) { return pos[std::size_t(c) * nr + std::size_t(k)]; };
     auto normal = [&](int c, int k) {
@@ -340,28 +361,51 @@ MeshData buildLevelHorizonMesh(const Level& level) {
         if (nn.y < 0.0f) nn = -nn;
         return glm::normalize(nn);
     };
-    // Per-vertex albedo (generic material, no procedural ground pattern that would tile visibly from far away):
-    // grass and forest tones in large noise patches, rock on steep or high ground, snow only on gentle faces above
-    // a noisy snow line, sand at the waterline. Colors blend smoothly across the large ring quads.
-    auto albedo = [](const glm::vec3& p, const glm::vec3& nn) {
-        const float slope = 1.0f - nn.y;
-        const float n1 = fbm2(p.x / 700.0f, p.z / 700.0f, 3, 751u);
-        const float n2 = fbm2(p.x / 260.0f, p.z / 260.0f, 3, 757u);
-        glm::vec3 c = glm::mix(glm::vec3(0.085f, 0.092f, 0.040f), glm::vec3(0.150f, 0.122f, 0.062f), glm::smoothstep(0.35f, 0.75f, n1));
-        c = glm::mix(c, glm::vec3(0.045f, 0.060f, 0.030f), 0.7f * glm::smoothstep(0.55f, 0.75f, n2)); // forest
-        const glm::vec3 rock = glm::mix(glm::vec3(0.115f, 0.105f, 0.095f), glm::vec3(0.205f, 0.190f, 0.170f), n2);
-        c = glm::mix(c, rock, glm::max(glm::smoothstep(0.18f, 0.32f, slope), glm::smoothstep(380.0f, 560.0f, p.y)));
-        const float snowLine = 720.0f + 260.0f * (n1 - 0.5f);
-        const float snow = glm::smoothstep(snowLine, snowLine + 120.0f, p.y) * (1.0f - glm::smoothstep(0.22f, 0.36f, slope));
-        c = glm::mix(c, glm::vec3(0.72f, 0.74f, 0.78f), snow);
-        c = glm::mix(c, glm::vec3(0.36f, 0.31f, 0.21f), 1.0f - glm::smoothstep(1.5f, 5.0f, p.y));
-        return c;
+    // Vertex colour: far-view ground colour of the baked terrain just inside each column (mean grass, soil, rock,
+    // sand and snow tones of the textured ground seen from hundreds of meters, from the render masks over the last
+    // 160 m), smoothed along the edge. The palette itself is per pixel (MatId::Horizon in lit_fs), which fades from
+    // this tone to its own over the first ~3 km.
+    const int cn = level.cells();
+    const auto cellAt = [&](float x, float z) {
+        const int i = std::clamp(int((x - level.origin()) / level.cell()), 0, cn - 1);
+        const int j = std::clamp(int((z - level.origin()) / level.cell()), 0, cn - 1);
+        return std::size_t(j) * std::size_t(cn) + std::size_t(i);
     };
+    const auto byte = [](std::uint32_t v, int ch) { return float((v >> (8 * ch)) & 0xffu) / 255.0f; };
+    std::vector<glm::vec3> edgeColor(std::size_t(nc), glm::vec3(0.0f));
+    for (int c = 0; c < nc; ++c) {
+        const glm::vec2 p = cols[std::size_t(c)].p, in = -glm::normalize(p);
+        glm::vec3 sum(0.0f);
+        int count = 0;
+        for (int d = -2; d <= 2; ++d)
+            for (float t = 8.0f; t <= 160.0f; t += 8.0f) {
+                const glm::vec2 q = p + in * t + glm::vec2(-in.y, in.x) * (float(d) * 12.0f);
+                const std::size_t k = cellAt(q.x, q.y);
+                const float grass = byte(level.maskTexels()[k], 0);
+                const std::uint32_t sp = level.splatTexels()[k];
+                const float rock = byte(sp, 1), sand = std::max(0.0f, 2.0f * byte(sp, 2) - 1.0f),
+                            snow = std::max(0.0f, 1.0f - 2.0f * byte(sp, 2));
+                glm::vec3 g = glm::mix(kEdgeSoil, kEdgeGrass, grass);
+                g = glm::mix(g, kEdgeSand, sand);
+                g = glm::mix(g, kEdgeRock, rock);
+                g = glm::mix(g, kEdgeSnow, snow);
+                sum += g;
+                ++count;
+            }
+        edgeColor[std::size_t(c)] = sum / float(count);
+    }
+    std::vector<glm::vec3> edgeSmooth(edgeColor.size());
+    for (int c = 0; c < nc; ++c) {
+        glm::vec3 sum(0.0f);
+        for (int d = -24; d <= 24; ++d) sum += edgeColor[std::size_t((c + d + nc) % nc)];
+        edgeSmooth[std::size_t(c)] = sum / 49.0f * kEdgeLight;
+    }
+
     MeshData m;
     m.vertices.reserve(std::size_t(nc) * std::size_t(nr - 1) * 6);
     auto vert = [&](int c, int k) {
         const glm::vec3 p = P(c, k), nn = normal(c, k);
-        m.vertices.push_back({p, nn, albedo(p, nn), glm::vec4(float(MatId::Generic), 0.92f, 0.0f, 0.0f)});
+        m.vertices.push_back({p, nn, edgeSmooth[std::size_t(c % nc)], glm::vec4(float(MatId::Horizon), 0.92f, 0.0f, 0.0f)});
     };
     for (int c = 0; c < nc; ++c)
         for (int k = 0; k + 1 < nr; ++k) {
