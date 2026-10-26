@@ -16,6 +16,7 @@
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 #include "ui/DebugUI.h"
+#include "ui/MapUI.h"
 #include "ui/MenuUI.h"
 #include "vehicle/VehicleDefinition.h"
 
@@ -23,6 +24,7 @@
 
 #include <array>
 #include <deque>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -104,7 +106,15 @@ private:
     std::shared_ptr<const Level> loadLevel(const std::string& id);
     // Render content of the simulation's current world (track or level props, water, ground maps, terrain, trees).
     void buildWorldContent();
-    void drawMap();
+    // Map: built on a worker thread per world (buildWorldContent starts it, renderFrame uploads the result).
+    void startMapBuild();
+    void pollMapBuild();
+    void openMap();
+    void closeMap();
+    void handleMap();
+    MapPlayer mapPlayer() const;
+    MapHints mapHints() const;
+    void drawMapHud(); // minimap and compass bar in gameplay
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
@@ -144,8 +154,17 @@ private:
     std::map<std::string, std::shared_ptr<const Level>> m_levelCache;
     const Level* m_contentLevel = nullptr;   // world the render content was built for
     bool m_contentBuilt = false;
-    bool m_mapOpen = false;
-    std::vector<std::uint32_t> m_mapColors;  // map overlay: kMapRes^2 ImGui colors of the current level
+    MapUI m_mapUI;                           // releases its texture explicitly before the renderer
+    std::future<MapData> m_mapJob;
+    MapView m_mapView;                       // full-screen map view (center, zoom); reset per world
+    bool m_mapViewSet = false;
+    MapMarker m_marker;                      // waypoint, cleared when the world changes
+    int m_mapHoverPoi = -1;
+    bool m_mapDragging = false;              // left button went down on the map panel
+    float m_mapDragMoved = 0.0f;             // points moved since the press (a click below 5)
+    float m_mapLastX = 0.0f, m_mapLastY = 0.0f;
+    bool m_mapCrosshair = false;             // keyboard / gamepad aiming: marker at the panel middle
+    double m_mapBuildMs = 0.0;               // worker time of the current world's map
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)

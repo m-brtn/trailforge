@@ -24,6 +24,11 @@ struct GameSettings {
                                // 1 On, 2 Off-road
     int diffLocks = 0;         // 0 open, 1 rear, 2 rear + center, 3 all
     bool autoReverse = true;
+    // Map: corner minimap (size 0 small, 1 medium, 2 large; turns with the vehicle unless north up), compass bar
+    bool minimap = true;
+    int minimapSize = 1;
+    bool minimapNorthUp = false;
+    bool compass = true;
     // Controls
     int driveKeys = 0;         // DriveKeys: 0 W A S D, 1 arrows (the other cluster moves the free camera)
     int padGlyphs = 0;         // PadGlyphSetting: 0 auto (from the connected pad), 1 Xbox, 2 PlayStation

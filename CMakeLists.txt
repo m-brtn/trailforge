@@ -69,6 +69,8 @@ add_library(trailforge_flow STATIC
     src/app/GameFlow.cpp
     src/app/GameSettings.cpp
     src/app/Garage.cpp
+    src/app/MapData.cpp
+    src/app/MapView.cpp
     src/input/ControlLayout.cpp)
 target_include_directories(trailforge_flow PUBLIC src)
 target_link_libraries(trailforge_flow PUBLIC trailforge_sim)
@@ -105,6 +107,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/DebugDraw.cpp
         src/ui/DebugUI.cpp
         src/ui/MenuUI.cpp
+        src/ui/MapUI.cpp
         ${TRAILFORGE_SHADER_SOURCES}
         ${TRAILFORGE_ICON_SOURCES})
     # trailforge_audio brings trailforge_sim.
@@ -222,7 +225,7 @@ if(TRAILFORGE_BUILD_TESTS)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model vehicle_page controls_layout pad_glyph_detect
-                         callout_spread)
+                         callout_spread map_view_math map_level_raster)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

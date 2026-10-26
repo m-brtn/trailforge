@@ -153,7 +153,7 @@ BindingGroup actionGroup(Action a) {
     switch (a) {
     case Action::ToggleCamera: return BindingGroup::Camera;
     case Action::ToggleDebugUI: case Action::ToggleGraphicsUI: case Action::ToggleAudioUI: case Action::TogglePause:
-    case Action::StepOnce: case Action::Quit: return BindingGroup::System;
+    case Action::StepOnce: case Action::Quit: case Action::ToggleMap: return BindingGroup::System;
     default: return BindingGroup::Vehicle;
     }
 }
@@ -259,6 +259,7 @@ const std::vector<PadAction>& padActions() {
         {PadControl::Back, Action::Reset},            {PadControl::RightShoulder, Action::ToggleCamera},
         {PadControl::DpadUp, Action::ToggleAbs},      {PadControl::DpadRight, Action::CycleTraction},
         {PadControl::DpadDown, Action::CycleDiffLock}, {PadControl::DpadLeft, Action::CycleTransfer},
+        {PadControl::LeftShoulder, Action::ToggleMap},
     };
     return p;
 }

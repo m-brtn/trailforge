@@ -5,7 +5,10 @@
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
+#include "app/MapData.h"
+#include "app/MapView.h"
 #include "input/ControlLayout.h"
+#include "track/Level.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 
@@ -53,6 +56,10 @@ void settingsRoundtrip() {
     s.autoReverse = false;
     s.driveKeys = 1;
     s.padGlyphs = 2;
+    s.minimap = false;
+    s.minimapSize = 2;
+    s.minimapNorthUp = true;
+    s.compass = false;
     s.vehicle = "trailforge_ev";
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
@@ -95,6 +102,10 @@ void settingsRoundtrip() {
     const GameSettings far = parseSettings("grass_distance = 900\ntree_distance = 5\n");
     CHECK(far.grassDistance == 250.0f && far.treeDistance == 0.0f, "distances clamped: grass %.0f tree %.0f",
           double(far.grassDistance), double(far.treeDistance));
+    CHECK(defaults.minimap && defaults.minimapSize == 1 && !defaults.minimapNorthUp && defaults.compass,
+          "map defaults: minimap on, medium, turning, compass on");
+    CHECK(parseSettings("minimap_size = 9\n").minimapSize == 2 && parseSettings("minimap_size = -1\n").minimapSize == 0,
+          "minimap size clamped");
     CHECK(defaults.traction == -1, "traction control defaults to the vehicle's own mode");
     CHECK(parseSettings("traction = 0\n").traction == -1 && parseSettings("traction = 1\n").traction == 1 &&
               parseSettings("traction_mode = 0\n").traction == 0 && parseSettings("traction_mode = -4\n").traction == -1,
@@ -270,6 +281,40 @@ void menuNavigation() {
     flow.closeGarage();
     CHECK(flow.screen() == Screen::Paused && flow.current() == MenuItem::Garage && !flow.simulationRuns(),
           "garage closes back to the (frozen) pause menu");
+    // Map: a pause menu row; the map owns its input and freezes the simulation; it closes back to where it opened.
+    CHECK(GameFlow::items(MenuPage::Pause)[1] == MenuItem::Map, "MAP is the second pause row");
+    flow.select(MenuItem::Map);
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::OpenMap && flow.screen() == Screen::Map && flow.menuActive() && !flow.simulationRuns(),
+          "MAP opens the frozen full-screen map");
+    r = flow.handle(esc, settings);
+    CHECK(flow.screen() == Screen::Map && r.command == MenuCommand::None, "GameFlow leaves map input alone");
+    flow.closeMap();
+    CHECK(flow.screen() == Screen::Paused && flow.current() == MenuItem::Map, "map closes to the pause menu on MAP");
+    flow.resume();
+    flow.openMap();
+    CHECK(flow.screen() == Screen::Map && flow.mapReturn() == Screen::Playing, "map from gameplay");
+    flow.closeMap();
+    CHECK(flow.screen() == Screen::Playing && !flow.menuActive(), "map closes to gameplay");
+    flow.pause();
+    flow.openSettings();
+    flow.select(MenuItem::Minimap);
+    CHECK(std::strcmp(menuSection(MenuItem::Minimap), "MAP") == 0 && menuValue(MenuItem::Minimap, settings) == "ON",
+          "MAP section, minimap on");
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(!settings.minimap && r.command == MenuCommand::SettingsChanged, "minimap off");
+    flow.select(MenuItem::MinimapSize);
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.minimapSize == 2 && menuValue(MenuItem::MinimapSize, settings) == "LARGE", "minimap size %d",
+          settings.minimapSize);
+    flow.select(MenuItem::MinimapNorthUp);
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.minimapNorthUp && menuValue(MenuItem::MinimapNorthUp, settings) == "NORTH UP", "north up");
+    flow.select(MenuItem::Compass);
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(!settings.compass, "compass off");
+    flow.handle(key(&MenuInput::back), settings);
+    CHECK(flow.page() == MenuPage::Pause, "back to the pause menu");
     flow.select(MenuItem::QuitToMenu);
     r = flow.handle(key(&MenuInput::accept), settings);
     CHECK(r.command == MenuCommand::QuitToMenu && flow.screen() == Screen::MainMenu && flow.menuFade() == 1.0f,
@@ -717,8 +762,171 @@ void calloutSpread() {
     CHECK(wrapLabel("DIAGNOSTICS", 5.0f, chars) == std::vector<std::string>{"DIAGNOSTICS"}, "one word cannot split");
 }
 
+// Map math: world <-> screen with and without rotation, bearings, the compass tape, distances, scale bar, zoom
+// around the pointer, panning, the marker toggle, and the compass distance shrinking while driving to the marker.
+void mapViewMath() {
+    auto near = [](float a, float b, float eps = 1e-3f) { return std::abs(a - b) <= eps; };
+    MapView v;
+    v.cx = 100.0f;
+    v.cz = -50.0f;
+    v.sx = 400.0f;
+    v.sy = 300.0f;
+    v.scale = 2.0f;
+    MapPoint p = v.toScreen(100.0f, -150.0f); // 100 m north
+    CHECK(near(p.x, 400.0f) && near(p.y, 100.0f), "north is up: (%.2f, %.2f)", double(p.x), double(p.y));
+    p = v.toScreen(150.0f, -50.0f); // 50 m east
+    CHECK(near(p.x, 500.0f) && near(p.y, 300.0f), "east is right: (%.2f, %.2f)", double(p.x), double(p.y));
+    v.rotationDeg = 90.0f; // heading east: east points up, north points left
+    p = v.toScreen(150.0f, -50.0f);
+    CHECK(near(p.x, 400.0f) && near(p.y, 200.0f), "heading east: east is up (%.2f, %.2f)", double(p.x), double(p.y));
+    p = v.toScreen(100.0f, -100.0f);
+    CHECK(near(p.x, 300.0f) && near(p.y, 300.0f), "heading east: north is left (%.2f, %.2f)", double(p.x), double(p.y));
+    for (const float rot : {0.0f, 37.0f, 90.0f, 211.0f, -75.0f}) {
+        v.rotationDeg = rot;
+        for (const auto& w : {MapPoint{-300.0f, 20.0f}, MapPoint{100.0f, -50.0f}, MapPoint{512.5f, 731.25f}}) {
+            const MapPoint s = v.toScreen(w.x, w.y), back = v.toWorld(s.x, s.y);
+            CHECK(near(back.x, w.x, 1e-2f) && near(back.y, w.y, 1e-2f), "roundtrip at %.0f deg: (%.3f, %.3f)", double(rot),
+                  double(back.x), double(back.y));
+        }
+    }
+    v.rotationDeg = 0.0f;
+    const MapPoint under = v.toWorld(620.0f, 140.0f);
+    v.zoomAround(2.5f, 620.0f, 140.0f, 0.1f, 100.0f);
+    const MapPoint after = v.toWorld(620.0f, 140.0f);
+    CHECK(near(v.scale, 5.0f) && near(after.x, under.x, 1e-2f) && near(after.y, under.y, 1e-2f), "zoom keeps the pointed point");
+    v.zoomAround(1000.0f, 400.0f, 300.0f, 0.1f, 8.0f);
+    CHECK(near(v.scale, 8.0f), "zoom clamped at the maximum (%.2f)", double(v.scale));
+    const MapPoint c0 = v.toWorld(400.0f, 300.0f);
+    v.pan(80.0f, -40.0f); // content dragged right and up: the view looks further west and south
+    const MapPoint c1 = v.toWorld(400.0f, 300.0f);
+    CHECK(near(c1.x, c0.x - 10.0f) && near(c1.y, c0.y + 5.0f), "pan (%.2f, %.2f)", double(c1.x - c0.x), double(c1.y - c0.y));
+
+    CHECK(near(bearingDeg(0.0f, -1.0f), 0.0f) && near(bearingDeg(1.0f, 0.0f), 90.0f) && near(bearingDeg(0.0f, 1.0f), 180.0f) &&
+              near(bearingDeg(-1.0f, 0.0f), 270.0f) && near(bearingDeg(1.0f, -1.0f), 45.0f),
+          "bearings N/E/S/W/NE");
+    CHECK(near(relativeBearingDeg(10.0f, 350.0f), 20.0f) && near(relativeBearingDeg(350.0f, 10.0f), -20.0f) &&
+              near(relativeBearingDeg(180.0f, 0.0f), 180.0f) && near(relativeBearingDeg(90.0f, 270.0f), 180.0f),
+          "relative bearings wrap");
+    const auto off = compassOffset(45.0f, 0.0f, 90.0f);
+    CHECK(off && near(*off, 0.5f), "NE on a north tape at +0.5");
+    CHECK(!compassOffset(135.0f, 0.0f, 90.0f) && compassOffset(300.0f, 350.0f, 90.0f) &&
+              near(*compassOffset(300.0f, 350.0f, 90.0f), -50.0f / 90.0f),
+          "outside the tape / wrapped left");
+    CHECK(std::strcmp(compassPointName(0.0f), "N") == 0 && std::strcmp(compassPointName(44.0f), "NE") == 0 &&
+              std::strcmp(compassPointName(359.0f), "N") == 0 && std::strcmp(compassPointName(225.0f), "SW") == 0,
+          "compass point names");
+    CHECK(formatDistance(8.4f) == "8 m" && formatDistance(354.0f) == "350 m" && formatDistance(996.0f) == "1.0 km" &&
+              formatDistance(1234.0f) == "1.2 km" && formatDistance(12600.0f) == "13 km",
+          "distances: %s %s %s %s %s", formatDistance(8.4f).c_str(), formatDistance(354.0f).c_str(),
+          formatDistance(996.0f).c_str(), formatDistance(1234.0f).c_str(), formatDistance(12600.0f).c_str());
+    CHECK(near(scaleBarMeters(1.0f, 160.0f), 100.0f) && near(scaleBarMeters(0.37f, 160.0f), 200.0f) &&
+              near(scaleBarMeters(6.0f, 160.0f), 20.0f) && scaleBarMeters(0.0f, 100.0f) == 0.0f,
+          "scale bar lengths %.0f %.0f %.0f", double(scaleBarMeters(1.0f, 160.0f)), double(scaleBarMeters(0.37f, 160.0f)),
+          double(scaleBarMeters(6.0f, 160.0f)));
+
+    MapMarker m;
+    CHECK(toggleMarker(m, 10.0f, 20.0f, 5.0f) && m.set && near(m.x, 10.0f), "first click sets");
+    CHECK(toggleMarker(m, 40.0f, 20.0f, 5.0f) && near(m.x, 40.0f), "a click elsewhere moves it");
+    CHECK(!toggleMarker(m, 42.0f, 21.0f, 5.0f) && !m.set, "a click on it clears it");
+
+    // Driving towards the marker: the compass distance shrinks and the marker stays near the tape middle.
+    m = {true, 300.0f, -400.0f};
+    float x = 0.0f, z = 0.0f, last = 1e9f;
+    bool shrinking = true;
+    for (int i = 0; i < 20; ++i) {
+        const float heading = bearingDeg(x, z, m.x, m.z);
+        const float d = std::hypot(m.x - x, m.z - z);
+        shrinking = shrinking && d < last;
+        last = d;
+        const auto o = compassOffset(bearingDeg(x, z, m.x, m.z), heading, 90.0f);
+        CHECK(o && std::abs(*o) < 1e-3f, "marker centered while heading to it");
+        x += 20.0f * std::sin(heading * 0.0174532925f);
+        z -= 20.0f * std::cos(heading * 0.0174532925f);
+    }
+    CHECK(shrinking && last < 121.0f, "distance shrinks to %.1f m", double(last)); // 500 m, 19 steps of 20 m
+}
+
+// Map data of Exploration Peaks (worker-thread build, timed) and of the proving ground (its triangles).
+void mapLevelRaster() {
+    std::string error;
+    const auto level = Level::load(TRAILFORGE_SOURCE_DIR "/assets/levels/exploration_peaks/level.json", &error);
+    CHECK(level != nullptr, "level: %s", error.c_str());
+    if (!level) return;
+    const MapData d = buildLevelMap(*level);
+    const MapRaster& r = d.raster;
+    std::printf("    %s: raster %d^2 at %.2f m/px over %.0f m, %zu lines, %zu POIs, built in %.0f ms\n", d.title.c_str(),
+                r.size, double(r.metersPerPixel), double(r.size) * double(r.metersPerPixel), d.lines.size(), d.pois.size(),
+                d.buildMs);
+    CHECK(r.size == 2048 && r.rgba.size() == std::size_t(r.size) * std::size_t(r.size), "raster size");
+    CHECK(r.x0 < d.playX0 && r.x0 + float(r.size) * r.metersPerPixel > d.playX1, "raster covers the play area");
+    CHECK(d.pois.size() == level->pois().size() && d.pois.size() == 13, "13 points of interest (%zu)", d.pois.size());
+    int roads = 0, trails = 0, rivers = 0, bridges = 0;
+    for (const MapLine& l : d.lines) {
+        roads += l.kind == MapLineKind::Road;
+        trails += l.kind == MapLineKind::Trail;
+        rivers += l.kind == MapLineKind::River;
+        bridges += l.kind == MapLineKind::Bridge;
+        CHECK(l.points.size() >= 2, "line '%s' with %zu points", l.name.c_str(), l.points.size());
+    }
+    CHECK(roads > 0 && trails > 0 && rivers > 0 && bridges == int(level->bridges().size()), "roads %d trails %d rivers %d bridges %d",
+          roads, trails, rivers, bridges);
+    // Colors where the level says what is there: water is blue, dry ground is not, every pixel opaque.
+    auto pixel = [&](float x, float z) {
+        const int i = std::clamp(int((x - r.x0) / r.metersPerPixel), 0, r.size - 1);
+        const int j = std::clamp(int((z - r.z0) / r.metersPerPixel), 0, r.size - 1);
+        return r.rgba[std::size_t(j) * r.size + i];
+    };
+    int wet = 0, wetBlue = 0, dry = 0, dryBlue = 0;
+    for (float z = -900.0f; z <= 900.0f; z += 37.0f)
+        for (float x = -900.0f; x <= 900.0f; x += 37.0f) {
+            const std::uint32_t c = pixel(x, z);
+            CHECK((c >> 24) == 0xFF, "transparent pixel at %.0f, %.0f", double(x), double(z));
+            const int R = int(c & 0xFF), B = int((c >> 16) & 0xFF);
+            if (level->waterAt(x, z)) {
+                ++wet;
+                wetBlue += B > R + 20;
+            } else {
+                ++dry;
+                dryBlue += B > R + 20;
+            }
+        }
+    std::printf("    samples: %d wet (%d blue), %d dry (%d blue)\n", wet, wetBlue, dry, dryBlue);
+    CHECK(wet > 50 && wetBlue >= wet * 9 / 10, "water drawn blue: %d of %d", wetBlue, wet);
+    CHECK(dryBlue <= dry / 50, "dry ground drawn blue: %d of %d", dryBlue, dry);
+
+    SimulationSettings s;
+    Simulation sim(s);
+    ProvingGroundMapInput in;
+    in.geometry = &sim.track().geometry();
+    const TrackBounds b = TestTrack::bounds();
+    in.x0 = b.xMin;
+    in.x1 = b.xMax;
+    in.z0 = b.zMin;
+    in.z1 = b.zMax;
+    const WaterInfo w = TestTrack::water();
+    in.waterLevel = w.level;
+    in.waterX0 = w.x0;
+    in.waterZ0 = w.z0;
+    in.waterX1 = w.x1;
+    in.waterZ1 = w.z1;
+    const MapData pg = buildProvingGroundMap(in);
+    int pgWet = 0;
+    for (const std::uint32_t c : pg.raster.rgba) pgWet += int((c >> 16) & 0xFF) > int(c & 0xFF) + 40;
+    std::printf("    proving ground: raster %d^2 at %.3f m/px, %d water pixels, built in %.0f ms\n", pg.raster.size,
+                double(pg.raster.metersPerPixel), pgWet, pg.buildMs);
+    CHECK(pg.raster.size == 1024 && pgWet > 200, "proving ground puddles on the map (%d px)", pgWet);
+    // The start pad (concrete) is grey, not grass green.
+    const MapRaster& q = pg.raster;
+    const int i = int((0.0f - q.x0) / q.metersPerPixel), j = int((-40.0f - q.z0) / q.metersPerPixel);
+    const std::uint32_t c = q.rgba[std::size_t(j) * q.size + i];
+    const int R = int(c & 0xFF), G = int((c >> 8) & 0xFF), B = int((c >> 16) & 0xFF);
+    CHECK(std::abs(R - G) < 25 && std::abs(G - B) < 25, "start pad color %d %d %d", R, G, B);
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"map_view_math", mapViewMath},
+        {"map_level_raster", mapLevelRaster},
         {"settings_roundtrip", settingsRoundtrip},
         {"menu_navigation", menuNavigation},
         {"pause_freezes_ticks", pauseFreezesTicks},

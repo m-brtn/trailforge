@@ -26,6 +26,7 @@ struct MenuKeys {
     bool mouseDown = false; // left button held (slider drags)
     bool mouseMoved = false;
     bool click = false;   // left mouse button pressed (not over an ImGui window)
+    bool release = false; // left mouse button released after a press that reached the game
     float wheel = 0.0f;   // mouse wheel / trackpad scroll this frame (not over an ImGui window), + = up
     float mouseX = 0.0f, mouseY = 0.0f; // window coordinates (the same as ImGui's)
 };
@@ -60,6 +61,12 @@ public:
     glm::vec3 freeCameraMove() const { return m_freeMove; }
     // Gamepad right stick after the dead zone (camera orbit / hood look-around), -1..1, x right, y down.
     glm::vec2 rightStick() const { return m_rightStick; }
+    // Left stick with the same dead zone and response (map panning), and the triggers (x LT, y RT) 0..1.
+    glm::vec2 leftStick() const { return m_leftStick; }
+    glm::vec2 triggers() const { return m_triggers; }
+    // A gamepad button pressed this frame (the map's own buttons; padActions still fire as usual).
+    bool padPressed(PadControl c) const { return m_padPressed[static_cast<std::size_t>(c)]; }
+    bool scancodeHeld(SDL_Scancode s) const { return m_held[s]; }
     bool fastModifier() const { return m_fast; }
 
     bool gamepadConnected() const { return m_gamepad != nullptr; }
@@ -93,6 +100,8 @@ private:
     float m_wheel = 0.0f;
     glm::vec3 m_freeMove{0.0f};
     glm::vec2 m_rightStick{0.0f};
+    glm::vec2 m_leftStick{0.0f}, m_triggers{0.0f};
+    std::array<bool, static_cast<std::size_t>(PadControl::Count)> m_padPressed{};
     bool m_fast = false;
     bool m_rmb = false;
     bool m_modal = false, m_modalText = false;

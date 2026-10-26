@@ -90,6 +90,8 @@ public:
     float menuScroll() const { return m_menuScrollTarget; }   // px, list offset of the menu page
     float garageScroll() const { return m_garageScrollTarget; } // px, list offset of the garage
     bool fontsLoaded() const { return m_body != nullptr; }
+    ImFont* bodyFont() const { return m_body; }
+    ImFont* headingFont() const { return m_heading; }
     // Controls page of the last frame: callouts drawn and overlapping pairs (callout / callout or callout / key cap /
     // controller outline), measured with the real font.
     int controlsCallouts() const { return m_controlsCallouts; }

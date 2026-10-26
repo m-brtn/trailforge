@@ -131,7 +131,7 @@ menu select quality
 wait 0.5
 tap Up                          # BACK sits above the page title (top left): Up from the first row
 wait 0.5
-expect menu_cursor == 14
+expect menu_cursor == 18
 expect menu_scroll == 0         # outside the scrolling list
 capture /tmp/trailforge_menu_05c_settings_back.png
 wait 0.1
@@ -256,7 +256,8 @@ wait 0.2
 expect d_ticks == 0
 expect d_z == 0
 
-# Settings from the pause menu, then back and resume (Resume, Reset vehicle, Garage, Settings)
+# Settings from the pause menu, then back and resume (Resume, Map, Reset vehicle, Garage, Settings)
+tap Down
 tap Down
 tap Down
 tap Down
