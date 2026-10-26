@@ -1,5 +1,6 @@
 #pragma once
 
+#include "track/DriveRoute.h"
 #include "track/SurfaceProperties.h"
 #include "track/TestTrack.h"
 
@@ -204,6 +205,8 @@ public:
     const std::string& modelError() const { return m_modelError; }
     const LevelProps& props() const { return m_props; }
     float snowLine() const { return m_snowLine; }
+    // Closed loop along the roads for the menu attract drive ("attractRoute" legs); empty when the level has none.
+    const DriveRoute& attractRoute() const { return m_attractRoute; }
 
     // Spawn point (on the ground, facing along the road) and the point-of-interest teleports, in map order.
     TrackFeature spawn() const;
@@ -236,6 +239,7 @@ private:
     std::vector<LevelModel> m_models;
     std::string m_modelError;
     LevelProps m_props;
+    DriveRoute m_attractRoute;
     float m_spawnX = 0.0f, m_spawnZ = 0.0f, m_spawnTowardX = 0.0f, m_spawnTowardZ = 1.0f;
     LevelBakeStats m_stats;
 };

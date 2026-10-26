@@ -1,5 +1,6 @@
 #pragma once
 
+#include "track/DriveRoute.h"
 #include "track/SurfaceProperties.h"
 
 #include <Jolt/Jolt.h>
@@ -93,6 +94,8 @@ public:
     static WaterInfo water();
     // Wheat test patch in the west meadow: render-only stalks, the ground under them is the Grass surface.
     static TrackBounds wheatPatch();
+    // Menu attract loop of the proving ground: flat ground around lane A (start pad, between the lanes, north end).
+    static DriveRoute attractRoute();
 
 private:
     void buildProvingGround();

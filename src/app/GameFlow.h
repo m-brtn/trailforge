@@ -12,7 +12,9 @@ namespace tf {
 // returned commands; the menu renderer only reads it.
 // Garage: opened from the start or the pause menu; the simulation runs (the vehicle can be rebuilt in place) and
 // closing it returns to the menu it came from.
-enum class Screen { Intro, MainMenu, Playing, Paused, Garage };
+// Map: the full-screen map, opened in gameplay (M / pad LB) or from the pause menu; the simulation is frozen and
+// closing it returns to where it was opened.
+enum class Screen { Intro, MainMenu, Playing, Paused, Garage, Map };
 
 // Menu pages. Start opens the vehicle page when the catalog has more than one vehicle (else it starts directly).
 // The level is a row of the start menu (applied at once, so the menu backdrop is the chosen world).
@@ -20,10 +22,11 @@ enum class MenuPage { Main, Pause, Settings, Controls, Vehicle };
 
 enum class MenuItem {
     Start, LevelChoice, Garage, Settings, Quit,  // main
-    Resume, Restart, QuitToMenu, QuitGame,       // pause (+ Garage, Settings)
+    Resume, Map, Restart, QuitToMenu, QuitGame,  // pause (+ Garage, Settings)
     Quality, RenderScale, GrassDistance, TreeDistance, VSync, // settings: graphics
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
+    Minimap, MinimapSize, MinimapNorthUp, Compass, // map
     DriveKeys, PadGlyphs,                        // controls page
     Controls, Back,
     VehicleChoice, Drive,                        // vehicle page
@@ -32,7 +35,8 @@ enum class MenuItem {
 enum class MenuCommand {
     None, StartGame, Resume, Restart, QuitToMenu, QuitGame, SettingsChanged, SettingsClosed, OpenGarage, CloseGarage,
     VehicleChanged, // GameSettings::vehicle changed on the vehicle page
-    LevelChanged    // GameSettings::level changed on the start menu
+    LevelChanged,   // GameSettings::level changed on the start menu
+    OpenMap         // the full-screen map opened from the pause menu
 };
 enum class MenuSound { None, Move, Confirm, Back, Adjust, Open, Close };
 
@@ -76,7 +80,7 @@ public:
     bool menuActive() const { return m_screen != Screen::Playing; }
     // The pause menu freezes the simulation: no ticks, the fixed-step accumulator keeps its value. The garage runs it,
     // also when opened from the pause menu.
-    bool simulationRuns() const { return m_screen != Screen::Paused; }
+    bool simulationRuns() const { return m_screen != Screen::Paused && m_screen != Screen::Map; }
     // Physics ticks for this frame: 0 (accumulator untouched) unless the simulation runs.
     int stepsForFrame(FixedStepClock& clock, double frameTime) const {
         return simulationRuns() ? clock.advance(frameTime) : 0;
@@ -111,6 +115,9 @@ public:
     void openGarage();  // from the start or the pause menu
     void closeGarage(); // back to that menu, cursor on GARAGE
     Screen garageReturn() const { return m_garageReturn; }
+    void openMap();  // from gameplay or the pause menu
+    void closeMap(); // back to gameplay, or to the pause menu with the cursor on MAP
+    Screen mapReturn() const { return m_mapReturn; }
     bool back(); // pops a page; false at a root page
     bool select(MenuItem item); // moves the cursor to the item on the current page
 
@@ -131,6 +138,7 @@ private:
     double m_introTime = 0.0;
     double m_menuFadeLength = 0.0; // > 0 while the start menu fades in after the intro
     Screen m_garageReturn = Screen::MainMenu;
+    Screen m_mapReturn = Screen::Playing;
     std::vector<std::string> m_vehicleIds;
     std::vector<std::string> m_levelIds;
 };

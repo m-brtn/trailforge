@@ -238,7 +238,7 @@ void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const Menu
         m_garageRows.clear();
         m_modalButtons.clear();
     }
-    if (!flow.menuActive() || flow.screen() == Screen::Garage) {
+    if (!flow.menuActive() || flow.screen() == Screen::Garage || flow.screen() == Screen::Map) {
         m_lastPage = -1;
         return;
     }

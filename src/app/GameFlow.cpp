@@ -47,12 +47,13 @@ GameFlow::GameFlow(Screen start) : m_screen(start) {
 const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
     using M = MenuItem;
     static const std::vector<MenuItem> kMain = {M::Start, M::LevelChoice, M::Garage, M::Settings, M::Quit};
-    static const std::vector<MenuItem> kPause = {M::Resume, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
+    static const std::vector<MenuItem> kPause = {M::Resume, M::Map, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
                                                  M::QuitGame};
     static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::GrassDistance, M::TreeDistance,
                                                     M::VSync,         M::MasterVolume,
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
-                                                    M::Traction,      M::DiffLocks,   M::AutoReverse, M::Controls,
+                                                    M::Traction,      M::DiffLocks,   M::AutoReverse, M::Minimap,
+                                                    M::MinimapSize,   M::MinimapNorthUp, M::Compass, M::Controls,
                                                     M::Back};
     static const std::vector<MenuItem> kControls = {M::DriveKeys, M::PadGlyphs, M::Back};
     static const std::vector<MenuItem> kVehicle = {M::VehicleChoice, M::Drive, M::Back};
@@ -123,6 +124,18 @@ void GameFlow::closeGarage() {
     if (m_screen != Screen::Garage) return;
     setScreen(m_garageReturn, m_garageReturn == Screen::Paused ? MenuPage::Pause : MenuPage::Main);
     select(MenuItem::Garage);
+}
+
+void GameFlow::openMap() {
+    if (m_screen != Screen::Playing && m_screen != Screen::Paused) return;
+    m_mapReturn = m_screen;
+    setScreen(Screen::Map, MenuPage::Main);
+}
+
+void GameFlow::closeMap() {
+    if (m_screen != Screen::Map) return;
+    setScreen(m_mapReturn, m_mapReturn == Screen::Paused ? MenuPage::Pause : MenuPage::Main);
+    if (m_mapReturn == Screen::Paused) select(MenuItem::Map);
 }
 
 int GameFlow::vehicleIndex(const GameSettings& settings) const {
@@ -213,6 +226,9 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
     case M::Resume:
         resume();
         return {MenuCommand::Resume, MenuSound::Close};
+    case M::Map:
+        openMap();
+        return {MenuCommand::OpenMap, MenuSound::Open};
     case M::Restart:
         resume();
         return {MenuCommand::Restart, MenuSound::Confirm};
@@ -236,7 +252,7 @@ MenuResult GameFlow::handle(const MenuInput& in, GameSettings& settings) {
         if (in.any) skipIntro();
         return {};
     }
-    if (m_screen == Screen::Garage) return {}; // the Garage model owns the input
+    if (m_screen == Screen::Garage || m_screen == Screen::Map) return {}; // the garage model / the map own the input
     if (m_screen == Screen::Playing) {
         if (in.pause) {
             pause();
@@ -292,6 +308,7 @@ const char* menuLabel(MenuItem item) {
     case M::Settings: return "SETTINGS";
     case M::Quit: return "QUIT";
     case M::Resume: return "RESUME";
+    case M::Map: return "MAP";
     case M::Restart: return "RESET VEHICLE";
     case M::QuitToMenu: return "QUIT TO MAIN MENU";
     case M::QuitGame: return "QUIT GAME";
@@ -308,6 +325,10 @@ const char* menuLabel(MenuItem item) {
     case M::Traction: return "TRACTION CONTROL";
     case M::DiffLocks: return "DIFFERENTIAL LOCKS";
     case M::AutoReverse: return "AUTO REVERSE";
+    case M::Minimap: return "MINIMAP";
+    case M::MinimapSize: return "MINIMAP SIZE";
+    case M::MinimapNorthUp: return "MINIMAP ORIENTATION";
+    case M::Compass: return "COMPASS BAR";
     case M::DriveKeys: return "DRIVE KEYS";
     case M::PadGlyphs: return "GAMEPAD BUTTONS";
     case M::Controls: return "CONTROLS";
@@ -334,6 +355,7 @@ const char* menuSection(MenuItem item) {
     case MenuItem::Quality: return "GRAPHICS";
     case MenuItem::MasterVolume: return "AUDIO";
     case MenuItem::Abs: return "DRIVING AIDS (DEFAULTS)";
+    case MenuItem::Minimap: return "MAP";
     default: return nullptr;
     }
 }
@@ -385,6 +407,13 @@ std::string menuValue(MenuItem item, const GameSettings& s, const std::string& d
         return kNames[std::clamp(s.diffLocks, 0, 3)];
     }
     case M::AutoReverse: return s.autoReverse ? "ON" : "OFF";
+    case M::Minimap: return s.minimap ? "ON" : "OFF";
+    case M::MinimapSize: {
+        static const char* kNames[] = {"SMALL", "MEDIUM", "LARGE"};
+        return kNames[std::clamp(s.minimapSize, 0, 2)];
+    }
+    case M::MinimapNorthUp: return s.minimapNorthUp ? "NORTH UP" : "TURNS WITH VEHICLE";
+    case M::Compass: return s.compass ? "ON" : "OFF";
     case M::DriveKeys: return driveKeysName(DriveKeys(std::clamp(s.driveKeys, 0, 1)));
     case M::PadGlyphs: {
         static const char* kNames[] = {"AUTO", "XBOX", "PLAYSTATION"};
@@ -417,6 +446,10 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
     case M::Traction: s.traction = wrap(s.traction + 1 + dir, 4) - 1; break;
     case M::DiffLocks: s.diffLocks = wrap(s.diffLocks + dir, 4); break;
     case M::AutoReverse: s.autoReverse = !s.autoReverse; break;
+    case M::Minimap: s.minimap = !s.minimap; break;
+    case M::MinimapSize: s.minimapSize = wrap(s.minimapSize + dir, 3); break;
+    case M::MinimapNorthUp: s.minimapNorthUp = !s.minimapNorthUp; break;
+    case M::Compass: s.compass = !s.compass; break;
     case M::DriveKeys: s.driveKeys = wrap(s.driveKeys + dir, 2); break;
     case M::PadGlyphs: s.padGlyphs = wrap(s.padGlyphs + dir, 3); break;
     default: return false;

@@ -306,8 +306,14 @@ public:
 
     bool parse(const json::Value& doc, std::string& err);
     void bake();
+    // After bake(): the attract route from the baked road center lines.
+    bool buildAttractRoute(std::string& err);
 
 private:
+    struct RouteLeg { std::string road; float x0, z0, x1, z1; };
+    std::vector<RouteLeg> m_routeLegs;
+    std::string m_routeName;
+    float m_routeSpeed = 9.0f;
     struct Peak { float x, z, h, r; };
     struct Beach { float x, z, r; };
     struct Lake { std::string name; float level, depth; Polygon poly; float shore = 0.0f; };
@@ -609,6 +615,17 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
             poi.atZ = poi.z;
         }
         L.m_pois.push_back(poi);
+    }
+    const json::Value& route = doc["attractRoute"];
+    m_routeName = route["name"].stringOr("attract route");
+    m_routeSpeed = float(route["speedKmh"].numberOr(32.0)) / 3.6f;
+    for (const json::Value& leg : route["legs"].array) {
+        RouteLeg l{leg["road"].stringOr(""), 0, 0, 0, 0};
+        if (!readPoint(leg["from"], l.x0, l.z0) || !readPoint(leg["to"], l.x1, l.z1)) {
+            err = "level: attractRoute leg on " + l.road + " needs from and to";
+            return false;
+        }
+        m_routeLegs.push_back(l);
     }
     const json::Value& sp = doc["spawn"];
     L.m_spawnX = float(sp["x"].numberOr(0));
@@ -2354,7 +2371,77 @@ std::shared_ptr<const Level> Level::fromJsonText(const std::string& text, std::s
         return nullptr;
     }
     baker.bake();
+    if (!baker.buildAttractRoute(err)) {
+        if (error) *error = err;
+        return nullptr;
+    }
     return level;
+}
+
+// Each leg runs along one road's baked center line between the samples nearest to its end points (in either
+// direction); consecutive legs share their junction point.
+bool LevelBaker::buildAttractRoute(std::string& err) {
+    DriveRoute route;
+    route.name = m_routeName;
+    route.cruiseSpeed = m_routeSpeed;
+    for (const RouteLeg& leg : m_routeLegs) {
+        const LevelRoad* road = nullptr;
+        for (const LevelRoad& r : L.m_roads)
+            if (r.name == leg.road) road = &r;
+        if (!road || road->samples.size() < 2) {
+            err = "level: attractRoute road '" + leg.road + "' not found";
+            return false;
+        }
+        auto nearest = [&](float x, float z) {
+            std::size_t best = 0;
+            float bestD = 1e30f;
+            for (std::size_t k = 0; k < road->samples.size(); ++k) {
+                const float d = std::hypot(road->samples[k].x - x, road->samples[k].z - z);
+                if (d < bestD) {
+                    bestD = d;
+                    best = k;
+                }
+            }
+            return std::pair<std::size_t, float>(best, bestD);
+        };
+        const auto [a, da] = nearest(leg.x0, leg.z0);
+        const auto [b, db] = nearest(leg.x1, leg.z1);
+        if (da > 15.0f || db > 15.0f || a == b) {
+            err = "level: attractRoute leg end points are not on road '" + leg.road + "'";
+            return false;
+        }
+        const int step = b > a ? 1 : -1;
+        for (int k = int(a); k != int(b); k += step) {
+            if (!route.points.empty() && k == int(a)) continue; // the junction is the previous leg's last point
+            route.points.push_back({road->samples[std::size_t(k)].x, road->samples[std::size_t(k)].z});
+        }
+        route.points.push_back({road->samples[b].x, road->samples[b].z});
+    }
+    if (!route.points.empty()) {
+        const RoutePoint& f = route.points.front();
+        const RoutePoint& l = route.points.back();
+        if (std::hypot(f.x - l.x, f.z - l.z) < 3.0f) route.points.pop_back(); // closed loop: no duplicate start
+        if (!route.valid()) {
+            err = "level: attractRoute is too short";
+            return false;
+        }
+        // Junctions meet at a corner: a few passes of a 5-point moving average round them to a drivable line
+        // (about 2 m inside a 90 degree corner, within the road width; straight stretches stay on the center line).
+        const std::size_t n = route.points.size();
+        for (int pass = 0; pass < 4; ++pass) {
+            std::vector<RoutePoint> s(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t k = 0; k < 5; ++k) {
+                    const RoutePoint& q = route.points[(i + n + k - 2) % n];
+                    s[i].x += 0.2f * q.x;
+                    s[i].z += 0.2f * q.z;
+                }
+            }
+            route.points = std::move(s);
+        }
+    }
+    L.m_attractRoute = std::move(route);
+    return true;
 }
 
 std::shared_ptr<const Level> Level::load(const std::string& path, std::string* error, int threads) {

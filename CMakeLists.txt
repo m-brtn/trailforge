@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TrailForge VERSION 0.15.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.16.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,7 @@ add_library(trailforge_sim STATIC
     src/vehicle/VehicleDefinition.cpp
     src/vehicle/VehicleSetup.cpp
     src/sim/Simulation.cpp
+    src/sim/Autopilot.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
     src/sim/WheelSpray.cpp
@@ -86,6 +87,8 @@ add_library(trailforge_flow STATIC
     src/app/GameFlow.cpp
     src/app/GameSettings.cpp
     src/app/Garage.cpp
+    src/app/MapData.cpp
+    src/app/MapView.cpp
     src/input/ControlLayout.cpp)
 target_include_directories(trailforge_flow PUBLIC src)
 target_link_libraries(trailforge_flow PUBLIC trailforge_sim)
@@ -123,6 +126,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/DebugDraw.cpp
         src/ui/DebugUI.cpp
         src/ui/MenuUI.cpp
+        src/ui/MapUI.cpp
         ${TRAILFORGE_SHADER_SOURCES}
         ${TRAILFORGE_ICON_SOURCES})
     # trailforge_audio brings trailforge_sim.
@@ -215,6 +219,7 @@ if(TRAILFORGE_BUILD_TESTS)
             level_bridges
             level_placement
             level_grass_clear
+            autopilot_loops
             terrain_textures_ktx2
             terrain_textures_assets)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
@@ -244,7 +249,7 @@ if(TRAILFORGE_BUILD_TESTS)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model vehicle_page controls_layout pad_glyph_detect
-                         callout_spread)
+                         callout_spread map_view_math map_level_raster)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

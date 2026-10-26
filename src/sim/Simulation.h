@@ -1,6 +1,7 @@
 #pragma once
 
 #include "physics/PhysicsWorld.h"
+#include "sim/Autopilot.h"
 #include "sim/BodyImpacts.h"
 #include "sim/TireMarks.h"
 #include "sim/WaterQuery.h"
@@ -77,6 +78,10 @@ struct SimulationSettings {
     TireMarkSettings tireMarks;
 };
 
+// Who drives: the player (setIntent), the autopilot along the world's attract route (the menu backdrop), or nobody
+// with the brakes held.
+enum class AutopilotMode { Off, Drive, Hold };
+
 struct StepTiming {
     double lastStepMs = 0.0;   // last physics step time (CPU, ms)
     double marksUs = 0.0;      // tire mark update of the last tick (CPU, microseconds), not part of lastStepMs
@@ -95,6 +100,21 @@ public:
     // Driver intent; applied on the following ticks.
     void setIntent(const DriverIntent& intent) { m_intent = intent; }
     const DriverIntent& intent() const { return m_intent; }
+
+    // Autopilot: in Drive it replaces the intent on every tick with its own pedals and steering (the same smoothing
+    // and vehicle model as a player). When it gets stuck, flips or leaves the route it puts the vehicle back at the
+    // route start (counted in autopilotResets). Off: setIntent drives.
+    // Drive picks the route up again from the vehicle's current position (nearest point, timers cleared).
+    void setAutopilot(AutopilotMode mode) {
+        if (mode == AutopilotMode::Drive && m_autopilotMode != AutopilotMode::Drive) m_autopilot.restart();
+        m_autopilotMode = mode;
+    }
+    AutopilotMode autopilotMode() const { return m_autopilotMode; }
+    const Autopilot& autopilot() const { return m_autopilot; }
+    int autopilotResets() const { return m_autopilotResets; }
+    const char* autopilotResetReason() const { return m_autopilotResetReason; } // of the last reset
+    // The current world's attract route (level.json "attractRoute", or the proving ground loop); may be empty.
+    const DriveRoute& attractRoute() const { return m_autopilot.route(); }
 
     // Discrete commands run at the start of the next tick.
     void requestToggleDirection() { m_pendingToggleDirection = true; }
@@ -187,6 +207,7 @@ private:
     void setMessage(const char* text);
     void resolvePedals(float dt);
     void smoothInput(float dt);
+    void runAutopilot(float dt);
 
     JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
     SimulationSettings m_settings;
@@ -206,6 +227,10 @@ private:
 
     DriverIntent m_intent;
     DriverIntent m_resolved;
+    Autopilot m_autopilot;
+    AutopilotMode m_autopilotMode = AutopilotMode::Off;
+    int m_autopilotResets = 0;
+    const char* m_autopilotResetReason = "";
     float m_autoReverseHold = 0.0f; // s the opposite pedal has been held while stopped
     // The opposite pedal has been held since the vehicle was moving: it keeps braking (holds on a slope) until it
     // is released; only a fresh press at a standstill switches the direction.

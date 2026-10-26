@@ -110,6 +110,11 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     }
     m_impactListener.setBody(m_vehicle->bodyId());
     ++m_spawnCount;
+    // The attract route of this world, steered with this vehicle's geometry; the progress starts over.
+    DriveRoute route;
+    if (m_settings.level) route = m_settings.level->attractRoute();
+    else if (m_track->layout() == TrackLayout::ProvingGround) route = TestTrack::attractRoute();
+    m_autopilot.setRoute(route, config.wheelBase, config.axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f);
     m_smoothed = {};
     m_autoReverseHold = 0.0f;
     m_brakeLatch = false;
@@ -340,6 +345,51 @@ void Simulation::smoothInput(float dt) {
     m_smoothed.steer = approach(m_smoothed.steer, target, rate, dt);
 }
 
+void Simulation::runAutopilot(float dt) {
+    if (m_autopilotMode == AutopilotMode::Off) return;
+    DriverIntent intent;
+    if (m_autopilotMode == AutopilotMode::Hold || !m_autopilot.hasRoute()) {
+        intent.brake = 1.0f;
+        m_intent = intent;
+        return;
+    }
+    const JPH::RMat44 xf = m_vehicle->bodyTransform();
+    const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ(), up = xf.GetAxisY();
+    AutopilotInput in;
+    in.x = p.GetX();
+    in.z = p.GetZ();
+    const float h = std::hypot(fwd.GetX(), fwd.GetZ());
+    if (h > 1e-3f) {
+        in.fx = fwd.GetX() / h;
+        in.fz = fwd.GetZ() / h;
+    }
+    in.forwardY = fwd.GetY();
+    in.upDot = up.GetY();
+    in.forwardSpeed = m_vehicle->telemetry().forwardSpeed;
+    const AutopilotOutput out = m_autopilot.update(in, dt);
+    if (m_autopilot.wantsReset()) {
+        // Quiet recovery to the route start, facing along the route (the vehicle is recreated, like the R reset).
+        const RoutePoint s = m_autopilot.startPoint();
+        TrackFeature at;
+        at.name = "route start";
+        const float y = m_settings.level ? m_settings.level->heightAt(s.x, s.z) : TestTrack::provingGroundHeight(s.x, s.z);
+        at.position = JPH::Vec3(s.x, y, s.z);
+        at.yaw = m_autopilot.startYaw();
+        m_autopilotResetReason = m_autopilot.resetReason();
+        spawnVehicle(m_vehicle->config(), at);
+        ++m_autopilotResets;
+        intent.brake = 1.0f;
+        m_intent = intent;
+        return;
+    }
+    intent.throttle = out.throttle;
+    intent.brake = out.brake;
+    intent.handBrake = out.handBrake;
+    intent.steer = out.steer;
+    intent.analog = true;
+    m_intent = intent;
+}
+
 void Simulation::tick() {
     using Clock = std::chrono::steady_clock;
     const float dt = float(m_settings.fixedStep);
@@ -349,6 +399,7 @@ void Simulation::tick() {
         const JPH::Vec3 p(m_vehicle->bodyTransform().GetTranslation());
         m_terrain->update(p.GetX(), p.GetZ());
     }
+    runAutopilot(dt);
     resolvePedals(dt);
     smoothInput(dt);
 

@@ -218,14 +218,14 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`, `minimap` / `compass` (0/1, session only); tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the hood camera |
-| `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`) |
+| `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` / `gamepad button south\|east\|west\|north\|lb\|rb\|back\|start 1\|0` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
-| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `back` |
+| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
@@ -237,7 +237,8 @@ One command per line, `#` starts a comment:
 | `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg …` |
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
-| `level ID` / `place X Z [YAW]` / `map on\|off` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees / show or hide the map overlay |
+| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
 
 **Scenario clock.** While a script runs, every frame advances the game by a fixed 1/120 s (physics ticks, menu
 animation, ImGui, `wait`, `until` timeouts), and frames are paced to never run faster than real time. A condition
@@ -259,6 +260,8 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
 streaming numbers, a ford, the deep-water recovery, the play-limit warning, all 13 POI teleports, the map, the EV
 on the level, overviews; `/tmp/trailforge_expl_*.png`),
+`tools/scenarios/map_check.txt` (full-screen map, waypoint, compass distance while driving at it, virtual-pad map
+controls, minimap options, the proving-ground map, minimap + compass cost; `/tmp/trailforge_map_*.png`),
 `tools/scenarios/terrain_textures.txt` (terrain texture size per preset and Off, no reloads while driving, frame
 times textured vs procedural per preset, `/tmp/trailforge_tex_*.png`),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
@@ -291,10 +294,10 @@ for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
-1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls, 4 vehicle page), `menu_depth`,
+1 start menu, 2 playing, 3 paused, 4 garage, 5 map), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls, 4 vehicle page), `menu_depth`,
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
 `setting_<key>` (the persistent settings: `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`,
-`abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`, `vehicle` (catalog index of the remembered choice)), `settings_roundtrip` (1 if the settings file format
+`abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`, `minimap`, `minimap_size`, `minimap_north_up`, `compass`, `vehicle` (catalog index of the remembered choice)), `settings_roundtrip` (1 if the settings file format
 keeps every current value), controls: `drive_keys` (applied to the input: 0 W A S D, 1 arrows), `kb_style` (0 Mac,
 1 PC), `pad_glyphs` (resolved: 0 Xbox, 1 PlayStation), `controls_callouts` / `controls_overlaps` (callouts on the
 Controls page and overlapping pairs of callouts, key caps and controller outline, measured with the real font), garage: `garage_open`, `garage_cursor`, `garage_dirty`, `garage_setups`,
@@ -328,6 +331,10 @@ choice in the level list), `submersion` (m below the water surface), `recoveries
 `water_depth` (render-only water over the ground at the vehicle), `road_dist`, `terrain_chunks`, `terrain_tris`,
 `tiles_loaded`, `tiles_async`, `tiles_sync`, `tiles_unloaded`, `tile_build_ms`, `tile_stall_ms`, `tile_update_ms`,
 `tile_x` / `tile_z`, `grass_dist` / `tree_detail` / `tree_dist` (applied render distances, m); `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
+map: `map_open`, `map_ready`, `map_build_ms`, `map_pois`, `map_scale` (points per m), `map_cx` / `map_cz` (view center),
+`marker_set`, `marker_x` / `marker_z`, `marker_dist` (m, horizontal), `marker_bearing` (deg, relative to the heading, + = right),
+`heading` (deg clockwise from north), attract drive: `autopilot` (0 off, 1 drive, 2 hold), `autopilot_driven` (m),
+`autopilot_progress`, `autopilot_lateral` (m from the route), `autopilot_resets`,
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -349,7 +356,7 @@ Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_p
 | Low range (only below 1 m/s; part-time 4WD: 4H ↔ 4L, from 2H to 4L; electric: none, a message says so) | L | Y (North) |
 | Transfer case 2H → 4H → 4L (part-time 4WD only; 4L in / out only below 1 m/s); electric: drive mode NORMAL ↔ OFF-ROAD | V | D-pad left |
 | Reset to the last start point (on a level: the nearest road point) | R | Back / View |
-| Map (level only: POIs, roads, rivers; click a POI to teleport) | M | — |
+| Map (full screen; the game pauses; see [Map, waypoint and compass](#map-waypoint-and-compass)) | M | LB |
 
 Keyboard pedals are a driver-input model (`src/input/KeyboardPedals.h`, the constants are in `KeyboardPedalSettings`),
 not a force: a held W goes to 0.5 within 0.15 s and to 1.0 after 0.8 s, a held S to 0.4 within 0.1 s and to 1.0
@@ -369,7 +376,7 @@ directly bypass the ramp.
 | Diagnostics | F1 | — |
 | Graphics panel (quality, look, cosmetic dirt) | F2 | — |
 | Audio panel (volumes, mute, engine pitch, read-outs) | F3 | — |
-| Pause menu (Resume, Reset vehicle, Garage, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
+| Pause menu (Resume, Map, Reset vehicle, Garage, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
 | Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
@@ -408,12 +415,14 @@ clicks rows (clicking the arrows of a setting steps it down / up). Every page be
 ◀ BACK button at the top left above the page title: clickable, reached with Up from the first row (Down returns to
 it), never the default focus. Esc during play opens the pause menu. Settings
 (shared by both menus): graphics preset, resolution scale, grass distance, tree detail distance, VSync, master / music / effects / UI volume, the driver
-aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and the Controls page
+aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse), the MAP rows (minimap on /
+off, minimap size small / medium / large, minimap orientation turns with the vehicle / north up, compass bar on / off) and the Controls page
 (drive keys W A S D / arrows, gamepad button names auto / Xbox / PlayStation, keyboard and gamepad diagrams).
 The TC default "VEHICLE DEFAULT" (the default setting) uses each vehicle's `aids.traction`: on for the electric SUV,
 off for the gasoline SUV; OFF / ON / OFF-ROAD force one mode for every vehicle.
 They are saved to `settings.cfg` (keys include `grass_distance` / `tree_distance` in m, 0 = the preset's value, `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
-`drive_keys` 0 / 1 and `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation; an old `traction = 0` line reads as the vehicle
+`drive_keys` 0 / 1, `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation, `minimap` / `minimap_north_up` / `compass` 0 / 1 and
+`minimap_size` 0..2; an old `traction = 0` line reads as the vehicle
 default)
 in the user data directory (`trailforge --paths`) when a Settings page is closed and
 loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
@@ -1013,11 +1022,77 @@ the development level and is what scenarios and `--demo` start on.
   CTest `level_grass_clear`); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
-- **Map (M):** hill-shaded overview with roads, rivers, POI markers (click to teleport) and a teleport list.
+- **Map (M / LB):** see [Map, waypoint and compass](#map-waypoint-and-compass). No fast travel: teleports are in the
+  F1 panel only.
 - **Frame times** (2880 × 1800, Metal, the display caps at 120 FPS): High 112–120 FPS on the roads, in the village and
   at the quarry, 95 FPS looking across the Alpine Lake; Ultra 89 FPS in the village. Details in the devlog. v0.14.0 distances (grass 110 m, tree detail 650 m on High)
   against the v0.13.0 ones (45 m, 380 m), GPU ms with VSync off (medians of 3, a background VM running): forest
   view High 6.90 vs 6.85, Ultra 11.3 vs 9.2; village view High 7.6–11.0 vs 6.9–10.5 (noisy).
+
+## Map, waypoint and compass
+
+**Full-screen map** (M, gamepad LB, or MAP in the pause menu; the simulation pauses while it is open). Drawn from the
+level data, not from a screenshot: a 2048² raster of Exploration Peaks (1.09 m per pixel over the play area plus a
+12% margin, darkened outside the ±1000 m limit) with hill shading from the north-west, 10 m contours (every 50 m
+stronger), water by depth, surfaces (sand, rock, snow, mud, wheat), forest crowns and rocks; on top as vector lines
+roads and trails by class (cased), rivers, bridges, the play boundary, the 13 POIs as numbered red circles with names
+(a label that would cover another one is left out; the list names every POI), the vehicle arrow, the waypoint with a
+dashed line from the vehicle, a scale bar (1 / 2 / 5 × 10ⁿ m) and a north arrow. The side panel lists the POIs with
+their kind and distance (style after `external_assets/images/Exploration.png`). The proving ground gets a 1024²
+top-down raster of its own track triangles (0.14 m per pixel, 1 m contours, puddles) with its 16 features as POIs.
+The raster is built once per world on a worker thread (`buildLevelMap` / `buildProvingGroundMap` in
+`src/app/MapData.cpp`, no SDL; Release on the M-series Mac: Exploration Peaks 15–17 ms, proving ground 9–11 ms),
+uploaded as one mipmapped texture, and the CPU copy is freed. Lines and labels are drawn as vectors every frame, so
+they stay sharp on HiDPI at every zoom.
+
+| Map control | Keyboard / mouse | Gamepad |
+|---|---|---|
+| Zoom (around the pointer / the center) | wheel, Q / E, PgDn / PgUp | LT / RT |
+| Pan | drag, W A S D or arrows | left stick (shows a crosshair) |
+| Set / clear the waypoint (snaps to a POI within 16 pt; a click on the waypoint clears it) | left click; Space / Enter at the map center | A at the crosshair (map center) |
+| Center on the vehicle | C | Y or RB |
+| Center on a POI | click its row in the list | — |
+| Close | M, Esc | LB, B |
+
+There is no fast travel: the map only sets a waypoint. Teleports stay in the F1 panel (development).
+
+**Compass bar** (top of the screen, Settings → MAP → COMPASS BAR): ±90° around the heading, ticks every 15°, N / NE /
+E … labels, POIs within 900 m (120 m on the proving ground) as small numbered circles, the waypoint as a yellow pin
+(clamped to the edge with an arrow when it is behind) and its horizontal distance below the tape.
+
+**Minimap** (bottom right, Settings → MAP → MINIMAP on / off, MINIMAP SIZE small / medium / large = radius 8.5 / 11 /
+14.5% of the window height, MINIMAP ORIENTATION turns with the vehicle (default) / north up): the same raster as a
+textured circle showing 180 m around the vehicle (45 m on the proving ground), roads, rivers, POIs, the waypoint (on
+the rim with a pointer when outside), a dashed guidance line from the vehicle to the waypoint, N on the rim and the
+waypoint distance. Settings are saved in `settings.cfg` (`minimap`, `minimap_size`, `minimap_north_up`, `compass`).
+Cost (Exploration Peaks, 2880 × 1800, High, VSync off, three alternating 3 s pairs in one process): GPU 15.24 / 15.05
+/ 15.32 ms with the large minimap and the compass, 14.65 / 14.94 / 15.70 ms without — no difference above the
+±0.5 ms noise of the scene.
+
+Pure logic (no SDL) in `src/app/MapView.h`: world ↔ screen transform with rotation, zoom around a point, bearings
+(clockwise from north, +X east, −Z north), compass placement, distance formatting, scale bar steps, waypoint toggle
+(CTest `map_view_math`); `map_level_raster` checks the raster (water samples blue, dry samples not, POIs, lines,
+build time). `tools/scenarios/map_check.txt` opens the map from gameplay and from the pause menu, zooms, drags,
+centers, sets / clears / sets the waypoint by click, drives at it with the distance falling, uses the virtual pad (LB,
+RT, left stick, A, B), switches the minimap options and opens the proving-ground map;
+`/tmp/trailforge_map_*.png`.
+
+## Attract drive (start menu)
+
+Behind the intro and the start menu the vehicle drives a looped route by itself (`src/sim/Autopilot.h`, in
+trailforge_sim): pure pursuit steering on the route (lookahead 7–16 m with speed, in tight curves at most 0.6 × the
+curve radius, so it does not cut corners), a speed profile from the route
+curvature (2 m/s² lateral, braking 1.6 m/s² before curves, accelerating 1.0 m/s² after them, slower downhill) and a
+PI speed controller (throttle capped at 0.65 and reduced with steering). Its only output is a `DriverIntent`
+(throttle, brake, steering) that goes through the same pedal smoothing as the player's; there are no forces and no
+velocity setting. Routes: Exploration Peaks `attractRoute` in level.json (Valley Road → Lake Trail → Forest Trail,
+1550 m loop at 32 km/h, junction corners rounded in the bake), proving ground: a 195 m rounded rectangle around
+lane A. The vehicle page and the garage hold the vehicle with the brake. When the vehicle is stuck (> 10 s below
+0.6 m/s), off the route (> 12 m for 4 s) or on its side (2.5 s), it is recreated at the route start like the R
+reset; Start and Quit to menu put it on the spawn. The menu camera follows the smoothed heading (3.5 s) and swings
+from behind to the side and back over 80 s. CTest `autopilot_loops`: one full loop without a reset for the gasoline
+SUV in 2H and 4H and the EV on both worlds (max 0.75 m off the line on Exploration Peaks, 2.0 m on the proving
+ground where it joins the loop from the start pad).
 
 ## Rendering
 
@@ -1473,7 +1548,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   sinkage, flotation or bulldozing; puddles have no water physics.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
-  message (the only teleports besides R, the teleport buttons / map and scenario `teleport` / `place`). Snow is rigid
+  message (the only teleports besides R, the F1 teleport buttons, the attract-drive reset behind the start menu and
+  scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;
   the river surface is a stepped level per sample, not a flow simulation.

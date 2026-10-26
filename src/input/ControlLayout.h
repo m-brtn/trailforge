@@ -25,7 +25,7 @@ enum class Action {
     CycleTransfer,    // part-time transfer case 2H -> 4H -> 4L
     TogglePause,      // debug freeze without the menu (Escape / gamepad Start open the pause menu, see MenuKeys)
     StepOnce,         // while frozen: a single physics step
-    ToggleMap,        // open-world level map with the point-of-interest teleports
+    ToggleMap,        // full-screen map (M / pad LB): waypoint marker, no teleports
     Quit,
     Count
 };
