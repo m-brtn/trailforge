@@ -33,6 +33,7 @@ add_library(trailforge_sim STATIC
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
     src/track/Level.cpp
+    src/track/BuildingKit.cpp
     src/track/TerrainTiles.cpp
     src/vehicle/Vehicle.cpp
     src/vehicle/DrivingAids.cpp
@@ -221,7 +222,10 @@ if(TRAILFORGE_BUILD_TESTS)
             level_grass_clear
             autopilot_loops
             terrain_textures_ktx2
-            terrain_textures_assets)
+            terrain_textures_assets
+            building_kit_parts
+            building_kit_materials
+            level_buildings)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
