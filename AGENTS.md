@@ -84,7 +84,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
-./build/release/trailforge --script tools/scenarios/track_check.txt # Achna Speedway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
+./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
@@ -187,14 +187,14 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
  blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py),
  levels/ (fetch_osm_track.py: OSM + DEM source data with a sha256 lock; blender/: tf_level.py, import_level.py,
- export_level.py, carve_track.py, make_achna_speedway.py; README "Editing a level in Blender")
+ export_level.py, carve_track.py, make_suncoast_raceway.py; README "Editing a level in Blender")
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke; manual only)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
  <id>/blueprint.json traced body (generated; README "Vehicle blueprints"), optional <id>/body.glb Blender
  body (Git LFS; README "Blender bodies (body.glb)")
-assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id); achna_speedway/ is a
- baked level (heightmap.pgm, surfaces.pgm, layout.json from Blender, plain files, not LFS; source/ raw OSM (ODbL) +
+assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id); suncoast_raceway/ is a
+ baked level (heightmap.pgm, surfaces.pgm, layout.json from Blender, plain files, not LFS; raw OSM (ODbL) +
  DEM data, CREDITS.md)
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; buildings/
  buildings.json + the same per layer (kit materials); CREDITS.md

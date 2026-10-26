@@ -1,5 +1,5 @@
-# Achna Speedway check (assets/levels/achna_speedway: the real layout from OpenStreetMap, built in Blender by
-# tools/levels/blender/make_achna_speedway.py):
+# Suncoast Raceway check (assets/levels/suncoast_raceway: the real layout from OpenStreetMap, built in Blender by
+# tools/levels/blender/make_suncoast_raceway.py):
 #   ./build/release/trailforge --script tools/scenarios/track_check.txt --no-audio
 # Level switch, start line, one autopilot lap through every checkpoint and both sector lines (lap timer, sector
 # times, best lap stored in a scratch best_laps.cfg), an R reset to the last checkpoint, the map, fixed-camera
@@ -11,7 +11,7 @@ set auto_reverse 0
 set vsync 0
 quality High
 time 11
-level achna_speedway
+level suncoast_raceway
 until level == 1 30
 until map_ready == 1 10
 wait 1.5

@@ -1399,7 +1399,7 @@ void levelPoiBuildings() {
 }
 
 // ------------------------------------------------------------------------------------------------- baked levels
-const std::string kCircuit = TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/level.json";
+const std::string kCircuit = TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/level.json";
 
 std::shared_ptr<const Level> loadOrExit(const std::string& path) {
     std::string err;
@@ -1484,7 +1484,7 @@ void levelBakedLayout() {
     const LevelCircuit& c = lv.circuit();
     std::printf("  circuit '%s' %.0f m, %zu gates; %zu roads, %zu POIs\n", c.road.c_str(), double(c.length), c.gates.size(),
                 lv.roads().size(), lv.pois().size());
-    // Achna Speedway full course: 1979 m as mapped in OpenStreetMap, the smoothed center line a little longer.
+    // Suncoast Raceway full course: 1979 m as mapped in OpenStreetMap, the smoothed center line a little longer.
     CHECK(c.length > 1950.0f && c.length < 2050.0f, "circuit %.0f m", double(c.length));
     CHECK(c.gates.size() >= 6, "%zu gates", c.gates.size());
     CHECK(lv.trees().size() > 2000 && lv.rocks().size() > 50 && lv.buildings().size() > 100, "trees %zu rocks %zu buildings %zu",
@@ -1538,8 +1538,8 @@ void levelBakedLayout() {
     // Heights: exactly the decoded heightmap.
     PgmImage hm;
     std::string err;
-    CHECK(readPgm(TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/heightmap.pgm", hm, err), "%s", err.c_str());
-    std::ifstream lf(TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/layout.json");
+    CHECK(readPgm(TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/heightmap.pgm", hm, err), "%s", err.c_str());
+    std::ifstream lf(TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/layout.json");
     std::stringstream ls;
     ls << lf.rdbuf();
     json::Value lay;

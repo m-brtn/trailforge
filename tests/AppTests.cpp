@@ -41,18 +41,18 @@ int g_failures = 0;
 // malformed lines are skipped.
 void bestLapsFile() {
     BestLaps b;
-    CHECK(b.best("achna_speedway", "trailforge_suv") == 0.0, "empty table");
-    CHECK(b.submit("achna_speedway", "trailforge_suv", 171.25), "first lap stored");
-    CHECK(!b.submit("achna_speedway", "trailforge_suv", 180.0), "a slower lap is not stored");
-    CHECK(b.submit("achna_speedway", "trailforge_suv", 165.5) && b.best("achna_speedway", "trailforge_suv") == 165.5, "faster lap");
-    CHECK(b.submit("achna_speedway", "trailforge_ev", 150.125), "per vehicle");
-    CHECK(!b.submit("Achna Speedway", "trailforge_ev", 10.0) && !b.submit("achna_speedway", "x", -1.0), "invalid ids / times");
+    CHECK(b.best("suncoast_raceway", "trailforge_suv") == 0.0, "empty table");
+    CHECK(b.submit("suncoast_raceway", "trailforge_suv", 171.25), "first lap stored");
+    CHECK(!b.submit("suncoast_raceway", "trailforge_suv", 180.0), "a slower lap is not stored");
+    CHECK(b.submit("suncoast_raceway", "trailforge_suv", 165.5) && b.best("suncoast_raceway", "trailforge_suv") == 165.5, "faster lap");
+    CHECK(b.submit("suncoast_raceway", "trailforge_ev", 150.125), "per vehicle");
+    CHECK(!b.submit("Suncoast Raceway", "trailforge_ev", 10.0) && !b.submit("suncoast_raceway", "x", -1.0), "invalid ids / times");
     BestLaps c;
     c.parse(b.serialize());
-    CHECK(c.size() == 2 && c.best("achna_speedway", "trailforge_ev") == 150.125 && c.best("achna_speedway", "trailforge_suv") == 165.5,
+    CHECK(c.size() == 2 && c.best("suncoast_raceway", "trailforge_ev") == 150.125 && c.best("suncoast_raceway", "trailforge_suv") == 165.5,
           "round trip: %zu entries", c.size());
     int skipped = 0;
-    c.parse("# comment\nachna_speedway trailforge_suv 99.5\nbroken line\nachna_speedway a b c\nlevel veh -3\n\n", &skipped);
+    c.parse("# comment\nsuncoast_raceway trailforge_suv 99.5\nbroken line\nsuncoast_raceway a b c\nlevel veh -3\n\n", &skipped);
     CHECK(c.size() == 1 && skipped == 3, "%zu entries, %d skipped", c.size(), skipped);
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
@@ -60,7 +60,7 @@ void bestLapsFile() {
     std::string error;
     CHECK(b.save(path, &error), "save failed: %s", error.c_str());
     BestLaps d;
-    CHECK(d.load(path) && d.size() == 2 && d.best("achna_speedway", "trailforge_suv") == 165.5, "load: %zu entries", d.size());
+    CHECK(d.load(path) && d.size() == 2 && d.best("suncoast_raceway", "trailforge_suv") == 165.5, "load: %zu entries", d.size());
     std::filesystem::remove(path);
     CHECK(!d.load(path) && d.size() == 0, "a missing file clears the table");
 }

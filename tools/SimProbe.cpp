@@ -2159,7 +2159,7 @@ int main(int argc, char** argv) {
         levelMap(argc > 2 ? argv[2] : "assets/levels/exploration_peaks/level.json", argc > 3 ? argv[3] : "/tmp/trailforge_levelmap.ppm");
         return 0;
     }
-    if (mode == "lap") lapProbe(argc > 2 ? argv[2] : TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/level.json",
+    if (mode == "lap") lapProbe(argc > 2 ? argv[2] : TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/level.json",
                                 argc > 3 ? std::max(1, std::atoi(argv[3])) : 2);
     else if (mode == "brake") brake();
     else if (mode == "course") course(argc > 2 ? std::atof(argv[2]) : 120.0);

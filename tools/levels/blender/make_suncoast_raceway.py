@@ -1,6 +1,6 @@
-"""Generates the Achna Speedway level (assets/levels/achna_speedway) from real data: the circuit, drag strip, short
-course connector and paddock access are the OpenStreetMap raceway ways of the venue (source/osm.osm, ODbL), the
-ground is the Copernicus GLO-30 DEM (source/dem.json); both are fetched by tools/levels/fetch_osm_track.py.
+"""Generates the Suncoast Raceway level (assets/levels/suncoast_raceway) from real data: the circuit, drag strip, short
+course connector and paddock access are the OpenStreetMap raceway ways of the venue (tools/levels/data/suncoast_raceway/osm.osm, ODbL), the
+ground is the Copernicus GLO-30 DEM (dem.json there); both are fetched by tools/levels/fetch_osm_track.py.
 
 Real: the plan geometry of every asphalt way (WGS84 -> local east / south metres about LAT0 / LON0), the circuit
 length that follows from it, the venue fence, the farmland around it, the start line and the two sector lines
@@ -11,10 +11,10 @@ the pit lane and all buildings (nothing of it is mapped).
 
 Headless:
   /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 \\
-      --python tools/levels/blender/make_achna_speedway.py -- [--blend build/levels/achna_speedway.blend] \\
-      [--out assets/levels/achna_speedway]
+      --python tools/levels/blender/make_suncoast_raceway.py -- [--blend build/levels/suncoast_raceway.blend] \\
+      [--out assets/levels/suncoast_raceway]
 Numbers only (no Blender scene; Blender's bundled python with numpy):
-  /Applications/Blender.app/Contents/Resources/5.3/python/bin/python3.13 tools/levels/blender/make_achna_speedway.py --plan
+  /Applications/Blender.app/Contents/Resources/5.3/python/bin/python3.13 tools/levels/blender/make_suncoast_raceway.py --plan
 """
 
 import argparse
@@ -29,12 +29,12 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tf_level as tl  # noqa: E402
 
-LEVEL_ID = "achna_speedway"
+LEVEL_ID = "suncoast_raceway"
 SEED = 3517
 HALF, PLAY = 512, 480
 N = 2 * HALF + 1
 ORIGIN = -float(HALF)
-SOURCE = os.path.join(tl.REPO, "assets", "levels", LEVEL_ID, "source")
+SOURCE = os.path.join(tl.REPO, "tools", "levels", "data", LEVEL_ID)
 
 LAT0, LON0 = 35.02546, 33.80017  # level origin (the middle of the circuit)
 CIRCUIT_WAY, SHORT_WAY, ACCESS_WAY, FENCE_WAY = "734690065", "734690066", "734691195", "734690068"
@@ -43,7 +43,7 @@ ACCESS_WIDTH = 6.0    # paddock access to the car park
 PIT_WIDTH = 8.0
 PIT_OFFSET = 14.5     # pit lane center line from the circuit center line along the start straight
 CONTROL_SPACING = 6.0
-# Start / finish and the two sector lines: positions on the published map (vetkuro.com Full Course), snapped to the
+# Start / finish and the two sector lines: positions on the published map of the real circuit (full course), snapped to the
 # nearest circuit point.
 START_AT = (-59.0, -123.5)
 SECTOR_AT = [(76.0, -21.0), (-7.0, 154.5)]

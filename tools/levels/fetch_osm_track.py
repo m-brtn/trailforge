@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fetches the source data of the Achna Speedway level (assets/levels/achna_speedway/source/).
+"""Fetches the source data of the Suncoast Raceway level into tools/levels/data/suncoast_raceway/ (kept outside
+assets/, so it is not packaged).
 
   osm.osm     OpenStreetMap API 0.6 `map` response for the venue bounding box (raw XML; ODbL,
               (c) OpenStreetMap contributors). The circuit is the raceway way 734690065 and its neighbours.
@@ -26,15 +27,14 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-LEVEL = os.path.join(ROOT, "assets", "levels", "achna_speedway")
-SOURCE = os.path.join(LEVEL, "source")
+SOURCE = os.path.join(ROOT, "tools", "levels", "data", "suncoast_raceway")
 LOCK = os.path.join(SOURCE, "sources.lock.json")
 CACHE = os.path.join(ROOT, "build", "level_cache")
 UA = {"User-Agent": "TrailForge-level-fetch/1.0 (https://github.com/; offline game level build)"}
 
 # Venue bounding box (lon / lat) and the DEM crop (a bit larger than the 1 km level square).
 BBOX = (33.7925, 35.0205, 33.8100, 35.0315)  # min lon, min lat, max lon, max lat
-DEM_CENTER = (35.02546, 33.80017)              # lat, lon (the level origin, make_achna_speedway.py)
+DEM_CENTER = (35.02546, 33.80017)              # lat, lon (the level origin, make_suncoast_raceway.py)
 DEM_HALF = 0.0075                              # degrees of latitude / longitude around the center
 OSM_API = "https://api.openstreetmap.org/api/0.6/map?bbox={:.4f},{:.4f},{:.4f},{:.4f}"
 OVERPASS = "https://overpass-api.de/api/interpreter"

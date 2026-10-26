@@ -1,13 +1,16 @@
-# Achna Speedway: data sources
+# Suncoast Raceway: data sources
 
-The level is built from real data by `tools/levels/blender/make_achna_speedway.py`; the raw files are in `source/`
-(fetched by `tools/levels/fetch_osm_track.py`, sha256 in `source/sources.lock.json`).
+The level is built from real data by `tools/levels/blender/make_suncoast_raceway.py`; the raw files are in
+`tools/levels/data/suncoast_raceway/` (fetched by `tools/levels/fetch_osm_track.py`, sha256 in `sources.lock.json`
+there; not packaged with the game). Suncoast Raceway is a fictional name: the layout is traced from OpenStreetMap data
+of a real circuit.
 
 ## OpenStreetMap
 
-`source/osm.osm`: OpenStreetMap API 0.6 `map` response for the venue (bounding box 33.7925, 35.0205, 33.8100,
-35.0315), fetched 2026-10-26. The circuit, drag strip, short course connector, paddock access, venue fence and the
-farmland around it come from it (ways 734690065, 734690066, 734691195, 734690068 and the `landuse=farmland` ways).
+Layout traced from OpenStreetMap data of a real circuit; © OpenStreetMap contributors, ODbL. `osm.osm` is the
+OpenStreetMap API 0.6 `map` response for the venue, fetched 2026-10-26 (bounding box and the way ids of the circuit,
+drag strip, short course connector, paddock access and venue fence in `sources.lock.json`). The asphalt ways, the
+fence and the farmland around them come from it.
 
 © OpenStreetMap contributors. The data is available under the Open Database License (ODbL) 1.0:
 https://www.openstreetmap.org/copyright. The level files derived from it (`heightmap.pgm`, `surfaces.pgm`,
@@ -15,7 +18,7 @@ https://www.openstreetmap.org/copyright. The level files derived from it (`heigh
 
 ## Copernicus DEM
 
-`source/dem.json`: heights cropped from the Copernicus GLO-30 DEM tile
+`dem.json`: heights cropped from the Copernicus GLO-30 DEM tile
 `Copernicus_DSM_COG_10_N35_00_E033_00_DEM` (AWS Open Data registry, https://copernicus-dem-30m.s3.amazonaws.com/).
 
 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union

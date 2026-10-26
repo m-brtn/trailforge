@@ -3,5 +3,11 @@
   "dem_tile": "22be7a7ec5867cc7f5854d7459fcef690683e9e6b327403b61f95935872573b7",
   "dem_url": "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N35_00_E033_00_DEM/Copernicus_DSM_COG_10_N35_00_E033_00_DEM.tif",
   "osm.osm": "16b0939f566e37ab3c85343c30db121dab5c9959e95e02d232a8f102ec436daa",
-  "osm_url": "https://api.openstreetmap.org/api/0.6/map?bbox=33.7925,35.0205,33.8100,35.0315"
+  "osm_url": "https://api.openstreetmap.org/api/0.6/map?bbox=33.7925,35.0205,33.8100,35.0315",
+  "osm_ways": {
+    "circuit": "734690065",
+    "fence": "734690068",
+    "paddock_access": "734691195",
+    "short_course": "734690066"
+  }
 }
