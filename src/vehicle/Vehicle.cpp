@@ -1,10 +1,12 @@
 #include "vehicle/Vehicle.h"
 
 #include "physics/PhysicsWorld.h"
+#include "vehicle/VehicleBlueprint.h"
 #include "vehicle/VehicleShape.h"
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
@@ -152,11 +154,21 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     using namespace JPH;
     const VehicleConfig& c = m_config;
 
-    // ---- Body shape (matches the visual body model)
+    // ---- Body shape: convex hulls of the traced blueprint body (the render model's data), or the three boxes of
+    // VehicleShape.h for a model without a blueprint
     StaticCompoundShapeSettings compound;
-    for (const BodyBox& b : kBodyBoxes)
-        compound.AddShape(Vec3(b.center[0], b.center[1], b.center[2]), Quat::sIdentity(),
-                          new BoxShape(Vec3(b.halfExtents[0], b.halfExtents[1], b.halfExtents[2]), kBodyConvexRadius));
+    if (const VehicleBlueprint* bp = findVehicleBlueprint(c.visualModel)) {
+        for (const auto& part : BlueprintBody(*bp, c).collisionParts()) {
+            Array<Vec3> points;
+            points.reserve(part.size());
+            for (const auto& p : part) points.push_back(Vec3(p[0], p[1], p[2]));
+            compound.AddShape(Vec3::sZero(), Quat::sIdentity(), new ConvexHullShapeSettings(points, kBodyConvexRadius));
+        }
+    } else {
+        for (const BodyBox& b : kBodyBoxes)
+            compound.AddShape(Vec3(b.center[0], b.center[1], b.center[2]), Quat::sIdentity(),
+                              new BoxShape(Vec3(b.halfExtents[0], b.halfExtents[1], b.halfExtents[2]), kBodyConvexRadius));
+    }
     ShapeSettings::ShapeResult compoundResult = compound.Create();
     if (compoundResult.HasError())
         throw std::runtime_error(std::string("Vehicle shape: ") + compoundResult.GetError().c_str());

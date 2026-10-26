@@ -65,34 +65,41 @@ void checkParts(const VehicleConfig& c) {
         CHECK(p && p->detachable, "'%s' should be detachable", n);
     }
     for (const char* n : ev ? std::vector<const char*>{"front_panel", "battery_pack", "motor_front", "motor_rear"}
-                            : std::vector<const char*>{"winch", "jerry_can_left", "grille", "snorkel"})
+                            : std::vector<const char*>{"winch", "jerry_can_left", "grille", "skid_plate"})
         CHECK(v.find(n), "%s: missing part '%s'", c.visualModel.c_str(), n);
-    for (const char* n : ev ? std::vector<const char*>{"winch", "snorkel", "grille", "jerry_can_left"}
-                            : std::vector<const char*>{"battery_pack", "motor_front"})
+    // Only what the concept sheet shows: no snorkel or ladder on either model (v0.15).
+    for (const char* n : ev ? std::vector<const char*>{"winch", "snorkel", "grille", "jerry_can_left", "ladder"}
+                            : std::vector<const char*>{"battery_pack", "motor_front", "snorkel", "ladder"})
         CHECK(!v.find(n), "%s: unexpected part '%s'", c.visualModel.c_str(), n);
-    // The bumpers cover the middle of the end faces with outward-facing triangles, at least 8 cm proud of the
-    // 2.20 m faces.
-    for (const auto& [name, zs] : {std::pair{"bumper_front", 1.0f}, std::pair{"bumper_rear", -1.0f}}) {
+    // The bumpers are the front- and rearmost body panels on the center line (outward-facing triangles spanning
+    // x = 0), ahead of the grille / front panel and behind the tailgate.
+    auto reach = [&](const char* name, float zs) {
         const VehiclePart* p = v.find(name);
-        float reach = 0.0f;
+        float r = -1e9f;
         for (std::size_t i = p ? p->firstVertex : 0; p && i + 2 < p->firstVertex + p->vertexCount; i += 3) {
             const glm::vec3 &a = v.mesh.vertices[i].position, &b = v.mesh.vertices[i + 1].position,
                             &d = v.mesh.vertices[i + 2].position;
-            // Triangles facing outward that span x = 0 at y = 0.12 (the bumper face on the center line).
             const glm::vec3 n = glm::cross(b - a, d - a);
             if (std::fmin(a.x, std::fmin(b.x, d.x)) > 0.0f || std::fmax(a.x, std::fmax(b.x, d.x)) < 0.0f) continue;
-            if (std::fmin(a.y, std::fmin(b.y, d.y)) > 0.12f || std::fmax(a.y, std::fmax(b.y, d.y)) < 0.12f) continue;
             if (zs * n.z <= 0.0f) continue;
-            reach = std::fmax(reach, zs * (a.z + b.z + d.z) / 3.0f);
+            r = std::fmax(r, zs * (a.z + b.z + d.z) / 3.0f);
         }
-        CHECK(reach > 2.28f, "%s: %s reaches only %.3f m at the center", c.visualModel.c_str(), name, reach);
-    }
+        return r;
+    };
+    const float front = reach("bumper_front", 1.0f), rear = reach("bumper_rear", -1.0f);
+    for (const char* n : {"body_shell", "hood", ev ? "front_panel" : "grille"})
+        CHECK(front >= reach(n, 1.0f) - 0.01f, "%s: bumper_front (%.3f) behind '%s' (%.3f)", c.visualModel.c_str(),
+              front, n, reach(n, 1.0f));
+    for (const char* n : {"body_shell", "tailgate"})
+        CHECK(rear >= reach(n, -1.0f) - 0.01f, "%s: bumper_rear (%.3f) ahead of '%s' (%.3f)", c.visualModel.c_str(), rear,
+              n, reach(n, -1.0f));
     // No antennas or mud flaps on any model (style rule).
     for (const VehiclePart& p : v.parts)
         CHECK(p.name.find("antenna") == std::string::npos && p.name.find("mud_flap") == std::string::npos,
               "%s: part '%s' is not allowed", c.visualModel.c_str(), p.name.c_str());
     CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
-    CHECK(v.spares.size() == 1, "%zu spare mounts", v.spares.size());
+    CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (the concept has one on the SUV tailgate only)",
+          v.spares.size());
     for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
     std::printf("  %s: %zu parts, %zu triangles\n", c.visualModel.c_str(), v.parts.size(), v.mesh.vertices.size() / 3);
 }

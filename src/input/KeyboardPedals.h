@@ -10,8 +10,8 @@ namespace tf {
 // the simulation's own pedal smoothing still follows. Gamepad triggers are analog and do not go through it.
 //
 // Levels from `trailforge_probe rampsweep` / `brakesweep` on the shipped SUV (2H, ABS off, concrete): half throttle
-// never spins the rear wheels, an instant full throttle spins them at ~4.8 m/s for ~2 s, a linear 0.5 s ramp still
-// at 3.5 m/s; 0.5 at once and full after another 0.8 s stays below 1 m/s and reaches 30 km/h quickest. The rear
+// never spins the rear wheels, an instant full throttle spins them at ~4.8 m/s for ~2 s (~3.9 m/s peak on the
+// 2.56 m wheelbase of v0.15, suv_marks_keyboard), a linear 0.5 s ramp still at 3.5 m/s; 0.5 at once and full after another 0.8 s stays below 1 m/s and reaches 30 km/h quickest. The rear
 // wheels lock from a brake of ~0.45 at 50 km/h; 0.4 stops without locking.
 struct KeyboardPedalSettings {
     float throttleFirm = 0.5f;      // reached within throttleFirmTime of the key press

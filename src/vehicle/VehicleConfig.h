@@ -196,7 +196,7 @@ struct VehicleTuning {
 
 // Per-axle geometry that requires recreating the vehicle.
 struct AxleConfig {
-    float track = 1.80f;       // m between wheel centers (tires stick out ~6 cm past the flares)
+    float track = 1.80f;       // m between wheel centers
     float wheelRadius = 0.40f; // m
     float wheelWidth = 0.30f;  // m
     float wheelMass = 35.0f;   // kg, only for wheel rotational inertia

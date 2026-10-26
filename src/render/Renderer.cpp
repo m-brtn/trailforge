@@ -1817,6 +1817,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     fu.trampleRect = m_trampleRect;
     fu.worldParams = glm::vec4(frame.skyMountains ? 1.0f : 0.0f, frame.deepOutsideGround ? 1.0f : 0.0f, 0.0f, 0.0f);
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
+    fu.bodyMudArch = frame.bodyMudArch;
+    fu.bodyMudBody = frame.bodyMudBody;
     if (frame.bodyMud) {
         for (int r = 0; r < kBodyMudRegions; ++r) {
             const BodyMudCoat& c = frame.bodyMud->coat(r);

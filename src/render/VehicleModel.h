@@ -33,14 +33,17 @@ struct SpareMount {
     bool detachable = true;
 };
 
-// Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The collision shape stays the
-// three boxes from vehicle/VehicleShape.h; the visual body fits around the wheels (see README "Vehicle rendering").
+// Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The body is meshed from the traced blueprint
+// (BlueprintBody), the same data the collision hulls come from; see README "Vehicle blueprints".
 struct VehicleVisual {
     MeshData mesh;                 // all parts, in `parts` order
     std::vector<VehiclePart> parts;
     std::vector<SpareMount> spares;
     style::WheelStyle wheel;       // rim / tire materials and spokes; size and tread come from the axle
     glm::vec3 headlightLens{0.67f, 0.40f, 2.24f}; // left low-beam lens center (body space; right is mirrored)
+    glm::vec4 mudArch{1.40f, -1.40f, -0.20f, 0.545f}; // BodyMud shading: axle z front / rear, arch centre y, radius
+    glm::vec4 mudBody{0.88f, 2.15f, -2.10f, 0.0f};    // BodyMud shading: body side |x|, bumper zones from z front / rear
+    Material coil{MatId::Generic, {0.16f, 0.025f, 0.012f}, 0.40f, 0.1f, 0.8f}; // coil spring colour
     const VehiclePart* find(const std::string& name) const;
 };
 
@@ -61,7 +64,7 @@ glm::mat4 spareWheelMatrix(const SpareMount& mount, float radius, float width);
 
 // Suspension parts, drawn per wheel with transforms computed from the Jolt wheel position each frame.
 // "Unit" meshes span local z = 0..1 and are stretched between two points.
-MeshData buildUnitSpringMesh();             // coil spring
+MeshData buildUnitSpringMesh(const Material& coil); // coil spring (VehicleVisual::coil)
 MeshData buildUnitTubeMesh(float radius);   // arms, half shafts
 MeshData buildShockBodyMesh();              // fixed length kShockBodyLength along +Z
 MeshData buildShockShaftMesh();             // fixed length kShockShaftLength along +Z

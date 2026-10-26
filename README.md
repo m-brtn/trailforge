@@ -308,7 +308,7 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 `soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `lowgrip_wheels`, `max_slip`, `load_sum`,
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `lowgrip_wheels`, `max_slip`, `load_sum`,
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
@@ -376,8 +376,9 @@ directly bypass the ramp.
 | Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
 
 **Hood camera.** A rigid view from the roof line in front of the windshield, mounted in body space from
-`camera.hood` in vehicle.json (both vehicles: [0, 1.24, 0.62] m, pitch −1°, near plane 5 cm), so it pitches and
-rolls with the body. The hood fills the bottom 18% of the 60° view on flat ground and on the proving-ground slope
+`camera.hood` in vehicle.json (SUV [0, 0.92, 0.38] m, EV [0, 0.86, 0.30] m: the roof line of the traced bodies
+since v0.15.0; pitch −1°, near plane 5 cm), so it pitches and rolls with the body. On flat ground the hood fills the
+bottom 19% (SUV) and 20% (EV) of the 60° view, also on the proving-ground slope
 (`/tmp/trailforge_cam_0*_hood_*.png`). The view is not a cockpit: there is no interior model.
 
 **Drive keys.** Settings → Controls → DRIVE KEYS chooses the driving cluster: W A S D (default) or the arrow keys. The
@@ -462,7 +463,8 @@ src/core/     Json (reader, writer, merge; used by the vehicle data, the setups 
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
               ElectricDrive (motor envelope, torque split, regen blend, battery; used by the electric controller in Vehicle.cpp),
-              VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files)
+              VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files),
+              VehicleBlueprint (traced concept body: distance fields, wheelhouses, collision hulls)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
@@ -482,8 +484,9 @@ shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedde
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only definitions
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
               shaderc/ — build-time shader compiler; render/ — capture comparison; release/ — packaging scripts;
-              texc/ — BC7 KTX2 encoder (standalone CMake project); textures/ — terrain texture download and rebuild
-assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format")
+              texc/ — BC7 KTX2 encoder (standalone CMake project); textures/ — terrain texture download and rebuild;
+              cars/ — blueprint tracing from the concept sheet, silhouette comparison, OBJ export
+assets/vehicles/ <id>/vehicle.json — vehicle definitions (see "Vehicle data format"), <id>/blueprint.json — traced body
 assets/levels/ <id>/level.json — open-world level definitions (see "Exploration Peaks")
 assets/textures/ terrain/ — terrain.json, 12 BC7 KTX2 maps (Git LFS), sources.lock.json; CREDITS.md
 assets/models/ <folder>/*.glb + BC7 KTX2 level models (Git LFS), models.json, sources.lock.json; CREDITS.md
@@ -525,7 +528,8 @@ vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format below); the C++ defaults of
 `VehicleConfig` are the v0.7 SUV (full-time AWD, no drag, 0.80 m tires, final drive 3.90), used by the physics tests.
 
-- Mass 2000 kg, wheelbase 2.8 m, track 1.80 m (tires stick out past the flares).
+- Mass 2000 kg, wheelbase 2.56 m, track 1.75 m (since v0.15.0, measured on the concept sheet; 2.8 m and 1.80 m
+  before; the C++ defaults keep 2.8 / 1.80). The tires stick out past the flares as on the sheet.
 - Tires (since v0.9.0): 315/70R17 mud-terrain on 17-inch rims, the 35-inch class of the concept sheet (Cars.png
   car #1 scaled by its wheelbase suggests ~0.90 m; it was 0.80 m before). Real dimensions: 17 in rim = 431.8 mm,
   sidewall 0.70 × 315 = 220.5 mm, diameter 872.8 mm, so `radius` 0.436 m, `width` 0.315 m (section width),
@@ -541,8 +545,9 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
   (3.90 on the new tires, probe `layouts`): 4H 0-30 km/h on concrete 1.59 s vs 1.53 s, 4L 2.33 s vs 2.40 s, the
   4L 15° mud climb 6.16 s vs 7.04 s (taller, so it carries more speed onto the ramp).
 - Center of mass 0.10 m below the frame center.
-- The body collision is a compound of three boxes. The visible model is a procedural five-door expedition SUV
-  (Cars.png car #1, ~18.5k triangles, 42 named parts) fitted around the physics wheels; see "Vehicle rendering".
+- The body collision is a compound of convex hulls built from the traced blueprint (tub between the wheels, the band
+  above the wheelhouses, the greenhouse, the slider box), the same data as the visible body: a five-door expedition
+  SUV traced from Cars.png car #1 (~162k body triangles, 40 named parts); see "Vehicle blueprints".
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
@@ -561,8 +566,8 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 
 ### Electric SUV (`trailforge_ev`)
 
-`assets/vehicles/trailforge_ev/vehicle.json`: a dual-motor electric off-roader on the same wheelbase and track as the
-SUV. The numbers are estimates for the current class of large electric off-road SUVs, not a copy of one vehicle.
+`assets/vehicles/trailforge_ev/vehicle.json`: a dual-motor electric off-roader, wheelbase 2.44 m and track 1.77 m
+from the concept sheet (since v0.15.0; the SUV's 2.8 / 1.80 before). The numbers are estimates for the current class of large electric off-road SUVs, not a copy of one vehicle.
 Class reference (manufacturer figures as commonly published, not re-checked for this build): Mercedes G 580 EQ about
 3.1 t with a 116 kWh pack, Rivian R1S about 2.7–3.2 t with 92–149 kWh packs, both with 0–100 km/h around 4–5 s.
 TrailForge EV sits at the light end of that range.
@@ -596,91 +601,128 @@ ABS off unless stated):
 
 | | SUV (2000 kg) | EV (2650 kg) |
 |---|---|---|
-| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.30 / 2.46 / 4.30 s (peak 401 kW, 0.419 kWh) |
-| 50–0 km/h ABS off / on | 13.70 / 13.49 m | 14.95 / 13.88 m (regen 12 / 16 % of the kinetic energy) |
-| 100–0 km/h ABS off / on | 47.57 / 46.42 m | 52.32 / 46.37 m (regen 5 / 9 %) |
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.82 / 4.49 / 9.58 s | 1.43 / 2.57 / 4.42 s (peak 401 kW, 0.359 kWh) |
+| 50–0 km/h ABS off / on | 13.92 / 13.77 m | 14.60 / 13.97 m (regen 18 / 22 % of the kinetic energy) |
+| 100–0 km/h ABS off / on | 48.14 / 47.31 m | 51.38 / 46.43 m (regen 7 / 13 %) |
 | lift-off at 80 km/h | 0.63 m/s² (drag, engine braking) | 1.36 m/s² (regen and drag) |
-| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.33 m/s², roll 2.17 / 2.58° |
-| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.88 s (NORMAL), 3.89 s (OFF-ROAD) |
-| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.10 s (NORMAL and OFF-ROAD) |
-| diagonal twister, travel used FL / FR / RL / RR | 0.308 / 0.259 / 0.401 / 0.400 m, 6.07 wheel-s in the air | 0.285 / 0.217 / 0.381 / 0.359 m, 5.17 wheel-s |
+| corner 40 km/h, steer 0.25 / 0.45 | 7.39 / 7.78 m/s², roll 4.50 / 4.83° | 8.24 / 8.15 m/s², roll 2.45 / 2.42° |
+| climb dirt 20°, full pedal | 4.34 s (4H), 5.07 s (4L) | 3.82 s (NORMAL and OFF-ROAD) |
+| climb mud 15°, full pedal | 6.13 s (4H), 7.05 s (4L) | 6.12 s (NORMAL and OFF-ROAD) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.405 / 0.336 / 0.392 / 0.402 m, 6.40 wheel-s in the air | 0.381 / 0.208 / 0.351 / 0.363 m, 4.85 wheel-s |
+
+Measured on v0.15.0 (traced bodies, concept wheelbase and track). The v0.14.0 values for comparison: SUV 0–100 9.68 s,
+100–0 ABS on 46.42 m, corner 6.87 / 7.91 m/s²; EV 0–100 4.36 s, 100–0 ABS on 46.37 m, corner 7.33 / 8.33 m/s². On the
+diagonal twister the old box collision touched the terrain in 34 (SUV) and 30 (EV) of 1200 ticks, the traced body in 0
+(`trailforge_probe susp 2`).
 | steady 50 / 90 km/h energy | — | 14.2 / 28.9 kWh/100 km (drag, wheel damping, aux; no rolling resistance) |
 
 The full-pedal launch with TC off spins the front wheels: the front axle's 4800 N·m exceeds its grip once the weight
 moves back (slip speed up to 18 m/s, about 2.5 s). Traction control (T) limits it per axle.
 
-### Vehicle rendering and the style kit
+### Vehicle blueprints (bodies traced from the concept sheet)
 
-All vehicle geometry is procedural and visual only (collision stays the three boxes of `vehicle/VehicleShape.h`).
+Since v0.15.0 both bodies are built from `external_assets/images/Cars.png` (car #1 `trailforge_suv`, car #2
+`trailforge_ev`) instead of hand-placed panels. The same data drives the visible body and the body collision.
 
-- **Style kit** (`src/render/StyleKit`): the shared building blocks for every car model.
+1. **Trace** (`tools/cars/trace_blueprint.py <id>`, Python venv from `tools/cars/requirements.txt`; never install
+   globally). The script crops the side / top / front / rear cells of the car's column (`tools/cars/sheet.json`),
+   separates the car from the grey background, fits the side-view tire circles (axle positions and scale: the concept
+   tire is scaled to the physics tire diameter), classifies every pixel into colour classes (paint, accent, white,
+   red, dark trim / glass) and writes `assets/vehicles/<id>/blueprint.json`: per view an RLE class grid in meters,
+   the belt and window lines, door cuts, axle z, lamps and accessory anchors, and a report with the scale checks.
+   Everything done by hand is data in `tools/cars/<id>.keypoints.json` (pixel coordinates of the cell): accessories
+   and shadows masked out of the silhouette (antennas, roof load, parts drawn on top of the hood, the drawn ground
+   shadow), extra door cuts, lamp boxes, anchor boxes (mirror, winch, cases, spare, slider, fender tops), the palette
+   and `restHubY` (where the concept axle line sits in body space). Debug overlays go to `/tmp/trailforge_blueprint_<id>_<view>.png`.
+2. **Embed**: `cmake/EmbedBlueprints.cmake` compiles the JSON files of `TRAILFORGE_BLUEPRINT_IDS` into the binary;
+   `VehicleBlueprint` parses them and turns every view outline into a smoothed signed distance field.
+3. **Body** (`BlueprintBody`, no SDL): the visual hull of the four views placed on the physics wheels (the concept
+   axles map onto the physics axles, the concept axle line onto `restHubY`), minus the wheelhouses: the volume each
+   tire sweeps over its whole suspension travel and steering range plus 2.5 cm. Around each wheelhouse a 1.6 cm fender
+   lip follows the side-view outline, open towards the tire and reaching out to the flare width of the end views
+   (at most 1.2 cm past the tire face), so a tire that moves up tucks under it. There is no full inner liner: only
+   the fender's underside at the top of the arch is liner, the coil-overs (orange springs on the SUV, blue on the EV,
+   both as on the sheet) stay visible through the opening and are placed from the physics suspension length every
+   frame. `FieldMesh` meshes the field (surface nets, about 2 cm cells, vertices projected onto the surface, normals
+   from the field gradient); a normal more than 40° from its triangle keeps the triangle normal, so creases stay hard.
+4. **Paint and parts** (`render/VehicleModel.cpp`): every triangle takes its colour class from the view it faces most
+   (side and top weighted over the end views), then three majority passes over neighbouring triangles remove single
+   blotches. Dark classes above the belt become glass. Triangles are split into named parts by position (doors from
+   the door cuts, hood, fenders, flares, bumpers, tailgate, grille / front panel). Lamps come from the traced lamp
+   boxes. Accessories are style-kit meshes placed on the anchors: raised fender tops, winch, tow hooks, mirrors, roof
+   rails, light bar, roof cases, rock sliders with the belly plate, skid plates, the SUV's rear jerry cans and
+   tailgate spare. The paint is per triangle (about 2 cm), so colour borders are stepped, and where a view of the
+   sheet draws an accessory over the body (the bull bar over the hood front in the plan, the cladding and handles in
+   the side view) its colour lands on the panel: the bodies show dark patches the concept does not have.
+5. **Collision** (`Vehicle.cpp`): `BlueprintBody::collisionParts` gives convex hulls of the tub between the wheels,
+   the full-width band above the wheelhouses up to the belt and the greenhouse (5 cm cross-sections), plus the
+   slider / belly box; the centre of mass is moved to the configured point with `OffsetCenterOfMassShape`. A visual
+   model without a blueprint falls back to the three boxes of `vehicle/VehicleShape.h`.
+
+Left out on purpose: antennas and the roof spare (both drawn on the sheet, dropped on request). Not on the sheet and
+therefore not built: mud flaps, snorkel, ladder, a spare on the EV.
+
+Fit to the concept, measured with `tools/cars/compare_silhouettes.py model.obj blueprint.json` (the OBJ from
+`trailforge_model_export <vehicle.json> out.obj`, settled on flat ground; the concept wheelbase is mapped onto the
+physics one; `--halves PREFIX` writes concept | model images). Silhouette IoU side / front / rear / top:
+
+| Model | v0.14.0 hand-built | v0.15.0 traced |
+|---|---|---|
+| trailforge_suv | 0.718 / 0.720 / 0.706 / 0.827 | 0.8998 / 0.914 / 0.910 / 0.895 |
+| trailforge_ev | 0.693 / 0.750 / 0.709 / 0.842 | 0.946 / 0.903 / 0.888 / 0.971 |
+
+The SUV side view was 0.901 before the raised parts drawn on top of the hood (the fender tops and a hood rail) were
+taken out of the side silhouette: the side-view hull extruded them across the whole hood as ridges. They are now
+built as separate raised fender tops (anchors `fender_top`, side and plan), and the hood follows a straight line in
+the side view. The EV rear view stays below 0.9: the sheet draws the end-view tires about 0.42 m wide (physics 0.285 m), the roof
+rack band and the rear underbody differently from the side view. Inconsistencies of the sheet itself (from the
+tracer's report): the end views are drawn at their own scale (SUV front 1.112, rear 1.144 × the side view); the
+concept flares are narrower than the physics tires (SUV: flare about 0.97 m from the centre line, tire face 1.03 m); the
+spare is drawn 0.15 m deep for a 0.315 m tire; mirror heights differ between the front and rear views; the side view
+shows a dark front case and an olive rear case where the top view shows two blue cans.
+
+**Adding a car**: add a column to `tools/cars/sheet.json` if the sheet grows, write `tools/cars/<id>.keypoints.json`
+(copy one of the two, adjust the palette, masks, lamps and anchors), run the tracer and check its overlays and report,
+add the id to `TRAILFORGE_BLUEPRINT_IDS` (CMakeLists.txt) and `knownVisualModel`, give the model its livery and
+accessories in `VehicleModel.cpp`, set `visualModel` in the vehicle.json, then check the IoU with
+`compare_silhouettes.py`, the model tests (`model_wheel_clearance`, parts, bumpers) and the `car*_views` scenarios.
+
+### Style kit, wheels and mud
+
+All vehicle geometry is procedural and visual only, except that the body collision hulls come from the same blueprint.
+
+- **Style kit** (`src/render/StyleKit`): the shared building blocks for the accessories.
   - Materials: clear-coat paint without metallic flakes (stylized-realistic), matte plastic trim, metal, rubber,
     glass, emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
-    a `Livery` groups base paint, accent paint (two-tone panels, decal stripes), roof, trims.
-  - Surfaces: `skin` lofts rows of points into quads with per-face orientation and normals averaged only within
-    38 degrees, so chamfers and creases stay hard edges that catch the light and curved parts shade smooth;
-    `roundedRect` builds rounded footprints (body sides, greenhouse) with matching stations between rings;
-    `grid`, `prism`, `face`, `panelGap` (panel gaps and decal stripes).
-  - Lights: LED rings (DRL outline), strips, round lamps. Accessories: low roof rails with crossbars, cargo straps, light bar, winch, bow shackles,
-    snorkel, slim fender flares over any arch outline (rounded lip, chamfered band), profile sweeps (bumpers),
-    jerry cans, cargo cases, ladder, rock sliders, mirrors, spare carrier. No mud flaps (the concept has none).
-    No antennas: they were left out on purpose (the concept sheet has them).
+    a `Livery` groups base paint, accent paint, roof, trims.
+  - Lights: LED rings, strips, round lamps. Accessories: roof rails with crossbars, cargo straps, light bar, winch,
+    bow shackles, cargo cases, rock sliders, mirrors, jerry cans, spare carrier.
   - Wheels: `buildWheel(radius, width, WheelStyle)` with spoke count, rim fraction, optional beadlock, mud- or
     all-terrain tread (chevron blocks, shoulder lugs wrapping the sidewall), bulging sidewalls, deep-dish rim with
     recessed spokes. The mesh fits exactly in the physics wheel: its outer radius is the physics radius (the
     beveled block corners end up to 1 mm inside it) and its axial extent is the physics width; the bulge and the
-    lugs stay inside. Size never comes from the model, only from the axle (see "Wheels follow the physics" below).
+    lugs stay inside. Size never comes from the model, only from the axle.
 - **Parts**: a model is a list of named parts (`VehiclePart`: name, parent, attachment point, flags `deformable`
   and `detachable`, vertex range), merged into one mesh and one draw call. The flags only mark what a later damage
   stage may bend or knock off; there is no damage logic. Spare wheels are mount points (`SpareMount`) drawn with
   the rear wheel mesh, so they follow the rear tire size.
-- **trailforge_suv**: lower body swept from one profile (chamfered rocker with black cladding, shoulder crease,
-  chamfered shoulder, belt deck) around a rounded footprint, arches clipped out of it; greenhouse lofted from the
-  deck (8 cm inside the body side) to the roof with a raked windshield and tumblehome; hood with crown, panel gaps
-  and a nose dropping to the grille; olive paint, orange fender tops, side stripe, rear quarter panel and roof band,
-  white roof, black pillars, flares, bumpers. Parts include doors, hood, tailgate, windshield, fenders, flares,
-  bumpers (the rear one swept around the body corners with chamfers, a groove and lamp pockets), winch, tow hooks,
-  lights, mirrors, roof rails, light bar, strapped cases and a jerry can on the crossbars, rear jerry cans, ladder,
-  snorkel, rock sliders and one spare mount (tailgate). The concept's roof spare is left out: with the 315/70R17
-  tire it would cover two thirds of the rail spacing and stand 0.32 m tall.
+- **trailforge_suv** (~162k body triangles, 40 parts): olive paint, orange accents and rear quarter panel, white
+  roof, black trim, grille with the traced lamps, winch, roof rails with a light bar, a dark front case with two LED
+  lenses and an olive rear case, rear jerry cans, tailgate spare.
+- **trailforge_ev** (~149k body triangles, 38 parts): white / light grey paint, blue accents, black cladding, the
+  closed front panel with the LED bar, the full-width tail light, roof rails with a light bar and one flat case, and
+  under the body the floor battery pack and one motor per axle. No winch, no spare.
 - **Wheels follow the physics**: the wheel meshes are built per axle from the active configuration (definition,
   kit, setup): `wheel.radius` and `wheel.width` give the tire size, the optional visual keys `wheel.rimRatio` and
-  `wheel.tread` the rim and the tread. The arches, the flares and the wheel-house clearance are derived from
-  the wheels too: every arch point is pushed out until it clears the tire swept over the whole suspension travel
-  (`attachHeight` minus `minLength` .. `maxLength`) and 0..`maxSteerAngleDeg` with a 3 cm margin, on top of a
-  circular arc of 1.2 wheel radii (vertical down to the rocker); the flares are a slim band along that arch
-  (0.30 x the wheel radius wide, clamped to 10-14 cm, 7.5 cm proud of the body side), so the tires stick out past
-  them as on the sheet. When a
-  kit or setup changes any of these values the app rebuilds the body and wheel meshes. Tests: `model_wheel_size`
-  (mesh radius / width equal the physics wheel for several sizes, rim ratios and treads) and
-  `model_wheel_clearance` (no body triangle point, vertices plus edge midpoints and centroids, inside any
-  wheel's sweep for the default wheels and 0.43 / 0.33, 0.45 / 0.30 and 0.36 / 0.26 m tires). The scenario
-  `tools/scenarios/wheel_fit.txt` changes the tire size in the running app (`wheels R W`) and checks
-  `wheel_fit_err` (measured mesh vs physics) after each rebuild.
-- **Fit to the concept**: known mismatches with the sheet and the collision (the physics was not changed for
-  the model; the tires were enlarged to the 315/70R17 physics wheels above):
-  - the tire is 0.873 m (sheet ~0.90 m); ground to roof is 2.03 m (roof 1.245 m above the frame, frame 0.78 m
-    above the ground at rest) vs ~1.75 m on the sheet: the body sits on the physics suspension (0.40 m of travel,
-    hub 0.35 m below the frame at rest), so it rides higher than drawn;
-  - at rest the tire top is 0.30 m below the arch top (0.25 m of bump travel plus margin; the sheet shows ~0.15 m);
-  - the greenhouse is 0.72–0.80 m half width while the cab collision box is 0.85 m, and the visual roof (1.245 m)
-    is 5 cm below the collision top; the windshield rakes back from z 0.92 to 0.40 while the box ends at z 0.80;
-  - the rear (z -1.50 to -2.20 above the belt) has no collision, the rear spare and bumpers reach 0.25 m behind
-    the -2.30 collision end, the front bumper and winch up to 0.16 m ahead of it.
-- **trailforge_ev** (Cars.png car #2, ~15.9k triangles, 38 parts): the same fitted lower body, greenhouse and hood
-  as trailforge_suv (same wheelbase and track) with livery `arcticElectric` (white / light grey paint, blue accents,
-  black cladding and flares), a closed piano-black front panel with a full-width LED bar, headlights with LED rings,
-  wrapped black bumpers with blue LED lamps, blue recovery points and blue tow hooks, a full-width tail light, a dark
-  quarter window with a slanted blue graphic, blue fender-top and door stripes, a flat dark hood panel, low roof
-  rails with a light bar (blue end pods, blue LED strips on the rails) and one flat case, rock sliders with blue
-  caps, the spare on a tailgate carrier, and under the body the floor battery pack and one motor with its reduction
-  and inverter per axle. No antenna, no snorkel (no engine air intake), no mud flaps. The concept's roof spare is
-  left out for the same reason as on the SUV. Six-spoke dark wheels with the all-terrain tread.
-  Headlight beam origins are per model (`VehicleVisual::headlightLens`). Model tests run every catalog vehicle
-  (parts, no antennas or mud flaps, bumpers covering the end faces, wheel size, wheel clearance with its own and
-  bigger / smaller tires).
-- Body mud and tread soil are the same cosmetic layers as before: the mud mask is computed in the shader from the
-  body-space position and the per-vertex receptivity of each material.
+  `wheel.tread` the rim and the tread. The wheelhouses and fender lips are derived from the wheels too (see above);
+  when a kit or setup changes any of these values the app rebuilds the body and wheel meshes. Tests:
+  `model_wheel_size` (mesh radius / width equal the physics wheel for several sizes, rim ratios and treads) and
+  `model_wheel_clearance` (no body triangle point inside any wheel's sweep for the default wheels and bigger /
+  smaller tires). The scenario `tools/scenarios/wheel_fit.txt` changes the tire size in the running app
+  (`wheels R W`) and checks `wheel_fit_err` after each rebuild.
+- Body mud and tread soil are cosmetic layers: the mud mask is computed in the shader from the body-space position
+  and the per-vertex receptivity of each material; the arch and bumper zones come from the model's axle positions,
+  arch height and body width (`VehicleVisual::mudArch` / `mudBody`).
 
 ## Vehicle data format
 
@@ -692,6 +734,10 @@ like `assets/vehicles/x/vehicle.json: axles.front.suspension.maxLength: 0.12 mus
 Broken definitions are skipped with the message in the log. The test `vehicle_definition_validation` feeds it broken
 documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` plus `tests/data/vehicles` (settle,
 0-30 / 0-50 km/h, braking from 50 km/h, a 15° low-range climb, suspension travel limits).
+
+The body shape is not part of vehicle.json: `visualModel` selects the traced `assets/vehicles/<id>/blueprint.json`
+(generated by `tools/cars/trace_blueprint.py`, embedded at build time; see "Vehicle blueprints"), which gives both the
+visible body and the collision hulls, placed on the wheelbase, track and wheels of the definition.
 
 | Section | Keys |
 |---|---|
@@ -1499,7 +1545,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   rotor inertia is added to the wheel inertia through the reduction, so the two wheels of an axle are not coupled
   through a shared shaft speed; the open differential is the torque split only. Traction control and regen blending
   are control logic that acts through the motor torque and the friction brake torque.
-- Body collision is a compound of three boxes.
+- Body collision is a compound of convex hulls from the traced blueprint (5 cm cross-sections, see "Vehicle
+  blueprints"): convex pieces, so concave details of the visible body are filled in, and the style-kit accessories
+  (roof load, winch, spare, jerry cans, mirrors) have no collision. The wheels touch the ground only through Jolt's
+  wheel casts.
 - Time of day, moonlight and headlights are lighting only: they do not change grip, temperature or anything else in
   the simulation.
 - Determinism is guaranteed only at the same step rate on the same platform.
@@ -1521,7 +1570,8 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 59 of 59 tests pass in Debug and Release, 56 of 56 in headless (no model tests) as of v0.12.0 (new in
+- **CTest.** 69 of 69 tests pass in Debug and Release as of v0.15.0; 56 of 56 in headless (no model tests) as of
+  v0.12.0 (new in
   v0.12.0: `level_heightfield_sampling`, `level_tile_streaming`, `level_road_carving`, `level_surfaces_water`,
   `level_vehicles` in the new `trailforge_level_tests`; new in v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,
   `ev_simulation`, `audio_electric`, `vehicle_page`; 30 before v0.8.0, then `vehicle_catalog_sweep`,
