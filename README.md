@@ -218,7 +218,8 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`, `minimap` / `compass` (0/1, session only); tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`, `minimap` / `compass` (0/1, session only); tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1`; post effects (see "Post effects"): `taa`, `ao` (0/1/2), `motion_blur`, `shafts`, `flare`, `auto_exposure`, `dof`, `dof_driving`, `tonemap` (0 ACES, 1 AgX), `grade`, `ao_strength`, `vignette`, `grain`, `chromatic`, `sharpen`, `water_refraction`, `water_ssr`; sky: `atmosphere` (0..1), `valley_fog` |
+| `post_bench PASS N` | repeat one post pass N times per frame for cost measurements (`lindepth`, `gtao`, `ao_blur`, `velocity`, `taa`, `motion_blur`, `dof`, `lum`, `shafts`, `bloom`, `tonemap`; `none` ends it) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the hood camera |
 | `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` / `gamepad button south\|east\|west\|north\|lb\|rb\|back\|start 1\|0` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`) |
@@ -1115,18 +1116,44 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
 3. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.
 4. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
    rock/concrete/dirt, mask-blended grass/mud/wet ground, tire marks (one instanced draw), instanced grass (2.4 m
-   chunks, 3 LOD levels, see "Grass, flowers and wheat"), procedural sky with clouds, water with Fresnel, ripples and
-   reflection, height fog, debug lines.
-5. Bloom (5-level downsample/upsample chain).
-6. Tonemap (ACES fit, exposure, vignette, dither) with upscale from the render scale; optional FXAA.
-7. Menu blur (only while a menu covers the world): dual-Kawase blur of the tonemapped frame, 4 levels down to 1/16
+   chunks, 3 LOD levels, see "Grass, flowers and wheat"), scattering sky with drifting clouds, height and valley fog.
+   Without MSAA the pass is split after the opaque part: linear depth, GTAO at half resolution (multiplied onto the
+   scene), a copy of the opaque scene for the water, then water, waterfalls, spray and debug lines.
+5. Post effects without MSAA (see [Post effects](#post-effects)): camera + per-object velocity, TAA, motion blur,
+   depth of field, sun shafts, eye adaptation.
+6. Bloom (5-level downsample/upsample chain).
+7. Tonemap (AgX or ACES, exposure, colour grade LUT, lens flare ghosts, vignette, chromatic aberration, film grain,
+   dither, sharpening after TAA) with upscale from the render scale; optional FXAA.
+8. Menu blur (only while a menu covers the world): dual-Kawase blur of the tonemapped frame, 4 levels down to 1/16
    resolution (5-tap down, 8-tap up), composited with a dim and slight desaturation; then ImGui (debug panels and
    the menus, drawn with the Rajdhani font from `assets/fonts/` at the framebuffer scale, so text stays crisp on
    HiDPI).
 
+### Post effects
+
+All of them need MSAA off (the depth buffer is sampled); High and Ultra use TAA instead of MSAA. Each has a control
+in F2 → Graphics → "Post effects" and a scenario `set` key; the cost column is GPU time at 2880×1800 (High, forest
+view, measured by repeating the pass with `post_bench`, M-series Mac).
+
+| Effect | Low | Medium | High | Ultra | `set` key | Cost (ms) |
+|---|---|---|---|---|---|---|
+| TAA (Halton jitter, YCoCg variance clip, Catmull-Rom history) + sharpening | off (FXAA) | on | on | on | `taa`, `sharpen` | 0.95 |
+| GTAO (half res, bilateral upsample) | off | 2×4 | 2×4 | 3×6 | `ao`, `ao_strength` | 0.68 + 0.46 |
+| Motion blur (camera + vehicle body / wheels velocity) | off | 0.4 | 0.5 | 0.5 | `motion_blur` | 0.22 + 0.16 velocity |
+| Depth of field (menus, garage; optional far blur while driving) | on | on | on | on | `dof`, `dof_driving` | 3.3 (24 taps, now 16) |
+| Sun shafts (radial blur of the sky around the sun, half res) | off | 0.5 | 0.6 | 0.6 | `shafts` | 0.06 |
+| Lens flare (ghosts of the bloom image) | off | 0.3 | 0.4 | 0.4 | `flare` | in tonemap |
+| Eye adaptation (64×64 log luminance, 1×1 adapted) | on | on | on | on | `auto_exposure` | 0.07 |
+| Bloom | off | on | on | on | `bloom` | 0.41 |
+| Tonemap AgX / ACES + grade LUT (32³) + vignette, grain, chromatic aberration | all | all | all | all | `tonemap`, `grade`, `vignette`, `grain`, `chromatic` | 0.64 |
+| Water refraction + screen-space reflections | refraction | both | both | both | `water_refraction`, `water_ssr` | see devlog |
+
+The grade LUT is built on the CPU (cool shadows, warm highlights, a gentle S-curve and vibrance toward the
+`Banner.png` key-art mood). Chromatic aberration is off by default.
+
 ### Shader pipeline
 
-`shaders/scene.hlsl` holds all 36 entry points (15 vertex, 21 fragment). Each entry's resources are declared inside
+`shaders/scene.hlsl` holds all 49 entry points (16 vertex, 33 fragment). Each entry's resources are declared inside
 `#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
 in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
 fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
@@ -1227,7 +1254,15 @@ elsewhere), places model rocks and logs with collision, and scatters render-only
 - **Waterfalls** are render-only meshes generated wherever the river surface drops 2 m or more between two samples: a
   sheet on the ballistic path from the lip (launch speed from the river width), streaks that scroll with the fall time
   and tear toward the foot, a foam disc on the pool and three crossed mist cards that fade edge-on, at the ground and
-  near the camera (`waterfall_fs`). No water flow is simulated.
+  near the camera and, without MSAA, where they meet the opaque scene (soft particles) (`waterfall_fs`). Seen from
+  above, the smooth upper part of the sheet is glassy dark water reflecting the sky instead of white foam. No water
+  flow is simulated.
+- **Water surfaces** (lakes, river, sea; render-only, the physics only knows the water height): wind swell as a sum
+  of four deep-water sine waves (phase speed from the wavelength) modulated by slow gust patches and calmed in the
+  shallows, plus scrolling noise ripples; detail fades with distance. Without MSAA the water samples a copy of the
+  opaque scene: the bed is refracted by the wave normal and absorbed per colour channel along the view path through
+  the water (Beer-Lambert, coefficients from the water body colour), and reflections are traced in screen space
+  against the linear depth (falling back to the sky). Shore foam bands run up the beach in the last half metre.
 
 ### Grass, flowers and wheat
 
@@ -1272,8 +1307,14 @@ vertex shader decides everything per blade from hashes, the ground maps and a ti
   blue ambient. The shadow light switches from the sun to the moon while both are below about −4°, so nothing is lit
   or shadowed from below the horizon. Headlights (H) are two unshadowed spot lights on the vehicle that light the
   ground, grass and rocks (render-only, stylized falloff).
-- **Sky:** large stylized sun disc (bigger near the horizon), sunset-lit cloud undersides, horizon haze that matches
-  the fog. Four layers of faceted distant mountains are drawn in the sky pass at infinity (render-only, no
+- **Sky:** single scattering in a flat exponential atmosphere (Rayleigh per colour channel with an 8 km scale height,
+  Mie with 1.2 km, Kasten-Young air mass along the view and toward the sun, an ozone term against green low-sun
+  skies), scaled to the palette's zenith brightness and mixed with the palette, which carries night and twilight
+  (`atmosphere` 0..1). Fog takes the sky colour just above the horizon in each direction (aerial perspective), and on
+  open levels a thin valley fog layer sits above the sea level (`valley_fog`, thicker in the morning). Clouds are a
+  value-noise layer on a plane 2 km up that drifts with the wind (9 m/s) with self-shadowing toward the sun; the
+  same layer casts soft moving shadows on the terrain, models, grass and water. Large stylized sun disc (bigger near
+  the horizon), sunset-lit cloud undersides. Four layers of faceted distant mountains are drawn in the sky pass at infinity (render-only, no
   collision) with aerial perspective toward a violet haze; a valley opens where the sun sets.
 - **Backdrop:** flat-shaded terrain beyond the walls with a lower view corridor toward the sunset; ~900 instanced
   low-poly pines (faceted tiers, per-tree size, yaw and tint, wind sway) with three LODs by distance (55 / 140 m),
@@ -1561,7 +1602,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;
-  the river surface is a stepped level per sample, not a flow simulation.
+  the river surface is a stepped level per sample, not a flow simulation. Waves, shore foam, refraction and
+  reflections are shading only: the water surface the physics sees stays flat, and the waves do not follow wind,
+  fetch or the river current. Clouds, their ground shadows and the valley fog are render-only too (cloud shadows dim
+  only the rendered sunlight).
 - The terrain textures are render-only: their height and normal maps shade the ground and pick which layer shows
   where layers meet; they never change the collision (the heightfield samples) or the surface friction (the baked
   per-sample material).

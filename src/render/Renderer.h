@@ -50,7 +50,7 @@ struct FrameUniforms {
     glm::vec4 sunDisc;      // rgb: sun disc radiance, w: moon disc brightness
     glm::vec4 moonDir;      // xyz, w: night factor
     glm::vec4 fogColor;     // rgb, w: world azimuth of the mountain valley (rad)
-    glm::vec4 skyAmbient;   // rgb: sky diffuse irradiance, w: unused
+    glm::vec4 skyAmbient;   // rgb: sky diffuse irradiance, w: scattering sky amount
     glm::vec4 headlightL;   // xyz: lamp position, w: intensity (0 = off)
     glm::vec4 headlightR;   // xyz: lamp position
     glm::vec4 headlightDir; // xyz: beam axis, w: cos of the outer cone angle
@@ -59,9 +59,11 @@ struct FrameUniforms {
     glm::vec4 bodyMudFlecks[4]; // grass blades in the coat per region
     glm::vec4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     glm::vec4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
-    glm::vec4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
+    glm::vec4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1),
+                                // z: valley fog density at its base, w: valley fog base height
     glm::vec4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
     glm::vec4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
+    glm::vec4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
 };
 
 struct DrawUniforms {
@@ -116,6 +118,31 @@ struct PostUniforms {
     glm::vec4 texel;
     glm::vec4 params;
     glm::vec4 extra;
+    glm::vec4 look{0.0f};
+    glm::vec4 look2{0.0f};
+    glm::vec4 look3{0.0f};
+};
+
+struct PostFxUniforms {
+    glm::mat4 viewProj;     // without the TAA jitter
+    glm::mat4 prevViewProj; // previous frame, without jitter
+    glm::mat4 invView;
+    glm::vec4 proj;         // P00, P11, P20, P21 of the jittered projection
+    glm::vec4 texel;
+    glm::vec4 params;
+    glm::vec4 params2;
+    glm::vec4 camPos;
+    glm::vec4 sun;          // xy: sun uv, z: shaft weight
+    glm::vec4 sunColor;
+    glm::vec4 depthParams;  // near * far, near, far - near, far
+};
+
+struct VelocityUniforms {
+    glm::mat4 viewProjJ;
+    glm::mat4 viewProj;
+    glm::mat4 prevViewProj;
+    glm::mat4 model;
+    glm::mat4 prevModel;
 };
 
 struct MarkUniforms {
@@ -183,6 +210,8 @@ struct FrameDesc {
     bool deepOutsideGround = false; // water beyond the ground maps is open sea (no floor height there)
     float fogDensity = 0.0016f;     // height fog at y = 0 (1/m), times the fog setting
     float fogFalloff = 0.05f;       // 1/m
+    float valleyFog = 0.0f;         // valley layer density at its base (1/m), times the valley fog setting
+    float valleyFogBase = 0.0f;     // valley layer base height (m)
     float shadowScale = 1.0f;       // multiplies the shadow distance setting (open levels see farther)
     std::span<const LineVertex> lines;
     bool linesOnTop = false;   // true: lines without depth test (visible through the body)
@@ -191,6 +220,10 @@ struct FrameDesc {
     float blur = 0.0f;           // 0..1: menu blur of the finished 3D frame (under the UI)
     float blurDim = 0.55f;       // brightness of the blurred frame at full blur
     float blurDesaturate = 0.25f;
+    // Depth of field (RenderSettings::dof / dofDriving): focus distance (m) and amount 0..1; 0 = off.
+    float dofFocus = 0.0f;
+    float dofAmount = 0.0f;
+    bool cameraCut = false;       // teleport / camera switch: drop the TAA history, motion vectors and adaptation
 
     // Vehicle state for shading only (cosmetic): body transform, mud amount and lamps.
     glm::mat4 vehicleModel{1.0f};
@@ -246,6 +279,11 @@ struct RenderStats {
     int modelShadowInstances = 0;               // summed over the cascades
     std::uint64_t modelShadowTriangles = 0;
     int modelDraws = 0;                         // draw calls (main view)
+    bool depthEffects = false;                  // single-sample scene: TAA, AO, motion blur, shafts, DOF available
+    bool taa = false, ao = false, motionBlur = false, shafts = false, dof = false, autoExposure = false;
+    int velocityObjects = 0;                    // moving meshes drawn into the velocity buffer
+    float sceneLogLum = 0.0f;                   // adapted log2 mean scene luminance (after the base exposure)
+    float autoExposureEv = 0.0f;                // correction applied on top of the time-of-day exposure
 };
 
 // Level terrain for the renderer: the physics height grid and the per-cell splat weights (render-only copy).
@@ -308,6 +346,11 @@ public:
     std::uint32_t depthWidth() const { return m_outW; }
     std::uint32_t depthHeight() const { return m_outH; }
     int depthCreations() const { return m_targetCreations; }
+
+    // GPU cost measurement: the named post pass is recorded `repeat` times per frame (same inputs and output, so
+    // the image is unchanged); (frame GPU time at N - at 1) / (N - 1) is its cost. Unknown name or repeat 1: off.
+    static const char* const kPostPassNames[];
+    void setPostBench(const std::string& pass, int repeat);
 
 private:
     int supportedMsaa(int n) const; // highest supported sample count <= n
@@ -400,6 +443,19 @@ private:
     SDL_GPUGraphicsPipeline* m_blurUpPipe = nullptr;
     SDL_GPUGraphicsPipeline* m_blurCompositePipe = nullptr;
     SDL_GPUGraphicsPipeline* m_terrainShadowPipe = nullptr;
+    // Post effects on the single-sample scene (static).
+    SDL_GPUGraphicsPipeline* m_linDepthPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_gtaoPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_aoBlurPipe = nullptr;      // multiplies onto the HDR scene
+    SDL_GPUGraphicsPipeline* m_velocityPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_velocityObjPipe = nullptr; // depth-tested against the scene depth
+    SDL_GPUGraphicsPipeline* m_taaPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_motionBlurPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_dofBlurPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_dofPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_lumPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_adaptPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_shaftsPipe = nullptr;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
     SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
@@ -425,6 +481,31 @@ private:
     static constexpr int kBlurLevels = 4;
     Texture m_blurSrc;
     std::vector<Texture> m_blur;
+    // Post effects (single-sample scene only).
+    static constexpr SDL_GPUTextureFormat kLinDepthFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
+    static constexpr SDL_GPUTextureFormat kVelocityFormat = SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT;
+    static constexpr SDL_GPUTextureFormat kAoFormat = SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT;
+    Texture m_linDepth, m_velocity, m_ao, m_sceneCopy;
+    std::array<Texture, 2> m_taa; // history ping-pong
+    std::array<Texture, 2> m_fx;  // motion blur / DOF outputs
+    Texture m_dofHalf, m_shafts;
+    Texture m_lum;                // 64 x 64 log luminance
+    std::array<Texture, 2> m_adapt; // 1 x 1 adapted log luminance, ping-pong
+    Texture m_lut;                // 32^3 colour grade
+    Texture m_farDepth;           // 1 x 1 linear depth "far" for passes without a depth buffer
+    SDL_GPUSampler* m_pointSampler = nullptr;
+    int m_taaIndex = 0, m_adaptIndex = 0;
+    bool m_historyValid = false, m_adaptValid = false;
+    std::uint32_t m_frameIndex = 0;
+    glm::mat4 m_prevViewProj{1.0f};
+    glm::vec3 m_prevCamPos{0.0f}, m_prevCamFwd{0.0f, 0.0f, -1.0f};
+    bool m_prevValid = false;
+    float m_prevTime = 0.0f;
+    std::vector<std::pair<const GpuMesh*, glm::mat4>> m_prevModels; // per draw of the previous frame
+    std::vector<std::pair<const GpuMesh*, glm::mat4>> m_curModels;
+    int m_benchPass = -1, m_benchRepeat = 1;
+    SDL_GPUTransferBuffer* m_adaptReadback = nullptr;
+    void buildGradeLut();
 
     // Static textures and samplers.
     Texture m_noise, m_mask, m_height;

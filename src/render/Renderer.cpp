@@ -40,7 +40,9 @@ namespace {
 
 enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2, kLayoutModel = 3 };
 // kBlendCoverage: no blending, alpha to coverage (alpha-tested foliage on MSAA targets).
-enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4, kBlendCoverage = 5 };
+// kBlendMultiply: dst * src (ambient occlusion onto the scene).
+enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4, kBlendCoverage = 5,
+                 kBlendMultiply = 6 };
 // Shadow casters: positive slope bias, no depth clip. Decals: pulled toward the camera so they win against the
 // surface they lie on. The scene uses reversed depth (near 1, far 0, compare GREATER_OR_EQUAL) for precision over
 // kilometres; the shadow maps keep the standard 0..1 depth.
@@ -62,6 +64,11 @@ constexpr float kGrassNearCanopy[4] = {0.6f, 0.5f, 0.35f, 0.3f};
 // Full quads per segment, so cut shapes (ears, seed heads, flower heads) get a wide top; the far LOD is one triangle.
 constexpr int grassTriangles(int lod) { return lod >= 2 ? 1 : 2 * kGrassSegs[lod]; }
 constexpr int kBloomLevels = 5;
+// Auto exposure: corrects the time-of-day exposure toward this mean scene luminance, by this share of the log
+// difference, within +-range EV.
+constexpr float kAutoExposureKey = 0.18f;
+constexpr float kAutoExposureStrength = 0.6f;
+constexpr float kAutoExposureRange = 1.5f;
 
 SDL_GPUSampleCount sampleCount(int n) {
     return n >= 4 ? SDL_GPU_SAMPLECOUNT_4 : n == 2 ? SDL_GPU_SAMPLECOUNT_2 : SDL_GPU_SAMPLECOUNT_1;
@@ -205,7 +212,14 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         si.max_lod = 16.0f;
         m_repeatSampler = SDL_CreateGPUSampler(m_device, &si);
         m_terrainSampler = SDL_CreateGPUSampler(m_device, &si);
-        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler) fail("samplers");
+
+        SDL_GPUSamplerCreateInfo pi{};
+        pi.min_filter = pi.mag_filter = SDL_GPU_FILTER_NEAREST;
+        pi.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+        pi.address_mode_u = pi.address_mode_v = pi.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        m_pointSampler = SDL_CreateGPUSampler(m_device, &pi);
+        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler || !m_pointSampler)
+            fail("samplers");
     }
 
     // Grass chunk storage buffer.
@@ -240,7 +254,11 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
                                    SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
         uploadTexture(m_terrainAlbedo.tex, px, 1, 1, 4);
         uploadTexture(m_terrainNra.tex, px, 1, 1, 4);
+        const float far = 1e9f;
+        m_farDepth = makeTexture(1, 1, kLinDepthFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        uploadTexture(m_farDepth.tex, &far, 1, 1, 4);
     }
+    buildGradeLut();
 
     m_settings = presetSettings(QualityPreset::High);
     m_settings.msaa = supportedMsaa(m_settings.msaa);
@@ -258,8 +276,13 @@ Renderer::~Renderer() {
     for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
                                        m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe,
                                        m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe,
-                                       m_modelShadowPipe})
+                                       m_modelShadowPipe, m_linDepthPipe, m_gtaoPipe, m_aoBlurPipe, m_velocityPipe,
+                                       m_velocityObjPipe, m_taaPipe, m_motionBlurPipe, m_dofBlurPipe, m_dofPipe,
+                                       m_lumPipe, m_adaptPipe, m_shaftsPipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
+    releaseTexture(m_lut);
+    releaseTexture(m_farDepth);
+    if (m_adaptReadback) SDL_ReleaseGPUTransferBuffer(m_device, m_adaptReadback);
     for (GpuMesh& m : m_treeMeshes) m.release();
     releaseModels();
     m_terrainPatch.release();
@@ -277,7 +300,7 @@ Renderer::~Renderer() {
     releaseTexture(m_noise);
     releaseTexture(m_mask);
     releaseTexture(m_height);
-    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler})
+    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler, m_pointSampler})
         if (s) SDL_ReleaseGPUSampler(m_device, s);
     if (m_grassBuffer) SDL_ReleaseGPUBuffer(m_device, m_grassBuffer);
     if (m_grassTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_grassTransfer);
@@ -320,13 +343,30 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.treeDetailDistance = std::clamp(s.treeDetailDistance, 100.0f, 2000.0f);
     s.treeDistance = std::clamp(s.treeDistance, s.treeDetailDistance, 6000.0f);
     s.flowerDensity = std::clamp(s.flowerDensity, 0.0f, 1.0f);
+    s.ao = std::clamp(s.ao, 0, 2);
+    s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
+    s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
+    s.lensFlare = std::clamp(s.lensFlare, 0.0f, 2.0f);
+    s.dofDriving = std::clamp(s.dofDriving, 0.0f, 1.0f);
+    s.tonemapper = std::clamp(s.tonemapper, 0, 1);
+    s.grade = std::clamp(s.grade, 0.0f, 1.0f);
+    s.aoStrength = std::clamp(s.aoStrength, 0.0f, 3.0f);
+    s.vignette = std::clamp(s.vignette, 0.0f, 1.0f);
+    s.grain = std::clamp(s.grain, 0.0f, 0.2f);
+    s.chromaticAberration = std::clamp(s.chromaticAberration, 0.0f, 1.0f);
+    s.sharpen = std::clamp(s.sharpen, 0.0f, 1.0f);
     s.exposure = std::clamp(s.exposure, 0.1f, 8.0f);
     s.timeOfDay = std::fmod(std::fmod(s.timeOfDay, 24.0f) + 24.0f, 24.0f);
     s.sunHeadingDeg = std::fmod(std::fmod(s.sunHeadingDeg, 360.0f) + 360.0f, 360.0f);
     const bool targets = s.renderScale != m_settings.renderScale || s.msaa != m_settings.msaa ||
                          s.shadowCascades != m_settings.shadowCascades || s.shadowMapSize != m_settings.shadowMapSize ||
                          s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
-                         s.reflections != m_settings.reflections || s.bloom != m_settings.bloom;
+                         s.reflections != m_settings.reflections || s.bloom != m_settings.bloom ||
+                         s.taa != m_settings.taa || (s.ao > 0) != (m_settings.ao > 0) ||
+                         s.waterRefraction != m_settings.waterRefraction ||
+                         (s.motionBlur > 0.0f) != (m_settings.motionBlur > 0.0f) ||
+                         (s.sunShafts > 0.0f) != (m_settings.sunShafts > 0.0f) ||
+                         (s.dof || s.dofDriving > 0.0f) != (m_settings.dof || m_settings.dofDriving > 0.0f);
     m_settings = s;
     if (targets) m_targetsDirty = true;
 }
@@ -406,6 +446,11 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
             b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        } else if (blend == kBlendMultiply) {
+            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_COLOR;
+            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
         } else {
             b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
@@ -474,7 +519,7 @@ void Renderer::createStaticPipelines() {
                                      false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_bloomUpPipe = createPipeline("fullscreen_vs", "bloom_up_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, false,
                                    false, SDL_GPU_CULLMODE_NONE, ccw, kBlendAdd);
-    m_tonemapPipe = createPipeline("fullscreen_vs", "tonemap_fs", 0, 1, 0, 2, 0, kLayoutNone, m_colorFormat, s1, false,
+    m_tonemapPipe = createPipeline("fullscreen_vs", "tonemap_fs", 0, 1, 0, 5, 0, kLayoutNone, m_colorFormat, s1, false,
                                    false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
@@ -496,6 +541,24 @@ void Renderer::createStaticPipelines() {
     m_modelShadowPipe = createPipeline("model_shadow_vs", "model_shadow_fs", 2, 2, 0, 1, 1, kLayoutModel, none, s1, true,
                                        true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
                                        kBiasShadow);
+    auto post = [&](const char* fs, std::uint32_t samplers, SDL_GPUTextureFormat fmt, int blend = kBlendNone) {
+        return createPipeline("fullscreen_vs", fs, 0, 1, 0, samplers, 0, kLayoutNone, fmt, s1, false, false,
+                              SDL_GPU_CULLMODE_NONE, ccw, blend);
+    };
+    m_linDepthPipe = post("lindepth_fs", 1, kLinDepthFormat);
+    m_gtaoPipe = post("gtao_fs", 1, kAoFormat);
+    m_aoBlurPipe = post("ao_blur_fs", 2, kHdrFormat, kBlendMultiply);
+    m_velocityPipe = post("velocity_fs", 1, kVelocityFormat);
+    m_velocityObjPipe = createPipeline("velocity_obj_vs", "velocity_obj_fs", 1, 0, 0, 0, 0, kLayoutLit, kVelocityFormat,
+                                       s1, true, false, SDL_GPU_CULLMODE_BACK, ccw, kBlendNone,
+                                       SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
+    m_taaPipe = post("taa_fs", 4, kHdrFormat);
+    m_motionBlurPipe = post("motion_blur_fs", 3, kHdrFormat);
+    m_dofBlurPipe = post("dof_blur_fs", 2, kHdrFormat);
+    m_dofPipe = post("dof_fs", 3, kHdrFormat);
+    m_lumPipe = post("lum_fs", 1, kLinDepthFormat);
+    m_adaptPipe = post("adapt_fs", 2, kLinDepthFormat);
+    m_shaftsPipe = post("shafts_fs", 2, kHdrFormat);
 }
 
 void Renderer::createScenePipelines() {
@@ -511,9 +574,9 @@ void Renderer::createScenePipelines() {
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
     m_sprayPipe = createPipeline("spray_vs", "spray_fs", 2, 1, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
-    m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
+    m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 6, 0, kLayoutLit, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
-    m_waterfallPipe = createPipeline("lit_vs", "waterfall_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, sc, true, false,
+    m_waterfallPipe = createPipeline("lit_vs", "waterfall_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
     m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
@@ -583,6 +646,11 @@ void Renderer::releaseTargets() {
     releaseTexture(m_blurSrc);
     for (Texture& t : m_blur) releaseTexture(t);
     m_blur.clear();
+    for (Texture* t : {&m_linDepth, &m_velocity, &m_ao, &m_sceneCopy, &m_taa[0], &m_taa[1], &m_fx[0], &m_fx[1], &m_dofHalf, &m_shafts,
+                       &m_lum, &m_adapt[0], &m_adapt[1]})
+        releaseTexture(*t);
+    m_historyValid = false;
+    m_adaptValid = false;
 }
 
 void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
@@ -602,7 +670,24 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
     const auto depthRT = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
     if (s.msaa > 1) m_hdrMsaa = makeTexture(rw, rh, kHdrFormat, colorRT, sc);
     m_hdr = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
-    m_depth = makeTexture(rw, rh, kDepthFormat, depthRT, sc);
+    m_depth = makeTexture(rw, rh, kDepthFormat, s.msaa == 1 ? depthRT | sampled : depthRT, sc);
+    if (s.msaa == 1) {
+        // Depth-based post effects (see drawFrame).
+        m_linDepth = makeTexture(rw, rh, kLinDepthFormat, colorRT | sampled);
+        m_velocity = makeTexture(rw, rh, kVelocityFormat, colorRT | sampled);
+        if (s.waterRefraction) m_sceneCopy = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+        if (s.ao > 0) m_ao = makeTexture((rw + 1) / 2, (rh + 1) / 2, kAoFormat, colorRT | sampled);
+        if (s.taa)
+            for (Texture& t : m_taa) t = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+        if (s.motionBlur > 0.0f) m_fx[0] = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+        if (s.dof || s.dofDriving > 0.0f) {
+            m_fx[1] = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+            m_dofHalf = makeTexture((rw + 1) / 2, (rh + 1) / 2, kHdrFormat, colorRT | sampled);
+        }
+        if (s.sunShafts > 0.0f) m_shafts = makeTexture((rw + 1) / 2, (rh + 1) / 2, kHdrFormat, colorRT | sampled);
+    }
+    m_lum = makeTexture(64, 64, kLinDepthFormat, colorRT | sampled);
+    for (Texture& t : m_adapt) t = makeTexture(1, 1, kLinDepthFormat, colorRT | sampled);
     if (s.reflections) {
         const std::uint32_t fw = std::uint32_t(std::lround(rw * s.reflectionScale));
         const std::uint32_t fh = std::uint32_t(std::lround(rh * s.reflectionScale));
@@ -663,6 +748,65 @@ void Renderer::uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_
     SDL_EndGPUCopyPass(copy);
     SDL_SubmitGPUCommandBuffer(cmd);
     SDL_ReleaseGPUTransferBuffer(m_device, tb);
+}
+
+// 32^3 colour grade in display space toward the key art (external_assets/images/Banner.png): cool blue-violet
+// shadows, warm orange highlights, a slight S-curve and more saturation in the muted colours.
+void Renderer::buildGradeLut() {
+    constexpr int N = 32;
+    std::vector<std::uint8_t> px(std::size_t(N) * N * N * 4);
+    const glm::vec3 lumW(0.2126f, 0.7152f, 0.0722f);
+    const glm::vec3 shadowTint(0.92f, 0.96f, 1.12f), highTint(1.07f, 1.0f, 0.88f);
+    for (int b = 0; b < N; ++b)
+        for (int g = 0; g < N; ++g)
+            for (int r = 0; r < N; ++r) {
+                glm::vec3 c = glm::vec3(float(r), float(g), float(b)) / float(N - 1);
+                const float l = glm::dot(c, lumW);
+                const float sh = (1.0f - l) * (1.0f - l);
+                c *= glm::mix(glm::vec3(1.0f), shadowTint, sh * 0.55f) * glm::mix(glm::vec3(1.0f), highTint, l * l * 0.6f);
+                c = glm::mix(c, c * c * (3.0f - 2.0f * c), 0.12f);
+                const float l2 = glm::dot(c, lumW);
+                const float sat = std::max({c.r, c.g, c.b}) - std::min({c.r, c.g, c.b});
+                c = glm::vec3(l2) + (c - glm::vec3(l2)) * (1.0f + 0.22f * (1.0f - glm::clamp(sat, 0.0f, 1.0f)));
+                c = glm::clamp(c, 0.0f, 1.0f);
+                std::uint8_t* o = &px[((std::size_t(b) * N + g) * N + r) * 4];
+                o[0] = std::uint8_t(std::lround(c.r * 255.0f));
+                o[1] = std::uint8_t(std::lround(c.g * 255.0f));
+                o[2] = std::uint8_t(std::lround(c.b * 255.0f));
+                o[3] = 255;
+            }
+    m_lut = makeTexture(N, N, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, N,
+                        1, SDL_GPU_TEXTURETYPE_3D);
+    SDL_GPUTransferBufferCreateInfo ti{};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    ti.size = std::uint32_t(px.size());
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
+    if (!tb) fail("LUT transfer buffer");
+    std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), px.data(), px.size());
+    SDL_UnmapGPUTransferBuffer(m_device, tb);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+    SDL_GPUTextureTransferInfo src{};
+    src.transfer_buffer = tb;
+    src.pixels_per_row = N;
+    src.rows_per_layer = N;
+    SDL_GPUTextureRegion dst{};
+    dst.texture = m_lut.tex;
+    dst.w = dst.h = dst.d = N;
+    SDL_UploadToGPUTexture(copy, &src, &dst, false);
+    SDL_EndGPUCopyPass(copy);
+    SDL_SubmitGPUCommandBuffer(cmd);
+    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+}
+
+const char* const Renderer::kPostPassNames[] = {"lindepth", "gtao", "ao_blur", "velocity", "taa", "motion_blur",
+                                                "dof", "lum", "shafts", "bloom", "tonemap", nullptr};
+
+void Renderer::setPostBench(const std::string& pass, int repeat) {
+    m_benchPass = -1;
+    m_benchRepeat = std::clamp(repeat, 1, 200);
+    for (int i = 0; kPostPassNames[i]; ++i)
+        if (pass == kPostPassNames[i]) m_benchPass = i;
 }
 
 SDL_GPUTexture* Renderer::createImage(const void* rgba, std::uint32_t w, std::uint32_t h) {
@@ -1453,13 +1597,15 @@ void Renderer::fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& ex
     fu.skyHorizon = glm::vec4(sky.horizon, 0.0f);
     fu.groundAmbient = glm::vec4(sky.groundAmbient, 0.0f);
     fu.fogParams = glm::vec4(frame.fogDensity * s.fogDensity * sky.fogMul, frame.fogFalloff, 1.0f, s.clouds ? 0.55f : 0.0f);
+    fu.worldParams.z = frame.valleyFog * s.valleyFog * s.fogDensity * sky.fogMul;
+    fu.worldParams.w = frame.valleyFogBase;
     fu.skySun = glm::vec4(sky.sunDir, sky.sunDiscCos);
     fu.skySunGlow = glm::vec4(sky.sunGlow, sky.stars);
     fu.sunDisc = glm::vec4(sky.sunDisc, sky.moonDisc);
     fu.moonDir = glm::vec4(sky.moonDir, sky.night);
     // The mountain valley lies where the sun sets (compass azimuth ~279 deg at the sunset preset).
     fu.fogColor = glm::vec4(sky.fogColor, glm::radians(std::fmod(279.0f + s.sunHeadingDeg, 360.0f)));
-    fu.skyAmbient = glm::vec4(sky.skyAmbient, 0.0f);
+    fu.skyAmbient = glm::vec4(sky.skyAmbient, s.atmosphere);
     // Low-beam spot lights (render-only, unshadowed). Intensity in HDR irradiance units at 1 m.
     const float lamp = frame.headlights > 0.0f ? 110.0f : 0.0f;
     fu.headlightL = glm::vec4(frame.headlightPos[0], lamp);
@@ -1748,6 +1894,14 @@ void Renderer::updateTerrainTextures() {
 
 bool Renderer::drawFrame(const FrameDesc& frame) {
     pollGpuTiming();
+    if (m_adaptReadback && m_adaptValid) {
+        float v = 0.0f;
+        std::memcpy(&v, SDL_MapGPUTransferBuffer(m_device, m_adaptReadback, false), 4);
+        SDL_UnmapGPUTransferBuffer(m_device, m_adaptReadback);
+        m_stats.sceneLogLum = v;
+        m_stats.autoExposureEv = std::clamp(std::log2(kAutoExposureKey) - v, -kAutoExposureRange, kAutoExposureRange) *
+                                 kAutoExposureStrength;
+    }
     updateTerrainTextures();
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
     if (!cmd) fail("SDL_AcquireGPUCommandBuffer");
@@ -1791,8 +1945,34 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     glm::mat4 reverse(1.0f);
     reverse[2][2] = -1.0f;
     reverse[3][2] = 1.0f;
-    const glm::mat4 proj = reverse * frame.proj;
+    // Post effects that sample the depth buffer run only on a single-sample scene.
+    const bool depthFx = s.msaa == 1 && m_linDepth.tex;
+    const bool taa = depthFx && s.taa && m_taa[0].tex;
+    const bool sceneCopy = depthFx && s.waterRefraction && m_sceneCopy.tex && frame.water && frame.water->vertexCount() > 0;
+    // A camera cut (teleport, camera switch, large jump) restarts the motion vectors, the TAA history and adaptation.
+    const glm::vec3 camFwd = -glm::vec3(glm::inverse(frame.view)[2]);
+    const bool cut = frame.cameraCut || !m_prevValid || glm::length(frame.cameraPos - m_prevCamPos) > 6.0f ||
+                     glm::dot(camFwd, m_prevCamFwd) < 0.9f;
+    const bool taaReset = cut || !m_historyValid;
+    const glm::mat4 projNJ = reverse * frame.proj;
+    glm::mat4 proj = projNJ;
+    if (taa) {
+        // Halton (2, 3) sub-pixel jitter over 8 frames.
+        auto halton = [](std::uint32_t i, std::uint32_t b) {
+            float f = 1.0f, r = 0.0f;
+            for (; i > 0; i /= b) {
+                f /= float(b);
+                r += f * float(i % b);
+            }
+            return r;
+        };
+        const std::uint32_t k = m_frameIndex % 8 + 1;
+        proj[2][0] += (halton(k, 2) - 0.5f) * 2.0f / float(rw);
+        proj[2][1] += (halton(k, 3) - 0.5f) * 2.0f / float(rh);
+    }
     const glm::mat4 viewProj = proj * frame.view;
+    const glm::mat4 viewProjNJ = projNJ * frame.view;
+    const glm::mat4 prevViewProj = cut ? viewProjNJ : m_prevViewProj;
     fu.viewProj = viewProj;
     fu.invViewProj = glm::inverse(viewProj);
     fu.vehicleInv = glm::inverse(frame.vehicleModel);
@@ -1815,7 +1995,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
     }
     fu.trampleRect = m_trampleRect;
-    fu.worldParams = glm::vec4(frame.skyMountains ? 1.0f : 0.0f, frame.deepOutsideGround ? 1.0f : 0.0f, 0.0f, 0.0f);
+    fu.worldParams = glm::vec4(frame.skyMountains ? 1.0f : 0.0f, frame.deepOutsideGround ? 1.0f : 0.0f,
+                               fu.worldParams.z, fu.worldParams.w);
     fu.vehicleParams = glm::vec4(frame.vehicleMud, frame.brakeLight, frame.reverseLight, frame.headlights);
     fu.bodyMudArch = frame.bodyMudArch;
     fu.bodyMudBody = frame.bodyMudBody;
@@ -1847,6 +2028,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                       glm::length(nearest - cam) < 120.0f;
     }
     fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
+    fu.screenFx = glm::vec4(sceneCopy ? 1.0f : 0.0f, sceneCopy && s.waterSsr ? 1.0f : 0.0f, 0.0f, 0.0f);
     m_stats.reflectionRendered = reflVisible;
     glm::mat4 mirror(1.0f);
     mirror[1][1] = -1.0f;
@@ -2223,6 +2405,62 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_EndGPURenderPass(pass);
     }
 
+    // Fullscreen pass; `bench` names the pass for setPostBench (the whole render pass is repeated there: repeated
+    // opaque draws inside one pass would be removed by tile-based hidden surface removal).
+    auto fullscreen = [&](SDL_GPUTexture* dst, SDL_GPULoadOp load, SDL_GPUGraphicsPipeline* pipe, const auto& pu,
+                          const SDL_GPUTextureSamplerBinding* tex, std::uint32_t numTex, int bench = -1) {
+        const int n = bench >= 0 && bench == m_benchPass ? m_benchRepeat : 1;
+        for (int i = 0; i < n; ++i) {
+            SDL_GPUColorTargetInfo ct{};
+            ct.texture = dst;
+            ct.load_op = load;
+            ct.store_op = SDL_GPU_STOREOP_STORE;
+            ct.cycle = i == 0 && load != SDL_GPU_LOADOP_LOAD && dst != target;
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+            SDL_BindGPUGraphicsPipeline(pass, pipe);
+            SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
+            SDL_BindGPUFragmentSamplers(pass, 0, tex, numTex);
+            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(pass);
+        }
+    };
+    enum { kBenchLinDepth, kBenchGtao, kBenchAoBlur, kBenchVelocity, kBenchTaa, kBenchMotionBlur, kBenchDof, kBenchLum,
+           kBenchShafts, kBenchBloom, kBenchTonemap };
+
+    // Shared uniforms of the depth-based post passes.
+    PostFxUniforms pf{};
+    pf.viewProj = viewProjNJ;
+    pf.prevViewProj = prevViewProj;
+    pf.invView = glm::inverse(frame.view);
+    pf.proj = glm::vec4(proj[0][0], proj[1][1], proj[2][0], proj[2][1]);
+    pf.camPos = glm::vec4(frame.cameraPos, frame.time);
+    {
+        const float zn = frame.proj[3][2] / frame.proj[2][2];
+        const float zf = frame.proj[2][2] * zn / (1.0f + frame.proj[2][2]);
+        pf.depthParams = glm::vec4(zn * zf, zn, zf - zn, zf);
+    }
+    const SDL_GPUTextureSamplerBinding linDepthTex{depthFx ? m_linDepth.tex : m_farDepth.tex, m_pointSampler};
+
+    // Linear depth, then GTAO multiplied onto the opaque scene (before water, waterfalls and spray are drawn).
+    auto depthPasses = [&]() {
+        PostFxUniforms u = pf;
+        u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(rw), 1.0f / float(rh));
+        const SDL_GPUTextureSamplerBinding depthTex{m_depth.tex, m_pointSampler};
+        fullscreen(m_linDepth.tex, SDL_GPU_LOADOP_DONT_CARE, m_linDepthPipe, u, &depthTex, 1, kBenchLinDepth);
+        m_stats.ao = s.ao > 0 && m_ao.tex && s.aoStrength > 0.0f;
+        if (!m_stats.ao) return;
+        u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_ao.w), 1.0f / float(m_ao.h));
+        const bool high = s.ao >= 2;
+        u.params = glm::vec4(1.5f, high ? 3.0f : 2.0f, high ? 6.0f : 4.0f, 0.5f * float(m_ao.h) * proj[1][1]);
+        u.params2 = glm::vec4(float(m_frameIndex % 64), 60.0f, 0, 0);
+        fullscreen(m_ao.tex, SDL_GPU_LOADOP_DONT_CARE, m_gtaoPipe, u, &linDepthTex, 1, kBenchGtao);
+        u.params = glm::vec4(s.aoStrength, 0.04f, 0, 0);
+        const SDL_GPUTextureSamplerBinding blurTex[2] = {{m_ao.tex, m_pointSampler}, linDepthTex};
+        fullscreen(m_hdr.tex, SDL_GPU_LOADOP_LOAD, m_aoBlurPipe, u, blurTex, 2, kBenchAoBlur);
+    };
+    m_stats.depthEffects = depthFx;
+    m_stats.ao = false;
+
     // ---- 3. Main HDR scene
     {
         SDL_GPUColorTargetInfo ct{};
@@ -2241,7 +2479,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         dt.texture = m_depth.tex;
         dt.clear_depth = 0.0f;
         dt.load_op = SDL_GPU_LOADOP_CLEAR;
-        dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.store_op = depthFx ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.cycle = true;
@@ -2372,16 +2610,44 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
         ++m_stats.drawCalls;
 
+        if (depthFx) {
+            // The transparent part continues in a second pass over the AO-darkened opaque scene.
+            SDL_EndGPURenderPass(pass);
+            depthPasses();
+            if (sceneCopy) {
+                // The water samples the opaque scene (refraction, absorption, screen-space reflections).
+                SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+                SDL_GPUTextureLocation src{}, dst{};
+                src.texture = m_hdr.tex;
+                dst.texture = m_sceneCopy.tex;
+                SDL_CopyGPUTextureToTexture(copy, &src, &dst, rw, rh, 1, false);
+                SDL_EndGPUCopyPass(copy);
+            }
+            SDL_GPUColorTargetInfo ct2{};
+            ct2.texture = m_hdr.tex;
+            ct2.load_op = SDL_GPU_LOADOP_LOAD;
+            ct2.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPUDepthStencilTargetInfo dt2{};
+            dt2.texture = m_depth.tex;
+            dt2.load_op = SDL_GPU_LOADOP_LOAD;
+            dt2.store_op = SDL_GPU_STOREOP_STORE;
+            dt2.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            dt2.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            pass = SDL_BeginGPURenderPass(cmd, &ct2, 1, &dt2);
+        }
+
         // Puddle surfaces.
         if (frame.water && frame.water->vertexCount() > 0) {
             SDL_BindGPUGraphicsPipeline(pass, m_waterPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding wtex[4] = {{m_shadow.tex, m_cmpSampler},
+            SDL_GPUTextureSamplerBinding wtex[6] = {{m_shadow.tex, m_cmpSampler},
                                                     {m_noise.tex, m_repeatSampler},
                                                     {m_height.tex, m_clampSampler},
-                                                    {reflVisible ? m_reflColor.tex : m_noise.tex, m_clampSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, wtex, 4);
+                                                    {reflVisible ? m_reflColor.tex : m_noise.tex, m_clampSampler},
+                                                    {sceneCopy ? m_sceneCopy.tex : m_noise.tex, m_clampSampler},
+                                                    {sceneCopy ? m_linDepth.tex : m_farDepth.tex, m_pointSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, wtex, 6);
             DrawItem wd;
             wd.mesh = frame.water;
             drawLit(pass, wd);
@@ -2393,10 +2659,11 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_waterfallPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding ftex[3] = {{m_shadow.tex, m_cmpSampler},
+            SDL_GPUTextureSamplerBinding ftex[4] = {{m_shadow.tex, m_cmpSampler},
                                                     {m_noise.tex, m_repeatSampler},
-                                                    {m_height.tex, m_clampSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, ftex, 3);
+                                                    {m_height.tex, m_clampSampler},
+                                                    {depthFx ? m_linDepth.tex : m_farDepth.tex, m_pointSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, ftex, 4);
             DrawItem wd;
             wd.mesh = frame.waterfalls;
             drawLit(pass, wd);
@@ -2432,39 +2699,167 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_EndGPURenderPass(pass);
     }
 
-    auto fullscreen = [&](SDL_GPUTexture* dst, SDL_GPULoadOp load, SDL_GPUGraphicsPipeline* pipe,
-                          const PostUniforms& pu, const SDL_GPUTextureSamplerBinding* tex, std::uint32_t numTex) {
-        SDL_GPUColorTargetInfo ct{};
-        ct.texture = dst;
-        ct.load_op = load;
-        ct.store_op = SDL_GPU_STOREOP_STORE;
-        ct.cycle = load != SDL_GPU_LOADOP_LOAD && dst != target;
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
-        SDL_BindGPUGraphicsPipeline(pass, pipe);
-        SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
-        SDL_BindGPUFragmentSamplers(pass, 0, tex, numTex);
-        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-        SDL_EndGPURenderPass(pass);
-    };
+    // ---- 3b. Velocity, TAA, motion blur, depth of field, sun shafts (single-sample scene only)
+    const Texture* scene = &m_hdr;
+    m_stats.taa = m_stats.motionBlur = m_stats.dof = m_stats.shafts = false;
+    m_stats.velocityObjects = 0;
+    m_curModels.clear();
+    for (const DrawItem& d : frame.draws) m_curModels.push_back({d.mesh, d.model});
+    if (depthFx) {
+        PostFxUniforms u = pf;
+        u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(rw), 1.0f / float(rh));
+        const bool blurOn = s.motionBlur > 0.0f && m_fx[0].tex && !cut;
+        if (taa || blurOn) {
+            fullscreen(m_velocity.tex, SDL_GPU_LOADOP_DONT_CARE, m_velocityPipe, u, &linDepthTex, 1, kBenchVelocity);
+            // Moving meshes (vehicle body, wheels) with their previous model matrix, depth-tested against the scene.
+            if (!cut && m_prevModels.size() == m_curModels.size()) {
+                SDL_GPUColorTargetInfo ct{};
+                ct.texture = m_velocity.tex;
+                ct.load_op = SDL_GPU_LOADOP_LOAD;
+                ct.store_op = SDL_GPU_STOREOP_STORE;
+                SDL_GPUDepthStencilTargetInfo dt{};
+                dt.texture = m_depth.tex;
+                dt.load_op = SDL_GPU_LOADOP_LOAD;
+                dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+                dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+                dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+                SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+                SDL_BindGPUGraphicsPipeline(pass, m_velocityObjPipe);
+                const Frustum fr(viewProj);
+                for (std::size_t i = 0; i < m_curModels.size(); ++i) {
+                    const DrawItem& d = frame.draws[i];
+                    if (!d.mesh || d.mesh->vertexCount() == 0 || m_prevModels[i].first != d.mesh) continue;
+                    const glm::mat4& prevModel = m_prevModels[i].second;
+                    if (prevModel == d.model) continue;
+                    glm::vec3 center;
+                    float radius;
+                    drawSphere(d, center, radius);
+                    if (!fr.sphere(center, radius)) continue;
+                    const VelocityUniforms vu{viewProj, viewProjNJ, prevViewProj, d.model, prevModel};
+                    SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
+                    SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
+                    SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+                    SDL_DrawGPUPrimitives(pass, d.mesh->vertexCount(), 1, 0, 0);
+                    ++m_stats.velocityObjects;
+                }
+                SDL_EndGPURenderPass(pass);
+            }
+        }
+        if (taa) {
+            const Texture& hist = m_taa[std::size_t(m_taaIndex)];
+            const Texture& out = m_taa[std::size_t(1 - m_taaIndex)];
+            u.params = glm::vec4(taaReset ? 1.0f : 0.0f, 0.1f, 0.0f, 0.0f);
+            const SDL_GPUTextureSamplerBinding b[4] = {{m_hdr.tex, m_clampSampler},
+                                                       {hist.tex, m_clampSampler},
+                                                       {m_velocity.tex, m_pointSampler},
+                                                       linDepthTex};
+            fullscreen(out.tex, SDL_GPU_LOADOP_DONT_CARE, m_taaPipe, u, b, 4, kBenchTaa);
+            m_taaIndex = 1 - m_taaIndex;
+            scene = &out;
+            m_stats.taa = true;
+        }
+        if (blurOn) {
+            u.params = glm::vec4(s.motionBlur, 40.0f * float(rh) / 1080.0f, s.ao >= 2 ? 12.0f : 10.0f, 0.0f);
+            const SDL_GPUTextureSamplerBinding b[3] = {{scene->tex, m_clampSampler},
+                                                       {m_velocity.tex, m_pointSampler},
+                                                       linDepthTex};
+            fullscreen(m_fx[0].tex, SDL_GPU_LOADOP_DONT_CARE, m_motionBlurPipe, u, b, 3, kBenchMotionBlur);
+            scene = &m_fx[0];
+            m_stats.motionBlur = true;
+        }
+        const float dofAmount = frame.dofFocus > 0.0f ? std::clamp(frame.dofAmount, 0.0f, 1.0f) : 0.0f;
+        if (dofAmount > 0.0f && m_fx[1].tex) {
+            u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_dofHalf.w), 1.0f / float(m_dofHalf.h));
+            u.params = glm::vec4(frame.dofFocus, dofAmount, 9.0f * float(m_dofHalf.h) / 540.0f, 0.6f);
+            const SDL_GPUTextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
+            fullscreen(m_dofHalf.tex, SDL_GPU_LOADOP_DONT_CARE, m_dofBlurPipe, u, b, 2, kBenchDof);
+            const SDL_GPUTextureSamplerBinding c[3] = {{scene->tex, m_clampSampler},
+                                                       {m_dofHalf.tex, m_clampSampler},
+                                                       linDepthTex};
+            fullscreen(m_fx[1].tex, SDL_GPU_LOADOP_DONT_CARE, m_dofPipe, u, c, 3, kBenchDof);
+            scene = &m_fx[1];
+            m_stats.dof = true;
+        }
+        // Sun shafts: where the true sun projects (fading out beyond the screen edges, below the horizon and at night).
+        const glm::vec3 sunDir(fu.skySun);
+        const glm::vec4 sc = viewProjNJ * glm::vec4(frame.cameraPos + sunDir * 1000.0f, 1.0f);
+        if (s.sunShafts > 0.0f && m_shafts.tex && sc.w > 0.0f) {
+            const glm::vec2 suv(sc.x / sc.w * 0.5f + 0.5f, 0.5f - sc.y / sc.w * 0.5f);
+            const float edge = std::max(std::abs(suv.x - 0.5f), std::abs(suv.y - 0.5f));
+            const float day = glm::smoothstep(-0.03f, 0.06f, sunDir.y) * (1.0f - fu.moonDir.w);
+            const float weight = day * (1.0f - glm::smoothstep(0.45f, 1.1f, edge));
+            if (weight > 1e-3f) {
+                u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_shafts.w), 1.0f / float(m_shafts.h));
+                // Threshold: twice the adapted mean scene luminance (only the bright sky around the sun streams).
+                const float mean = m_adaptValid ? std::exp2(m_stats.sceneLogLum) / std::max(exposure, 1e-3f)
+                                                : 0.5f / std::max(exposure, 1e-3f);
+                u.params = glm::vec4(2.0f * mean, 0.965f, 28.0f, 0.0f);
+                u.params2 = glm::vec4(float(m_frameIndex % 64), 0, 0, 0);
+                u.sun = glm::vec4(suv, weight, 0.0f);
+                const glm::vec3 glow(fu.skySunGlow);
+                const float gl = std::max(0.2126f * glow.r + 0.7152f * glow.g + 0.0722f * glow.b, 1e-4f);
+                u.sunColor = glm::vec4(glm::mix(glm::vec3(1.0f), glow / gl, 0.5f), 0.0f);
+                const SDL_GPUTextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
+                fullscreen(m_shafts.tex, SDL_GPU_LOADOP_DONT_CARE, m_shaftsPipe, u, b, 2, kBenchShafts);
+                m_stats.shafts = true;
+            }
+        }
+    }
+
+    // ---- 3c. Auto exposure: 64 x 64 log luminance -> adapted 1 x 1 mean
+    m_stats.autoExposure = s.autoExposure && m_lum.tex;
+    if (m_stats.autoExposure) {
+        PostFxUniforms u = pf;
+        u.texel = glm::vec4(1.0f / float(scene->w), 1.0f / float(scene->h), 1.0f / 64.0f, 1.0f / 64.0f);
+        u.params = glm::vec4(exposure, 0, 0, 0);
+        const SDL_GPUTextureSamplerBinding b{scene->tex, m_clampSampler};
+        fullscreen(m_lum.tex, SDL_GPU_LOADOP_DONT_CARE, m_lumPipe, u, &b, 1, kBenchLum);
+        const float dt = std::clamp(frame.time - m_prevTime, 0.0f, 0.1f);
+        u.params.x = (!m_adaptValid || cut) ? 1.0f : 1.0f - std::exp(-dt * 1.4f);
+        const SDL_GPUTextureSamplerBinding a[2] = {{m_lum.tex, m_clampSampler},
+                                                   {m_adapt[std::size_t(m_adaptIndex)].tex, m_pointSampler}};
+        fullscreen(m_adapt[std::size_t(1 - m_adaptIndex)].tex, SDL_GPU_LOADOP_DONT_CARE, m_adaptPipe, u, a, 2);
+        m_adaptIndex = 1 - m_adaptIndex;
+        m_adaptValid = true;
+        // Read back the adapted value for the stats (mapped one frame later; a stale value is harmless).
+        if (!m_adaptReadback) {
+            SDL_GPUTransferBufferCreateInfo ti{};
+            ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+            ti.size = 4;
+            m_adaptReadback = SDL_CreateGPUTransferBuffer(m_device, &ti);
+        }
+        if (m_adaptReadback) {
+            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+            SDL_GPUTextureRegion region{};
+            region.texture = m_adapt[std::size_t(m_adaptIndex)].tex;
+            region.w = region.h = region.d = 1;
+            SDL_GPUTextureTransferInfo dst{};
+            dst.transfer_buffer = m_adaptReadback;
+            SDL_DownloadFromGPUTexture(copy, &region, &dst);
+            SDL_EndGPUCopyPass(copy);
+        }
+    } else {
+        m_adaptValid = false;
+    }
 
     // ---- 4. Bloom (13-tap downsample chain, tent upsample with additive blend)
     const bool bloom = s.bloom && !m_bloom.empty();
     if (bloom) {
         for (int i = 0; i < kBloomLevels; ++i) {
-            const Texture& src = i == 0 ? m_hdr : m_bloom[i - 1];
+            const Texture& src = i == 0 ? *scene : m_bloom[i - 1];
             PostUniforms pu{};
             pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
             pu.params = glm::vec4(1.6f, 0, 0, i == 0 ? 1.0f : 0.0f);
             pu.extra = glm::vec4(0, 0, 1, 1);
             SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
-            fullscreen(m_bloom[i].tex, SDL_GPU_LOADOP_DONT_CARE, m_bloomDownPipe, pu, &b, 1);
+            fullscreen(m_bloom[i].tex, SDL_GPU_LOADOP_DONT_CARE, m_bloomDownPipe, pu, &b, 1, kBenchBloom);
         }
         for (int i = kBloomLevels - 1; i > 0; --i) {
             PostUniforms pu{};
             pu.texel = glm::vec4(1.0f / float(m_bloom[i].w), 1.0f / float(m_bloom[i].h), 0, 0);
             pu.extra = glm::vec4(0, 0, 1, 1);
             SDL_GPUTextureSamplerBinding b{m_bloom[i].tex, m_clampSampler};
-            fullscreen(m_bloom[i - 1].tex, SDL_GPU_LOADOP_LOAD, m_bloomUpPipe, pu, &b, 1);
+            fullscreen(m_bloom[i - 1].tex, SDL_GPU_LOADOP_LOAD, m_bloomUpPipe, pu, &b, 1, kBenchBloom);
         }
     }
 
@@ -2474,20 +2869,37 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     {
         PostUniforms pu{};
         pu.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(w), 1.0f / float(h));
-        pu.params = glm::vec4(0.0f, bloom ? s.bloomStrength * bloomMul : 0.0f, exposure, 0.0f);
-        pu.extra = glm::vec4(0.28f, s.fxaa ? 1.0f : 0.0f, 1.0f, 1.0f);
-        SDL_GPUTextureSamplerBinding tex[2] = {{m_hdr.tex, m_clampSampler},
-                                               {bloom ? m_bloom[0].tex : m_hdr.tex, m_clampSampler}};
+        pu.params = glm::vec4(m_stats.taa ? s.sharpen : 0.0f, bloom ? s.bloomStrength * bloomMul : 0.0f, exposure,
+                              m_stats.autoExposure ? kAutoExposureStrength : 0.0f);
+        pu.extra = glm::vec4(s.vignette, s.fxaa ? 1.0f : 0.0f, 1.0f, 1.0f);
+        pu.look = glm::vec4(float(s.tonemapper), s.grade, s.grain, s.chromaticAberration);
+        pu.look2 = glm::vec4(bloom ? s.lensFlare * 0.035f : 0.0f, m_stats.shafts ? s.sunShafts : 0.0f,
+                             kAutoExposureKey, kAutoExposureRange);
+        pu.look3 = glm::vec4(float(m_frameIndex % 997) * 7.31f, 0, 0, 0);
+        const SDL_GPUTextureSamplerBinding tex[5] = {
+            {scene->tex, m_clampSampler},
+            {bloom ? m_bloom[0].tex : scene->tex, m_clampSampler},
+            {m_adapt[std::size_t(m_adaptIndex)].tex, m_pointSampler},
+            {m_stats.shafts ? m_shafts.tex : scene->tex, m_clampSampler},
+            {m_lut.tex, m_clampSampler}};
         if (s.fxaa && m_ldr.tex) {
-            fullscreen(m_ldr.tex, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
+            fullscreen(m_ldr.tex, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
             PostUniforms fx{};
             fx.texel = glm::vec4(1.0f / float(w), 1.0f / float(h), 0, 0);
             SDL_GPUTextureSamplerBinding b{m_ldr.tex, m_clampSampler};
             fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_fxaaPipe, fx, &b, 1);
         } else {
-            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 2);
+            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
         }
     }
+    m_prevViewProj = viewProjNJ;
+    m_prevCamPos = frame.cameraPos;
+    m_prevCamFwd = camFwd;
+    m_prevValid = true;
+    m_historyValid = taa;
+    m_prevModels.swap(m_curModels);
+    m_prevTime = frame.time;
+    ++m_frameIndex;
 
     // ---- 6b. Menu blur: dual Kawase down to 1/16 and back up to 1/2, composited over the sharp frame
     if (blur) {

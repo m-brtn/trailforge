@@ -184,6 +184,7 @@ private:
     glm::vec3 m_menuCamOffset{0.0f}; // smoothed camera offset from the vehicle
     float m_gameplayTimeOfDay = 9.0f; // restored when gameplay starts (the menus use a sunset)
     float m_menuBlur = 0.0f;          // eased blur of the 3D frame under the pause / settings menus
+    float m_dofAmount = 0.0f;         // eased depth of field amount (menus, garage, optional while driving)
     FixedStepClock m_clock;
     // Audio: the feed turns every physics tick into sound parameters and events; the system owns the device
     // (or the offline capture) and the mixer that runs on the audio thread.

@@ -79,7 +79,7 @@ struct FrameUniforms {
     float4 sunDisc;         // rgb: sun disc radiance, w: moon disc brightness
     float4 moonDir;         // xyz, w: night factor
     float4 fogColor;        // rgb, w: world azimuth of the mountain valley (rad)
-    float4 skyAmbient;      // rgb: sky diffuse irradiance
+    float4 skyAmbient;      // rgb: sky diffuse irradiance, w: scattering sky amount
     float4 headlightL;      // xyz: lamp position, w: intensity (0 = off)
     float4 headlightR;      // xyz: lamp position
     float4 headlightDir;    // xyz: beam axis, w: cos of the outer cone angle
@@ -88,9 +88,11 @@ struct FrameUniforms {
     float4 bodyMudFlecks[4]; // grass blades in the coat per region
     float4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     float4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
-    float4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
+    float4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1),
+                             // z: valley fog density at its base, w: valley fog base height
     float4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
     float4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
+    float4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
 };
 
 struct DrawUniforms {
@@ -108,7 +110,11 @@ struct DrawUniforms {
     defined(TF_ENTRY_model_shadow_vs) || \
     defined(TF_ENTRY_bloom_down_fs) || \
     defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs) || \
-    defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs)
+    defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs) || \
+    defined(TF_ENTRY_lindepth_fs) || defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || \
+    defined(TF_ENTRY_velocity_fs) || defined(TF_ENTRY_velocity_obj_vs) || defined(TF_ENTRY_velocity_obj_fs) || \
+    defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || defined(TF_ENTRY_dof_blur_fs) || \
+    defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_lum_fs) || defined(TF_ENTRY_adapt_fs) || defined(TF_ENTRY_shafts_fs)
 ConstantBuffer<FrameUniforms> f : UBO(13);
 #else
 ConstantBuffer<FrameUniforms> f : UBO(0);
@@ -128,20 +134,39 @@ float hash12(float2 p) {
     return frac((p3.x + p3.y) * p3.z);
 }
 
-// Procedural sky radiance for a view direction (no sun disk), used by the sky pass and as environment light.
-float3 skyRadiance(float3 dir) {
+// Single scattering in a flat exponential atmosphere (Hoffman and Preetham 2002): Rayleigh (per wavelength, scale
+// height 8 km) and Mie (1.2 km) with Kasten-Young air mass along the view and toward the sun, so the sky turns blue
+// overhead, pale at the horizon and red where sunlight crosses more air. Unit sun irradiance; skyRadiance scales it.
+float airMass(float y) {
+    const float zenithDeg = acos(clamp(y, 0.0, 1.0)) * 57.29578;
+    return 1.0 / (max(y, 0.0) + 0.50572 * pow(max(96.07995 - zenithDeg, 1e-3), -1.6364));
+}
+
+float3 atmosphere(float3 dir, float3 sun) {
+    const float3 bR = float3(5.8e-3, 13.5e-3, 33.1e-3); // 1/km
+    const float3 ozone = float3(0.0098, 0.028, 0.0013); // vertical optical depth of the ozone layer
+    const float bM = 3.0e-3, HR = 8.0, HM = 1.2;
+    const float mv = airMass(dir.y), ms = airMass(sun.y);
+    const float3 tauV = bR * HR * mv + bM * 1.1 * HM * mv;
+    // Most scattering happens well above the ground, where sunlight has crossed only part of the air column (0.35 of
+    // the ground-level air mass); ozone removes the green that the plain model leaves at low sun.
+    const float3 sunT = exp(-((bR * HR + bM * 1.1 * HM) * 0.35 + ozone) * ms - ozone * 0.5 * mv);
+    const float mu = dot(dir, sun);
+    const float pR = 0.0596831 * (1.0 + mu * mu);
+    const float g = 0.76;
+    const float pM = 0.0795775 * (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5);
+    return sunT * (bR * pR + bM * pM) / (bR + bM) * (1.0 - exp(-tauV));
+}
+
+// Palette sky (TimeOfDay keys: night, twilight and the stylized banner colours).
+float3 paletteSky(float3 dir) {
     const float3 sun = f.skySun.xyz;
-    const float y = dir.y;
-    const float up = saturate(y);
+    const float up = saturate(dir.y);
     // Toward the sun the warm horizon band reaches higher (sunset banding), away from it the sky stays cooler.
     const float mu = dot(dir, sun);
     const float toward = saturate(mu * 0.5 + 0.5);
     const float band = lerp(0.55, 0.28, toward * toward);
     float3 col = lerp(f.skyHorizon.rgb, f.skyZenith.rgb, pow(up, band));
-    // Below the horizon: hazy ground color.
-    const float3 below = lerp(f.fogColor.rgb * 0.85, f.groundAmbient.rgb * 1.4, saturate(-y * 4.0));
-    col = y < 0.0 ? below : col;
-    // Mie-like glow around the sun and a warmer horizon toward it.
     const float g = 0.76;
     const float hg = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) / (4.0 * PI);
     col += f.skySunGlow.rgb * hg * 0.10;
@@ -149,24 +174,86 @@ float3 skyRadiance(float3 dir) {
     return col;
 }
 
-// Haze color along a view ray: the fog color, warmed toward the sun.
-float3 hazeColor(float3 rd) {
-    const float sunAmt = pow(saturate(dot(rd, f.skySun.xyz)), 8.0);
-    return f.fogColor.rgb + f.skySunGlow.rgb * 0.22 * sunAmt * f.fogParams.z;
+// Sky radiance for a view direction (no sun disc), used by the sky pass and as environment light: the scattering
+// model scaled to the palette's brightness at the zenith, mixed with the palette (which carries night and twilight).
+float3 skyRadiance(float3 dir) {
+    const float3 sun = f.skySun.xyz;
+    const float3 d = float3(dir.x, max(dir.y, 0.0), dir.z);
+    const float3 pal = paletteSky(d);
+    const float3 zen = atmosphere(float3(0, 1, 0), sun);
+    const float scale = luminance(f.skyZenith.rgb) / max(luminance(zen), 1e-6);
+    const float day = smoothstep(-0.06, 0.05, sun.y);
+    float3 col = lerp(pal, atmosphere(d, sun) * scale * 0.85 + pal * 0.25, day * f.skyAmbient.w);
+    // Below the horizon: hazy ground color.
+    const float3 below = lerp(f.fogColor.rgb * 0.85, f.groundAmbient.rgb * 1.4, saturate(-dir.y * 4.0));
+    return dir.y < 0.0 ? lerp(col, below, saturate(-dir.y * 12.0)) : col;
 }
 
-// Analytic height fog (exponential in height) with sun in-scattering. Returns rgb: fog color, a: amount.
+// Haze color along a view ray: the fog color, warmed toward the sun; with the scattering sky, the sky colour just
+// above the horizon in that direction (aerial perspective: distant land fades into the sky behind it).
+float3 hazeColor(float3 rd) {
+    const float sunAmt = pow(saturate(dot(rd, f.skySun.xyz)), 8.0);
+    const float3 base = f.fogColor.rgb + f.skySunGlow.rgb * 0.22 * sunAmt * f.fogParams.z;
+    if (f.skyAmbient.w <= 0.0) return base;
+    const float3 h = normalize(float3(rd.x, 0.06, rd.z));
+    const float3 sky = skyRadiance(h);
+    return lerp(base, sky * (luminance(base) / max(luminance(sky), 1e-5)) * 0.5 + sky * 0.5, 0.6 * f.skyAmbient.w);
+}
+
+// Optical depth of an exponential height layer (density a at y = 0, falloff b) along a ray from camPos.
+float fogLayer(float a, float b, float3 camPos, float3 rd, float dist) {
+    const float k = b * rd.y;
+    const float camTerm = exp(-b * camPos.y);
+    return abs(k) > 1e-4 ? a * camTerm * (1.0 - exp(-k * dist)) / k : a * camTerm * dist;
+}
+
+// Analytic height fog (exponential in height) with sun in-scattering, plus a thin valley layer on open levels
+// (worldParams z: density at its base, w: base height). Returns rgb: fog color, a: amount.
 float4 fogAt(float3 worldPos, float3 camPos) {
     const float3 d = worldPos - camPos;
     const float dist = length(d);
     if (dist < 1e-3) return ((float4)(0.0));
     const float3 rd = d / dist;
-    const float a = f.fogParams.x, b = f.fogParams.y;
-    const float k = b * rd.y;
-    const float camTerm = exp(-b * camPos.y);
-    const float optical = abs(k) > 1e-4 ? a * camTerm * (1.0 - exp(-k * dist)) / k : a * camTerm * dist;
+    float optical = fogLayer(f.fogParams.x, f.fogParams.y, camPos, rd, dist);
+    if (f.worldParams.z > 0.0) {
+        const float3 c = float3(camPos.x, camPos.y - f.worldParams.w, camPos.z);
+        optical += fogLayer(f.worldParams.z, 0.03, c, rd, dist);
+    }
     const float fog = 1.0 - exp(-max(optical, 0.0));
     return float4(hazeColor(rd), fog);
+}
+
+// Cloud layer (render-only): a plane 2 km up drifting with the wind. Returns coverage 0..1 at a world position on
+// the plane; the sky pass draws it and the ground receives its shadow along the sun.
+static const float kCloudHeight = 2000.0;
+float valueNoise(float2 p) {
+    const float2 i = floor(p);
+    const float2 u = frac(p);
+    const float2 w = u * u * (3.0 - 2.0 * u);
+    return lerp(lerp(hash12(i), hash12(i + float2(1, 0)), w.x), lerp(hash12(i + float2(0, 1)), hash12(i + float2(1, 1)), w.x), w.y);
+}
+
+// octaves: 4 in the sky, 2 for ground shadows (their soft edges hide the missing detail).
+float cloudCover(float2 xz, int octaves) {
+    const float t = f.cameraPos.w;
+    float2 p = (xz + float2(9.0, 4.0) * t) * float2(1.0 / 2400.0, 1.0 / 1100.0);
+    float n = 0.0, amp = 0.5, norm = 0.0;
+    for (int o = 0; o < octaves; ++o) {
+        n += valueNoise(p) * amp;
+        norm += amp;
+        amp *= 0.5;
+        p = float2(p.x * 1.6 - p.y * 1.2, p.x * 1.2 + p.y * 1.6) + 7.3;
+    }
+    n /= norm;
+    const float cover = f.fogParams.w;
+    return smoothstep(1.0 - cover, 1.0 - cover + 0.22, n);
+}
+
+float cloudShadow(float3 P) {
+    if (f.options.w < 0.5 || f.skySun.y < 0.05) return 1.0;
+    const float3 L = f.skySun.xyz;
+    const float2 q = P.xz + L.xz * ((kCloudHeight - P.y) / L.y);
+    return 1.0 - 0.55 * cloudCover(q, 2) * smoothstep(0.05, 0.25, L.y);
 }
 
 // Low-beam headlights: two unshadowed spot lights on the vehicle (render-only). Returns irradiance.
@@ -849,7 +936,7 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     s.N = N;
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal) * (front ? 1.0 : -1.0));
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal) * (front ? 1.0 : -1.0)) * cloudShadow(P);
     float3 color = shade(s);
     color = applyFog(color, P, f.cameraPos.xyz);
     return float4(color, 1.0);
@@ -1081,7 +1168,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.N = N;
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal));
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal)) * cloudShadow(P);
     float3 color = shade(s);
     color = applyFog(color, P, f.cameraPos.xyz);
     return float4(color, 1.0);
@@ -1336,7 +1423,7 @@ float3 shadeModel(float3 albedo, float rough, float ao, float3 N, float3 Ng, flo
     s.emissive = ((float3)(0.0));
     s.clearCoat = 0.0;
     s.lamp = headlightIrradiance(P, N);
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, Ng);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, Ng) * cloudShadow(P);
     if (foliage) {
         const float back = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
         s.emissive = albedo * f.sunColor.rgb * s.shadow * (0.05 + 0.35 * back) * ao;
@@ -1580,19 +1667,20 @@ float4 sky_fs(FullscreenOut vin) : SV_Target0 {
         col = lerp(col, float3(0.80, 0.84, 0.95) * (0.9 + 0.4 * maria) * 1.4, disc * f.sunDisc.w);
         col += float3(0.10, 0.12, 0.18) * pow(saturate(muMoon), 400.0) * f.sunDisc.w * 0.6;
     }
-    // Clouds on a plane far above, stretched into streaks.
+    // Clouds on the drifting plane 2 km up (the same layer whose shadow crosses the ground), stretched into streaks.
     if (f.options.w > 0.5 && dir.y > 0.01) {
-        const float t = f.cameraPos.w;
-        const float2 uv = dir.xz / (dir.y + 0.08) * float2(0.10, 0.24) + float2(t * 0.0012, t * 0.001);
-        const float n0 = noiseTex.Sample(ns, uv).r * 0.65 + noiseTex.Sample(ns, uv * 2.7 + 0.3).g * 0.35;
-        const float n = saturate((n0 - 0.5) * 2.6 + 0.5); // the fbm is centered at 0.5 with a small spread
-        const float cover = f.fogParams.w;
-        const float c = smoothstep(1.0 - cover, 1.0 - cover + 0.3, n) * smoothstep(0.01, 0.20, dir.y);
-        const float thick = noiseTex.Sample(ns, uv * 1.3 + 0.17).r;
+        const float dist = (kCloudHeight - f.cameraPos.y) / dir.y;
+        const float2 q = f.cameraPos.xz + dir.xz * dist;
+        const float c = cloudCover(q, 4) * smoothstep(0.01, 0.20, dir.y);
+        // Self-shadowing: cover 300 m toward the sun darkens the side facing away from it.
+        const float2 toSun = normalize(f.skySun.xz + 1e-4) * 300.0;
+        const float occl = cloudCover(q + toSun, 3);
+        const float thick = saturate(occl * 0.8 + c * 0.3);
         const float muL = dot(dir, f.sunDir.xyz);
-        float3 cloudLit = f.sunColor.rgb * 0.11 * (0.75 + 0.6 * pow(saturate(muL), 4.0)) + f.skyZenith.rgb * 0.5;
+        float3 cloudLit = f.sunColor.rgb * 0.15 * (0.75 + 0.6 * pow(saturate(muL), 4.0)) + f.skyZenith.rgb * 0.45 +
+                          f.skyHorizon.rgb * 0.25;
         cloudLit += f.skySunGlow.rgb * (0.06 + 0.25 * pow(saturate(mu), 3.0)); // sunset-lit undersides
-        const float3 cloudCol = lerp(cloudLit, cloudLit * 0.55 + f.skyHorizon.rgb * 0.2, thick * c);
+        const float3 cloudCol = lerp(cloudLit, cloudLit * 0.7 + f.skyHorizon.rgb * 0.15, thick);
         col = lerp(col, cloudCol, c * 0.9);
     }
     // Horizon haze matches the fog color.
@@ -1622,6 +1710,50 @@ Texture2D<float4> heightTex : TEX(2);
 SamplerState cs : SMP(2);
 Texture2D<float4> reflTex : TEX(3);
 SamplerState rs : SMP(3);
+Texture2D<float4> sceneTex : TEX(4); // opaque scene copy (screenFx.x)
+SamplerState scs : SMP(4);
+Texture2D<float4> depthLin : TEX(5); // view depth of the opaque scene (screenFx.x)
+SamplerState dls : SMP(5);
+
+float viewDepth(float3 P) { return dot(P - f.cameraPos.xyz, f.cameraFwd.xyz); }
+
+float2 screenUV(float3 P, out bool inside) {
+    const float4 c = mul(f.viewProj, float4(P, 1.0));
+    const float2 n = c.xy / max(c.w, 1e-4);
+    inside = c.w > 0.0 && all(abs(n) < 1.0);
+    return float2(n.x * 0.5 + 0.5, 0.5 - n.y * 0.5);
+}
+
+// Screen-space reflection: march the reflected ray in growing steps against the opaque scene's view depth, refine
+// the first crossing by bisection. Returns rgb and the confidence (0: no hit, use the sky).
+float4 traceReflection(float3 P, float3 R, float dist) {
+    float step = 0.3 + dist * 0.012;
+    float3 prev = P, pos = P;
+    for (int i = 0; i < 28; ++i) {
+        pos = prev + R * step;
+        bool inside;
+        float2 uv = screenUV(pos, inside);
+        if (!inside) break;
+        const float zr = viewDepth(pos);
+        const float zs = depthLin.SampleLevel(dls, uv, 0).r;
+        if (zr > zs && zr - zs < step * 2.0 + 0.3) {
+            float3 a = prev, b = pos;
+            for (int k = 0; k < 5; ++k) {
+                const float3 m = 0.5 * (a + b);
+                bool mi;
+                const float2 muv = screenUV(m, mi);
+                if (viewDepth(m) > depthLin.SampleLevel(dls, muv, 0).r) b = m; else a = m;
+            }
+            uv = screenUV(b, inside);
+            const float2 e = smoothstep(0.0, 0.08, uv) * smoothstep(1.0, 0.92, uv);
+            const float conf = e.x * e.y * (1.0 - float(i) / 28.0);
+            return float4(sceneTex.SampleLevel(scs, uv, 0).rgb, conf);
+        }
+        prev = pos;
+        step *= 1.25;
+    }
+    return float4(0, 0, 0, 0);
+}
 
 float4 water_fs(LitOut vin) : SV_Target0 {
     const float3 P = vin.worldPos;
@@ -1632,23 +1764,47 @@ float4 water_fs(LitOut vin) : SV_Target0 {
     const float depth = outside && f.worldParams.y > 0.5 ? 24.0 : P.y - terrain;
     if (depth <= 0.0) discard;
     const float t = f.cameraPos.w;
-    // Ripples: two scrolling noise layers, normal from finite differences.
+    const float dist = length(f.cameraPos.xyz - P);
+    const bool open = vin.material.y > 1.0; // lakes, rivers, sea (puddles: ripples only)
+    // Waves (render-only): wind swell as a sum of deep-water sine waves (phase speed sqrt(g L / 2 pi)), calmer in
+    // the shallows, plus two scrolling noise ripple layers; detail fades with distance against shimmer.
+    float2 slope = float2(0.0, 0.0);
+    if (open) {
+        const float calm = saturate(depth / 3.0);
+        const float4 L = float4(9.0, 5.3, 3.1, 1.7);
+        // Peak slopes, modulated by slow gust patches so the wave field does not read as a regular grid.
+        const float gust = noiseTex.Sample(ns, P.xz * 0.0045 + float2(t * 0.0021, t * 0.0013)).r;
+        const float4 S = float4(0.030, 0.026, 0.021, 0.017) * calm * (0.35 + 1.3 * gust);
+        const float2 D[4] = {float2(0.87, 0.49), float2(0.57, 0.82), float2(0.98, -0.20), float2(0.34, 0.94)};
+        [unroll] for (int w = 0; w < 4; ++w) {
+            const float k = 6.2831853 / L[w];
+            const float c = sqrt(9.81 / k);
+            slope += D[w] * S[w] * cos(k * (dot(D[w], P.xz) - c * t) + float(w) * 1.7);
+        }
+        slope *= saturate(1.0 - dist / 500.0) * 0.85 + 0.15;
+    }
     const float e = 0.08;
     const float h0 = rippleHeight(noiseTex, ns, P.xz, t), hx = rippleHeight(noiseTex, ns, P.xz + float2(e, 0), t),
                 hz = rippleHeight(noiseTex, ns, P.xz + float2(0, e), t);
-    const float rip = 0.035;
-    const float3 N = normalize(float3(-(hx - h0) / e * rip, 1.0, -(hz - h0) / e * rip));
+    const float rip = 0.035 * saturate(1.0 - dist / 250.0);
+    const float3 N = normalize(float3(-(hx - h0) / e * rip - slope.x, 1.0, -(hz - h0) / e * rip - slope.y));
     const float3 V = normalize(f.cameraPos.xyz - P);
     const float NdotV = saturate(dot(N, V));
     const float F = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
+    const float2 suv = vin.position.xy * f.waterParams.zw;
     float3 refl;
     if (f.waterParams.y > 0.5) {
-        const float2 suv = vin.position.xy * f.waterParams.zw + N.xz * 0.06;
-        refl = reflTex.Sample(rs, suv).rgb;
+        refl = reflTex.Sample(rs, suv + N.xz * 0.06).rgb;
     } else {
-        refl = skyRadiance(reflect(-V, N));
+        float3 R = reflect(-V, N);
+        R.y = abs(R.y);
+        refl = skyRadiance(R);
+        if (f.screenFx.y > 0.5) {
+            const float4 hit = traceReflection(P, R, dist);
+            refl = lerp(refl, hit.rgb, hit.a);
+        }
     }
-    const float shadow = shadowFactor(shadowMap, shadowSampler, P, float3(0, 1, 0));
+    const float shadow = shadowFactor(shadowMap, shadowSampler, P, float3(0, 1, 0)) * cloudShadow(P);
     const float3 H = normalize(f.sunDir.xyz + V);
     const float spec = ggxSpec(saturate(dot(N, H)), max(NdotV, 1e-3), saturate(dot(N, f.sunDir.xyz)), 0.07);
     const float3 sunSpec = f.sunColor.rgb * spec * 0.02 * saturate(dot(N, f.sunDir.xyz)) * shadow;
@@ -1656,12 +1812,45 @@ float4 water_fs(LitOut vin) : SV_Target0 {
     // which it turns opaque, material.z = opacity; see-through at the very edge.
     const float3 skyUp = lerp(f.skyHorizon.rgb, f.skyZenith.rgb, 0.5);
     const float3 body = vin.color * (skyUp + f.sunColor.rgb * 0.15 * shadow);
-    const float aBody = saturate(depth / vin.material.y) * vin.material.z;
     const float edge = smoothstep(0.0, 0.025, depth);
-    float3 src = (body * aBody * (1.0 - F) + refl * F + sunSpec) * edge;
-    const float srcAlpha = edge * (1.0 - (1.0 - F) * (1.0 - aBody));
-    // Fog over the premultiplied contribution (the background is already fogged).
+    // Shore foam on open water: bands running up the beach, broken by noise, in the last half metre of depth.
+    float foam = 0.0;
+    if (open) {
+        const float n = noiseTex.Sample(ns, P.xz * 0.23 + float2(t * 0.013, -t * 0.009)).g;
+        const float band = sin(depth * 16.0 - t * 1.3 + n * 7.0) * 0.5 + 0.5;
+        foam = (1.0 - smoothstep(0.03, 0.5, depth)) * saturate(n * 1.6 - 0.45 + band * 0.55) * edge *
+               saturate(1.5 - dist / 300.0);
+    }
+    const float3 foamCol = float3(0.80, 0.84, 0.86) * (skyUp * 0.9 + f.sunColor.rgb * 0.30 * saturate(f.sunDir.y) * shadow);
     const float4 fog = fogAt(P, f.cameraPos.xyz);
+    if (f.screenFx.x > 0.5) {
+        // Refraction: the bed seen through the surface, offset by the wave normal (undistorted where the offset
+        // sample lies in front of the water), absorbed per channel along the view path through the water.
+        const float zw = viewDepth(P);
+        float2 ruv = suv + N.xz * min(depth, 2.0) * 0.35 / max(zw, 0.5);
+        float zb = depthLin.SampleLevel(dls, ruv, 0).r;
+        if (zb < zw) {
+            ruv = suv;
+            zb = depthLin.SampleLevel(dls, ruv, 0).r;
+        }
+        const float path = outside && f.worldParams.y > 0.5 ? 1e4 : max(zb - zw, 0.0) * dist / max(zw, 1e-3);
+        const float3 tint = vin.color / max(max(vin.color.r, vin.color.g), max(vin.color.b, 1e-4));
+        const float3 sigma = ((1.0 - tint) * 2.5 + 1.2) / vin.material.y;
+        const float3 T = lerp((float3)1.0, exp(-sigma * min(path, 1e3)), vin.material.z);
+        const float3 bed = sceneTex.SampleLevel(scs, ruv, 0).rgb;
+        const float3 scatter = body * (1.0 - T);
+        float3 lit = ((scatter * (1.0 - F) + refl * F + sunSpec) * (1.0 - foam) + foamCol * foam);
+        lit = lit * (1.0 - fog.a) + fog.rgb * fog.a;
+        // The bed in the copy is already fogged.
+        const float3 col = bed * T * (1.0 - F) * (1.0 - foam) + lit;
+        return float4(col * edge, edge);
+    }
+    const float aBody = saturate(depth / vin.material.y) * vin.material.z;
+    float3 src = (body * aBody * (1.0 - F) + refl * F + sunSpec) * edge;
+    float srcAlpha = edge * (1.0 - (1.0 - F) * (1.0 - aBody));
+    src = lerp(src, foamCol * edge, foam);
+    srcAlpha = lerp(srcAlpha, edge, foam);
+    // Fog over the premultiplied contribution (the background is already fogged).
     src = src * (1.0 - fog.a) + fog.rgb * fog.a * srcAlpha;
     return float4(src, srcAlpha);
 }
@@ -1678,6 +1867,8 @@ Texture2D<float4> noiseTex : TEX(1);
 SamplerState ns : SMP(1);
 Texture2D<float4> heightTex : TEX(2);
 SamplerState cs : SMP(2);
+Texture2D<float4> depthLin : TEX(3); // view depth of the opaque scene (far plane when not available)
+SamplerState dls : SMP(3);
 
 float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     const float3 P = vin.worldPos;
@@ -1687,7 +1878,7 @@ float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     const float3 V = normalize(f.cameraPos.xyz - P);
     float3 N = normalize(vin.normal);
     if (!front) N = -N;
-    float alpha, white, translucency;
+    float alpha, white, translucency, glassy = 0.0;
     if (kind < 0.5) {
         // Sheet: streaks stretched along the fall, scrolling with the water (the coordinate is the fall time, so the
         // pattern accelerates like the water). Thin film near the lip, aerated and torn toward the foot.
@@ -1704,6 +1895,10 @@ float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         const float lip = smoothstep(0.0, 0.05, s);
         alpha = saturate(lerp(0.35 + 0.45 * streak, streak * 1.4 - 0.25, torn)) * edge * lip;
         white = saturate(0.1 + 0.6 * streak + 0.8 * s);
+        // Seen from above, the smooth upper part of the curtain is glassy dark water with light streaks, not foam.
+        glassy = smoothstep(0.25, 0.75, V.y) * (1.0 - smoothstep(0.25, 0.75, s));
+        white = lerp(white, 0.05 + 0.35 * streak * streak, glassy);
+        alpha = lerp(alpha, (0.6 + 0.3 * streak) * edge * lip, glassy);
         translucency = 0.6;
     } else if (kind < 1.5) {
         // Foam: churned water spreading outward from the impact.
@@ -1727,15 +1922,18 @@ float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         const float terrain = heightTex.SampleLevel(cs, groundUV(P.xz), 0).r;
         const float dist = length(f.cameraPos.xyz - P);
         const float facing = saturate(abs(dot(N, V)) * 1.6 - 0.2);
+        // Soft particle: fades where the card meets the opaque scene (rocks, banks, the vehicle).
+        const float zScene = depthLin.SampleLevel(dls, vin.position.xy * f.waterParams.zw, 0).r;
+        const float soft = saturate((zScene - dot(P - f.cameraPos.xyz, f.cameraFwd.xyz)) / 2.5);
         alpha = puff * sin(3.14159 * u) * smoothstep(0.0, 0.2, v) * (1.0 - v) * (1.0 - v) * 0.32 * facing *
-                saturate((P.y - terrain) * 0.5) * saturate((dist - 3.0) / 10.0) * saturate(drop / 12.0);
+                saturate((P.y - terrain) * 0.5) * saturate((dist - 3.0) / 10.0) * saturate(drop / 12.0) * soft;
         white = 0.95;
         translucency = 1.0;
         N = V;
     }
     if (alpha < 0.002) discard;
     // Light: wrapped sun diffuse with forward scattering through the water, sky ambient, a small sun glint.
-    const float shadow = shadowFactor(shadowMap, shadowSampler, P, N);
+    const float shadow = shadowFactor(shadowMap, shadowSampler, P, N) * cloudShadow(P);
     const float3 L = f.sunDir.xyz;
     const float wrap = saturate((dot(N, L) + 0.5) / 1.5);
     const float forward = pow(saturate(dot(-V, L)), 6.0) * translucency;
@@ -1745,6 +1943,8 @@ float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     if (kind < 0.5) {
         const float3 H = normalize(L + V);
         col += f.sunColor.rgb * shadow * ggxSpec(saturate(dot(N, H)), max(saturate(dot(N, V)), 1e-3), saturate(dot(N, L)), 0.18) * 0.04;
+        const float F = 0.02 + 0.98 * pow(1.0 - saturate(abs(dot(N, V))), 5.0);
+        col += skyRadiance(reflect(-V, N)) * lerp(F, 0.25 + 0.6 * F, glassy);
     }
     const float4 fog = fogAt(P, f.cameraPos.xyz);
     col = col * (1.0 - fog.a) + fog.rgb * fog.a;
@@ -2180,7 +2380,7 @@ float4 grass_fs(GrassOut vin) : SV_Target0 {
     if (t <= 1.0) N = normalize(N + vin.across * vin.shape.x * 0.6);
     const float3 Nl = normalize(lerp(N, float3(0.0, 1.0, 0.0), 0.3));
     const float3 L = f.sunDir.xyz;
-    const float shadow = shadowFactor(shadowMap, shadowSampler, P, float3(0, 1, 0));
+    const float shadow = shadowFactor(shadowMap, shadowSampler, P, float3(0, 1, 0)) * cloudShadow(P);
     const float NdotL = saturate(dot(Nl, L) * 0.6 + 0.4); // wrapped diffuse
     // Root occlusion: the base of a dense clump sees little sky and little sun.
     const float rootAO = lerp(1.0 - 0.75 * vin.ao, 1.0, smoothstep(0.0, 0.7, min(t, 1.0)));
@@ -2457,7 +2657,7 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     s.metallic = 0.0;
     s.N = N;
     s.V = V;
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, N0);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, N0) * cloudShadow(P);
     s.ao = vehicleAO(P) * (1.0 - cavity);
     s.specOcclusion = 0.75;
     s.emissive = ((float3)(0.0));
@@ -2649,7 +2849,7 @@ float4 spray_fs(SprayOut vin) : SV_Target0 {
     s.metallic = 0.0;
     s.N = N;
     s.V = V;
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, N);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, N) * cloudShadow(P);
     s.ao = 1.0;
     s.specOcclusion = wet ? 1.0 : 0.5;
     s.emissive = ((float3)(0.0));
@@ -2708,8 +2908,12 @@ float4 line_fs(LineOut vin) : SV_Target0 {
 
 struct PostUniforms {
     float4 texel;   // xy: 1/source size, zw: 1/target size
-    float4 params;  // x: bloom threshold, y: bloom strength, z: exposure, w: mode/flags
+    float4 params;  // x: bloom threshold (tonemap: sharpening), y: bloom strength, z: exposure, w: mode/flags
+                    // (tonemap: auto exposure strength, 0 = off)
     float4 extra;   // x: vignette, y: FXAA on (tonemap writes luma to alpha), z: render scale u, w: v
+    float4 look;    // tonemap: x: curve (0 ACES, 1 AgX), y: grade LUT amount, z: film grain, w: chromatic aberration
+    float4 look2;   // tonemap: x: lens flare, y: sun shafts, z: auto exposure key (luminance), w: its range (EV)
+    float4 look3;   // tonemap: x: grain seed (changes every frame)
 };
 
 #if defined(TF_ENTRY_bloom_down_fs) || defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || \
@@ -2772,24 +2976,560 @@ float3 aces(float3 x) {
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
+// AgX (Sobotka) with the "punchy" look, polynomial fit of the base contrast curve (Wrensch). Returns display values
+// (gamma 2.2 encoded).
+float3 agxContrast(float3 x) {
+    const float3 x2 = x * x, x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+
+float3 agx(float3 c) {
+    // HLSL float3x3 rows are the columns of the reference GLSL mat3, so mul(v, M) == M * v there.
+    const float3x3 inset = float3x3(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+                                    0.0784335999999992, 0.878468636469772, 0.0784336,
+                                    0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+    const float3x3 outset = float3x3(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+                                     -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+                                     -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+    const float minEv = -12.47393, maxEv = 4.026069;
+    float3 v = mul(max(c, 1e-10), inset);
+    v = (clamp(log2(v), minEv, maxEv) - minEv) / (maxEv - minEv);
+    v = saturate(agxContrast(v));
+    v = pow(v, ((float3)(1.35)));
+    const float l = luminance(v);
+    v = l + 1.4 * (v - l);
+    return saturate(mul(v, outset));
+}
+
+// Tone-mapped domain for neighbourhood filters (reversible, keeps bright pixels from dominating).
+float3 tmap(float3 c) { return c / (1.0 + max(c.r, max(c.g, c.b))); }
+float3 itmap(float3 c) { return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-4); }
+
 #if defined(TF_ENTRY_tonemap_fs)
 Texture2D<float4> bloom : TEX(1);
 SamplerState bs : SMP(1);
+Texture2D<float4> adaptTex : TEX(2);
+SamplerState ads : SMP(2);
+Texture2D<float4> shaftTex : TEX(3);
+SamplerState shs : SMP(3);
+Texture3D<float4> lutTex : TEX(4);
+SamplerState lts : SMP(4);
+
+// Ghosts of the bright (bloom) image mirrored through the screen centre, tinted like lens coatings.
+float3 lensFlare(float2 suv) {
+    const float k[4] = {-0.55, 0.42, -1.25, 0.82};
+    const float3 tint[4] = {float3(1.0, 0.62, 0.30), float3(0.35, 0.65, 1.0), float3(0.55, 1.0, 0.55),
+                            float3(1.0, 0.45, 0.75)};
+    float3 acc = ((float3)(0.0));
+    for (int i = 0; i < 4; ++i) {
+        const float2 g = 0.5 + (suv - 0.5) * k[i];
+        const float w = saturate(1.0 - length(g - 0.5) * 1.7);
+        acc += bloom.SampleLevel(bs, g * p.extra.zw, 0).rgb * tint[i] * (w * w);
+    }
+    return acc;
+}
 
 float4 tonemap_fs(FullscreenOut vin) : SV_Target0 {
     const float2 uv = vin.uv * p.extra.zw; // the 3D image may use only part of the HDR texture (render scale)
-    float3 c = src.Sample(ls, uv).rgb;
+    float3 c;
+    if (p.look.w > 0.0) {
+        // Chromatic aberration: red and blue sampled apart along the radius.
+        const float2 o = (vin.uv - 0.5) * p.look.w * 0.010 * p.extra.zw;
+        c = float3(src.Sample(ls, uv + o).r, src.Sample(ls, uv).g, src.Sample(ls, uv - o).b);
+    } else {
+        c = src.Sample(ls, uv).rgb;
+    }
+    if (p.params.x > 0.0) {
+        // Sharpening after TAA (unsharp mask on the 4 neighbours, in the tone-mapped domain).
+        const float2 t = p.texel.xy;
+        const float3 n = tmap(src.Sample(ls, uv + float2(0, -t.y)).rgb) + tmap(src.Sample(ls, uv + float2(0, t.y)).rgb) +
+                         tmap(src.Sample(ls, uv + float2(-t.x, 0)).rgb) + tmap(src.Sample(ls, uv + float2(t.x, 0)).rgb);
+        const float3 tc = tmap(c);
+        c = itmap(clamp(tc + (tc - n * 0.25) * p.params.x, 0.0, 0.999));
+    }
     if (p.params.y > 0.0) c += bloom.Sample(bs, uv).rgb * p.params.y;
-    c *= p.params.z * ACES_PRE_EXPOSURE;
-    float3 mapped = aces(c);
-    // Vignette.
+    if (p.look2.x > 0.0) c += lensFlare(vin.uv) * p.look2.x;
+    if (p.look2.y > 0.0) c += shaftTex.Sample(shs, uv).rgb * p.look2.y;
+    float exposure = p.params.z;
+    if (p.params.w > 0.0) {
+        // Auto exposure on top of the time-of-day exposure: towards the key luminance, within +-range EV.
+        const float avgLog = adaptTex.Load(int3(0, 0, 0)).r;
+        exposure *= exp2(clamp(log2(p.look2.z) - avgLog, -p.look2.w, p.look2.w) * p.params.w);
+    }
+    c *= exposure;
     const float2 q = vin.uv - 0.5;
-    mapped *= 1.0 - p.extra.x * dot(q, q) * 1.6;
-    float3 display = pow(saturate(mapped), ((float3)(1.0 / 2.2)));
+    const float vignette = saturate(1.0 - p.extra.x * dot(q, q) * 1.6);
+    float3 display;
+    if (p.look.x > 0.5) {
+        display = agx(c * vignette);
+    } else {
+        display = pow(saturate(aces(c * ACES_PRE_EXPOSURE) * vignette), ((float3)(1.0 / 2.2)));
+    }
+    if (p.look.y > 0.0) {
+        const float3 graded = lutTex.SampleLevel(lts, saturate(display) * (31.0 / 32.0) + 0.5 / 32.0, 0).rgb;
+        display = lerp(display, graded, p.look.y);
+    }
+    if (p.look.z > 0.0) {
+        // Film grain: per-frame noise, stronger in the shadows and mid-tones.
+        const float g = hash12(vin.position.xy + p.look3.x) + hash12(vin.position.yx * 1.37 - p.look3.x) - 1.0;
+        display += g * p.look.z * (1.0 - 0.75 * luminance(saturate(display)));
+    }
     // Dither against banding in the sky.
     const float n = hash12(vin.position.xy) - 0.5;
     display += n / 255.0;
     return float4(display, p.extra.y > 0.5 ? luminance(display) : 1.0);
+}
+#endif
+
+// ---------------------------------------------------------------- post: depth-based effects
+// Linear depth, GTAO, velocity, TAA, motion blur, depth of field, auto exposure, sun shafts. Only with a
+// single-sample scene (the depth buffer is sampled); see Renderer::drawFrame.
+
+struct PostFxUniforms {
+    float4x4 viewProj;      // current view-projection without the TAA jitter
+    float4x4 prevViewProj;  // previous frame's, without jitter
+    float4x4 invView;       // view -> world
+    float4 proj;            // x: P00, y: P11, z: P20, w: P21 of the (jittered) projection
+    float4 texel;           // xy: 1/source size, zw: 1/target size
+    float4 params;          // per pass
+    float4 params2;         // per pass
+    float4 camPos;          // xyz, w: time (s)
+    float4 sun;             // xy: sun position (uv), z: shaft weight (0 = off screen / night)
+    float4 sunColor;        // rgb: shaft tint
+    float4 depthParams;     // x: near * far, y: near, z: far - near, w: far
+};
+
+struct VelocityUniforms {
+    float4x4 viewProjJ;     // jittered (as the scene pass, for the depth test)
+    float4x4 viewProj;
+    float4x4 prevViewProj;
+    float4x4 model;
+    float4x4 prevModel;
+};
+
+#if defined(TF_ENTRY_lindepth_fs) || defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || \
+    defined(TF_ENTRY_velocity_fs) || defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || \
+    defined(TF_ENTRY_dof_blur_fs) || defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_lum_fs) || \
+    defined(TF_ENTRY_adapt_fs) || defined(TF_ENTRY_shafts_fs)
+ConstantBuffer<PostFxUniforms> px : UBO(0);
+#endif
+
+#if defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || defined(TF_ENTRY_velocity_fs) || \
+    defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || defined(TF_ENTRY_dof_blur_fs) || \
+    defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_shafts_fs)
+// View-space position in screen axes (x right, y down, z forward = view distance) from uv and linear depth.
+float3 viewPosSS(float2 uv, float z) {
+    const float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    return float3(z * (ndc.x + px.proj.z) / px.proj.x, -z * (ndc.y + px.proj.w) / px.proj.y, z);
+}
+
+float3 worldFromUV(float2 uv, float z) {
+    const float3 v = viewPosSS(uv, z);
+    return mul(px.invView, float4(v.x, -v.y, -v.z, 1.0)).xyz;
+}
+#endif
+
+float2 clipToUV(float4 c) {
+    const float2 n = c.xy / c.w;
+    return float2(n.x * 0.5 + 0.5, 0.5 - n.y * 0.5);
+}
+
+// Interleaved gradient noise (Jimenez).
+float ign(float2 pix) { return frac(52.9829189 * frac(dot(pix, float2(0.06711056, 0.00583715)))); }
+
+#if defined(TF_ENTRY_lindepth_fs)
+Texture2D<float4> depthTex : TEX(0);
+SamplerState dps : SMP(0);
+
+// Reversed device depth -> view distance (m); the sky (cleared depth 0) comes out as the far plane.
+float4 lindepth_fs(FullscreenOut vin) : SV_Target0 {
+    const float d = depthTex.Load(int3(int2(vin.position.xy), 0)).r;
+    return float4(px.depthParams.x / (px.depthParams.y + d * px.depthParams.z), 0.0, 0.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_gtao_fs)
+Texture2D<float4> depthLin : TEX(0);
+SamplerState pts : SMP(0);
+
+// Snapped to a full-resolution texel centre: the depth and the position it is reconstructed at must belong to the same
+// texel (half-resolution centres sit on texel corners, where point sampling rounds either way and fakes steps on
+// surfaces seen at grazing angles).
+float2 aoTexel(float2 uv) { return (floor(uv / px.texel.xy) + 0.5) * px.texel.xy; }
+float3 aoPos(float2 uv) {
+    const float2 c = aoTexel(uv);
+    return viewPosSS(c, depthLin.SampleLevel(pts, c, 0).r);
+}
+
+// Ground-truth ambient occlusion (Jimenez 2016, after XeGTAO) at half resolution: params x: radius (m), y: slices,
+// z: steps per side, w: half-res pixels per metre at 1 m; params2 x: frame index (noise rotation), y: fade start (m).
+// Output r: visibility, g: view distance (for the bilateral upsample).
+float4 gtao_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = aoTexel(vin.uv);
+    const float z = depthLin.SampleLevel(pts, uv, 0).r;
+    if (z > px.depthParams.w * 0.5) return float4(1.0, z, 0.0, 1.0);
+    const float3 P = viewPosSS(uv, z);
+    const float2 t = px.texel.xy;
+    const float3 pl = aoPos(uv - float2(t.x, 0)), pr = aoPos(uv + float2(t.x, 0));
+    const float3 pu = aoPos(uv - float2(0, t.y)), pd = aoPos(uv + float2(0, t.y));
+    const float3 dx = abs(pr.z - P.z) < abs(P.z - pl.z) ? pr - P : P - pl;
+    const float3 dy = abs(pd.z - P.z) < abs(P.z - pu.z) ? pd - P : P - pu;
+    const float3 V = normalize(-P);
+    float3 N = normalize(cross(dy, dx));
+    if (dot(N, V) < 0.0) N = -N;
+    const float radius = px.params.x, slices = px.params.y, steps = px.params.z;
+    const float screenRadius = min(radius * px.params.w / z, 80.0);
+    if (screenRadius < 1.5) return float4(1.0, z, 0.0, 1.0);
+    // No samples closer than 0.3 m: the terrain's height-grid steps on steep walls are not occluders worth showing.
+    const float minPx = max(1.0, 0.3 * px.params.w / z);
+    const float falloffRange = 0.6 * radius;
+    const float falloffMul = -1.0 / falloffRange, falloffAdd = (radius - falloffRange) / falloffRange + 1.0;
+    const float2 pix = vin.position.xy + px.params2.x * float2(5.588238, 2.71);
+    const float nSlice = ign(pix), nStep = ign(pix.yx + 17.0);
+    float vis = 0.0;
+    for (int s = 0; s < 4; ++s) {
+        if (float(s) >= slices) break;
+        const float phi = (float(s) + nSlice) * PI / slices;
+        const float2 omega = float2(cos(phi), sin(phi));
+        const float3 dir = float3(omega, 0.0);
+        const float3 ortho = dir - dot(dir, V) * V;
+        const float3 axis = normalize(cross(ortho, V));
+        const float3 projN = N - axis * dot(N, axis);
+        const float projLen = length(projN);
+        const float cosN = saturate(dot(projN, V) / max(projLen, 1e-4));
+        const float n = (dot(ortho, projN) < 0.0 ? -1.0 : 1.0) * acos(cosN);
+        const float low0 = cos(n + PI * 0.5), low1 = cos(n - PI * 0.5);
+        float hc0 = low0, hc1 = low1;
+        for (int j = 0; j < 8; ++j) {
+            if (float(j) >= steps) break;
+            float st = (float(j) + frac(nStep + float(j) * 0.618034)) / steps;
+            st = st * st;
+            const float2 off = omega * (st * screenRadius + minPx) * px.texel.zw;
+            const float3 d0 = aoPos(uv + off) - P, d1 = aoPos(uv - off) - P;
+            const float l0 = max(length(d0), 1e-4), l1 = max(length(d1), 1e-4);
+            hc0 = max(hc0, lerp(low0, dot(d0 / l0, V), saturate(l0 * falloffMul + falloffAdd)));
+            hc1 = max(hc1, lerp(low1, dot(d1 / l1, V), saturate(l1 * falloffMul + falloffAdd)));
+        }
+        float h0 = -acos(clamp(hc1, -1.0, 1.0)), h1 = acos(clamp(hc0, -1.0, 1.0));
+        h0 = n + clamp(h0 - n, -PI * 0.5, PI * 0.5);
+        h1 = n + clamp(h1 - n, -PI * 0.5, PI * 0.5);
+        const float sinN = sin(n);
+        vis += projLen * ((cosN + 2.0 * h0 * sinN - cos(2.0 * h0 - n)) + (cosN + 2.0 * h1 * sinN - cos(2.0 * h1 - n))) * 0.25;
+    }
+    vis = saturate(vis / slices);
+    vis = lerp(vis, 1.0, smoothstep(px.params2.y, px.params2.y * 2.0, z));
+    return float4(vis, z, 0.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_ao_blur_fs)
+Texture2D<float4> aoTex : TEX(0);
+SamplerState aps : SMP(0);
+Texture2D<float4> depthLin : TEX(1);
+SamplerState dls : SMP(1);
+
+// Full-resolution bilateral 4 x 4 gather of the half-resolution AO (covers its noise pattern), multiplied onto the
+// opaque scene by the blend state (dst * src). params x: strength (exponent), y: depth tolerance.
+float4 ao_blur_fs(FullscreenOut vin) : SV_Target0 {
+    const float z = depthLin.SampleLevel(dls, vin.uv, 0).r;
+    const float2 t = px.texel.zw; // 1 / AO size
+    float sum = 0.0, wsum = 0.0;
+    for (int y = -2; y < 2; ++y) {
+        for (int x = -2; x < 2; ++x) {
+            const float2 a = aoTex.SampleLevel(aps, vin.uv + (float2(x, y) + 0.5) * t, 0).rg;
+            const float w = exp(-abs(a.y - z) / max(z * px.params.y, 1e-3));
+            sum += a.x * w;
+            wsum += w;
+        }
+    }
+    const float ao = wsum > 1e-4 ? sum / wsum : 1.0;
+    return float4((float3)pow(saturate(ao), px.params.x), 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_velocity_fs)
+Texture2D<float4> depthLin : TEX(0);
+SamplerState dls : SMP(0);
+
+// Camera motion: screen offset since the previous frame of the world point seen at this pixel (uv units).
+float4 velocity_fs(FullscreenOut vin) : SV_Target0 {
+    const float z = depthLin.SampleLevel(dls, vin.uv, 0).r;
+    const float3 w = worldFromUV(vin.uv, z);
+    const float2 v = clipToUV(mul(px.viewProj, float4(w, 1.0))) - clipToUV(mul(px.prevViewProj, float4(w, 1.0)));
+    return float4(v, 0.0, 1.0);
+}
+#endif
+
+struct VelocityOut {
+    float4 position : SV_Position;
+    [[vk::location(0)]] float4 cur : TEXCOORD0;
+    [[vk::location(1)]] float4 prev : TEXCOORD1;
+};
+
+#if defined(TF_ENTRY_velocity_obj_vs)
+ConstantBuffer<VelocityUniforms> vu : UBO(0);
+
+// Moving meshes (vehicle body, spinning wheels) over the camera velocity, with their previous model matrix.
+VelocityOut velocity_obj_vs(LitIn vin) {
+    VelocityOut vout;
+    const float4 world = mul(vu.model, float4(vin.position, 1.0));
+    vout.position = mul(vu.viewProjJ, world);
+    vout.cur = mul(vu.viewProj, world);
+    vout.prev = mul(vu.prevViewProj, mul(vu.prevModel, float4(vin.position, 1.0)));
+    return vout;
+}
+#endif
+
+#if defined(TF_ENTRY_velocity_obj_fs)
+float4 velocity_obj_fs(VelocityOut vin) : SV_Target0 {
+    return float4(clipToUV(vin.cur) - clipToUV(vin.prev), 0.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_taa_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+Texture2D<float4> hist : TEX(1);
+SamplerState hls : SMP(1);
+Texture2D<float4> velTex : TEX(2);
+SamplerState vps : SMP(2);
+Texture2D<float4> depthLin : TEX(3);
+SamplerState dls : SMP(3);
+
+float3 rgbToYCoCg(float3 c) {
+    return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25)));
+}
+float3 yCoCgToRgb(float3 c) { return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+
+// Catmull-Rom history fetch with 5 bilinear taps.
+float3 historyCatmullRom(float2 uv, float2 size) {
+    const float2 sp = uv * size;
+    const float2 tc1 = floor(sp - 0.5) + 0.5;
+    const float2 fr = sp - tc1;
+    const float2 w0 = fr * (-0.5 + fr * (1.0 - 0.5 * fr));
+    const float2 w1 = 1.0 + fr * fr * (-2.5 + 1.5 * fr);
+    const float2 w2 = fr * (0.5 + fr * (2.0 - 1.5 * fr));
+    const float2 w3 = fr * fr * (-0.5 + 0.5 * fr);
+    const float2 w12 = w1 + w2;
+    const float2 tc0 = (tc1 - 1.0) / size, tc3 = (tc1 + 2.0) / size, tc12 = (tc1 + w2 / w12) / size;
+    const float a = w12.x * w0.y, b = w0.x * w12.y, c = w12.x * w12.y, d = w3.x * w12.y, e = w12.x * w3.y;
+    const float3 r = hist.SampleLevel(hls, float2(tc12.x, tc0.y), 0).rgb * a +
+                     hist.SampleLevel(hls, float2(tc0.x, tc12.y), 0).rgb * b + hist.SampleLevel(hls, tc12, 0).rgb * c +
+                     hist.SampleLevel(hls, float2(tc3.x, tc12.y), 0).rgb * d +
+                     hist.SampleLevel(hls, float2(tc12.x, tc3.y), 0).rgb * e;
+    return max(r / (a + b + c + d + e), 0.0);
+}
+
+// Temporal AA: jittered current frame blended into the reprojected history, clipped to the variance box of the
+// 3 x 3 neighbourhood (YCoCg, tone-mapped domain). params x: 1 = reset history, y: current-frame weight.
+float4 taa_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float2 t = px.texel.xy;
+    // Velocity of the nearest depth in a cross (keeps edges of moving objects from trailing).
+    float2 best = uv;
+    float zMin = depthLin.SampleLevel(dls, uv, 0).r;
+    const float2 offs[4] = {float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1)};
+    for (int i = 0; i < 4; ++i) {
+        const float2 o = uv + offs[i] * t;
+        const float zo = depthLin.SampleLevel(dls, o, 0).r;
+        if (zo < zMin) { zMin = zo; best = o; }
+    }
+    const float2 vel = velTex.SampleLevel(vps, best, 0).xy;
+    float3 m1 = ((float3)(0.0)), m2 = ((float3)(0.0));
+    float3 center = ((float3)(0.0));
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            const float3 c = rgbToYCoCg(tmap(cur.SampleLevel(cls, uv + float2(x, y) * t, 0).rgb));
+            if (x == 0 && y == 0) center = c;
+            m1 += c;
+            m2 += c * c;
+        }
+    }
+    const float2 huv = uv - vel;
+    if (px.params.x > 0.5 || any(huv < 0.0) || any(huv > 1.0))
+        return float4(itmap(yCoCgToRgb(center)), 1.0);
+    const float3 mu = m1 / 9.0;
+    const float3 sigma = sqrt(abs(m2 / 9.0 - mu * mu));
+    const float3 bmin = mu - sigma * 1.1, bmax = mu + sigma * 1.1;
+    float3 h = rgbToYCoCg(tmap(historyCatmullRom(huv, 1.0 / t)));
+    // Clip toward the box centre (not a per-channel clamp: keeps the hue).
+    const float3 hc = 0.5 * (bmax + bmin), he = 0.5 * (bmax - bmin) + 1e-5;
+    const float3 dv = (h - hc) / he;
+    const float ma = max(abs(dv.x), max(abs(dv.y), abs(dv.z)));
+    if (ma > 1.0) h = hc + (h - hc) / ma;
+    const float speed = length(vel / t);
+    const float a = lerp(px.params.y, 0.3, saturate(speed / 40.0));
+    return float4(max(itmap(yCoCgToRgb(lerp(h, center, a))), 0.0), 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_motion_blur_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+Texture2D<float4> velTex : TEX(1);
+SamplerState vps : SMP(1);
+Texture2D<float4> depthLin : TEX(2);
+SamplerState dls : SMP(2);
+
+// Camera and per-object motion blur along the pixel's velocity. params x: shutter (share of the frame), y: max
+// length (pixels), z: samples. Closer samples count only if their own motion reaches this pixel, so a sharp vehicle
+// in front of a blurred background stays sharp and does not smear into it.
+float4 motion_blur_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float3 c0 = cur.SampleLevel(cls, uv, 0).rgb;
+    const float2 tpx = px.texel.xy;
+    float2 v = velTex.SampleLevel(vps, uv, 0).xy * px.params.x;
+    float lenPx = length(v / tpx);
+    if (lenPx < 0.75) return float4(c0, 1.0);
+    if (lenPx > px.params.y) { v *= px.params.y / lenPx; lenPx = px.params.y; }
+    const float z0 = depthLin.SampleLevel(dls, uv, 0).r;
+    const float n = px.params.z;
+    const float j = ign(vin.position.xy) - 0.5;
+    float3 sum = c0;
+    float wsum = 1.0;
+    for (int i = 0; i < 16; ++i) {
+        if (float(i) >= n) break;
+        const float s = (float(i) + 0.5 + j) / n - 0.5;
+        if (abs(s) < 1e-3) continue;
+        const float2 suv = uv + v * s;
+        const float zs = depthLin.SampleLevel(dls, suv, 0).r;
+        const float distPx = abs(s) * lenPx;
+        float w = 1.0;
+        if (zs < z0 * 0.98) {
+            const float vs = length(velTex.SampleLevel(vps, suv, 0).xy * px.params.x / tpx);
+            w = saturate(vs - distPx + 1.0);
+        }
+        sum += cur.SampleLevel(cls, suv, 0).rgb * w;
+        wsum += w;
+    }
+    return float4(sum / wsum, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_dof_blur_fs) || defined(TF_ENTRY_dof_fs)
+// Circle of confusion (target pixels) at view distance z: params x: focus distance (m), y: aperture (blur at
+// infinity, share of the max radius), z: max radius (half-res pixels), w: near blur scale.
+float dofCoc(float z) {
+    const float c = (z - px.params.x) / max(z, 1e-3);
+    return clamp(c * px.params.y * (c < 0.0 ? px.params.w : 1.0), -1.0, 1.0) * px.params.z;
+}
+#endif
+
+#if defined(TF_ENTRY_dof_blur_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+Texture2D<float4> depthLin : TEX(1);
+SamplerState dls : SMP(1);
+
+// Half-resolution gather over a golden-angle disc; a tap counts where its own blur reaches this pixel, background
+// taps no farther than this pixel's own blur (no sharp foreground smeared outward). a: |CoC| / max radius.
+float4 dof_blur_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float c0 = abs(dofCoc(depthLin.SampleLevel(dls, uv, 0).r));
+    const float z0 = depthLin.SampleLevel(dls, uv, 0).r;
+    const float R = px.params.z;
+    float3 sum = cur.SampleLevel(cls, uv, 0).rgb;
+    float wsum = 1.0;
+    const float rot = ign(vin.position.xy) * 6.2831853;
+    for (int i = 0; i < 16; ++i) {
+        const float r = sqrt((float(i) + 0.5) / 16.0) * R;
+        const float a = float(i) * 2.39996323 + rot;
+        const float2 suv = uv + float2(cos(a), sin(a)) * r * px.texel.zw;
+        const float zs = depthLin.SampleLevel(dls, suv, 0).r;
+        float cs = abs(dofCoc(zs));
+        if (zs > z0) cs = min(cs, c0);
+        const float w = saturate(cs - r + 1.0);
+        sum += cur.SampleLevel(cls, suv, 0).rgb * w;
+        wsum += w;
+    }
+    return float4(sum / wsum, c0 / max(R, 1e-3));
+}
+#endif
+
+#if defined(TF_ENTRY_dof_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+Texture2D<float4> blurred : TEX(1);
+SamplerState bls : SMP(1);
+Texture2D<float4> depthLin : TEX(2);
+SamplerState dls : SMP(2);
+
+float4 dof_fs(FullscreenOut vin) : SV_Target0 {
+    const float3 sharp = cur.SampleLevel(cls, vin.uv, 0).rgb;
+    const float4 b = blurred.SampleLevel(bls, vin.uv, 0);
+    const float coc = abs(dofCoc(depthLin.SampleLevel(dls, vin.uv, 0).r));
+    const float a = smoothstep(0.4, 1.6, max(coc, b.a * px.params.z * 0.7));
+    return float4(lerp(sharp, b.rgb, a), 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_lum_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+
+// 64 x 64 log2 luminance after the base exposure (params x), 4 bilinear taps per texel.
+float4 lum_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 h = px.texel.zw * 0.25;
+    float s = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const float2 o = float2((i & 1) != 0 ? h.x : -h.x, (i & 2) != 0 ? h.y : -h.y);
+        s += log2(max(luminance(cur.SampleLevel(cls, vin.uv + o, 0).rgb) * px.params.x, 1e-4));
+    }
+    return float4(s * 0.25, 0.0, 0.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_adapt_fs)
+Texture2D<float4> lumTex : TEX(0);
+SamplerState lls : SMP(0);
+Texture2D<float4> prevTex : TEX(1);
+SamplerState pls : SMP(1);
+
+// 1 x 1: centre-weighted mean log luminance, adapted from the previous value. params x: blend (1 = snap).
+float4 adapt_fs(FullscreenOut vin) : SV_Target0 {
+    float s = 0.0, ws = 0.0;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            const float2 uv = (float2(x, y) + 0.5) / 16.0;
+            const float2 q = uv - float2(0.5, 0.55);
+            const float w = 1.0 - saturate(dot(q, q) * 2.2);
+            s += lumTex.SampleLevel(lls, uv, 0).r * w;
+            ws += w;
+        }
+    }
+    const float target = s / ws;
+    const float prev = prevTex.Load(int3(0, 0, 0)).r;
+    return float4(lerp(prev, target, px.params.x), 0.0, 0.0, 1.0);
+}
+#endif
+
+#if defined(TF_ENTRY_shafts_fs)
+Texture2D<float4> cur : TEX(0);
+SamplerState cls : SMP(0);
+Texture2D<float4> depthLin : TEX(1);
+SamplerState dls : SMP(1);
+
+// Sun shafts (half resolution): radial march toward the sun over the bright sky only, so trees, ridges and the
+// vehicle cut dark wedges into the glow. params x: threshold, y: decay per step, z: steps.
+float4 shafts_fs(FullscreenOut vin) : SV_Target0 {
+    const float2 uv = vin.uv;
+    const float2 d = px.sun.xy - uv;
+    const float n = px.params.z;
+    const float2 stp = d / n;
+    const float j = ign(vin.position.xy + px.params2.x * 3.17);
+    float2 suv = uv + stp * j;
+    float acc = 0.0, decay = 1.0;
+    for (int i = 0; i < 32; ++i) {
+        if (float(i) >= n) break;
+        if (all(suv > 0.0) && all(suv < 1.0)) {
+            const float sky = depthLin.SampleLevel(dls, suv, 0).r > px.depthParams.w * 0.5 ? 1.0 : 0.0;
+            acc += sky * max(luminance(cur.SampleLevel(cls, suv, 0).rgb) - px.params.x, 0.0) * decay;
+        }
+        decay *= px.params.y;
+        suv += stp;
+    }
+    const float fall = saturate(1.0 - length(d * float2(px.texel.y / px.texel.x, 1.0)) * 1.4);
+    return float4(px.sunColor.rgb * (acc / n) * px.sun.z * fall, 1.0);
 }
 #endif
 

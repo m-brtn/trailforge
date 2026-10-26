@@ -289,11 +289,41 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
             edited = true;
         }
     }
+    if (ImGui::CollapsingHeader("Post effects", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (s.msaa > 1)
+            ImGui::TextDisabled("TAA, AO, motion blur, sun shafts and depth of field need MSAA off.");
+        edited |= ImGui::Checkbox("TAA", &s.taa);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110.0f);
+        gfx.changed |= ImGui::SliderFloat("Sharpen", &s.sharpen, 0.0f, 1.0f, "%.2f");
+        edited |= ImGui::Checkbox("Water refraction", &s.waterRefraction);
+        ImGui::SameLine();
+        edited |= ImGui::Checkbox("Water SSR", &s.waterSsr);
+        const char* aoNames[] = {"Off", "GTAO 2x4 (half res)", "GTAO 3x6 (half res)"};
+        edited |= ImGui::Combo("Ambient occlusion", &s.ao, aoNames, 3);
+        gfx.changed |= ImGui::SliderFloat("AO strength", &s.aoStrength, 0.0f, 3.0f, "%.2f");
+        edited |= ImGui::SliderFloat("Motion blur (shutter)", &s.motionBlur, 0.0f, 1.0f, "%.2f");
+        edited |= ImGui::SliderFloat("Sun shafts", &s.sunShafts, 0.0f, 2.0f, "%.2f");
+        edited |= ImGui::SliderFloat("Lens flare", &s.lensFlare, 0.0f, 2.0f, "%.2f");
+        edited |= ImGui::Checkbox("Auto exposure", &s.autoExposure);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%+.2f EV", stats.autoExposureEv);
+        edited |= ImGui::Checkbox("Depth of field (menus, garage)", &s.dof);
+        edited |= ImGui::SliderFloat("Depth of field while driving", &s.dofDriving, 0.0f, 1.0f, "%.2f");
+        const char* curves[] = {"ACES (fitted)", "AgX (punchy)"};
+        gfx.changed |= ImGui::Combo("Tonemap", &s.tonemapper, curves, 2);
+        gfx.changed |= ImGui::SliderFloat("Colour grade", &s.grade, 0.0f, 1.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Vignette", &s.vignette, 0.0f, 1.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Film grain", &s.grain, 0.0f, 0.1f, "%.3f");
+        gfx.changed |= ImGui::SliderFloat("Chromatic aberration", &s.chromaticAberration, 0.0f, 1.0f, "%.2f");
+    }
     if (ImGui::CollapsingHeader("Look", ImGuiTreeNodeFlags_DefaultOpen)) {
         drawTimeOfDay(gfx);
         gfx.changed |= ImGui::SliderFloat("Exposure", &s.exposure, 0.3f, 3.0f, "%.2f");
         gfx.changed |= ImGui::SliderFloat("Sun path heading [deg]", &s.sunHeadingDeg, 0.0f, 360.0f, "%.0f");
         gfx.changed |= ImGui::SliderFloat("Fog density", &s.fogDensity, 0.0f, 4.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Valley fog", &s.valleyFog, 0.0f, 3.0f, "%.2f");
+        gfx.changed |= ImGui::SliderFloat("Scattering sky", &s.atmosphere, 0.0f, 1.0f, "%.2f");
         gfx.changed |= ImGui::SliderFloat("Bloom strength", &s.bloomStrength, 0.0f, 0.2f, "%.3f");
         gfx.changed |= ImGui::Checkbox("1 m ground grid", &s.groundGrid);
         ImGui::Checkbox("Headlights (H)", &gfx.headlights);

@@ -1082,6 +1082,7 @@ void Application::renderFrame(float frameTime) {
     stats.grassBlades = rs.grassBlades;
     stats.reflection = rs.reflectionRendered;
     stats.maxMsaa = m_renderer->maxMsaa();
+    stats.autoExposureEv = rs.autoExposureEv;
     stats.markUploadBytes = rs.markUploadBytes;
     m_gfx.sprayDrawn = rs.sprayParticles;
     const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
@@ -1169,6 +1170,8 @@ void Application::renderFrame(float frameTime) {
         // Open world: thinner fog over kilometers, longer shadow cascades, no planar puddle reflection.
         frame.fogDensity = 0.00045f;
         frame.fogFalloff = 0.004f;
+        frame.valleyFog = 0.001f;
+        frame.valleyFogBase = 15.0f;
         frame.shadowScale = 2.0f;
         frame.waterReflection = false;
         frame.skyMountains = false;
@@ -1210,6 +1213,17 @@ void Application::renderFrame(float frameTime) {
         const float step = frameTime / 0.25f;
         m_menuBlur = m_menuBlur < target ? std::min(target, m_menuBlur + step) : std::max(target, m_menuBlur - step);
         frame.blur = m_menuBlur;
+        // Depth of field on the vehicle: the start menu backdrop and the garage; optional (subtle) while driving.
+        const Screen sc = m_flow.screen();
+        const bool showcase = sc == Screen::Garage || (sc == Screen::MainMenu && target == 0.0f);
+        const float dofTarget = showcase && m_gfx.settings.dof ? 0.5f
+                                : sc == Screen::Playing ? 0.25f * m_gfx.settings.dofDriving
+                                                        : 0.0f;
+        const float dofStep = frameTime / 0.4f;
+        m_dofAmount = m_dofAmount < dofTarget ? std::min(dofTarget, m_dofAmount + dofStep)
+                                              : std::max(dofTarget, m_dofAmount - dofStep);
+        frame.dofAmount = m_dofAmount;
+        frame.dofFocus = m_dofAmount > 0.0f ? glm::length(glm::vec3(bodyM[3]) - m_camera.position()) : 0.0f;
     }
     if (!m_options.capturePath.empty() && !m_captured && m_time >= m_options.captureAtSeconds) {
         frame.capturePath = m_options.capturePath.c_str();
@@ -2014,6 +2028,12 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         }
         return Exec::Failed;
     }
+    if (c.op == "post_bench") {
+        // post_bench PASS N: record that post pass N times per frame (GPU cost measurement), N = 1 ends it.
+        if (c.args.size() < 2) return Exec::Failed;
+        m_renderer->setPostBench(c.args[0], std::atoi(c.args[1].c_str()));
+        return Exec::Done;
+    }
     if (c.op == "set") {
         if (c.args.size() < 2) return Exec::Failed;
         const float v = float(std::atof(c.args[1].c_str()));
@@ -2039,14 +2059,33 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "spray_dust") s.sprayDust = v != 0.0f;
         else if (k == "exposure") s.exposure = v;
         else if (k == "fog") s.fogDensity = v;
+        else if (k == "water_refraction") s.waterRefraction = v != 0.0f;
+        else if (k == "water_ssr") s.waterSsr = v != 0.0f;
+        else if (k == "valley_fog") s.valleyFog = v;
+        else if (k == "atmosphere") s.atmosphere = v;
         else if (k == "tree_dist") s.treeDistance = v;
         else if (k == "tree_detail") s.treeDetailDistance = v;
         else if (k == "terrain_detail") s.terrainDetail = v;
         else if (k == "terrain_tex") s.terrainTextureSize = int(v);
+        else if (k == "taa") s.taa = v != 0.0f;
+        else if (k == "ao") s.ao = int(v);
+        else if (k == "motion_blur") s.motionBlur = v;
+        else if (k == "shafts") s.sunShafts = v;
+        else if (k == "flare") s.lensFlare = v;
+        else if (k == "auto_exposure") s.autoExposure = v != 0.0f;
+        else if (k == "dof") s.dof = v != 0.0f;
+        else if (k == "dof_driving") s.dofDriving = v;
         else {
             render = false;
             // Look-only settings: they do not turn the quality preset into Custom.
             if (k == "tod") { s.timeOfDay = v; m_gfx.changed = true; }
+            else if (k == "tonemap") { s.tonemapper = int(v); m_gfx.changed = true; }
+            else if (k == "grade") { s.grade = v; m_gfx.changed = true; }
+            else if (k == "ao_strength") { s.aoStrength = v; m_gfx.changed = true; }
+            else if (k == "vignette") { s.vignette = v; m_gfx.changed = true; }
+            else if (k == "grain") { s.grain = v; m_gfx.changed = true; }
+            else if (k == "chromatic") { s.chromaticAberration = v; m_gfx.changed = true; }
+            else if (k == "sharpen") { s.sharpen = v; m_gfx.changed = true; }
             else if (k == "sun_heading") { s.sunHeadingDeg = v; m_gfx.changed = true; }
             else if (k == "tod_speed") m_gfx.timeLapseSpeed = v;
             else if (k == "tod_run") m_gfx.timeLapse = v != 0.0f;
@@ -2273,6 +2312,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "garage_scroll") return m_menu.garageScroll();
     if (n == "menu_fade") return m_flow.menuFade();
     if (n == "menu_blur") return m_menuBlur;
+    if (n == "dof_amount") return m_dofAmount;
     if (n == "menu_font") return m_menu.fontsLoaded() ? 1.0 : 0.0;
     if (n == "menu_logo") return m_menu.logoLoaded() ? 1.0 : 0.0;
     if (n.rfind("setting_", 0) == 0) {
@@ -2470,6 +2510,14 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (n == "tile_z") return tt->tileIndexOf(float(p.GetZ()));
     }
     if (n == "msaa") return m_renderer->settings().msaa;
+    if (n == "post_taa") return m_renderer->stats().taa ? 1.0 : 0.0;
+    if (n == "post_ao") return m_renderer->stats().ao ? 1.0 : 0.0;
+    if (n == "post_motion_blur") return m_renderer->stats().motionBlur ? 1.0 : 0.0;
+    if (n == "post_dof") return m_renderer->stats().dof ? 1.0 : 0.0;
+    if (n == "post_shafts") return m_renderer->stats().shafts ? 1.0 : 0.0;
+    if (n == "post_velocity_objects") return m_renderer->stats().velocityObjects;
+    if (n == "auto_exposure_ev") return m_renderer->stats().autoExposureEv;
+    if (n == "scene_log_lum") return m_renderer->stats().sceneLogLum;
     if (n == "grass_blades") return double(m_renderer->stats().grassBlades);
     if (n == "marks") return double(m_sim.tireMarks().size());
     if (n == "spray") return double(m_spray.size());

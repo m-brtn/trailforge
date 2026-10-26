@@ -52,7 +52,7 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
 
-Shaders: `shaders/scene.hlsl` is the only shader source (36 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
+Shaders: `shaders/scene.hlsl` is the only shader source (49 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
 register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
 tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
 MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->

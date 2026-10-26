@@ -41,6 +41,7 @@ struct FrameStats {
     bool reflection = false;
     int maxMsaa = 1;
     unsigned markUploadBytes = 0; // tire mark bytes uploaded in the last frame
+    float autoExposureEv = 0.0f;  // auto exposure correction on top of the time-of-day exposure
 };
 
 // Graphics panel state (owned by the application, edited by the UI).

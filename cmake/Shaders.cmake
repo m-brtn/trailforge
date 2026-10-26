@@ -27,7 +27,9 @@ set(TRAILFORGE_SHADER_ENTRIES
     line_fs:fragment bloom_down_fs:fragment bloom_up_fs:fragment tonemap_fs:fragment fxaa_fs:fragment
     blur_down_fs:fragment blur_up_fs:fragment blur_composite_fs:fragment terrain_vs:vertex terrain_shadow_vs:vertex
     terrain_fs:fragment model_vs:vertex model_fs:fragment model_shadow_vs:vertex model_shadow_fs:fragment
-    impostor_vs:vertex impostor_fs:fragment)
+    impostor_vs:vertex impostor_fs:fragment lindepth_fs:fragment gtao_fs:fragment ao_blur_fs:fragment
+    velocity_fs:fragment velocity_obj_vs:vertex velocity_obj_fs:fragment taa_fs:fragment motion_blur_fs:fragment
+    dof_blur_fs:fragment dof_fs:fragment lum_fs:fragment adapt_fs:fragment shafts_fs:fragment)
 
 set(_metal_ok OFF)
 if(APPLE)
