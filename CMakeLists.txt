@@ -187,6 +187,10 @@ if(TRAILFORGE_BUILD_TESTS)
             level_road_carving
             level_surfaces_water
             level_vehicles
+            level_prop_winding
+            level_bridges
+            level_placement
+            level_grass_clear
             terrain_textures_ktx2
             terrain_textures_assets)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})

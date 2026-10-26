@@ -12,7 +12,10 @@
 
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 
 #include <algorithm>
 #include <chrono>
@@ -252,6 +255,15 @@ void levelRoadCarving() {
                     for (const RoadSample& q : o.samples)
                         junction = junction || std::hypot(q.x - s.x, q.z - s.z) < 0.5f * (o.width + r.width) + 8.0f;
             if (junction) continue;
+            // The deck ramps (3 m into the banks) are the running surface there, checked by level_bridges.
+            bool ramp = false;
+            for (const LevelBridge& b : L.bridges()) {
+                const float len = b.length(), dx = (b.x1 - b.x0) / len, dz = (b.z1 - b.z0) / len;
+                const float along = (s.x - b.x0) * dx + (s.z - b.z0) * dz;
+                const float lat = std::abs((s.x - b.x0) * dz - (s.z - b.z0) * dx);
+                ramp = ramp || (along > -LevelBridge::kRamp - 2.0f && along < len + LevelBridge::kRamp + 2.0f && lat < b.halfWidth);
+            }
+            if (ramp) continue;
             ++samples;
             if (std::abs(L.heightAt(s.x, s.z) - s.y) > worstCenter) {
                 wx = s.x;
@@ -370,6 +382,26 @@ int wheelsInContact(const Simulation& sim) {
     return n;
 }
 
+// The vehicle body shape touches static geometry (both triangle faces count; the wheels are casts, not part of it).
+bool chassisTouches(Simulation& sim) {
+    PhysicsWorld& w = sim.world();
+    const JPH::BodyID id = sim.vehicle().bodyId();
+    JPH::RefConst<JPH::Shape> shape;
+    JPH::RMat44 xf;
+    {
+        JPH::BodyLockRead lock(w.system().GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return false;
+        shape = lock.GetBody().GetShape();
+        xf = lock.GetBody().GetCenterOfMassTransform();
+    }
+    JPH::CollideShapeSettings cs;
+    cs.mBackFaceMode = JPH::EBackFaceMode::CollideWithBackFaces;
+    JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> hit;
+    w.system().GetNarrowPhaseQuery().CollideShape(shape, JPH::Vec3::sReplicate(1.0f), xf, cs, xf.GetTranslation(), hit, {},
+                                                  {}, JPH::IgnoreSingleBodyFilter(id));
+    return hit.HadHit();
+}
+
 // A dry, gentle point near the Alpine Lake marker facing at least 32 m of lake deeper than 1.5 m.
 std::optional<TrackFeature> lakeShore(const Level& L) {
     const LevelPoi* lake = nullptr;
@@ -483,6 +515,295 @@ void levelVehicles() {
           "switch back");
 }
 
+// Triangles of one convex piece that face toward its vertex centroid. Jolt's wheel casts ignore back faces, so an
+// inverted piece carries the chassis but not the wheels.
+int inwardTriangles(const TrackGeometry& g, std::size_t first, std::size_t last) {
+    JPH::Vec3 c = JPH::Vec3::sZero();
+    for (std::size_t v = 3 * first; v < 3 * last; ++v) c += JPH::Vec3(g.positions[v]);
+    c /= float(3 * (last - first));
+    int bad = 0;
+    for (std::size_t t = first; t < last; ++t) {
+        const JPH::Vec3 a(g.positions[3 * t]), b(g.positions[3 * t + 1]), d(g.positions[3 * t + 2]);
+        const JPH::Vec3 n = (b - a).Cross(d - a);
+        if (n.Length() < 1e-6f) continue;
+        bad += n.Normalized().Dot(a - c) < -1e-3f;
+    }
+    return bad;
+}
+
+void levelPropWinding() {
+    const Level& L = *level();
+    const LevelProps& props = L.props();
+    int pieces = 0, inverted = 0, badTris = 0;
+    for (std::size_t k = 0; k < props.pieceStarts.size(); ++k) {
+        const std::size_t first = props.pieceStarts[k];
+        const std::size_t last = k + 1 < props.pieceStarts.size() ? props.pieceStarts[k + 1] : props.geometry.triangleCount();
+        if (last <= first) continue;
+        ++pieces;
+        const int bad = inwardTriangles(props.geometry, first, last);
+        if (bad > 0 && inverted < 5) {
+            const JPH::Vec3 p(props.geometry.positions[3 * first]);
+            std::printf("  piece %zu at %.0f %.1f %.0f: %d of %zu triangles face inward\n", k, p.GetX(), p.GetY(),
+                        p.GetZ(), bad, last - first);
+        }
+        inverted += bad > 0;
+        badTris += bad;
+    }
+    CHECK(inverted == 0, "%d of %d prop pieces have %d inward triangles", inverted, pieces, badTris);
+    int rocks = 0, trunks = 0;
+    for (const LevelRock& r : L.rocks()) {
+        TrackGeometry g;
+        addLevelRock(g, r);
+        rocks += inwardTriangles(g, 0, g.triangleCount()) > 0;
+    }
+    for (std::size_t i = 0; i < L.trees().size(); i += 7) {
+        TrackGeometry g;
+        addLevelTrunk(g, L.trees()[i]);
+        trunks += inwardTriangles(g, 0, g.triangleCount()) > 0;
+    }
+    CHECK(rocks == 0 && trunks == 0, "inverted rocks %d, trunks %d", rocks, trunks);
+    std::printf("  %d prop pieces, %zu rocks, %zu trunks (every 7th) wound outward\n", pieces, L.rocks().size(),
+                (L.trees().size() + 6) / 7);
+}
+
+// Placement: no building, prop, rock or tree trunk within its margin of a road (bridges excepted: they carry the
+// roads), no building in water or on a spawn / teleport point.
+struct Xz {
+    float x, z;
+};
+
+std::vector<Xz> convexHull(std::vector<Xz> p) {
+    std::sort(p.begin(), p.end(), [](const Xz& a, const Xz& b) { return a.x < b.x || (a.x == b.x && a.z < b.z); });
+    const auto cross = [](const Xz& o, const Xz& a, const Xz& b) { return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x); };
+    std::vector<Xz> h(2 * p.size());
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        while (k >= 2 && cross(h[k - 2], h[k - 1], p[i]) <= 0.0f) --k;
+        h[k++] = p[i];
+    }
+    for (std::size_t i = p.size() - 1, t = k + 1; i > 0; --i) {
+        while (k >= t && cross(h[k - 2], h[k - 1], p[i - 1]) <= 0.0f) --k;
+        h[k++] = p[i - 1];
+    }
+    h.resize(k > 1 ? k - 1 : k);
+    return h;
+}
+
+// Distance from a point to a convex polygon (counter-clockwise), 0 inside.
+float polygonDistance(const std::vector<Xz>& poly, Xz q) {
+    bool inside = poly.size() >= 3;
+    float best = 1e30f;
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+        const Xz a = poly[i], b = poly[(i + 1) % poly.size()];
+        const float ex = b.x - a.x, ez = b.z - a.z, px = q.x - a.x, pz = q.z - a.z;
+        if (ex * pz - ez * px < 0.0f) inside = false;
+        const float t = std::clamp((px * ex + pz * ez) / std::max(1e-9f, ex * ex + ez * ez), 0.0f, 1.0f);
+        best = std::min(best, std::hypot(px - ex * t, pz - ez * t));
+    }
+    return inside ? 0.0f : best;
+}
+
+// Road center line points every 0.5 m with the half width.
+struct RoadPoint {
+    float x, z, hw;
+};
+std::vector<RoadPoint> roadPoints(const Level& L) {
+    std::vector<RoadPoint> pts;
+    for (const LevelRoad& r : L.roads())
+        for (std::size_t i = 0; i + 1 < r.samples.size(); ++i) {
+            const RoadSample &a = r.samples[i], &b = r.samples[i + 1];
+            const int n = std::max(1, int(std::hypot(b.x - a.x, b.z - a.z) / 0.5f));
+            for (int k = 0; k < n; ++k) {
+                const float t = float(k) / float(n);
+                pts.push_back({a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, 0.5f * r.width});
+            }
+        }
+    return pts;
+}
+
+void levelPlacement() {
+    const Level& L = *level();
+    const LevelProps& props = L.props();
+    const std::vector<RoadPoint> road = roadPoints(L);
+    const auto roadClearance = [&](const std::vector<Xz>& hull, float x0, float z0, float x1, float z1) {
+        float best = 1e30f;
+        for (const RoadPoint& p : road) {
+            if (p.x < x0 - 60.0f || p.x > x1 + 60.0f || p.z < z0 - 60.0f || p.z > z1 + 60.0f) continue;
+            best = std::min(best, polygonDistance(hull, {p.x, p.z}) - p.hw);
+        }
+        return best;
+    };
+    int counts[4] = {}, bad[4] = {};
+    const char* names[4] = {"bridge", "building", "prop", "rock"};
+    for (std::size_t k = 0; k < props.pieceStarts.size(); ++k) {
+        const std::size_t first = props.pieceStarts[k];
+        const std::size_t last = k + 1 < props.pieceStarts.size() ? props.pieceStarts[k + 1] : props.geometry.triangleCount();
+        const PropRole role = props.pieceRoles[k];
+        if (last <= first || role == PropRole::Bridge) continue;
+        std::vector<Xz> pts;
+        float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
+        for (std::size_t v = 3 * first; v < 3 * last; ++v) {
+            const Xz p{props.geometry.positions[v].x, props.geometry.positions[v].z};
+            pts.push_back(p);
+            x0 = std::min(x0, p.x), z0 = std::min(z0, p.z), x1 = std::max(x1, p.x), z1 = std::max(z1, p.z);
+        }
+        const std::vector<Xz> hull = convexHull(pts);
+        const float margin = role == PropRole::Building ? 3.0f : role == PropRole::Rock ? 2.0f : 1.5f;
+        const float clear = roadClearance(hull, x0, z0, x1, z1);
+        bool ok = clear >= margin;
+        if (role == PropRole::Building) {
+            for (const Xz& p : hull) ok = ok && !L.waterAt(p.x, p.z);
+            for (const TrackFeature& f : L.features())
+                ok = ok && polygonDistance(hull, {f.position.GetX(), f.position.GetZ()}) > 6.0f;
+        }
+        ++counts[int(role)];
+        if (!ok) {
+            if (bad[int(role)] < 6)
+                std::printf("  %s piece %zu at %.0f %.0f: %.1f m from a road (margin %.1f)\n", names[int(role)], k,
+                            0.5f * (x0 + x1), 0.5f * (z0 + z1), clear, margin);
+            ++bad[int(role)];
+        }
+    }
+    for (int r = 1; r < 4; ++r) CHECK(bad[r] == 0, "%d of %d %s pieces too close to a road, in water or on a spawn point", bad[r], counts[r], names[r]);
+    int trees = 0, rocks = 0;
+    for (const LevelTree& t : L.trees()) {
+        const float trunk = 0.022f * t.height * t.width;
+        std::vector<Xz> c{{t.x, t.z}};
+        trees += roadClearance(c, t.x, t.z, t.x, t.z) - trunk < 2.0f;
+    }
+    for (const LevelRock& r : L.rocks()) {
+        std::vector<Xz> c{{r.x, r.z}};
+        rocks += roadClearance(c, r.x, r.z, r.x, r.z) - std::max(r.rx, r.rz) < 2.0f;
+    }
+    CHECK(trees == 0 && rocks == 0, "%d trees, %d rocks within 2 m of a road", trees, rocks);
+    std::printf("  clear of the roads: %d buildings, %d props, %d rock props, %zu trees, %zu rocks (%zu road points); "
+                "placement moved %d, removed %d\n",
+                counts[1], counts[2], counts[3], L.trees().size(), L.rocks().size(), road.size(),
+                L.bakeStats().propsMoved, L.bakeStats().propsRemoved);
+}
+
+// Every bridge, both vehicles: from the road 30 m before the deck across to 15 m past it, on the wheels.
+void levelBridges() {
+    const Level& L = *level();
+    struct Crossing {
+        const LevelRoad* road;
+        std::size_t first, last; // deck samples
+    };
+    std::vector<Crossing> crossings;
+    for (const LevelRoad& r : L.roads())
+        for (std::size_t i = 0; i < r.samples.size(); ++i) {
+            if (!r.samples[i].bridge || (i > 0 && r.samples[i - 1].bridge)) continue;
+            std::size_t j = i;
+            while (j + 1 < r.samples.size() && r.samples[j + 1].bridge) ++j;
+            crossings.push_back({&r, i, j});
+        }
+    // No terrain above the deck surface (ramps included; the outer 1.5 m of each ramp meets the road).
+    for (const LevelBridge& b : L.bridges()) {
+        const float len = b.length(), dx = (b.x1 - b.x0) / len, dz = (b.z1 - b.z0) / len;
+        float worst = -1e9f;
+        for (float sa = -LevelBridge::kRamp + 1.5f; sa <= len + LevelBridge::kRamp - 1.5f; sa += 0.5f)
+            for (float lat = -b.halfWidth; lat <= b.halfWidth; lat += 0.5f)
+                worst = std::max(worst, L.heightAt(b.x0 + dx * sa + dz * lat, b.z0 + dz * sa - dx * lat) - b.deckY(sa));
+        CHECK(worst < 0.0f, "bridge %.0f %.0f: terrain %.3f m above the deck", b.x0, b.z0, worst);
+        std::printf("  bridge %.0f m: terrain at least %.3f m below the deck, ramps %.2f / %.2f m\n", len, -worst,
+                    b.ya - b.y0, b.ye - b.y1);
+    }
+    CHECK(crossings.size() == L.bridges().size(), "%zu bridge crossings, %zu bridges", crossings.size(), L.bridges().size());
+    for (const char* id : {"trailforge_suv", "trailforge_ev"}) {
+        SimulationSettings s;
+        s.level = level();
+        s.vehicle = vehicle(id);
+        s.terrain.async = false;
+        Simulation sim(s);
+        for (const Crossing& c : crossings) {
+            for (int dir = 0; dir < 2; ++dir) {
+                const std::vector<RoadSample>& rs = c.road->samples;
+                // Sample index stepping in the driving direction.
+                auto at = [&](long k) { return &rs[std::size_t(std::clamp<long>(k, 0, long(rs.size()) - 1))]; };
+                const long step = dir == 0 ? 1 : -1;
+                const long deckIn = dir == 0 ? long(c.first) : long(c.last);
+                const long deckOut = dir == 0 ? long(c.last) : long(c.first);
+                const RoadSample* start = at(deckIn - step * 15); // ~30 m before the deck
+                const RoadSample* next = at(deckIn - step * 14);
+                TrackFeature f;
+                f.name = "bridge approach";
+                f.position = JPH::Vec3(start->x, start->y, start->z);
+                f.yaw = std::atan2(next->x - start->x, next->z - start->z);
+                sim.requestPlace(f);
+                DriverIntent hold;
+                hold.brake = 1.0f;
+                sim.setIntent(hold);
+                runFor(sim, 2.0);
+                long cursor = deckIn - step * 15;
+                const RoadSample* exit = at(deckOut + step * 8);
+                int impacts = 0, deckTicks = 0, deckFullContact = 0, chassisTicks = 0;
+                float minDeckSpeed = 1e9f, minAbove = 1e9f;
+                const float rideHeight = sim.currentSnapshot().body.position.GetY() - start->y;
+                bool crossed = false;
+                double t = 0.0;
+                while (t < 40.0) {
+                    const JPH::Vec3 p = sim.currentSnapshot().body.position;
+                    const JPH::Quat q = sim.currentSnapshot().body.rotation;
+                    // Pure pursuit on the road center line, 8 m ahead.
+                    while (cursor != deckOut + step * 8) {
+                        const RoadSample* n = at(cursor);
+                        if (std::hypot(n->x - p.GetX(), n->z - p.GetZ()) > 8.0f &&
+                            (JPH::Vec3(n->x, 0, n->z) - JPH::Vec3(p.GetX(), 0, p.GetZ())).Dot(q * JPH::Vec3::sAxisZ()) > 0.0f)
+                            break;
+                        cursor += step;
+                    }
+                    const RoadSample* target = at(cursor);
+                    const JPH::Vec3 d(target->x - p.GetX(), 0.0f, target->z - p.GetZ());
+                    const float lateral = d.Dot(q * JPH::Vec3::sAxisX()), ahead = d.Dot(q * JPH::Vec3::sAxisZ());
+                    DriverIntent in;
+                    in.throttle = 0.5f;
+                    in.steer = std::clamp(-2.0f * std::atan2(lateral, std::max(ahead, 1.0f)), -1.0f, 1.0f);
+                    in.analog = true;
+                    sim.setIntent(in);
+                    sim.tick();
+                    t += sim.fixedStep();
+                    impacts += int(sim.bodyImpacts().size());
+                    // Over the deck (not the ramps into the banks): along the bridge between its end samples.
+                    const RoadSample* a = &rs[c.first];
+                    const RoadSample* b = &rs[c.last];
+                    const JPH::Vec3 ab(b->x - a->x, 0.0f, b->z - a->z);
+                    const float u = JPH::Vec3(p.GetX() - a->x, 0.0f, p.GetZ() - a->z).Dot(ab) / ab.LengthSq();
+                    if (u > 0.05f && u < 0.95f) {
+                        ++deckTicks;
+                        deckFullContact += wheelsInContact(sim) == 4;
+                        chassisTicks += chassisTouches(sim);
+                        minDeckSpeed = std::min(minDeckSpeed, sim.vehicle().telemetry().speed);
+                        const float deckY = a->y + (b->y - a->y) * u;
+                        minAbove = std::min(minAbove, p.GetY() - deckY);
+                    }
+                    if ((JPH::Vec3(p.GetX() - exit->x, 0, p.GetZ() - exit->z)).Dot(JPH::Vec3(exit->dx, 0, exit->dz)) *
+                            float(step) > 0.0f) {
+                        crossed = true;
+                        break;
+                    }
+                }
+                const float len = std::hypot(rs[c.last].x - rs[c.first].x, rs[c.last].z - rs[c.first].z);
+                CHECK(crossed && !sim.hadPhysicsError(), "%s: %s bridge (%.0f m) dir %d not crossed in %.1f s", id,
+                      c.road->name.c_str(), len, dir, t);
+                CHECK(deckTicks > 0 && deckFullContact >= deckTicks * 98 / 100,
+                      "%s: %s bridge dir %d: 4 wheels down %d of %d deck ticks", id, c.road->name.c_str(), dir,
+                      deckFullContact, deckTicks);
+                CHECK(impacts == 0 && chassisTicks == 0, "%s: %s bridge dir %d: %d chassis impacts, %d deck ticks touching",
+                      id, c.road->name.c_str(), dir, impacts, chassisTicks);
+                CHECK(minDeckSpeed > 4.0f, "%s: %s bridge dir %d: min speed on the deck %.1f m/s", id,
+                      c.road->name.c_str(), dir, minDeckSpeed);
+                CHECK(minAbove > rideHeight - 0.15f, "%s: %s bridge dir %d: body %.2f m above the deck (%.2f m on the road)",
+                      id, c.road->name.c_str(), dir, minAbove, rideHeight);
+                std::printf("  %s: %s bridge %.0f m dir %d: %.1f s, 4 wheels %d/%d deck ticks, min %.1f m/s, "
+                            "height %.2f (road %.2f) m, chassis impacts %d / touching %d ticks\n",
+                            id, c.road->name.c_str(), len, dir, t, deckFullContact, deckTicks, minDeckSpeed, minAbove,
+                            rideHeight, impacts, chassisTicks);
+            }
+        }
+        CHECK(sim.recoveries() == 0, "%s: %d recoveries on the bridges", id, sim.recoveries());
+    }
+}
+
 // KTX2 container: write / read round trip of a full BC7 mip chain, skipping the largest levels, structural errors
 // and the Git LFS pointer check; the level skip used by the quality presets.
 void terrainTexturesKtx2() {
@@ -577,6 +898,50 @@ void terrainTexturesAssets() {
     std::printf("  terrain textures: %.1f MB of BC7 data in 12 maps\n", double(total) / (1024.0 * 1024.0));
 }
 
+// Grass, flowers and wheat (mask R and A, sampled bilinearly like the grass shader) are zero on every road surface and
+// on every bridge deck with its ramps.
+void levelGrassClear() {
+    const Level& L = *level();
+    const int n = L.cells();
+    const auto& mask = L.maskTexels();
+    const float c0 = L.origin() + 0.5f * L.cell();
+    const auto sample = [&](float x, float z, int ch) {
+        const float fx = (x - c0) / L.cell(), fz = (z - c0) / L.cell();
+        const int i = std::clamp(int(std::floor(fx)), 0, n - 2), j = std::clamp(int(std::floor(fz)), 0, n - 2);
+        const float tx = std::clamp(fx - float(i), 0.0f, 1.0f), tz = std::clamp(fz - float(j), 0.0f, 1.0f);
+        const auto v = [&](int a, int b) {
+            return float((mask[std::size_t(b) * std::size_t(n) + std::size_t(a)] >> (8 * ch)) & 0xffu) / 255.0f;
+        };
+        return (v(i, j) * (1 - tx) + v(i + 1, j) * tx) * (1 - tz) + (v(i, j + 1) * (1 - tx) + v(i + 1, j + 1) * tx) * tz;
+    };
+    float worstRoad = 0.0f, worstDeck = 0.0f;
+    int roadPts = 0, deckPts = 0;
+    for (const LevelRoad& r : L.roads())
+        for (const RoadSample& s : r.samples) {
+            if (s.bridge || !L.insidePlayArea(s.x, s.z, 2.0f)) continue;
+            for (int k = -2; k <= 2; ++k) {
+                const float lat = 0.5f * r.width * float(k) / 2.0f;
+                const float x = s.x + s.dz * lat, z = s.z - s.dx * lat;
+                worstRoad = std::max({worstRoad, sample(x, z, 0), sample(x, z, 3)});
+                ++roadPts;
+            }
+        }
+    for (const LevelBridge& b : L.bridges()) {
+        const float len = b.length(), dx = (b.x1 - b.x0) / len, dz = (b.z1 - b.z0) / len;
+        for (float a = -LevelBridge::kRamp; a <= len + LevelBridge::kRamp; a += 0.5f)
+            for (int k = -2; k <= 2; ++k) {
+                const float lat = b.halfWidth * float(k) / 2.0f;
+                const float x = b.x0 + dx * a + dz * lat, z = b.z0 + dz * a - dx * lat;
+                worstDeck = std::max({worstDeck, sample(x, z, 0), sample(x, z, 3)});
+                ++deckPts;
+            }
+    }
+    CHECK(worstRoad < 0.5f / 255.0f, "grass / wheat %.4f on a road surface", worstRoad);
+    CHECK(worstDeck < 0.5f / 255.0f, "grass / wheat %.4f on a bridge deck", worstDeck);
+    std::printf("  grass clear: %d road points (max %.4f), %d deck points of %zu bridges (max %.4f)\n", roadPts,
+                worstRoad, deckPts, L.bridges().size(), worstDeck);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -586,6 +951,10 @@ int main(int argc, char** argv) {
         {"level_road_carving", levelRoadCarving},
         {"level_surfaces_water", levelSurfacesAndWater},
         {"level_vehicles", levelVehicles},
+        {"level_prop_winding", levelPropWinding},
+        {"level_bridges", levelBridges},
+        {"level_placement", levelPlacement},
+        {"level_grass_clear", levelGrassClear},
         {"terrain_textures_ktx2", terrainTexturesKtx2},
         {"terrain_textures_assets", terrainTexturesAssets},
     };
