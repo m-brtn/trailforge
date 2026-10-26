@@ -13,10 +13,10 @@
     "friction": 0.5,
     "angularDamping": 0.02
   },
-  "geometry": {"wheelBase": 2.80, "attachHeight": 0.05},
+  "geometry": {"wheelBase": 2.44, "attachHeight": 0.05},
   "axles": {
     "front": {
-      "track": 1.80,
+      "track": 1.77,
       "wheel": {"radius": 0.4155, "width": 0.285, "mass": 40, "inertia": 4.0, "angularDamping": 0.2, "rimRatio": 0.52, "tread": "all_terrain"},
       "suspension": {
         "frequency": 1.45, "compressionDamping": 0.50, "reboundDamping": 0.55,
@@ -27,7 +27,7 @@
       "handBrakeTorque": 0
     },
     "rear": {
-      "track": 1.80,
+      "track": 1.77,
       "wheel": {"radius": 0.4155, "width": 0.285, "mass": 40, "inertia": 4.0, "angularDamping": 0.2, "rimRatio": 0.52, "tread": "all_terrain"},
       "suspension": {
         "frequency": 1.45, "compressionDamping": 0.50, "reboundDamping": 0.55,

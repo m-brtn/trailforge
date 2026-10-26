@@ -88,6 +88,8 @@ struct FrameUniforms {
     float4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     float4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
     float4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
+    float4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
+    float4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
 };
 
 struct DrawUniforms {
@@ -626,8 +628,9 @@ float mudCover(float amount, float receptivity, float radial, float3 lp, float3 
     return smoothstep(0.0, 0.06, t);
 }
 
-// Spray mud on the body (BodyMud regions, cosmetic). Body space: +X left, +Z forward; arches centered at y = -0.20,
-// z = +-1.40, radius 0.545, outer skin at |x| = 0.88. Each region has a "need" field (how much coat a spot needs
+// Spray mud on the body (BodyMud regions, cosmetic). Body space: +X left, +Z forward; the arches, body side and
+// bumper zones come from the vehicle model (f.bodyMudArch / bodyMudBody; distances below are for a 0.545 m arch and
+// scale with it). Each region has a "need" field (how much coat a spot needs
 // before it is covered, 0 = first): the rear part of an arch fills from the liner facing the tire, the panel behind a
 // wheel from the sill upward, bumpers from the bottom edge. Returns rgb + cover, the wetness and grass flecks.
 struct BodyMudAcc {
@@ -668,13 +671,15 @@ float4 bodyMudCover(float3 P, float3 Nw, float receptivity, Texture2D<float4> no
     acc.wet = 0.0;
     acc.flecks = 0.0;
     acc.col = ((float3)(0.0));
+    const float archScale = 0.545 / f.bodyMudArch.w;
+    const float skin = f.bodyMudBody.x;
     for (int w = 0; w < 4; ++w) {
         const float sx = (w % 2 == 0) ? 1.0 : -1.0; // FL / RL on the left (+X)
-        const float zc = w < 2 ? 1.40 : -1.40;
-        if (p.x * sx < 0.30) continue;
-        const float2 d2 = float2(p.z - zc, p.y + 0.20);
-        const float d = length(d2);
-        const float facing = saturate(dot(nb, normalize(float3(sx * 0.90, -0.20, zc) - p)));
+        const float zc = w < 2 ? f.bodyMudArch.x : f.bodyMudArch.y;
+        if (p.x * sx < skin - 0.58) continue;
+        const float2 d2 = float2(p.z - zc, p.y - f.bodyMudArch.z);
+        const float d = length(d2) * archScale;
+        const float facing = saturate(dot(nb, normalize(float3(sx * (skin + 0.02), f.bodyMudArch.z, zc) - p)));
         if (d > 0.38 && d < 1.0) {
             // Arch: angle 0 straight behind (or ahead) of the axle, pi/2 at the top; spray hits ~25 deg up first.
             const float ring = 1.8 * saturate((d - 0.60) / 0.45) + 0.35 * (1.0 - facing);
@@ -685,12 +690,12 @@ float4 bodyMudCover(float3 P, float3 Nw, float receptivity, Texture2D<float4> no
         // Panel behind the wheel: from the arch edge backward (front: sill and lower rear door; rear: rear quarter).
         const float len = w < 2 ? 1.3 : 0.45;
         const float t = ((zc - 0.50) - p.z) / len;
-        if (t > -0.15 && t < 1.2 && p.x * sx > 0.45)
-            bodyMudAdd(acc, kMudBehindShader + w, 0.08 + 1.3 * saturate((p.y + 0.12) / 0.75) + 0.5 * saturate(t) +
+        if (t > -0.15 && t < 1.2 && p.x * sx > skin - 0.43)
+            bodyMudAdd(acc, kMudBehindShader + w, 0.08 + 1.3 * saturate((p.y - f.bodyMudArch.z - 0.08) / 0.75) + 0.5 * saturate(t) +
                                           2.0 * saturate(t - 1.0));
     }
-    if (p.z < -2.10) bodyMudAdd(acc, kMudRearBumperShader, 0.10 + 1.4 * saturate((p.y + 0.02) / 0.55) + (nb.z > -0.3 ? 0.15 : 0.0));
-    if (p.z > 2.15) bodyMudAdd(acc, kMudFrontBumperShader, 0.10 + 1.4 * saturate((p.y + 0.02) / 0.55) + (nb.z < 0.3 ? 0.15 : 0.0));
+    if (p.z < f.bodyMudBody.z) bodyMudAdd(acc, kMudRearBumperShader, 0.10 + 1.4 * saturate((p.y - f.bodyMudArch.z - 0.18) / 0.55) + (nb.z > -0.3 ? 0.15 : 0.0));
+    if (p.z > f.bodyMudBody.y) bodyMudAdd(acc, kMudFrontBumperShader, 0.10 + 1.4 * saturate((p.y - f.bodyMudArch.z - 0.18) / 0.55) + (nb.z < 0.3 ? 0.15 : 0.0));
     if (acc.best <= 0.0) return ((float4)(0.0));
     wet = acc.wet / acc.sum;
     flecks = acc.flecks / acc.sum;
