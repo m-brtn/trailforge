@@ -155,8 +155,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     const VehicleConfig& c = m_config;
 
     // ---- Body shape: the convex collision pieces of a Blender-authored body (body.glb COL_*), else convex hulls of
-    // the traced blueprint body (the render model's data), or the three boxes of VehicleShape.h for a model without
-    // a blueprint
+    // the traced blueprint body (bodyShape "traced", the render model's data), else the three boxes of VehicleShape.h
+    // that the kit body is built around
     StaticCompoundShapeSettings compound;
     if (!c.bodyHulls.empty()) {
         for (const auto& hull : c.bodyHulls) {
@@ -165,7 +165,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
             for (const auto& p : hull) points.push_back(Vec3(p[0], p[1], p[2]));
             compound.AddShape(Vec3::sZero(), Quat::sIdentity(), new ConvexHullShapeSettings(points, kBodyConvexRadius));
         }
-    } else if (const VehicleBlueprint* bp = findVehicleBlueprint(c.visualModel)) {
+    } else if (const VehicleBlueprint* bp = c.bodyShape == "traced" ? findVehicleBlueprint(c.visualModel) : nullptr) {
         for (const auto& part : BlueprintBody(*bp, c).collisionParts()) {
             Array<Vec3> points;
             points.reserve(part.size());

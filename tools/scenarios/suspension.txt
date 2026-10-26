@@ -1,8 +1,8 @@
 # Suspension articulation on the diagonal twister (screenshots to /tmp/trailforge_v_susp_*.png):
 #   ./build/release/trailforge --script tools/scenarios/suspension.txt
-# Stops on the twister and checks that the wheels articulate independently. Since v0.15 (shorter, narrower concept
-# body, no body contact on the twister) the car usually settles with all four wheels down, so the check is the
-# spread of the suspension lengths rather than a wheel in the air.
+# Stops on the twister and checks that the wheels articulate independently: the spread of the suspension lengths
+# (whether a wheel stays in the air depends on the body: the traced bodies of v0.15-v0.22 usually settled with all
+# four wheels down).
 set ui 0
 set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 teleport 2

@@ -86,7 +86,7 @@ set headlights 0
 vehicle trailforge_suv
 wait 2.5
 expect body_glb == 0
-expect body_triangles > 100000
+expect body_triangles > 15000          # kit body ~17.9k (the glb test body has < 10000)
 camera vehicle three_quarter 8 45
 wait 0.4
 capture /tmp/trailforge_vglb_procedural_34.png

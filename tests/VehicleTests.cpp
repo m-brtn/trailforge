@@ -228,6 +228,8 @@ void vehicleDefinitionValidation() {
            "tires.surfaceGrip.ice: unknown key");
     expect("unknown visual model", [](V& d) { d.object["visualModel"] = V::makeString("truck"); },
            "visualModel: unknown model 'truck'");
+    expect("unknown body shape", [](V& d) { d.object["bodyShape"] = V::makeString("voxel"); },
+           "bodyShape: unknown shape 'voxel'");
     expect("unknown audio profile", [](V& d) { d.object["audioProfile"] = V::makeString("truck"); },
            "audioProfile: unknown profile 'truck'");
     expect("tire sound out of range",
@@ -506,18 +508,9 @@ void suvDefinitionMatchesBuiltin() {
         a.rimRatio = 0.495f;
     }
     expected.tuning.finalDrive = 4.27f;
-    // v0.15: the concept sheet's wheelbase and track (2.56 m, 1.75 m; same front weight share, so the COM moves
-    // with the axles) and the v0.14 inertia written out (the traced collision shape no longer gives the same tensor).
-    const float share = 0.5f + expected.comForward / expected.wheelBase;
-    expected.wheelBase = 2.56f;
-    for (AxleConfig& a : expected.axles) a.track = 1.75f;
-    expected.hoodCamera = {0.0f, 0.92f, 0.38f}; // the roof line of the traced body
-    CHECK(std::abs(def.config.comForward - (share - 0.5f) * expected.wheelBase) < 1e-5f, "front weight share changed");
-    expected.comForward = def.config.comForward;
-    expected.inertia = {3121.0f, 3184.0f, 796.0f};
     std::printf("    comForward %.9g vs %.9g, layout %s, drag area %.2f m^2\n", def.config.comForward,
                 expected.comForward, driveLayoutName(def.config.layout), double(def.config.tuning.dragArea));
-    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires, final drive, wheelbase, track, inertia and hood camera");
+    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires and final drive");
 }
 
 

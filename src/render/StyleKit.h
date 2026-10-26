@@ -9,7 +9,7 @@
 #include <vector>
 
 // Shared procedural building blocks for the vehicle models: materials, panels, lights, wheels and
-// accessories. Everything is visual only; the body collision comes from the blueprint (vehicle/VehicleBlueprint.h).
+// accessories. Everything is visual only; the kit body collides as the boxes of vehicle/VehicleShape.h.
 // Body space: +X left, +Y up, +Z forward (meters).
 namespace tf::style {
 

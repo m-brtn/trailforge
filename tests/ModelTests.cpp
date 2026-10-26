@@ -33,13 +33,18 @@ int g_failures = 0;
         }                                                                       \
     } while (0)
 
-// Base configuration of every catalog vehicle (one per visual model at least).
+// Base configuration of every catalog vehicle (one per visual model at least), each also with the traced body
+// (bodyShape "traced"; the shipped vehicles use the kit body).
 std::vector<VehicleConfig> catalogConfigs() {
     std::vector<std::string> errors;
     std::vector<VehicleConfig> out;
-    for (const VehicleDefinition& d : loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors))
+    for (const VehicleDefinition& d : loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors)) {
+        CHECK(d.config.bodyShape == "kit", "%s: bodyShape '%s'", d.config.id.c_str(), d.config.bodyShape.c_str());
         out.push_back(d.config);
-    CHECK(errors.empty() && out.size() >= 2, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
+        out.push_back(d.config);
+        out.back().bodyShape = "traced";
+    }
+    CHECK(errors.empty() && out.size() >= 4, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
     return out;
 }
 
@@ -105,7 +110,8 @@ void checkParts(const VehicleConfig& c) {
     CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (the concept has one on the SUV tailgate only)",
           v.spares.size());
     for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
-    std::printf("  %s: %zu parts, %zu triangles\n", c.visualModel.c_str(), v.parts.size(), v.mesh.vertices.size() / 3);
+    std::printf("  %s (%s): %zu parts, %zu triangles\n", c.visualModel.c_str(), c.bodyShape.c_str(), v.parts.size(),
+                v.mesh.vertices.size() / 3);
 }
 
 void modelParts() {

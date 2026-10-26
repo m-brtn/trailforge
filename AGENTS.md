@@ -8,8 +8,9 @@ TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 
 SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
-procedural except the level's CC0 models (trees, plants, rocks, cliffs, logs; the car bodies are generated from
-blueprints traced from `external_assets/images/Cars.png` by `tools/cars/trace_blueprint.py`, venv only), and so are
+procedural except the level's CC0 models (trees, plants, rocks, cliffs, logs; the shipped car bodies are StyleKit
+panels around the collision boxes, `bodyShape` `"kit"`; the optional `"traced"` bodies are generated from blueprints
+traced from `external_assets/images/Cars.png` by `tools/cars/trace_blueprint.py`, venv only), and so are
 all textures except the level ground, the building kit materials and those models. External assets: the sounds in `assets/audio/`
 (licenses in `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY`
 from the environment — never write the key into any file) and the CC0 PBR ground materials in
@@ -148,7 +149,8 @@ src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving
 src/core/     Json (reader, writer, merge), Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
- in Vehicle.cpp), VehicleBlueprint (traced body: distance fields, wheelhouses, collision hulls; no SDL), DrivingAids
+ in Vehicle.cpp), VehicleBlueprint (traced body for bodyShape "traced": distance fields, wheelhouses, collision
+ hulls; no SDL), DrivingAids
  (ABS / traction control logic, brake torque and throttle
               factor only), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
               parameters, setup files), WheelSweep (space a tire sweeps over travel + steering), VehicleBody (body.glb

@@ -329,12 +329,16 @@ void bodyDefinition() {
     std::filesystem::remove_all(dir);
 }
 
-// Jolt collision from the COL_* pieces: the body shape spans the pieces (not the blueprint hulls), the vehicle
-// settles at the same ride height as the procedural SUV (the body never touches flat ground). The twister run is in
+// Jolt collision from the COL_* pieces: the body shape spans the pieces (not the procedural body's boxes), the vehicle
+// settles at the same ride height as the same definition with the procedural body (the body never touches flat
+// ground). The twister run is in
 // vehicle_catalog_sweep (tests/data/vehicles is part of the catalog there).
 void bodyPhysics() {
     const VehicleDefinition glb = load(kTestDir + "/vehicle.json");
-    const VehicleDefinition suv = load(kSuv);
+    VehicleConfig procedural = glb.config;
+    procedural.bodyModel.clear();
+    procedural.bodyHulls.clear();
+    procedural.bodyPaint.clear();
     BodyModel body;
     CHECK(loadBodyModel(glb.config.bodyModel, body, false), "body.glb");
     float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
@@ -345,7 +349,7 @@ void bodyPhysics() {
     for (int i = 0; i < 2; ++i) {
         SimulationSettings s;
         s.layout = TrackLayout::Flat;
-        s.vehicle = (i == 0 ? glb : suv).config;
+        s.vehicle = i == 0 ? glb.config : procedural;
         Simulation sim(s);
         for (int t = 0; t < 480; ++t) sim.tick();
         ride[i] = sim.currentSnapshot().body.position.GetY();

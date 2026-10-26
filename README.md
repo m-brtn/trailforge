@@ -398,8 +398,9 @@ directly bypass the ramp.
 | Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
 
 **Hood camera.** A rigid view from the roof line in front of the windshield, mounted in body space from
-`camera.hood` in vehicle.json (SUV [0, 0.92, 0.38] m, EV [0, 0.86, 0.30] m: the roof line of the traced bodies
-since v0.15.0; pitch −1°, near plane 5 cm), so it pitches and rolls with the body. On flat ground the hood fills the
+`camera.hood` in vehicle.json (SUV and EV [0, 1.24, 0.62] m, the roof line of the kit bodies; [0, 0.92, 0.38] /
+[0, 0.86, 0.30] m in v0.15.0–v0.22.0 for the traced bodies; pitch −1°, near plane 5 cm), so it pitches and rolls
+with the body. On flat ground the hood fills the
 bottom 19% (SUV) and 20% (EV) of the 60° view, also on the proving-ground slope
 (`/tmp/trailforge_cam_0*_hood_*.png`). The view is not a cockpit: there is no interior model.
 
@@ -489,7 +490,7 @@ src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layo
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
               ElectricDrive (motor envelope, torque split, regen blend, battery; used by the electric controller in Vehicle.cpp),
               VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files),
-              VehicleBlueprint (traced concept body: distance fields, wheelhouses, collision hulls)
+              VehicleBlueprint (traced concept body for bodyShape "traced": distance fields, wheelhouses, collision hulls)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
@@ -553,8 +554,9 @@ vehicle idles at the start pad); Start resets the vehicle with the aid defaults.
 The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format below); the C++ defaults of
 `VehicleConfig` are the v0.7 SUV (full-time AWD, no drag, 0.80 m tires, final drive 3.90), used by the physics tests.
 
-- Mass 2000 kg, wheelbase 2.56 m, track 1.75 m (since v0.15.0, measured on the concept sheet; 2.8 m and 1.80 m
-  before; the C++ defaults keep 2.8 / 1.80). The tires stick out past the flares as on the sheet.
+- Mass 2000 kg, wheelbase 2.80 m, track 1.80 m (v0.15.0–v0.22.0 used the 2.56 / 1.75 m measured on the concept
+  sheet for the traced body; the kit body is laid out for 2.80 / 1.80). The tires stick out past the flares as on
+  the sheet.
 - Tires (since v0.9.0): 315/70R17 mud-terrain on 17-inch rims, the 35-inch class of the concept sheet (Cars.png
   car #1 scaled by its wheelbase suggests ~0.90 m; it was 0.80 m before). Real dimensions: 17 in rim = 431.8 mm,
   sidewall 0.70 × 315 = 220.5 mm, diameter 872.8 mm, so `radius` 0.436 m, `width` 0.315 m (section width),
@@ -570,9 +572,10 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
   (3.90 on the new tires, probe `layouts`): 4H 0-30 km/h on concrete 1.59 s vs 1.53 s, 4L 2.33 s vs 2.40 s, the
   4L 15° mud climb 6.16 s vs 7.04 s (taller, so it carries more speed onto the ramp).
 - Center of mass 0.10 m below the frame center.
-- The body collision is a compound of convex hulls built from the traced blueprint (tub between the wheels, the band
-  above the wheelhouses, the greenhouse, the slider box), the same data as the visible body: a five-door expedition
-  SUV traced from Cars.png car #1 (~162k body triangles, 40 named parts); see "Vehicle blueprints".
+- The body collision is a compound of three boxes (`vehicle/VehicleShape.h`). The visible model is the kit body, a
+  procedural five-door expedition SUV (Cars.png car #1, ~17.9k triangles, 40 named parts) built around those
+  boxes and fitted to the physics wheels; see "Vehicle rendering and the style kit". The body traced from the
+  concept sheet (v0.15.0–v0.22.0) is still available as `"bodyShape": "traced"`; see "Vehicle blueprints".
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
 - Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
@@ -591,8 +594,8 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
 
 ### Electric SUV (`trailforge_ev`)
 
-`assets/vehicles/trailforge_ev/vehicle.json`: a dual-motor electric off-roader, wheelbase 2.44 m and track 1.77 m
-from the concept sheet (since v0.15.0; the SUV's 2.8 / 1.80 before). The numbers are estimates for the current class of large electric off-road SUVs, not a copy of one vehicle.
+`assets/vehicles/trailforge_ev/vehicle.json`: a dual-motor electric off-roader on the SUV's wheelbase and track
+(2.80 / 1.80 m; 2.44 / 1.77 m from the concept sheet in v0.15.0–v0.22.0). The numbers are estimates for the current class of large electric off-road SUVs, not a copy of one vehicle.
 Class reference (manufacturer figures as commonly published, not re-checked for this build): Mercedes G 580 EQ about
 3.1 t with a 116 kWh pack, Rivian R1S about 2.7–3.2 t with 92–149 kWh packs, both with 0–100 km/h around 4–5 s.
 TrailForge EV sits at the light end of that range.
@@ -626,28 +629,32 @@ ABS off unless stated):
 
 | | SUV (2000 kg) | EV (2650 kg) |
 |---|---|---|
-| 0–30 / 0–60 / 0–100 km/h, concrete | 1.82 / 4.49 / 9.58 s | 1.43 / 2.57 / 4.42 s (peak 401 kW, 0.359 kWh) |
-| 50–0 km/h ABS off / on | 13.92 / 13.77 m | 14.60 / 13.97 m (regen 18 / 22 % of the kinetic energy) |
-| 100–0 km/h ABS off / on | 48.14 / 47.31 m | 51.38 / 46.43 m (regen 7 / 13 %) |
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.42 / 2.52 / 4.36 s (peak 401 kW, 0.358 kWh) |
+| 50–0 km/h ABS off / on | 13.70 / 13.49 m | 14.95 / 13.88 m (regen 12 / 16 % of the kinetic energy) |
+| 100–0 km/h ABS off / on | 47.57 / 46.42 m | 52.32 / 46.37 m (regen 5 / 9 %) |
 | lift-off at 80 km/h | 0.63 m/s² (drag, engine braking) | 1.36 m/s² (regen and drag) |
-| corner 40 km/h, steer 0.25 / 0.45 | 7.39 / 7.78 m/s², roll 4.50 / 4.83° | 8.24 / 8.15 m/s², roll 2.45 / 2.42° |
-| climb dirt 20°, full pedal | 4.34 s (4H), 5.07 s (4L) | 3.82 s (NORMAL and OFF-ROAD) |
-| climb mud 15°, full pedal | 6.13 s (4H), 7.05 s (4L) | 6.12 s (NORMAL and OFF-ROAD) |
-| diagonal twister, travel used FL / FR / RL / RR | 0.405 / 0.336 / 0.392 / 0.402 m, 6.40 wheel-s in the air | 0.381 / 0.208 / 0.351 / 0.363 m, 4.85 wheel-s |
-
-Measured on v0.15.0 (traced bodies, concept wheelbase and track). The v0.14.0 values for comparison: SUV 0–100 9.68 s,
-100–0 ABS on 46.42 m, corner 6.87 / 7.91 m/s²; EV 0–100 4.36 s, 100–0 ABS on 46.37 m, corner 7.33 / 8.33 m/s². On the
-diagonal twister the old box collision touched the terrain in 34 (SUV) and 30 (EV) of 1200 ticks, the traced body in 0
-(`trailforge_probe susp 2`).
+| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.33 m/s², roll 2.16 / 2.58° |
+| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.88 s (NORMAL), 3.89 s (OFF-ROAD) |
+| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.10 s (NORMAL and OFF-ROAD) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.308 / 0.259 / 0.401 / 0.400 m, 6.07 wheel-s in the air | 0.321 / 0.231 / 0.362 / 0.302 m, 4.22 wheel-s |
 | steady 50 / 90 km/h energy | — | 14.2 / 28.9 kWh/100 km (drag, wheel damping, aux; no rolling resistance) |
+
+Measured on v0.23.0 (kit bodies, box collision, 2.80 / 1.80 m; 0–100, 100–0 ABS on, the corner values and the
+twister contact counts equal the v0.14.0 ones). v0.15.0–v0.22.0 (traced
+bodies on the concept wheelbase and track) for comparison: SUV 0–100 9.58 s, 100–0 ABS on 47.31 m, corner 7.39 /
+7.78 m/s²; EV 0–100 4.42 s, 100–0 ABS on 46.43 m, corner 8.24 / 8.15 m/s². On the diagonal twister the box collision
+touches the terrain in 34 (SUV) and 30 (EV) of 1200 ticks, the traced body did in 0 (`trailforge_probe susp 2`).
 
 The full-pedal launch with TC off spins the front wheels: the front axle's 4800 N·m exceeds its grip once the weight
 moves back (slip speed up to 18 m/s, about 2.5 s). Traction control (T) limits it per axle.
 
 ### Vehicle blueprints (bodies traced from the concept sheet)
 
-Since v0.15.0 both bodies are built from `external_assets/images/Cars.png` (car #1 `trailforge_suv`, car #2
-`trailforge_ev`) instead of hand-placed panels. The same data drives the visible body and the body collision.
+A vehicle.json with `"bodyShape": "traced"` gets its body from `external_assets/images/Cars.png` (car #1
+`trailforge_suv`, car #2 `trailforge_ev`) instead of the kit panels; the same data drives the visible body and the
+body collision. Both shipped bodies were built this way in v0.15.0–v0.22.0; since v0.23.0 they are kit bodies again
+(see "Vehicle rendering and the style kit"), because the meshed surfaces looked ragged at the arch edges and on the
+front in close views (sawtooth steps along the hood and fender edges and the arch lips, wavy greenhouse panels: the 2 cm surface-nets lattice cannot follow the sharp edges where the extruded view silhouettes intersect). The tracer data also feeds the Blender body generator (`tools/cars/blender`).
 
 1. **Trace** (`tools/cars/trace_blueprint.py <id>`, Python venv from `tools/cars/requirements.txt`; never install
    globally). The script crops the side / top / front / rear cells of the car's column (`tools/cars/sheet.json`),
@@ -690,13 +697,14 @@ Since v0.15.0 both bodies are built from `external_assets/images/Cars.png` (car 
    corners, the EV's rear quarter) a small patch takes the colour of the view that wins there.
 5. **Collision** (`Vehicle.cpp`): `BlueprintBody::collisionParts` gives convex hulls of the tub between the wheels,
    the full-width band above the wheelhouses up to the belt and the greenhouse (5 cm cross-sections), plus the
-   slider / belly box; the centre of mass is moved to the configured point with `OffsetCenterOfMassShape`. A visual
-   model without a blueprint falls back to the three boxes of `vehicle/VehicleShape.h`.
+   slider / belly box; the centre of mass is moved to the configured point with `OffsetCenterOfMassShape`. The kit
+   body (and a visual model without a blueprint) collides as the three boxes of `vehicle/VehicleShape.h`.
 
 Left out on purpose: antennas and the roof spare (both drawn on the sheet, dropped on request). Not on the sheet and
 therefore not built: mud flaps, snorkel, ladder, a spare on the EV.
 
-Fit to the concept, measured with `tools/cars/compare_silhouettes.py model.obj blueprint.json` (the OBJ from
+The traced bodies were laid out with the concept wheelbase and track (SUV 2.56 / 1.75 m, EV 2.44 / 1.77 m); on the
+shipped 2.80 / 1.80 m definitions the concept axles are stretched onto the physics ones. Fit to the concept, measured with `tools/cars/compare_silhouettes.py model.obj blueprint.json` (the OBJ from
 `trailforge_model_export <vehicle.json> out.obj`, settled on flat ground; the concept wheelbase is mapped onto the
 physics one; `--halves PREFIX` writes concept | model images). Silhouette IoU side / front / rear / top:
 
@@ -718,20 +726,31 @@ shows a dark front case and an olive rear case where the top view shows two blue
 **Adding a car**: add a column to `tools/cars/sheet.json` if the sheet grows, write `tools/cars/<id>.keypoints.json`
 (copy one of the two, adjust the palette, masks, lamps and anchors), run the tracer and check its overlays and report,
 add the id to `TRAILFORGE_BLUEPRINT_IDS` (CMakeLists.txt) and `knownVisualModel`, give the model its livery and
-accessories in `VehicleModel.cpp`, set `visualModel` in the vehicle.json, then check the IoU with
+accessories in `VehicleModel.cpp`, set `visualModel` and `"bodyShape": "traced"` in the vehicle.json, then check the IoU with
 `compare_silhouettes.py`, the model tests (`model_wheel_clearance`, parts, bumpers) and the `car*_views` scenarios.
 
-### Style kit, wheels and mud
+### Vehicle rendering and the style kit
 
-All vehicle geometry is procedural and visual only, except that the body collision hulls come from the same blueprint.
+All vehicle geometry is procedural and visual only. The shipped bodies are kit bodies (`bodyShape` `"kit"`, the
+default): StyleKit panels around the three collision boxes of `vehicle/VehicleShape.h`, fitted to the physics wheels.
+v0.15.0–v0.22.0 shipped the traced bodies instead (see "Vehicle blueprints"); v0.23.0 brought the kit bodies of
+v0.14.0 back, with the later changes kept (below).
 
-- **Style kit** (`src/render/StyleKit`): the shared building blocks for the accessories.
-  - Materials: clear-coat paint without metallic flakes (stylized-realistic), grained matte plastic trim, metal, rubber,
-    glass (opaque dark tinted glass: no interior is drawn behind it, the shader keeps the sun highlight and 30 % of the
-    sky reflection), emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
-    a `Livery` groups base paint, accent paint, roof, trims.
-  - Lights: LED rings, strips, round lamps. Accessories: roof rails with crossbars, cargo straps, light bar, winch,
-    bow shackles, cargo cases, rock sliders, mirrors, jerry cans, spare carrier.
+- **Style kit** (`src/render/StyleKit`): the shared building blocks for every car model.
+  - Materials: clear-coat paint without metallic flakes (stylized-realistic), grained matte plastic trim
+    (`MatId::Cladding`: cladding, flares, bumpers, pillars), metal, rubber, glass (opaque dark tinted glass: no
+    interior is drawn behind it, the shader keeps the sun highlight and 30 % of the sky reflection), emissive LEDs
+    (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader); a `Livery` groups base paint, accent paint
+    (two-tone panels, decal stripes), roof, trims.
+  - Surfaces: `skin` lofts rows of points into quads with per-face orientation and normals averaged only within
+    38 degrees, so chamfers and creases stay hard edges that catch the light and curved parts shade smooth;
+    `roundedRect` builds rounded footprints (body sides, greenhouse) with matching stations between rings;
+    `grid`, `prism`, `face`, `panelGap` (panel gaps and decal stripes).
+  - Lights: LED rings (DRL outline), strips, round lamps. Accessories: low roof rails with crossbars (not a rack),
+    cargo straps, light bar, winch, bow shackles, slim fender flares over any arch outline (rounded lip, chamfered
+    band), profile sweeps (bumpers), jerry cans, cargo cases, rock sliders, mirrors, spare carrier. The kit still has
+    a snorkel and a ladder; no model uses them (the concept has none). No mud flaps (the concept has none). No
+    antennas: they were left out on purpose (the concept sheet has them).
   - Wheels: `buildWheel(radius, width, WheelStyle)` with spoke count, rim fraction, optional beadlock, mud- or
     all-terrain tread (chevron blocks, shoulder lugs wrapping the sidewall), bulging sidewalls, deep-dish rim with
     recessed spokes. The mesh fits exactly in the physics wheel: its outer radius is the physics radius (the
@@ -741,20 +760,37 @@ All vehicle geometry is procedural and visual only, except that the body collisi
   and `detachable`, vertex range), merged into one mesh and one draw call. The flags only mark what a later damage
   stage may bend or knock off; there is no damage logic. Spare wheels are mount points (`SpareMount`) drawn with
   the rear wheel mesh, so they follow the rear tire size.
-- **trailforge_suv** (~205k body triangles, 40 parts): olive paint, orange accents and rear quarter panel, white
-  roof, black trim, grille with the traced lamps, winch, roof rails with a light bar, a dark front case with two LED
-  lenses and an olive rear case, rear jerry cans, tailgate spare.
-- **trailforge_ev** (~193k body triangles, 38 parts): white / light grey paint, blue accents, black cladding, the
-  closed front panel with the LED bar, the full-width tail light, roof rails with a light bar and one flat case, and
-  under the body the floor battery pack and one motor per axle. No winch, no spare.
+- **trailforge_suv** (~17.9k body triangles, 40 parts): lower body swept from one profile (chamfered rocker with
+  black cladding, shoulder crease, chamfered shoulder, belt deck) around a rounded footprint, arches clipped out of
+  it; greenhouse lofted from the deck (8 cm inside the body side) to the roof with a raked windshield and
+  tumblehome; hood with crown, panel gaps and a nose dropping to the grille. Paint by panels with straight borders:
+  olive body (`style::oliveExpedition`), orange fender tops, side stripe, rear quarter panel and roof band, white
+  roof, black pillars, flares, bumpers. Parts include doors, hood, tailgate, windshield, fenders, flares, bumpers
+  (the rear one swept around the body corners with chamfers, a groove and lamp pockets), winch, tow hooks, lights,
+  mirrors, roof rails, light bar, strapped cases and a jerry can on the crossbars, rear jerry cans, rock sliders and
+  one spare mount (tailgate). Left out: the concept's roof spare (with the 315/70R17 tire it would cover two thirds
+  of the rail spacing and stand 0.32 m tall), antennas, snorkel, ladder, mud flaps.
+- **trailforge_ev** (~15.8k body triangles, 37 parts): shares the fitted lower body, glasshouse and hood; white /
+  light grey paint, blue accents and door stripe, black cladding, a closed front panel with a full-width LED bar,
+  headlights with LED rings, wrapped bumpers with blue LED lamps and blue tow hooks, a full-width tail light, a
+  quarter window with a slanted blue graphic, low rails with a light bar (blue end pods, blue LED strips) and one
+  flat case; under the body the floor battery pack and one motor per axle. No winch, no spare (the concept has
+  none), no snorkel.
+- **Suspension stays visible**: the coil-overs (orange springs on the SUV, blue on the EV, as on the sheet) are
+  seen through the arch openings in front of the dark wheel-house walls and are placed from the physics suspension
+  length every frame.
 - **Wheels follow the physics**: the wheel meshes are built per axle from the active configuration (definition,
   kit, setup): `wheel.radius` and `wheel.width` give the tire size, the optional visual keys `wheel.rimRatio` and
-  `wheel.tread` the rim and the tread. The wheelhouses and fender lips are derived from the wheels too (see above);
-  when a kit or setup changes any of these values the app rebuilds the body and wheel meshes. Tests:
-  `model_wheel_size` (mesh radius / width equal the physics wheel for several sizes, rim ratios and treads) and
-  `model_wheel_clearance` (no body triangle point inside any wheel's sweep for the default wheels and bigger /
-  smaller tires). The scenario `tools/scenarios/wheel_fit.txt` changes the tire size in the running app
-  (`wheels R W`) and checks `wheel_fit_err` after each rebuild.
+  `wheel.tread` the rim and the tread. The arches, the flares and the wheel-house clearance are derived from
+  the wheels too: every arch point is pushed out until it clears the tire swept over the whole suspension travel
+  (`attachHeight` minus `minLength` .. `maxLength`) and 0..`maxSteerAngleDeg` with a 3 cm margin, on top of a
+  circular arc of 1.2 wheel radii (vertical down to the rocker); the flares are a slim band along that arch
+  (0.30 × the wheel radius wide, clamped to 10–14 cm, 7.5 cm proud of the body side), so the tires stick out past
+  them as on the sheet. When a kit or setup changes any of these values the app rebuilds the body and wheel meshes.
+  Tests: `model_wheel_size` (mesh radius / width equal the physics wheel for several sizes, rim ratios and treads)
+  and `model_wheel_clearance` (no body triangle point inside any wheel's sweep for the default wheels and bigger /
+  smaller tires, kit and traced bodies). The scenario `tools/scenarios/wheel_fit.txt` changes the tire size in the
+  running app (`wheels R W`) and checks `wheel_fit_err` after each rebuild.
 - Body mud and tread soil are cosmetic layers: the mud mask is computed in the shader from the body-space position
   and the per-vertex receptivity of each material; the arch and bumper zones come from the model's axle positions,
   arch height and body width (`VehicleVisual::mudArch` / `mudBody`).
@@ -770,15 +806,16 @@ Broken definitions are skipped with the message in the log. The test `vehicle_de
 documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` plus `tests/data/vehicles` (settle,
 0-30 / 0-50 km/h, braking from 50 km/h, a 15° low-range climb, suspension travel limits).
 
-By default the body shape is not part of vehicle.json: `visualModel` selects the traced
-`assets/vehicles/<id>/blueprint.json` (generated by `tools/cars/trace_blueprint.py`, embedded at build time; see
-"Vehicle blueprints"), which gives both the visible body and the collision hulls, placed on the wheelbase, track and
-wheels of the definition. A vehicle can instead reference a Blender-authored body, `body.model` = `body.glb` in its
+By default the body is the kit body of `visualModel` (StyleKit panels fitted to the definition's wheels, collision
+boxes of `vehicle/VehicleShape.h`; see "Vehicle rendering and the style kit"). `"bodyShape": "traced"` selects the
+traced `assets/vehicles/<id>/blueprint.json` instead (generated by `tools/cars/trace_blueprint.py`, embedded at build
+time; see "Vehicle blueprints"), which gives both the visible body and the collision hulls, placed on the wheelbase,
+track and wheels of the definition. A vehicle can instead reference a Blender-authored body, `body.model` = `body.glb` in its
 folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks the procedural wheel and coil style.
 
 | Section | Keys |
 |---|---|
-| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev` |
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, optional `bodyShape` (`kit` default, `traced`), `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev` |
 | `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
@@ -809,7 +846,7 @@ keeps the JSON equal to the C++ defaults except the layout and the drag area.
 
 A vehicle body can be modelled in Blender instead of traced from the concept sheet. The game reads a converted
 `assets/vehicles/<id>/body.glb` (Git LFS, `.gitattributes`) when vehicle.json has `"body": {"model": "body.glb"}`;
-without it, or when the file fails to load (logged), the procedural blueprint body is used. The shipped SUV and EV
+without it, or when the file fails to load (logged), the procedural body (`bodyShape`) is used. The shipped SUV and EV
 still use their procedural bodies; the only glb body is the test vehicle `tests/data/vehicles/suv_glb_test` (the SUV
 definition with a scripted body, `paint_primary` = the SUV olive [0.45, 0.50, 0.32]). Test vehicles under
 `tests/data/vehicles` are not in the game's vehicle list or the packaged app (the catalog is `assets/vehicles` only);
@@ -846,7 +883,7 @@ load one with the scenario op `vehicle_file`.
   overrides the per-role cosmetic mud receptivity.
 - **Collision.** `COL_<name>` mesh nodes are convex collision pieces (closed, convex within 2 mm: every point on
   the convex hull of the piece, at least 10 mm in every direction). The physics body is a Jolt compound of their
-  convex hulls (convex radius 0.05 m), replacing the blueprint hulls; mass, inertia and centre of mass stay those of
+  convex hulls (convex radius 0.05 m), replacing the procedural body's collision; mass, inertia and centre of mass stay those of
   vehicle.json. Pieces must clear the wheel sweep like the body, the visual and collision bounds must agree within
   0.12 m per face (parts with `tf_collides` false excluded), and 90 % of the LOD0 vertices must be within 0.10 m of a
   piece.
@@ -1098,9 +1135,9 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   A **lap timer** (`src/sim/LapTimer`: start / finish line and two sector gates, crossing times interpolated
   within a physics tick, a lap counts only through the gates in order) runs in the HUD (top center) on the proving
   ground: `LAP n`, sector splits, last and best lap. Teleporting (or R) restarts the lap.
-  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 1:06.96 (112 km/h,
-  0.67 g), EV 1:03.49 (138 km/h, 0.72 g), `builtin` 1:04.27 (115 km/h, 0.79 g), `rwd_test` 1:01.67 (122 km/h,
-  0.85 g). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
+  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 1:04.57 (113 km/h,
+  0.76 g), EV 1:01.25 (141 km/h, 0.79 g), `builtin` 1:06.51 (114 km/h, 0.64 g), `rwd_test` 0:58.62 (124 km/h,
+  0.90 g) (kit bodies, box collision). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
   hairpin entry (oversteer) and leaves the track.
 
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
@@ -1875,9 +1912,11 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   rotor inertia is added to the wheel inertia through the reduction, so the two wheels of an axle are not coupled
   through a shared shaft speed; the open differential is the torque split only. Traction control and regen blending
   are control logic that acts through the motor torque and the friction brake torque.
-- Body collision is a compound of convex hulls from the traced blueprint (5 cm cross-sections, see "Vehicle
-  blueprints"): convex pieces, so concave details of the visible body are filled in, and the style-kit accessories
-  (roof load, winch, spare, jerry cans, mirrors) have no collision. The wheels touch the ground only through Jolt's
+- Body collision of the shipped (kit) bodies is a compound of three boxes (tub, fender band, cab) with a 5 cm
+  convex radius around the visible body: the arches, chamfers, bumpers and the style-kit accessories (roof load,
+  winch, spare, jerry cans, mirrors) have no collision of their own. A traced body (`bodyShape` `"traced"`)
+  collides as convex hulls from the blueprint (5 cm cross-sections, see "Vehicle blueprints"), so its concave
+  details are filled in. The wheels touch the ground only through Jolt's
   wheel casts.
 - A Blender body (body.glb) collides only with its authored `COL_*` convex pieces (hulls with a 0.05 m convex
   radius), never with the render mesh; how closely they follow the visual body is checked only by bounds (0.12 m per

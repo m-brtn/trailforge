@@ -417,11 +417,14 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         std::string description;
         root.str("description", description, false);
         root.str("visualModel", c.visualModel);
+        root.str("bodyShape", c.bodyShape, false);
         root.str("audioProfile", c.audioProfile);
         if (c.id.empty() || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
             root.error("id", "must be non-empty lowercase letters, digits and '_'");
         if (!c.visualModel.empty() && !knownVisualModel(c.visualModel))
             root.error("visualModel", "unknown model '" + c.visualModel + "' (known: trailforge_suv, trailforge_ev)");
+        if (c.bodyShape != "kit" && c.bodyShape != "traced")
+            root.error("bodyShape", "unknown shape '" + c.bodyShape + "' (known: kit, traced)");
         if (!c.audioProfile.empty() && !knownAudioProfile(c.audioProfile))
             root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv, ev, sporty)");
         c.tireSound = tireSoundPreset(c.audioProfile);

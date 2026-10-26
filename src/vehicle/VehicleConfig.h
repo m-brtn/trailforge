@@ -223,10 +223,13 @@ struct VehicleConfig {
     std::string id = "default";
     std::string name = "Default off-roader";
     std::string visualModel = "trailforge_suv"; // procedural body model (src/render/VehicleModel)
+    // How the procedural body is built: "kit" (StyleKit panels; collision = the boxes of vehicle/VehicleShape.h) or
+    // "traced" (meshed from the embedded blueprint; collision = its convex hulls, vehicle/VehicleBlueprint.h).
+    std::string bodyShape = "kit";
     std::string audioProfile = "trailforge_suv"; // sound set (assets/audio/manifest.json) and tire sound preset
     // Blender-authored body (vehicle.json body.model: a converted body.glb, vehicle/VehicleBody.h), resolved to a
     // path; empty = the procedural body of visualModel. Its convex collision pieces (body space) are read when the
-    // definition loads and replace the blueprint hulls. bodyPaint: colour overrides per paint role
+    // definition loads and replace the procedural body's collision. bodyPaint: colour overrides per paint role
     // ("paint_primary", "paint_secondary", "paint_accent"; sRGB 0..1) for that body.
     std::string bodyModel;
     std::vector<std::vector<std::array<float, 3>>> bodyHulls;
