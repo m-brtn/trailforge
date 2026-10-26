@@ -23,10 +23,12 @@ textures must also be CC0 (Poly Haven / ambientCG), go through that script and `
 CREDITS file. 3D models (trees, ground cover, rocks, cliffs, logs) are CC0 Poly Haven glTF only, fetched by
 `tools/models/fetch_models.py` (manifest `assets/models/models.json`, md5 lock `sources.lock.json`) and converted by
 `trailforge_modelc` (`tools/texc`) to `assets/models/<folder>/*.glb` + BC7 KTX2; credits in `assets/models/CREDITS.md`.
-The one exception to these licence rules is the Ironwall Stadium level ("Third-party content in a private repo" below).
+The exceptions to these licence rules are the Ironwall Stadium level and the IRONCLAD G / KESTREL M vehicle bodies
+("Third-party content in a private repo" below).
 `*.ktx2` under `assets/textures/` and `*.glb` / `*.ktx2` under `assets/models/` are Git LFS objects (`.gitattributes`;
-run `git lfs pull` after cloning). Keep the LFS total small (currently 326.5 MB: terrain textures 167.8 MB, building
-textures 19.2 MB, models 84.3 MB, Ironwall Stadium scene 54.3 MB (third-party, see below), test vehicle body 0.9 MB;
+run `git lfs pull` after cloning; `*.glb` under `assets/vehicles/` too). Keep the LFS total small (currently 352.6 MB:
+terrain textures 167.8 MB, building textures 19.2 MB, models 84.3 MB, Ironwall Stadium scene 54.3 MB (third-party, see
+below), IRONCLAD G / KESTREL M bodies 13.4 + 12.7 MB (third-party, see below), test vehicle body 0.9 MB;
 GitHub's LFS storage and bandwidth quota is shared with CI, which caches `.git/lfs`), and report size changes in the
 devlog.
 
@@ -106,6 +108,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
+./build/release/trailforge --script tools/scenarios/thirdparty_views.txt # IRONCLAD G + KESTREL M bodies: views, steering lock, night, hood, twister, coupe slicks, /tmp/trailforge_tp_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
@@ -278,6 +281,15 @@ It **must be removed or replaced before the repository or any build is made publ
 the level's `CREDITS.md` and in this note only: in the game, the README and release notes the level is the fictional
 "Ironwall Stadium", and real venue names must not appear in the game (the converter paints them out of the
 textures).
+
+The same exemption, at the owner's decision (2026-10-27), covers two vehicle bodies with **unknown licence**:
+**IRONCLAD G** (`assets/vehicles/ironclad_suv/`) and **KESTREL M** (`assets/vehicles/kestrel_coupe/`), Blender bodies
+(`body.glb`, Git LFS) converted from the owner's zips `external_assets/models/suv_source.zip`
+and `coupe_source.zip` (not in git). Both models carry a commercial game asset names (very likely extracted from that
+commercial game; the KESTREL upload's CC-BY-4.0 label cannot be relied on) and show real car designs (manufacturer
+trademarks). They **must be removed or replaced before the repository or any build is made public.** Provenance is in
+each folder's `CREDITS.md`, the devlog and this note only; in the game, the README and release notes they are the fictional
+IRONCLAD G and KESTREL M, and real brand or model names must not appear in the game UI.
 
 ### Physics honesty
 

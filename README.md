@@ -332,7 +332,9 @@ brake tap, audible for lock-up and handbrake slides, never while the mud layer i
 regen, blended braking, SoC and energy counters, drive modes, the low range message, reverse, an empty battery, the
 mud bath in OFF-ROAD; `/tmp/trailforge_ev_*.png`), `tools/scenarios/ev_audio.txt` (EV launch, regen and stop for an
 `--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/patrol_views.txt` (buggy views, full droop and full bump coil-over close-ups,
-`/tmp/trailforge_patrol_*.png`), `tools/scenarios/car2_views.txt` (EV model views
+`/tmp/trailforge_patrol_*.png`), `tools/scenarios/thirdparty_views.txt` (IRONCLAD G and KESTREL M bodies: views,
+steering lock, night lamps, hood camera, twister, slicks on the coupe; `/tmp/trailforge_tp_*.png`),
+`tools/scenarios/car2_views.txt` (EV model views
 for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`), `tools/scenarios/tires.txt` (tire sets and
 temperature: cold slicks, warming on the mini track, slicks taken off warmers, the telemetry grid, the road set fitted
 on a 35 C day; `/tmp/trailforge_tires_*.png`).
@@ -756,6 +758,47 @@ on-demand AWD rather than RWD.
 
 The engine sound uses the `sporty` profile (car recordings pitched to the engine rpm); nobody has listened to it at
 11000 rpm.
+
+### IRONCLAD G and KESTREL M (`ironclad_suv`, `kestrel_coupe`)
+
+Two vehicles with Blender bodies (`body.glb`, see "Blender bodies (body.glb)") converted from third-party models of
+unknown licence: private builds only, they must be removed before the repository or a build is made public
+(`CREDITS.md` in each folder). The physics follow published manufacturer data and tests of the real cars; wheel
+positions were measured from the models.
+
+- **IRONCLAD G**: boxy body-on-frame off-roader, 2560 kg (front 0.54), wheelbase 2.883 m, track 1.672 m, 295/40 R22
+  tires (r 0.396 m), 4.0 L twin-turbo V8 (850 N·m, 430 kW rated, 437 kW curve peak), 9-speed automatic, 2.93:1 low
+  range, permanent AWD 40:60 with a centre LSD, OFF-ROAD tire set by default. Bump travel 83 / 101 mm above rest.
+- **KESTREL M**: rear-drive coupe, 1740 kg (front 0.53), wheelbase 2.748 m, 275/35 R19 front and 285/30 R20 rear,
+  3.0 L twin-turbo six (550 N·m, 338 kW rated, 346 kW curve peak), 8-speed automatic, rear LSD, ROAD tire set by
+  default (`tires.set`; its `tires` curves are the earlier road-tire tuning divided by the ROAD multipliers on
+  concrete, so ROAD reproduces it there and OFF-ROAD / SLICK scale from the same baseline).
+- Bodies: the arch lips were flared outward (IRONCLAD up to 40 mm paint / 47 mm trim, KESTREL up to 69 / 27 mm) so
+  every body vertex keeps 10 mm from the wheel sweep over the full travel, the steering lock and the garage ride
+  heights (`trailforge_vehiclec --check` without `--clearance`; closest 12.3 mm on the IRONCLAD). The arches leave
+  no room to lower either car: the garage ride height only raises it (IRONCLAD 0..+80 mm, KESTREL 0..+30 mm).
+- Coil-overs under a Blender body: the body has no shock towers, so the procedural layout moves with each axle's hub
+  (the shock 0.06 m longer than its body at full bump, the lower arm level at rest) and the coil sits inboard of the
+  steered tire; `model_suspension_mounts` checks the shock length, a 5 mm coil-to-tire gap and that the top eye is
+  under the body skin.
+
+`trailforge_probe compare` (Release, 120 Hz, TC and ABS off unless stated; default tire sets):
+
+| | IRONCLAD G (2560 kg, OFF-ROAD) | KESTREL M (1740 kg, ROAD) |
+|---|---|---|
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.21 / 2.35 / 4.63 s | 1.69 / 3.04 / 4.96 s |
+| 50–0 km/h ABS off / on | 14.28 / 13.57 m | 11.13 / 11.05 m |
+| 100–0 km/h ABS off / on | 49.50 / 43.28 m | 36.33 / 33.34 m |
+| corner 40 km/h, steer 0.25 / 0.45 | 6.51 / 7.72 m/s², roll 2.46 / 3.08° | 6.52 / 9.64 m/s², roll 0.81 / 1.45° |
+| climb dirt 20° / mud 15°, full pedal | 3.97 / 5.85 s (4H) | 7.63 s / does not climb the mud (7.7 m) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.174 / 0.160 / 0.230 / 0.222 m | 0.106 / 0.107 / 0.109 / 0.119 m |
+
+The real cars are quoted at 4.5 s (IRONCLAD) and 4.1 s (KESTREL, 8-speed) to 100 km/h; the probe launch has no
+launch control and the KESTREL's rear tires limit it. `trailforge_probe tires` (autopilot, best clean flying lap,
+20 C air), OFF-ROAD / ROAD / SLICK: mini track IRONCLAD 56.10 / 51.63 / 52.44 s, KESTREL 55.70 / 51.43 / 47.35 s
+(slick treads 62–66 C average, below the 80–110 C window); Suncoast Raceway IRONCLAD 110.42 / 109.96 s / no clean
+lap, KESTREL 104.48 / 99.19 / 103.95 s (slick treads about 55 C). 60–0 km/h on asphalt with ABS, cold / warm tires:
+KESTREL ROAD 14.19 / 13.33 m, SLICK 16.84 / 12.53 m.
 
 ### Vehicle blueprints (bodies traced from the concept sheet)
 
