@@ -133,11 +133,15 @@ Every stage ends with a packaged build and a GitHub release, after the stage's c
 
 `dist/` is git-ignored; never commit the zip or the app.
 
-Windows / Linux packages: CI builds them with `tools/release/package_windows.ps1` and `tools/release/package_linux.sh`
-and uploads them as artifacts (`trailforge-windows-x64`, `trailforge-linux-x64`). After `package_macos.sh --publish`,
-download the artifacts of the green CI run for the release commit (`gh run download <run-id>`) and attach them with
-`gh release upload v<version>`; the release notes must label them "untested on real hardware". Check the CI run with
-`gh run watch` / `gh run view --log-failed` after every push.
+CI is paused (user decision, 2026-10-26: GitHub Actions billing): `.github/workflows/ci.yml` runs only on manual
+`workflow_dispatch`, not on push or pull request. Releases are macOS only until the user re-enables CI: do not wait for
+or attach Windows / Linux artifacts, do not trigger the workflow, and say in the release notes that this release has no
+Windows / Linux packages. The local gates above (debug + release build, ctest, `full_check`) are the only checks.
+When CI is re-enabled: CI builds the Windows / Linux packages with `tools/release/package_windows.ps1` and
+`tools/release/package_linux.sh` and uploads them as artifacts (`trailforge-windows-x64`, `trailforge-linux-x64`);
+after `package_macos.sh --publish`, download the artifacts of the green CI run for the release commit
+(`gh run download <run-id>`), attach them with `gh release upload v<version>` and label them "untested on real
+hardware" in the release notes.
 
 ## Layout
 

@@ -3,10 +3,8 @@
 # None of this is a run on real Windows/Linux hardware.
 name: CI
 
+# Paused (GitHub Actions billing): manual runs only. Restore the push / pull_request triggers to re-enable.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
