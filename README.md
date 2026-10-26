@@ -207,7 +207,7 @@ One command per line, `#` starts a comment:
 | Command | What it does |
 |---|---|
 | `down/up/tap KEY` | press / release / press and release (SDL name: `W`, `Space`, `Escape`, `Left`…) |
-| `wait S` | pause for S seconds of real time |
+| `wait S` | pause for S seconds of scenario time (see below) |
 | `until VAR OP VAL TIMEOUT` | wait for a condition (`< <= > >= == !=`); FAIL on timeout |
 | `expect VAR OP VAL` | check immediately |
 | `mark VAR` | remember a value; afterwards `d_VAR` = current − remembered |
@@ -216,13 +216,14 @@ One command per line, `#` starts a comment:
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
-| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist`, `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
+| `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`; tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1` |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
-| `camera X Y Z TX TY TZ` / `camera follow` | free camera at a pose looking at a target / back to the follow camera |
+| `camera X Y Z TX TY TZ` / `camera follow` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the hood camera |
+| `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
-| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `back` |
+| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
@@ -235,6 +236,13 @@ One command per line, `#` starts a comment:
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 | `level ID` / `place X Z [YAW]` / `map on\|off` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees / show or hide the map overlay |
+
+**Scenario clock.** While a script runs, every frame advances the game by a fixed 1/120 s (physics ticks, menu
+animation, ImGui, `wait`, `until` timeouts), and frames are paced to never run faster than real time. A condition
+reached in `until` is therefore acted on after the same simulated time on a 60 Hz or a 120 Hz display, with or
+without VSync (before v0.14.0 the frame-counted input latency was ~67 ms at 60 Hz against ~33 ms at 120 Hz, enough
+to move braking points). `perf_begin` … `perf_end` uses the real frame time, and FPS / frame statistics are always
+real.
 
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
@@ -283,7 +291,7 @@ Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`,
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
 1 start menu, 2 playing, 3 paused, 4 garage), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls, 4 vehicle page), `menu_depth`,
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
-`setting_<key>` (the persistent settings: `quality`, `render_scale`, `vsync`, `master`, `music`, `effects`, `ui`,
+`setting_<key>` (the persistent settings: `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`,
 `abs`, `tc`, `diff`, `auto_reverse`, `drive_keys`, `pad_glyphs`, `vehicle` (catalog index of the remembered choice)), `settings_roundtrip` (1 if the settings file format
 keeps every current value), controls: `drive_keys` (applied to the input: 0 W A S D, 1 arrows), `kb_style` (0 Mac,
 1 PC), `pad_glyphs` (resolved: 0 Xbox, 1 PlayStation), `controls_callouts` / `controls_overlaps` (callouts on the
@@ -317,7 +325,7 @@ levels: `level` (1 on an open-world level, 0 on the proving ground), `level_choi
 choice in the level list), `submersion` (m below the water surface), `recoveries`,
 `water_depth` (render-only water over the ground at the vehicle), `road_dist`, `terrain_chunks`, `terrain_tris`,
 `tiles_loaded`, `tiles_async`, `tiles_sync`, `tiles_unloaded`, `tile_build_ms`, `tile_stall_ms`, `tile_update_ms`,
-`tile_x` / `tile_z`; `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
+`tile_x` / `tile_z`, `grass_dist` / `tree_detail` / `tree_dist` (applied render distances, m); `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -350,7 +358,8 @@ marks 0.77 → 0, 0-30 km/h 1.90 → 1.73 s; a 0.25 s S tap at 50 km/h 7.57 → 
 1.83 s / 14.5 m instead of 1.75 s / 13.5 m and still locks the rear wheels (equal front / rear brake torque); a
 0.4 s tap (pedal 0.66) still locks them. Gamepad triggers are analog and not ramped; scenarios that set pedal values
 directly bypass the ramp.
-| Camera: follow ↔ free | C | RB |
+| Camera: follow → hood → free | C | RB |
+| Camera orbit (follow; swings back behind a moving vehicle 1.75 s after release) / look around (hood; springs back) | — | right stick |
 | ABS on / off | B | D-pad up |
 | Traction control: off → on → off-road | T | D-pad right |
 | Diff locks: open → rear → rear + center → all | X | D-pad down |
@@ -362,7 +371,12 @@ directly bypass the ramp.
 | Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
-| Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac) | A (South) / B (East) |
+| Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
+
+**Hood camera.** A rigid view from the roof line in front of the windshield, mounted in body space from
+`camera.hood` in vehicle.json (both vehicles: [0, 1.24, 0.62] m, pitch −1°, near plane 5 cm), so it pitches and
+rolls with the body. The hood fills the bottom 18% of the 60° view on flat ground and on the proving-ground slope
+(`/tmp/trailforge_cam_0*_hood_*.png`). The view is not a cockpit: there is no interior model.
 
 **Drive keys.** Settings → Controls → DRIVE KEYS chooses the driving cluster: W A S D (default) or the arrow keys. The
 other cluster moves the free camera; no other binding uses either cluster, so nothing clashes (CTest
@@ -374,24 +388,28 @@ The table above names the W A S D layout.
 row, letters, Space, Shift, Return, Backspace, PgUp / PgDn, the inverted-T arrows, and the mouse), each with a callout;
 the driving keys are drawn bold. Key cap wording follows the platform the game runs on (macOS: RETURN, DELETE, PAGE UP;
 Windows / Linux: ENTER, BACKSPACE, PG UP); there is no switch for it. Below GAMEPAD BUTTONS a drawn controller shows
-every bound control with a callout. Button names come from the connected pad (`SDL_GetGamepadType`: PS3 / PS4 / PS5 ->
+every bound control with a callout. Menu navigation keys and buttons are not listed (they are the same everywhere
+and shown in the menu footer). Button names come from the connected pad (`SDL_GetGamepadType`: PS3 / PS4 / PS5 ->
 PlayStation names and shapes — cross, circle, square, triangle, L1 / R1 / L2 / R2, Create / Options; everything else,
 and no pad, -> Xbox names A / B / X / Y, LB / RB / LT / RT, View / Menu); AUTO can be overridden with XBOX or
 PLAYSTATION. Nintendo pads get Xbox names, which do not match their printed letters. No gamepad has been connected to
-this build: the pad diagram, the automatic choice with a real pad and the gamepad bindings are untested on hardware
-(CTest `pad_glyph_detect` covers the type mapping only). Bindings, key labels and glyph names live in
+this build by a person: the pad diagram, the automatic choice with a real pad and the gamepad bindings are untested
+by hand (CTest `pad_glyph_detect` covers the type mapping only; the right-stick camera is checked with a virtual SDL
+pad). With several pads connected, the newest one drives; unplugging it falls back to another. Bindings, key labels and glyph names live in
 `src/input/ControlLayout.h` (no SDL); `Input` maps them to SDL keys and buttons.
 
 **Menus.** The game starts with an intro (logo over `intro.mp3`; any key, click or gamepad button skips it), then
 the start menu: Start, Garage, Settings, Quit. Up / Down (arrows, W / S, D-pad or left stick) move, Enter / Space / gamepad A
 select, Left / Right (A / D, D-pad, stick) change a setting, Esc / Backspace / gamepad B go back; the mouse hovers and
-clicks rows (clicking the arrows of a setting steps it down / up). Esc during play opens the pause menu. Settings
-(shared by both menus): graphics preset, resolution scale, VSync, master / music / effects / UI volume, the driver
+clicks rows (clicking the arrows of a setting steps it down / up). Every page below the start / pause menu has a
+◀ BACK button at the top left above the page title: clickable, reached with Up from the first row (Down returns to
+it), never the default focus. Esc during play opens the pause menu. Settings
+(shared by both menus): graphics preset, resolution scale, grass distance, tree detail distance, VSync, master / music / effects / UI volume, the driver
 aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse) and the Controls page
 (drive keys W A S D / arrows, gamepad button names auto / Xbox / PlayStation, keyboard and gamepad diagrams).
 The TC default "VEHICLE DEFAULT" (the default setting) uses each vehicle's `aids.traction`: on for the electric SUV,
 off for the gasoline SUV; OFF / ON / OFF-ROAD force one mode for every vehicle.
-They are saved to `settings.cfg` (keys include `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
+They are saved to `settings.cfg` (keys include `grass_distance` / `tree_distance` in m, 0 = the preset's value, `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
 `drive_keys` 0 / 1 and `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation; an old `traction = 0` line reads as the vehicle
 default)
 in the user data directory (`trailforge --paths`) when a Settings page is closed and
@@ -688,6 +706,7 @@ documents; `vehicle_catalog_sweep` drives every definition in `assets/vehicles` 
 | `aero` | `dragArea` (Cd·A, m²), `airDensity` |
 | `aids` | `absEnabled`, `traction` (`off`, `on`, `off_road`) and the ABS / TC thresholds and rates |
 | `garage` | `ranges` {setup parameter key: [min, max]} — slider ranges for this vehicle |
+| `camera` (optional) | `hood` {`position` [x, y, z] (m, body space: x in ±1.5, y 0..3, z ±3), `pitch` (deg, negative looks down), `nearPlane` (m)} — hood camera mount, view only |
 | `kits` | [{`id`, `name`, `description`, `massDelta`, `overrides` (a partial vehicle.json merged over the base), `ranges`, `visualParts`}] |
 
 `tests/data/vehicles/rwd_test/vehicle.json` (test-only, not shipped) is a 1650 kg RWD pickup with bump stops,
@@ -927,7 +946,10 @@ the development level and is what scenarios and `--demo` start on.
 - **Physics:** the grid is split into 255 m Jolt `HeightFieldShape` tiles (`TerrainTiles`) with per-sample
   materials; tiles within 420 m are built on a worker thread (removed beyond 620 m), a tile within 110 m that is
   not ready yet is built synchronously. Tree trunks and rocks are per-tile mesh colliders. The rendered terrain, the props and the colliders
-  come from the same grid and triangles.
+  come from the same grid and triangles. Every prop piece (bridge decks and ramps, piers, buildings) is wound
+  outward, because Jolt's wheel casts ignore back faces (CTest `level_prop_winding`); both vehicles cross both
+  bridges in both directions on four wheels without chassis contact (`level_bridges`). Buildings and props are
+  placed clear of the road corridors (`level_placement`).
 - **Water is render-only:** rivers, the lakes and the sea are surfaces drawn over rigid ground. Fords are shallow
   dips the vehicle drives through on rigid ground. Deep water: when the body origin stays below the water surface for
   1 s the vehicle is put on the nearest road with the message "Deep water: vehicle recovered to the nearest road (no
@@ -935,13 +957,18 @@ the development level and is what scenarios and `--demo` start on.
   the nearest road 8 m past it. R resets to the nearest road point, not to the spawn.
 - **Rendering:** quadtree terrain LOD over the same height grid (64 × 64 patch, split by distance and by a height
   error; `terrainDetail` per preset), splat weights (road paint with worn shoulders, rock, sand, snow) over the grass
-  / mud / wet / wheat masks, shaded with photo-scanned materials ([Terrain textures](#terrain-textures)); 4 tree LODs (crossed cards beyond 380 m; drawn out to 1.5 / 2.5 / 3.5 / 4.5 km per
-  preset); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
+  / mud / wet / wheat masks, shaded with photo-scanned materials ([Terrain textures](#terrain-textures)); 4 tree LODs (crossed cards beyond the tree detail distance: 380 / 500 / 650 / 900 m per
+  preset, the mesh LODs switch at 0.145 / 0.37 of it; the last 12% before each switch is a dithered cross-fade of
+  both LODs, so trees do not pop; drawn out to 2 / 3 / 3.5 / 4.5 km per preset); grass, flowers, wheat, trees, rocks
+  and props keep clear of every road corridor and of bridge decks with their ramps (a 1.5–3 m fade from the edge,
+  CTest `level_grass_clear`); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
 - **Map (M):** hill-shaded overview with roads, rivers, POI markers (click to teleport) and a teleport list.
 - **Frame times** (2880 × 1800, Metal, the display caps at 120 FPS): High 112–120 FPS on the roads, in the village and
-  at the quarry, 95 FPS looking across the Alpine Lake; Ultra 89 FPS in the village. Details in the devlog.
+  at the quarry, 95 FPS looking across the Alpine Lake; Ultra 89 FPS in the village. Details in the devlog. v0.14.0 distances (grass 110 m, tree detail 650 m on High)
+  against the v0.13.0 ones (45 m, 380 m), GPU ms with VSync off (medians of 3, a background VM running): forest
+  view High 6.90 vs 6.85, Ultra 11.3 vs 9.2; village view High 7.6–11.0 vs 6.9–10.5 (noisy).
 
 ## Rendering
 
@@ -1057,7 +1084,9 @@ vertex shader decides everything per blade from hashes, the ground maps and a ti
   flexibility, plus a small flutter across the wind; no independent per-blade jitter.
 - **Wheels** flatten every species: blades within the contact radius and in the trample mask lie down (lean up to
   83°, away from the wheel when it is near) and torn turf removes them, so driven lanes stay visible in grass and wheat.
-- **Distance:** blades fade out toward the grass distance and the coarser LODs widen; the ground under grass takes
+- **Distance:** blades shrink to nothing over the last 20% of the grass distance (Settings → GRASS DISTANCE, F2
+  "Grass distance", 20–250 m); the two dense LODs end at 0.3 / 0.6 of it but at most 18 / 40 m, so a longer
+  distance only adds the sparse far LOD; the coarser LODs widen; the ground under grass takes
   the same zone colours as a canopy colour, fully at distance and partly near the camera (more on Low/Medium, whose
   grids are sparser), so there is no visible LOD ring. With grass off the ground shows the canopy colour everywhere.
 - **Per preset:** density and distance (table below), flower density 0.5 / 0.8 / 1 / 1, fine detail (awns,
@@ -1204,10 +1233,14 @@ Quality presets (Graphics panel, F2; default High):
 
 | Preset | Render scale | AA | Cascades × size | Shadow distance | Reflection scale | Bloom | Grass density / distance | Flowers / grass detail | Wheel spray cap |
 |---|---|---|---|---|---|---|---|---|---|
-| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 22 m | 0.5 / off | 600, no dust |
-| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 32 m | 0.8 / on | 1500 |
-| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 45 m | 1 / on | 3000 |
-| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 60 m | 1 / on | 6000 |
+| Low | 0.67 | FXAA | 1 × 1024 | 40 m | off | off | 1 / 40 m | 0.5 / off | 600, no dust |
+| Medium | 0.85 | FXAA | 2 × 1536 | 60 m | 0.35 | on | 2 / 70 m | 0.8 / on | 1500 |
+| High | 1.0 | MSAA 2× | 3 × 2048 | 80 m | 0.5 | on | 3 / 110 m | 1 / on | 3000 |
+| Ultra | 1.0 | MSAA 4× | 4 × 2048 | 110 m | 0.75 | on | 4 / 160 m | 1 / on | 6000 |
+
+Grass distance and the tree detail distance (Exploration Peaks; see there for the trees) can also be set on their
+own in Settings → Graphics and in the F2 panel; they are generic per-system distances (not tied to the current pine
+mesh). Rocks and props have a single mesh each and no distance setting.
 
 The panel also shows CPU frame time (without the swapchain wait), GPU time (from `MTLCommandBuffer`
 `GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed

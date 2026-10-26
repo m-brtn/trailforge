@@ -34,7 +34,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 61 tests, 58 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 69 tests, 62 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -56,7 +56,7 @@ prints them). Visual changes to Metal output can be measured with `tools/render/
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
-`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_probe`
+`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
@@ -66,7 +66,9 @@ check failed:
 
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
-./build/release/trailforge --script tools/scenarios/menus.txt         # intro, start/pause/settings menus, /tmp/trailforge_menu_*.png
+./build/release/trailforge --script tools/scenarios/menus.txt         # intro, start/pause/settings menus, BACK buttons, draw distances, /tmp/trailforge_menu_*.png
+./build/release/trailforge --script tools/scenarios/camera.txt        # hood camera both vehicles (flat + slope), virtual-pad right stick, /tmp/trailforge_cam_*.png
+./build/release/trailforge --script tools/scenarios/controls.txt      # Controls page diagrams and callouts, arrow-key drive, /tmp/trailforge_controls_*.png
 ./build/release/trailforge --script tools/scenarios/garage.txt        # garage setups, live / rebuild values, /tmp/trailforge_garage_*.png
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
@@ -85,6 +87,10 @@ check failed:
 python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 # EV motor sound: tools/scenarios/ev_audio.txt with --audio-capture, same analysis (motor order vs motor_hz)
 ```
+
+Scenario time is a fixed 1/120 s per frame (paced to real time; not inside `perf_begin`..`perf_end`), so checks
+behave the same at 60 and 120 Hz and with VSync on or off. A real gamepad may be connected to the test Mac: use
+`controls pad_type none` or the virtual `gamepad attach` in checks that must not depend on it.
 
 Other app flags: `--level ID` (`exploration_peaks`, `proving_ground`; scenarios and `--demo` start on the proving ground), `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
 `--audio-capture file.wav`, `--paths`, `--version`. Scenario checks must not depend on an audio device: everything except
