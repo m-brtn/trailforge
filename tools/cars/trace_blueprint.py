@@ -258,16 +258,69 @@ class View:
         self.silhouette = full & (1 - self.ignore)  # compared with the render (antennas, roof spare ignored)
         self.body = largest(self.silhouette & (1 - self.accessory))  # what the body loft is traced from
         self.class_names, idx, dist = classify(cell, kp["palette"])
-        for o in vk.get("classOverride", []):  # hand-marked colour regions (e.g. the roof under the rack)
-            idx = np.where(poly_mask(cell.shape, [o["poly"]]) > 0, self.class_names.index(o["class"]), idx)
+        self.overrides = [(poly_mask(cell.shape, [o["poly"]]), self.class_names.index(o["class"]))
+                          for o in vk.get("classOverride", [])]  # hand-marked colour regions (roof under the rack)
+        self.regions = [(poly_mask(cell.shape, [o["poly"]]), self.class_names.index(o["class"]))
+                        for o in vk.get("paint", [])]  # hand-drawn paint regions with straight edges, drawn last
+        for m, c in self.overrides:
+            idx = np.where(m > 0, c, idx)
         self.cls = np.where(self.silhouette > 0, idx, -1)
         self.cls_dist = dist
+        self.paint = paint_classes(self)
 
     def cmask(self, name, within=None):
         if name not in self.class_names:
             return np.zeros(self.body.shape, np.uint8)
         m = (self.cls == self.class_names.index(name)).astype(np.uint8)
         return m & (within if within is not None else self.silhouette)
+
+
+def nearest_fill(cls, holes):
+    """Classes of the `holes` pixels (and of every pixel without a class) taken from the nearest pixel that has one."""
+    known = (cls >= 0) & (holes == 0)
+    if not known.any():
+        return cls
+    _, lab = cv2.distanceTransformWithLabels((1 - known).astype(np.uint8), cv2.DIST_L2, 5,
+                                             labelType=cv2.DIST_LABEL_PIXEL)
+    ys, xs = np.nonzero(known)
+    lut = np.zeros(lab.max() + 1, cls.dtype)
+    lut[lab[ys, xs]] = cls[ys, xs]
+    return np.where(known, cls, lut[lab])
+
+
+def paint_classes(v, k=7, min_area=90):
+    """Paint regions of one view for the body colours (cell pixels, a class everywhere): the colour classes with the
+    accessories and ignored parts (rack, cargo, mirrors, bull bar, antennas) replaced by the nearest body colour,
+    the hand-marked overrides put back, then cleaned: two k x k majority passes and no region smaller than
+    `min_area` pixels (handles, seams, badges, line work), which are filled from around them. The hand-drawn
+    "paint" polygons of the view (main panels, cladding lines) are drawn over the result in order."""
+    cls = nearest_fill(v.cls, (v.accessory | v.ignore) & v.silhouette)
+    for m, c in v.overrides:
+        cls = np.where(m > 0, c, cls)
+    every = np.ones(cls.shape, np.uint8)
+    for _ in range(2):
+        cls = mode_filter(cls, every, k)
+    for _ in range(2):
+        small = np.zeros(cls.shape, np.uint8)
+        for c in range(int(cls.max()) + 1):
+            n, lab, st, _ = cv2.connectedComponentsWithStats((cls == c).astype(np.uint8), connectivity=4)
+            tiny = np.nonzero(st[:, cv2.CC_STAT_AREA] < min_area)[0]
+            tiny = tiny[tiny > 0]
+            if len(tiny):
+                small |= np.isin(lab, tiny).astype(np.uint8)
+        if not small.any():
+            break
+        cls = nearest_fill(cls, small)
+    if "accent" in v.class_names:  # accent stripes are drawn thinner than the majority window: kept from the sheet
+        a = v.class_names.index("accent")
+        raw = ((v.cls == a) & (v.accessory == 0) & (v.ignore == 0)).astype(np.uint8)
+        raw = cv2.morphologyEx(raw, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        n, lab, st, _ = cv2.connectedComponentsWithStats(raw, connectivity=4)
+        keep = np.nonzero(st[:, cv2.CC_STAT_AREA] >= min_area // 3)[0]
+        cls = np.where(np.isin(lab, keep[keep > 0]), a, cls)
+    for m, c in v.regions:
+        cls = np.where(m > 0, c, cls)
+    return cls
 
 
 def col_extent(mask, x):
@@ -631,7 +684,7 @@ def build(cfg, kp, root, debug_dir):
         del sections[n]["_tireHalf"]
         gv, ghull, gcx, gq, gg = sections[n].pop("_grid")
         sgn = 1.0 if n == "front" else -1.0
-        sections[n]["grid"] = grid(gv, ghull, gv.cls, -sgn * gcx * kx / gq, sgn * kx / gq, gg / gq - D / 2, -1.0 / gq)
+        sections[n]["grid"] = grid(gv, ghull, gv.paint, -sgn * gcx * kx / gq, sgn * kx / gq, gg / gq - D / 2, -1.0 / gq)
     # Top: symmetric about the centre line, from the image-top half (the drop shadow falls on the other side).
     h_t = v.body.shape[0]
     top_i = np.array([col_extent(v.body, x)[0] if v.body[:, x].any() else np.nan for x in range(v.body.shape[1])])
@@ -639,9 +692,9 @@ def build(cfg, kp, root, debug_dir):
     hw_rows = (cy_t - top_i)[None, :]
     hull_t = (np.abs(ii - cy_t) <= hw_rows).astype(np.uint8)
     mirror_i = np.clip(np.round(np.where(ii > cy_t, 2 * cy_t - ii, ii)).astype(int), 0, h_t - 1)
-    cls_t = v.cls[mirror_i, np.arange(v.body.shape[1])[None, :]]
+    cls_t = v.paint[mirror_i, np.arange(v.body.shape[1])[None, :]]
     plan["grid"] = grid(v, hull_t, cls_t, side_front + xs.min() / ppm_t, -1.0 / ppm_t, -cy_t / ppm_t, 1.0 / ppm_t)
-    side["grid"] = grid(s, side_hull(s, wh, p, kp), s.cls, x_mid / ppm, -1.0 / ppm, y_axle / ppm, -1.0 / ppm)
+    side["grid"] = grid(s, side_hull(s, wh, p, kp), s.paint, x_mid / ppm, -1.0 / ppm, y_axle / ppm, -1.0 / ppm)
     def box_m(view, box):
         g = (sections[view] if view in sections else side if view == "side" else plan)["grid"]
         (x0, y0), (x1, y1) = box
@@ -706,7 +759,7 @@ def grid(v, hull, cls, u0, du, v0, dv):
     """One view as a class grid on the cell's pixels: cell (row i, column j) is at u = u0 + du * j,
     v = v0 + dv * i (meters, concept frame); '.' outside the body hull."""
     names = v.class_names
-    cl = mode_filter(np.where(cls < 0, names.index("paint"), cls), hull)
+    cl = np.where(cls < 0, names.index("paint"), cls)
     lut = np.array([CLASS_LETTERS.get(n, n[0]) for n in names] + ["."])
     letters = lut[np.where(hull > 0, cl, len(names))]
     return {"u0": rnd(u0, 5), "du": rnd(du, 6), "v0": rnd(v0, 5), "dv": rnd(dv, 6), "width": int(hull.shape[1]),
@@ -789,6 +842,12 @@ def debug_overlays(V, wh, p, out_dir, vid):
         path = os.path.join(out_dir, f"trailforge_blueprint_{vid}_{n}.png")
         Image.fromarray(img).save(path)
         print("overlay", path)
+        pc = np.zeros_like(v.cell)
+        for i, cn in enumerate(v.class_names):
+            pc[v.paint == i] = CLASS_COLORS.get(cn, (255, 0, 255))
+        path = os.path.join(out_dir, f"trailforge_blueprint_{vid}_{n}_paint.png")
+        Image.fromarray(np.concatenate([v.cell, pc], 1).astype(np.uint8)).resize(
+            (v.cell.shape[1] * 4, v.cell.shape[0] * 2), Image.NEAREST).save(path)
 
 
 def main():

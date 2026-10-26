@@ -27,6 +27,9 @@ struct BlueprintView {
     std::vector<float> sd;  // signed distance to the body outline, m (negative inside)
 
     char classAt(float u, float v) const; // nearest cell; '.' outside the grid
+    // Class with the largest weight in a [1 2 1] blur of the cells, bilinear between cell centres: region borders
+    // run smoothly between the cells instead of following the pixel staircase. '.' outside the grid.
+    char smoothClassAt(float u, float v) const;
     float distance(float u, float v) const; // bilinear; grows linearly outside the grid
     bool inside(float u, float v) const { return distance(u, v) < 0.0f; }
 };

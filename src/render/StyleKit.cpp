@@ -40,7 +40,7 @@ Livery oliveExpedition() {
     l.accent = paint(srgb(0.96f, 0.50f, 0.13f), 0.34f);
     l.roof = paint(srgb(0.90f, 0.90f, 0.87f), 0.36f, 0.35f);
     l.stripe = paint(srgb(0.93f, 0.93f, 0.90f), 0.38f, 0.8f);
-    l.trim = plastic(lin(0.17f), 0.78f);
+    l.trim = {MatId::Cladding, lin(0.17f), 0.78f, 0.0f, 1.0f};
     l.steel = {MatId::Generic, lin(0.16f), 0.48f, 0.35f, 1.0f};
     l.liner = plastic(lin(0.12f), 0.92f);
     l.underbody = plastic(lin(0.20f), 0.88f);
@@ -58,7 +58,7 @@ Livery arcticElectric() {
     l.accent = paint(srgb(0.10f, 0.42f, 0.92f), 0.32f);
     l.roof = paint(srgb(0.80f, 0.81f, 0.82f), 0.34f, 0.35f);
     l.stripe = l.accent;
-    l.trim = plastic(lin(0.10f), 0.80f);
+    l.trim = {MatId::Cladding, lin(0.10f), 0.80f, 0.0f, 1.0f};
     l.steel = {MatId::Generic, lin(0.12f), 0.50f, 0.30f, 1.0f};
     l.gunmetal = {MatId::Generic, lin(0.20f), 0.36f, 0.8f, 0.8f};
     l.hooks = {MatId::Generic, srgb(0.10f, 0.42f, 0.92f), 0.40f, 0.2f, 0.5f};
