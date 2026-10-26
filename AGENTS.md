@@ -43,7 +43,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 81 tests, 73 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 82 tests, 74 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 

@@ -1106,12 +1106,24 @@ the development level and is what scenarios and `--demo` start on.
 
 - **Data:** `assets/levels/exploration_peaks/level.json` — elevation control points and peaks, coast polygons and
   beaches, 2 lakes, 4 rivers, 11 spline roads (width, banking, trail flag), forests, a wheat field, flats for the POI
-  sites, 13 POIs, the spawn. `Level` bakes it at load (about 270 ms in Release on the M-series Mac) into a 2561 × 2561 grid at 1 m
+  sites, 13 POIs, the spawn. `Level` bakes it at load (about 0.4 s in Release on the M-series Mac) into a 2561 × 2561 grid at 1 m
   (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
   flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
   shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
-  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI buildings
+  road ruts, snow above a noisy snow line), render masks, ~25.6k trees, ~1.5k rocks, logs, cliff faces and scree
+  boulders, and the POI buildings
   ([Buildings](#buildings)).
+- **Steep ground:** no straight walls from the bake itself. A lake whose surroundings are lower than its water keeps
+  a 12 m lip that falls away as an uneven 15–27° embankment; inside the outline the bed shelves down at most ~27°,
+  and gorge walls rise from it at most ~63°. Steep river banks (`bankSlope` ≥ 1.5, the canyon) have a scree apron of
+  1.5–5.5 m at ~37° at the water, spurs and gullies (the slope varies ±25 % along the wall), ledges every ~16 m of
+  height, a bank line that wanders a few meters off the spline and a rim rounded by a smooth minimum. Cut banks
+  within 40 m of a road are relaxed to about 45° (switchback legs used to meet in a wall). The coast cap fades out
+  toward its 400 m reach (it used to cut a 64 m cliff into the northern range). Cliff faces (CC0 models with their
+  collision meshes) clad walls of 46° or more every ~7 m, scree boulders (rock models, collision meshes) lie at the
+  wall feet where the ground within 6 m rises by more than 6 m. CTest `level_slopes`: no dry cell steeper than 80°
+  beyond 0.04 % (measured 0.000 %) and no single 1 m step of 8 m or more outside the waterfalls (largest 7.3 m, a
+  canyon ledge). `trailforge_probe levelslope` prints the slope statistics and writes a slope map.
 - **Physics:** the grid is split into 255 m Jolt `HeightFieldShape` tiles (`TerrainTiles`) with per-sample
   materials; tiles within 420 m are built on a worker thread (removed beyond 620 m), a tile within 110 m that is
   not ready yet is built synchronously. Tree trunks and rocks are per-tile mesh colliders. The rendered terrain, the props and the colliders
@@ -1126,11 +1138,15 @@ the development level and is what scenarios and `--demo` start on.
   the nearest road 8 m past it. R resets to the nearest road point, not to the spawn.
 - **Rendering:** quadtree terrain LOD over the same height grid (64 × 64 patch, split by distance and by a height
   error; `terrainDetail` per preset), splat weights (road paint with worn shoulders, rock, sand, snow) over the grass
-  / mud / wet / wheat masks, shaded with photo-scanned materials ([Terrain textures](#terrain-textures)); 4 tree LODs (crossed cards beyond the tree detail distance: 380 / 500 / 650 / 900 m per
+  / mud / wet / wheat masks, shaded with photo-scanned materials ([Terrain textures](#terrain-textures)); steep rock
+  gets warped side projections (no stacked texture repeats), dipping sedimentary beds (grey, buff and iron-stained
+  tones, small ledges in the normal) and large tone patches; under the tree crowns (a canopy weight from the placed
+  trees in the splat alpha) the floor turns into dark needle and leaf litter with less sky light; 4 tree LODs (crossed cards beyond the tree detail distance: 380 / 500 / 650 / 900 m per
   preset, the mesh LODs switch at 0.145 / 0.37 of it; the last 12% before each switch is a dithered cross-fade of
   both LODs, so trees do not pop; drawn out to 2 / 3 / 3.5 / 4.5 km per preset); grass, flowers, wheat, trees, rocks
   and props keep clear of every road corridor and of bridge decks with their ramps (a 1.5–3 m fade from the edge,
-  CTest `level_grass_clear`); a render-only horizon ring outside the bake (low hills, a northern range, vertex colors) and the open sea
+  CTest `level_grass_clear`); a render-only horizon ring outside the bake (ridged hills that continue the bake edge, a northern range from
+  ~1 km out, vertex colors) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
 - **Map (M / LB):** see [Map, waypoint and compass](#map-waypoint-and-compass). No fast travel: teleports are in the
@@ -1339,10 +1355,10 @@ elsewhere), places model rocks and logs with collision, and scatters render-only
   quads sample; the impostor is rendered from the full source foliage.
 - **Drawing:** instanced, 64 m buckets culled against the view and the shadow cascades, LOD by distance with the same
   dithered cross-fade as the grass and pines; ranges scale with TREE DETAIL DISTANCE (trees: mesh LODs to 0.07 /
-  0.19 / 0.55 of it, impostors beyond, out to the tree distance). Foliage is alpha-tested (alpha to coverage with MSAA)
+  0.15 / 0.45 of it, impostors beyond, out to the tree distance). Foliage is alpha-tested (alpha to coverage with MSAA)
   and sways in the wind (render only).
-- **Cliff faces:** the two rock faces (turned by modelc so their mean face normal is +Z) clad walls of 50° and steeper
-  with at least 8 m of drop: a 9 m jittered grid, tilted into the slope and turned downhill, kept only where every
+- **Cliff faces:** the two rock faces (turned by modelc so their mean face normal is +Z) clad walls of 46° and steeper
+  with at least 8 m of drop and no water within 4 m below them: a 7 m jittered grid, tilted into the slope and turned downhill, kept only where every
   edge point stays within the slab depth of the ground (no fins past a rim). Collision is their collision mesh in the
   tile compound, like the other model rocks.
 
