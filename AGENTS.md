@@ -34,7 +34,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 69 tests, 62 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 72 tests, 65 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -80,6 +80,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
 ./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
 ./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, PERF tex vs off, /tmp/trailforge_tex_*.png
+./build/release/trailforge --script tools/scenarios/map_check.txt # full-screen map, waypoint, compass distance, pad map controls, minimap options, /tmp/trailforge_map_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
