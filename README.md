@@ -1197,7 +1197,7 @@ the development level and is what scenarios and `--demo` start on.
   (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
   flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
   shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
-  road ruts, snow above a noisy snow line), render masks, ~25.6k trees, ~1.5k rocks, logs, cliff faces and scree
+  road ruts, snow above a noisy snow line), render masks, ~22.1k trees (thinning out over the last ~200 m before the bake edge), ~1.2k rocks, logs, cliff faces and scree
   boulders, and the POI buildings
   ([Buildings](#buildings)).
 - **Steep ground:** no straight walls from the bake itself. A lake whose surroundings are lower than its water keeps
@@ -1453,8 +1453,10 @@ elsewhere), places model rocks and logs with collision, and scatters render-only
   and sways in the wind (render only).
 - **Cliff faces:** the two rock faces (turned by modelc so their mean face normal is +Z) clad walls of 46° and steeper
   with at least 8 m of drop and no water within 4 m below them: a 7 m jittered grid, tilted into the slope and turned downhill, kept only where every
-  edge point stays within the slab depth of the ground (no fins past a rim). Collision is their collision mesh in the
-  tile compound, like the other model rocks.
+  edge point keeps the back of the slab inside the wall (the models are open shells: a back seen from above a rim
+  read as loose shards over the Falls Pool) and no part dips below water within its reach (237 faces). Collision is
+  their collision mesh in the tile compound, like the other model rocks. CTest `level_poi_buildings` checks both, plus
+  ground cover with its whole footprint on dry ground, the castle ruins on their POI and buildings above the water.
 
 ### Buildings
 

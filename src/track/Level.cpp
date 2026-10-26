@@ -1543,7 +1543,11 @@ void LevelBaker::bakeTrees() {
             const float h = m_h[k];
             const float snowFade = 1.0f - smoothstep(snowLineAt(x, z) - 40.0f, snowLineAt(x, z) - 5.0f, h);
             const float forest = m_forest[c];
-            const float density = treeDensity(x, z, forest) * snowFade;
+            // Past the play area the forest thins out toward the bake edge along a noisy line, so the horizon ring
+            // (no trees) does not meet a straight wall of trees.
+            const float edge = std::max(std::abs(x), std::abs(z)) + 150.0f * (fbm(x / 240.0f, z / 240.0f, 3, m_seed + 151u) - 0.5f);
+            const float outer = 1.0f - smoothstep(L.m_playHalf + 80.0f, m_half - 30.0f, edge);
+            const float density = treeDensity(x, z, forest) * snowFade * outer;
             if (hashUnit(gi, gj, m_seed + 109u) >= density) continue;
             LevelTree t;
             t.x = x;
@@ -1788,8 +1792,8 @@ void LevelBaker::bakeCliffs() {
             rock.yaw = std::atan2(dx, dz) + 0.3f * (hashUnit(gi, gj, m_seed + 515u) - 0.5f);
             rock.pitch = slope - 0.5f * kPi;
             // Face frame (the shader transform of +X, +Y, +Z); the slab sits a third of its depth proud of the slope
-            // and every edge point must stay within the slab depth of the ground, so faces neither stick up past a
-            // rim nor bridge a gully.
+            // and every edge point must keep the back buried (the models are open shells: a back seen from above a
+            // rim reads as loose shards) without bridging a gully.
             const float cy = std::cos(rock.yaw), sy = std::sin(rock.yaw), cp = std::cos(rock.pitch), sp = std::sin(rock.pitch);
             const float rgt[3] = {cy, 0.0f, -sy}, up[3] = {sp * sy, cp, sp * cy}, nrm[3] = {cp * sy, -sp, cp * cy};
             const float out = 0.33f * rock.rz;
@@ -1804,9 +1808,18 @@ void LevelBaker::bakeCliffs() {
                     const float px = rock.x + rgt[0] * u + up[0] * v, py = rock.y + up[1] * v, pz = rock.z + rgt[2] * u + up[2] * v;
                     const float gy = L.heightAt(px, pz);
                     const float d = (py - gy) * std::cos(slope);
-                    if (d > 1.5f * rock.rz + 0.5f || d < -0.5f * rock.rz - 1.0f) flush = false;
+                    if (d > 0.9f * rock.rz || d < -0.5f * rock.rz - 1.0f) flush = false;
                 }
             if (!flush) continue;
+            // A slab reaching below the surface of water next to it leaves only slivers above the surface (dark
+            // shards on the Falls Pool): within its reach of any water its lowest point stays above the water.
+            const float reach = std::max(rock.rx, rock.ry);
+            bool dry = true;
+            for (int a = 0; a < 8 && dry; ++a) {
+                const float ax = rock.x + reach * std::cos(0.25f * kPi * float(a)), az = rock.z + reach * std::sin(0.25f * kPi * float(a));
+                if (const std::optional<float> w = L.waterAt(ax, az); w && rock.y - rock.ry < *w + 0.3f) dry = false;
+            }
+            if (!dry) continue;
             rock.seed = hash3(gi, gj, m_seed + 517u);
             rock.style = PropStyle::DarkStone;
             L.m_rocks.push_back(rock);
@@ -1927,7 +1940,17 @@ void LevelBaker::bakeScatter() {
             const int id = (*pool)[hash3(gi, gj, m_seed + 519u) % std::uint32_t(pool->size())];
             const float reach = L.m_models[std::size_t(id)].radius * size;
             if (roadClearance(x, z) < 0.8f + reach + kGridSlack) continue;
+            // The whole footprint on dry, even ground: a fern or bush whose fronds reach over water or past a wall
+            // edge floats there as loose shards (the Falls Pool shore under its walls).
             bool clear = true;
+            float lo = 1e30f, hi = -1e30f;
+            for (int a = 0; a < 8 && clear; ++a) {
+                const float ax = x + reach * std::cos(0.25f * kPi * float(a)), az = z + reach * std::sin(0.25f * kPi * float(a));
+                if (L.waterAt(ax, az)) clear = false;
+                const float ah = L.heightAt(ax, az);
+                lo = std::min(lo, ah), hi = std::max(hi, ah);
+            }
+            if (!clear || hi - lo > 0.8f * reach + 0.3f) continue;
             for (const LevelPoi& p : L.m_pois)
                 if (std::hypot(x - p.atX, z - p.atZ) < 8.0f + reach) clear = false;
             if (!clear) continue;

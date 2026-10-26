@@ -1297,6 +1297,103 @@ void levelBuildings() {
                 structures, L.buildingTypes().size());
 }
 
+// POI building groups stay on their sites (the placement may shift a group off a road, not across the map), no
+// structure stands below the surface of a lake or the sea next to it, and neither ground cover nor cliff slabs reach
+// into water.
+void levelPoiBuildings() {
+    const Level& L = *level();
+    const auto poi = [&](const char* kind) -> const LevelPoi* {
+        for (const LevelPoi& p : L.pois())
+            if (p.kind == kind) return &p;
+        return nullptr;
+    };
+    const auto kindOf = [&](const LevelBuilding& b) { return L.buildingTypes()[b.type].spec.kind; };
+    // Castle ruins: walls, towers and the gate are one group laid out around the POI, the gate 14 m north of it.
+    if (const LevelPoi* p = poi("ruins")) {
+        int n = 0;
+        float shift = 1e9f;
+        for (const LevelBuilding& b : L.buildings()) {
+            const BuildingKind k = kindOf(b);
+            if (k != BuildingKind::RuinWall && k != BuildingKind::RuinTower && k != BuildingKind::RuinGate) continue;
+            ++n;
+            if (k == BuildingKind::RuinGate) shift = std::hypot(b.x - (p->x + 0.5f), b.z - (p->z + 14.0f));
+        }
+        std::printf("  castle ruins: %d parts, shifted %.1f m from their layout around the POI\n", n, double(shift));
+        CHECK(n == 8 && shift < 6.0f, "%d ruin parts, shifted %.1f m from the POI layout", n, double(shift));
+    }
+    // Single landmarks stand on their marker.
+    for (const auto& [kind, bk] : {std::pair{"lighthouse", BuildingKind::Lighthouse}, std::pair{"radio_tower", BuildingKind::RadioMast}}) {
+        const LevelPoi* p = poi(kind);
+        if (!p) continue;
+        float best = 1e9f;
+        for (const LevelBuilding& b : L.buildings())
+            if (kindOf(b) == bk) best = std::min(best, std::hypot(b.x - p->x, b.z - p->z));
+        CHECK(best < 6.0f, "%s %.1f m from its POI", kind, double(best));
+    }
+    // Structures by a lake or the sea: the floor is not below the water surface within 40 m.
+    int below = 0, nearWater = 0;
+    for (const LevelBuilding& b : L.buildings()) {
+        if (!buildingIsStructure(kindOf(b))) continue;
+        float top = -1e30f;
+        for (float dz = -40.0f; dz <= 40.0f; dz += 1.0f)
+            for (float dx = -40.0f; dx <= 40.0f; dx += 1.0f) {
+                if (dx * dx + dz * dz > 1600.0f) continue;
+                const WaterKind wk = L.waterKindAt(b.x + dx, b.z + dz);
+                if (wk != WaterKind::Lake && wk != WaterKind::Sea) continue;
+                if (const auto w = L.waterAt(b.x + dx, b.z + dz)) top = std::max(top, *w);
+            }
+        if (top < -1e29f) continue;
+        ++nearWater;
+        if (b.y < top - 0.3f) {
+            std::printf("  %s at %.1f %.1f: floor %.2f below the water at %.2f\n", buildingKindName(kindOf(b)),
+                        double(b.x), double(b.z), double(b.y), double(top));
+            ++below;
+        }
+    }
+    std::printf("  %d structures within 40 m of a lake or the sea\n", nearWater);
+    CHECK(below == 0, "%d structures below the water next to them", below);
+    // Ground cover stands with its whole footprint on dry ground (no fronds floating over a pool).
+    int overWater = 0;
+    for (const LevelScatter& c : L.scatter()) {
+        const float r = L.models()[std::size_t(c.model)].radius * c.scale;
+        for (int k = 0; k < 8; ++k)
+            if (L.waterAt(c.x + r * std::cos(0.785398f * float(k)), c.z + r * std::sin(0.785398f * float(k)))) {
+                ++overWater;
+                break;
+            }
+    }
+    std::printf("  %zu ground cover models, %d reaching over water\n", L.scatter().size(), overWater);
+    CHECK(overWater == 0, "%d ground cover models reach over water", overWater);
+    // Cliff slabs (pitched rock models on the walls) do not dip into a pool or show their back.
+    int dipping = 0, slabs = 0, exposed = 0;
+    for (const LevelRock& r : L.rocks()) {
+        if (r.model < 0 || std::abs(r.pitch) < 0.05f) continue;
+        ++slabs;
+        const float reach = std::max(r.rx, r.ry);
+        for (int k = 0; k < 8; ++k) {
+            const float ax = r.x + reach * std::cos(0.785398f * float(k)), az = r.z + reach * std::sin(0.785398f * float(k));
+            if (const auto w = L.waterAt(ax, az); w && r.y - r.ry < *w) {
+                ++dipping;
+                break;
+            }
+        }
+        // The models are open shells: the back stays inside the wall everywhere over the face.
+        const float cy = std::cos(r.yaw), sy = std::sin(r.yaw), cp = std::cos(r.pitch), sp = std::sin(r.pitch);
+        const float slope = r.pitch + 0.5f * 3.14159265f;
+        bool buried = true;
+        for (int a = -2; a <= 2; ++a)
+            for (int b = -2; b <= 2; ++b) {
+                const float u = 0.5f * float(a) * r.rx, v = 0.5f * float(b) * r.ry;
+                const float px = r.x + cy * u + sp * sy * v, py = r.y + cp * v, pz = r.z - sy * u + sp * cy * v;
+                if ((py - L.heightAt(px, pz)) * std::cos(slope) > 0.9f * r.rz + 0.05f) buried = false;
+            }
+        if (!buried) ++exposed;
+    }
+    std::printf("  %d cliff slabs, %d dipping into water, %d with the back exposed\n", slabs, dipping, exposed);
+    CHECK(exposed == 0, "%d cliff slabs show their open back", exposed);
+    CHECK(dipping == 0, "%d cliff slabs dip into water", dipping);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1317,6 +1414,7 @@ int main(int argc, char** argv) {
         {"building_kit_parts", buildingKitParts},
         {"building_kit_materials", buildingKitMaterials},
         {"level_buildings", levelBuildings},
+        {"level_poi_buildings", levelPoiBuildings},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

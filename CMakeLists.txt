@@ -249,7 +249,8 @@ if(TRAILFORGE_BUILD_TESTS)
             terrain_textures_assets
             building_kit_parts
             building_kit_materials
-            level_buildings)
+            level_buildings
+            level_poi_buildings)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()

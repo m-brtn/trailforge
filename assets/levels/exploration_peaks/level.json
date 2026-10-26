@@ -153,7 +153,7 @@
     { "name": "quarry", "x": 761, "z": -750, "radius": 70, "height": 146, "fade": 22, "surface": "rock" },
     { "name": "pass", "x": 51, "z": -865, "radius": 22, "fade": 30 },
     { "name": "radio", "x": 165, "z": 140, "radius": 13, "fade": 16 },
-    { "name": "ruins", "x": 659, "z": 254, "radius": 38, "fade": 30 },
+    { "name": "ruins", "x": 716, "z": 276, "radius": 38, "fade": 30 },
     { "name": "lighthouse", "x": 833, "z": 790, "radius": 20, "fade": 18 },
     { "name": "beach camp", "x": -799, "z": 676, "radius": 24, "height": 2.2, "fade": 30 },
     { "name": "island camp", "x": 21, "z": 795, "radius": 20, "height": 2.6, "fade": 22 },
@@ -215,7 +215,7 @@
     { "id": 7, "name": "Canyon Bridge", "kind": "bridge", "x": 873, "z": -115, "at": [866, -111] },
     { "id": 8, "name": "Radio Hill", "kind": "radio_tower", "x": 162, "z": 146, "at": [172, 136] },
     { "id": 9, "name": "Valley Village", "kind": "village", "x": -510, "z": 373, "at": [-470, 395] },
-    { "id": 10, "name": "Castle Ruins", "kind": "ruins", "x": 659, "z": 254, "at": [650, 240] },
+    { "id": 10, "name": "Castle Ruins", "kind": "ruins", "x": 716, "z": 276, "at": [684, 272] },
     { "id": 11, "name": "Beach Camp", "kind": "beach_camp", "x": -799, "z": 673, "at": [-790, 668] },
     { "id": 12, "name": "Island Camp", "kind": "island_camp", "x": 21, "z": 795, "at": [32, 785] },
     { "id": 13, "name": "Lighthouse", "kind": "lighthouse", "x": 833, "z": 791, "at": [824, 778] }
