@@ -8,6 +8,7 @@
 #include "core/ModelAsset.h"
 #include "core/TerrainTextureSet.h"
 #include "physics/PhysicsWorld.h"
+#include "sim/DriftScore.h"
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
@@ -1812,6 +1813,28 @@ void levelStaticScene() {
               int(ok), double(y));
     }
     std::printf("  %zu collision triangles in the static scene body\n", collisionTris);
+
+    // Drift scoring: the course area holds the spawn, the start / infield POIs and every gate end; the clipping zones
+    // lie inside it; the outer wall bands are the x2 zones, the clipping points x1.5.
+    const DriftConfig& drift = lv.drift();
+    DriftZone area;
+    area.polygon = drift.area;
+    int outside = 0, wallZones = 0, clips = 0;
+    outside += !area.contains(lv.spawn().position.GetX(), lv.spawn().position.GetZ());
+    for (const LevelPoi& poi : lv.pois())
+        if (poi.kind != "paddock") outside += !area.contains(poi.atX, poi.atZ);
+    for (const LevelGate& g : lv.circuit().gates)
+        for (float u : {-1.0f, 1.0f}) outside += !area.contains(g.x + g.dz * u * g.halfWidth, g.z - g.dx * u * g.halfWidth);
+    for (const DriftZone& z : drift.zones) {
+        wallZones += z.multiplier == 2.0f;
+        clips += z.multiplier == 1.5f;
+        for (const DriftPoint& q : z.polygon) outside += !area.contains(q.x, q.z);
+    }
+    std::printf("  drift: area %zu points, %d wall zones x2, %d clipping zones x1.5, %d points outside the area\n",
+                drift.area.size(), wallZones, clips, outside);
+    CHECK(drift.enabled && drift.area.size() >= 20 && wallZones == 4 && clips >= 6 && outside == 0,
+          "drift: enabled %d, area %zu, wall zones %d, clips %d, outside %d", int(drift.enabled), drift.area.size(),
+          wallZones, clips, outside);
 
     SimulationSettings s;
     s.level = stadiumLevel();

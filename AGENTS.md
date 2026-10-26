@@ -86,7 +86,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
-./build/release/trailforge --script tools/scenarios/ironwall_check.txt # Ironwall Stadium: spawn on the static meshes, SUV + EV laps, R, POIs, map, PERF, /tmp/trailforge_ironwall_*.png
+./build/release/trailforge --script tools/scenarios/ironwall_check.txt # Ironwall Stadium: spawn on the static meshes, SUV + EV laps, R, drift HUD + judged slide, POIs, map, PERF, /tmp/trailforge_ironwall_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/drift_check.txt # drift scoring on the mini track: judged run, drift on/off/level switch, /tmp/trailforge_drift_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png

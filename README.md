@@ -285,7 +285,7 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `tools/scenarios/track_check.txt` (Suncoast Raceway: an autopilot lap through every checkpoint with sector times,
 the stored best lap, R to the last checkpoint, the map, fixed cameras, frame times per preset;
 `/tmp/trailforge_track_*.png`), `tools/scenarios/ironwall_check.txt` (Ironwall Stadium: spawn on the static meshes,
-SUV and EV autopilot laps, R to the last gate, the three POIs, the map, fixed cameras, frame times per preset;
+SUV and EV autopilot laps, R to the last gate, a judged hand brake drift (rwd_test), the three POIs, the map, fixed cameras, frame times per preset;
 `/tmp/trailforge_ironwall_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
 cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`), `tools/scenarios/surfaces.txt` (asphalt rubber
 marks after a locked-wheel stop on the mini track, gravel spray and displaced-gravel tracks in a trap;
@@ -384,7 +384,7 @@ lap, s), `lap_last`, `lap_best` (session), `lap_stored_best` (best_laps.cfg, thi
 (entries in it), `lap_best_gap` (best − last), `lap_stored_gap` (stored − session best), `lap_next` / `lap_next_gate`,
 `lap_last_gate`, `lap_checkpoints`, `lap_gates`, `lap_gate_dist_N` (m from gate N), `lap_sectors`, `lap_sector_N`
 (last lap, 1-based; a scenario stores its best laps in `<tmp>/trailforge_scenario_best_laps.cfg`, emptied at start),
-drift scoring: `drift_active`, `drift_running`, `drift_drifting`, `drift_angle` (body slip, deg), `drift_score`
+drift scoring: `drift_active`, `drift_running`, `drift_drifting`, `drift_in_area` (inside the course area), `drift_angle` (body slip, deg), `drift_score`
 (running run), `drift_max_angle`, `drift_zone` (multiplier of the zone at the vehicle, 0 outside), `drift_zone_time`,
 `drift_runs`, `drift_failed`, `drift_judged` (runs + failed), `drift_last`, `drift_best` (session), `drift_end` (last
 run: 0 none, 1 completed, 2 left the course, 3 spin, 4 wall hit, 5 reset), `drift_stored_best` (best_drift.cfg; a
@@ -1445,7 +1445,8 @@ physics tick; it only reads simulation data and never feeds back.
   Bad values fail the level load with a message (`parseDriftConfig`). The proving ground enables it in code for the
   mini handling track (`miniTrackDrift()`): area = the walled rectangle of the mini track, zone "Outer zone" ×2 (the
   outer 3.7 m band of the asphalt and edge over the steady part of the 32 m 180° corner), zone "Apex" ×1.5 (a line
-  on the inner edge over the middle third of that arc, reach 2.5 m).
+  on the inner edge over the middle third of that arc, reach 2.5 m). Ironwall Stadium has its own `"drift"` block
+  (see [Ironwall Stadium](#ironwall-stadium-banked-oval)).
 - **Switch:** F1 → Simulation → Drift scoring (World setting / On / Off) and the scenario command `drift
   on|off|level`; the override lasts the session.
 - **HUD:** a panel below the lap panel while scoring is active and the vehicle is on the course: slip angle, speed,
@@ -1484,11 +1485,18 @@ repository is private (see the note at the top; it must be removed or replaced b
 - **Circuit:** a 424 m oval 10 m inside the outer asphalt edge, driven counter-clockwise, banked 5–14°; gate 0 is
   the start / finish line, 6 gates with two sector lines; spawn 12 m behind the line. POIs: Start / Finish,
   Infield (drift area), Paddock. The lap timer is the shared one (see Suncoast Raceway).
+- **Drift scoring** (level.json `"drift"`, written by `convert_stadium.py --drift-only` from the source scene; see
+  [Drift scoring](#drift-scoring)): area = the outer wall face loop 0.5 m back (the oval and the infield, not the
+  paddock); ×2 "Outer wall" zones along the outer wall, 2.5 m in from the wall face (a line zone per straight, a band
+  polygon per turn); ×1.5 "Clip 1" … "Clip 12" octagons (3 m radius) around the source's clipping-point boards that
+  stand off the wall (the inner clipping points; the boards on the wall mark the outer zones). Default thresholds.
+  CTest `level_static_scene` checks that the area holds the spawn, the gates and every zone polygon.
 - **Autopilot laps** (`trailforge_probe lap assets/levels/ironwall_stadium/level.json`, 70 km/h cruise, 5 m/s² in
   curves): SUV 30.605 s (49.8 km/h mean, 67.0 km/h max), EV 30.144 s (50.6 km/h mean, 69.0 km/h max), both 100 % of
   the ticks on four asphalt wheels, no resets (CTest `level_static_lap` / `level_static_lap_ev`).
-- **Frame times** (2880 × 1800, Metal, VSync off, `ironwall_check.txt`): Low 303.6 FPS, Medium 132.1 (GPU 13.5 ms),
-  High 100.0 (GPU 18.4 ms), Ultra 92.0 (GPU 20.3 ms). Model load 7 models, ~118 ms.
+- **Frame times** (2880 × 1800, Metal, VSync off, `ironwall_check.txt`, three runs): Low 120–304 FPS, Medium
+  120–132 (GPU 13.5–14.9 ms), High 96–105 (GPU 17.5–19.1 ms), Ultra 88–92 (GPU 20.3–20.8 ms). Model load 7 models,
+  ~118 ms.
 - **Size:** 54.3 MB in Git LFS (glb + KTX2 in `assets/models/ironwall_stadium/`), 0.8 MB of plain level files.
 
 ## Map, waypoint and compass

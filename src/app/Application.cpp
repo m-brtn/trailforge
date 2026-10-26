@@ -2424,6 +2424,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "drift_active") return m_sim.drift().active() ? 1.0 : 0.0;
     if (n == "drift_running") return m_sim.drift().running() ? 1.0 : 0.0;
     if (n == "drift_drifting") return m_sim.drift().drifting() ? 1.0 : 0.0;
+    if (n == "drift_in_area") return m_sim.drift().inArea() ? 1.0 : 0.0;
     if (n == "drift_angle") return std::abs(m_sim.drift().slipAngleDeg()); // deg, |body slip|
     if (n == "drift_score") return m_sim.drift().score();                  // running run
     if (n == "drift_max_angle") return m_sim.drift().maxAngleDeg();        // of the running / last run
