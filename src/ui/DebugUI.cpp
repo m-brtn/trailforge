@@ -103,6 +103,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         remember("hud", true);
         ImGui::End();
         drawDriveHud(sim);
+        drawLapTimer(sim);
     }
 
     if (gfx.visible) drawGraphics(sim, stats, gfx);
@@ -215,6 +216,37 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     ImGui::PushFont(nullptr, 1.5f * ImGui::GetStyle().FontSizeBase);
     ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.5f, 1), "%s", sim.lastMessage());
     ImGui::PopFont();
+    ImGui::End();
+}
+
+// Mini handling track: running lap, sector splits, last and best lap (after the first start/finish crossing).
+void DebugUI::drawLapTimer(const Simulation& sim) {
+    const LapTimer& lt = sim.lapTimer();
+    if (!lt.hasGates() || (!lt.running() && lt.laps() == 0)) return;
+    auto fmt = [](double s, char* buf, std::size_t n) {
+        if (s < 0.0) std::snprintf(buf, n, "--:--.---");
+        else std::snprintf(buf, n, "%d:%06.3f", int(s / 60.0), std::fmod(s, 60.0));
+        return buf;
+    };
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(0.5f * display.x, 64.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.5f);
+    ImGui::Begin("##laptimer", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
+    char a[24], b[24], c[24];
+    ImGui::PushFont(nullptr, 1.6f * ImGui::GetStyle().FontSizeBase);
+    if (lt.running()) ImGui::Text("LAP %d  %s", lt.laps() + 1, fmt(lt.currentLap(sim.simTime()), a, sizeof(a)));
+    else ImGui::TextDisabled("LAP --  cross the start line");
+    ImGui::PopFont();
+    std::string splits;
+    for (std::size_t k = 0; k < lt.currentSectors().size(); ++k) {
+        std::snprintf(a, sizeof(a), "%sS%zu %.2f", k ? "  " : "", k + 1, lt.currentSectors()[k]);
+        splits += a;
+    }
+    if (!splits.empty()) ImGui::TextUnformatted(splits.c_str());
+    ImGui::TextDisabled("last %s  best %s", fmt(lt.lastLap(), b, sizeof(b)), fmt(lt.bestLap(), c, sizeof(c)));
+    remember("lap_timer", true);
     ImGui::End();
 }
 

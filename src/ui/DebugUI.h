@@ -110,6 +110,7 @@ private:
     std::map<std::string, UiItemRect> m_items;
 
     void drawDriveHud(const Simulation& sim);
+    void drawLapTimer(const Simulation& sim);
     void drawAidIndicators(const Simulation& sim);
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);

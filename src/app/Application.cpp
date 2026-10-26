@@ -18,6 +18,7 @@
 #include <imgui_impl_sdlgpu3.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <cmath>
@@ -767,7 +768,7 @@ void Application::startMapBuild() {
     }
     if (m_sim.track().layout() != TrackLayout::ProvingGround) return;
     ProvingGroundMapInput in;
-    const TrackBounds b = TestTrack::bounds();
+    const TrackBounds b = TestTrack::worldBounds();
     in.x0 = b.xMin - 4.0f;
     in.x1 = b.xMax + 4.0f;
     in.z0 = b.zMin - 4.0f;
@@ -1916,8 +1917,23 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         return Exec::Done;
     }
     if (c.op == "teleport") {
-        m_sim.requestTeleport(std::atoi(arg.c_str()));
-        return Exec::Done;
+        // teleport N (feature index) or teleport WORD (first feature whose name contains it, case-insensitive).
+        if (!arg.empty() && (std::isdigit(static_cast<unsigned char>(arg[0])) || arg[0] == '-')) {
+            m_sim.requestTeleport(std::atoi(arg.c_str()));
+            return Exec::Done;
+        }
+        auto lower = [](std::string v) {
+            for (char& ch : v) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+            return v;
+        };
+        const auto& features = m_sim.track().features();
+        for (std::size_t k = 0; k < features.size(); ++k)
+            if (lower(features[k].name).find(lower(arg)) != std::string::npos) {
+                m_sim.requestTeleport(int(k));
+                return Exec::Done;
+            }
+        std::printf("SCENARIO: no teleport matching '%s'\n", arg.c_str());
+        return Exec::Failed;
     }
     if (c.op == "level") {
         // level ID: switch the world like the start menu row (proving_ground or an assets/levels id).
@@ -2313,6 +2329,12 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "autopilot_progress") return m_sim.autopilot().progress();     // m from the route start
     if (n == "autopilot_lateral") return m_sim.autopilot().lateralError();
     if (n == "autopilot_resets") return m_sim.autopilotResets();
+    if (n == "lap_running") return m_sim.lapTimer().running() ? 1.0 : 0.0; // mini handling track lap timer
+    if (n == "lap_count") return m_sim.lapTimer().laps();
+    if (n == "lap_last") return m_sim.lapTimer().lastLap();
+    if (n == "lap_best") return m_sim.lapTimer().bestLap();
+    if (n == "lap_time") return m_sim.lapTimer().currentLap(m_sim.simTime());
+    if (n == "lap_next_gate") return m_sim.lapTimer().nextGate();
     if (n == "vehicle_index") return m_garage ? m_garage->vehicleIndex() : 0.0; // catalog order, 0 = default vehicle
     if (n == "vehicle_choice") return m_flow.vehicleIndex(m_settings);         // the vehicle page's choice
     if (n == "vehicle_cards") return double(m_menu.vehicleCardCount());

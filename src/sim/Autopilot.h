@@ -36,6 +36,7 @@ struct AutopilotSettings {
     float downhillSlowdown = 3.0f;   // target speed factor 1 - this * (grade - downhillGrade)
     float kp = 0.30f, ki = 0.10f;    // throttle per m/s of speed error, per m of integrated error
     float kb = 0.30f;                // brake per m/s above the target
+    float maxBrake = 0.7f;           // brake pedal limit
     // Reset conditions (honest recovery: the vehicle is put back at the route start).
     float offRouteDistance = 12.0f;  // m from the route center line ...
     float offRouteTime = 4.0f;       // ... for this long

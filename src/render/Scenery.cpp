@@ -1,6 +1,7 @@
 #include "render/Scenery.h"
 
 #include "render/GroundMaps.h"
+#include "track/MiniTrack.h"
 #include "track/TestTrack.h"
 
 #include <algorithm>
@@ -27,12 +28,19 @@ OuterRect wallRect() {
     return {b.xMin - 1.0f, b.xMax + 1.0f, b.zMin - 1.0f, b.zMax + 1.0f};
 }
 
-float outsideDistance(float x, float z) {
-    const OuterRect r = wallRect();
+// The walled mini handling track area south of the proving ground (it ends at the proving ground's wall line).
+OuterRect circuitRect() {
+    const TrackBounds b = miniTrack().area;
+    return {b.xMin - 1.0f, b.xMax + 1.0f, b.zMin - 1.0f, wallRect().z0};
+}
+
+float rectDistance(const OuterRect& r, float x, float z) {
     const float dx = std::max(std::max(r.x0 - x, x - r.x1), 0.0f);
     const float dz = std::max(std::max(r.z0 - z, z - r.z1), 0.0f);
     return std::sqrt(dx * dx + dz * dz);
 }
+
+float outsideDistance(float x, float z) { return std::min(rectDistance(wallRect(), x, z), rectDistance(circuitRect(), x, z)); }
 
 // 1 inside the view corridor north of the showcase (toward the sunset with the default sun heading), 0 elsewhere.
 // It keeps the line of sight from the meadow to the distant mountains open.
@@ -101,14 +109,16 @@ void addTier(MeshData& m, float baseY, float radius, float height, int seg, floa
 
 MeshData buildSceneryMesh() {
     MeshData m;
-    const OuterRect r = wallRect();
-    const std::vector<float> xs = axis({{-420.0f, r.x0}, {r.x0, r.x1}, {r.x1, 420.0f}}, 7.0f);
-    const std::vector<float> zs = axis({{-400.0f, r.z0}, {r.z0, r.z1}, {r.z1, 520.0f}}, 7.0f);
+    const OuterRect r = wallRect(), c = circuitRect();
+    const std::vector<float> xs =
+        axis({{-420.0f, c.x0}, {c.x0, r.x0}, {r.x0, r.x1}, {r.x1, c.x1}, {c.x1, 420.0f}}, 7.0f);
+    const std::vector<float> zs = axis({{-400.0f, c.z0}, {c.z0, r.z0}, {r.z0, r.z1}, {r.z1, 520.0f}}, 7.0f);
     Material ground{MatId::Grass, {0.20f, 0.26f, 0.09f}, 0.95f, 0.0f, 0.0f};
     for (std::size_t j = 0; j + 1 < zs.size(); ++j)
         for (std::size_t i = 0; i + 1 < xs.size(); ++i) {
             const float cx = 0.5f * (xs[i] + xs[i + 1]), cz = 0.5f * (zs[j] + zs[j + 1]);
             if (cx > r.x0 && cx < r.x1 && cz > r.z0 && cz < r.z1) continue; // inside the walls
+            if (cx > c.x0 && cx < c.x1 && cz > c.z0 && cz < c.z1) continue;
             auto P = [&](float x, float z) { return glm::vec3(x, outerHeight(x, z), z); };
             const glm::vec3 a = P(xs[i], zs[j]), b = P(xs[i], zs[j + 1]), c = P(xs[i + 1], zs[j]), d = P(xs[i + 1], zs[j + 1]);
             // Flat-shaded: the backdrop reads as faceted low-poly hills.

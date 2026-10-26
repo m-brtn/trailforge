@@ -54,6 +54,13 @@ void Simulation::buildWorld() {
         m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, m_settings.layout);
         m_water = provingGroundWater();
     }
+    // Lap timing on the proving ground's mini handling track.
+    if (!m_settings.level && m_settings.layout == TrackLayout::ProvingGround) {
+        const auto& gates = miniTrack().gates;
+        m_lapTimer.setGates({gates.begin(), gates.end()});
+    } else {
+        m_lapTimer.setGates({});
+    }
     m_tireMarks.setWater(m_water);
     m_tireMarks.clear();
     m_spawnFeature = 0;
@@ -124,6 +131,7 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_tireMarks.breakRibbons();
     m_curr = captureSnapshot();
     m_prev = m_curr;
+    m_lapTimer.reset();
 }
 
 void Simulation::respawnInPlace(VehicleConfig config) {
@@ -419,6 +427,8 @@ void Simulation::tick() {
 
     m_prev = m_curr;
     m_curr = captureSnapshot();
+    m_lapTimer.update(m_prev.body.position.GetX(), m_prev.body.position.GetZ(), m_curr.body.position.GetX(),
+                      m_curr.body.position.GetZ(), m_simTime - m_settings.fixedStep, m_simTime);
     checkRecovery(dt);
 
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

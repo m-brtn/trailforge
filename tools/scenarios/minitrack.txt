@@ -1,0 +1,83 @@
+# Mini handling track (proving ground, walled area south of its walls; src/track/MiniTrack):
+#   ./build/release/trailforge --script tools/scenarios/minitrack.txt --no-audio
+# Teleport by name, the lap timer starting at the line, fixed cameras on every section, the proving ground map.
+# Captures /tmp/trailforge_minitrack_*.png (time 11:00). Exit code 1 on FAIL.
+set ui 0
+set auto_reverse 0
+set vsync 1
+time 11
+wait 1.5
+
+# ---------------------------------------------------------------- teleport to the grid, cross the line
+teleport mini
+wait 1.5
+expect x > -53
+expect x < -51
+expect z > -75.5
+expect z < -74.5
+expect lap_running == 0
+expect speed_kmh < 0.5
+capture /tmp/trailforge_minitrack_01_grid.png
+wait 0.3
+down W
+until lap_running == 1 10
+wait 1.5
+expect lap_time > 1.0
+expect lap_next_gate == 1
+expect lap_count == 0
+capture /tmp/trailforge_minitrack_02_lap_timer.png
+wait 0.3
+up W
+down S
+until speed_kmh < 0.5 10
+up S
+wait 0.5
+
+# ---------------------------------------------------------------- fixed cameras (HUD off)
+set hud 0
+camera 60 110 15 10 0 -140
+wait 1.5
+capture /tmp/trailforge_minitrack_03_overview.png
+wait 0.3
+camera -62 2.2 -66 -30 0.5 -76
+wait 1.2
+capture /tmp/trailforge_minitrack_04_start_finish.png
+wait 0.3
+camera 112 9 -64 148 0 -90
+wait 1.2
+capture /tmp/trailforge_minitrack_05_hairpin.png
+wait 0.3
+camera 138 5 -116 94 0 -106
+wait 1.2
+capture /tmp/trailforge_minitrack_06_chicane.png
+wait 0.3
+camera 98 14 -150 140 0 -182
+wait 1.2
+capture /tmp/trailforge_minitrack_07_constant_radius.png
+wait 0.3
+camera 128 3 -203 50 0.5 -209
+wait 1.2
+capture /tmp/trailforge_minitrack_08_slalom.png
+wait 0.3
+camera -30 14 -195 -125 0 -165
+wait 1.2
+capture /tmp/trailforge_minitrack_09_sweeper.png
+wait 0.3
+camera 0 14 -38 0 0 -130
+wait 1.2
+capture /tmp/trailforge_minitrack_10_from_proving_ground.png
+wait 0.3
+
+# ---------------------------------------------------------------- the proving ground map shows the circuit
+camera follow
+set hud 1
+until map_ready == 1 10
+tap M
+wait 0.5
+expect map_open == 1
+capture /tmp/trailforge_minitrack_11_map.png
+wait 0.3
+tap M
+wait 0.3
+expect map_open == 0
+quit

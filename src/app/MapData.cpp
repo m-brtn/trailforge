@@ -60,6 +60,22 @@ Rgb surfaceColor(SurfaceId s) {
     return kGrassLow;
 }
 
+// Mini handling track finishes.
+Rgb paintColor(Paint p) {
+    switch (p) {
+    case Paint::Asphalt: return {0.30f, 0.30f, 0.32f};
+    case Paint::Line:
+    case Paint::CurbWhite:
+    case Paint::BarrierWhite: return {0.92f, 0.92f, 0.90f};
+    case Paint::CurbRed:
+    case Paint::BarrierRed: return {0.78f, 0.18f, 0.14f};
+    case Paint::Gravel: return kSand;
+    case Paint::Tyre: return {0.12f, 0.12f, 0.13f};
+    case Paint::None: break;
+    }
+    return kConcrete;
+}
+
 // Runs fn(row0, row1) over [0, rows) split across threads.
 void parallelRows(int rows, int threads, const std::function<void(int, int)>& fn) {
     if (threads <= 0) threads = int(std::max(1u, std::thread::hardware_concurrency()));
@@ -286,6 +302,7 @@ MapData buildProvingGroundMap(const ProvingGroundMapInput& in, int pixels) {
     constexpr float kEmpty = -1.0e30f;
     std::vector<float> h(std::size_t(n) * n, kEmpty);
     std::vector<SurfaceId> surf(std::size_t(n) * n, SurfaceId::Count);
+    std::vector<Paint> paint(std::size_t(n) * n, Paint::None);
     // Top-down rasterization of the upward-facing track triangles, highest surface wins.
     if (in.geometry) {
         const auto& p = in.geometry->positions;
@@ -312,6 +329,7 @@ MapData buildProvingGroundMap(const ProvingGroundMapInput& in, int pixels) {
                     if (y > h[k]) {
                         h[k] = y;
                         surf[k] = in.geometry->surfaces[t / 3];
+                        paint[k] = in.geometry->paintOf(t / 3);
                     }
                 }
         }
@@ -324,7 +342,7 @@ MapData buildProvingGroundMap(const ProvingGroundMapInput& in, int pixels) {
             const float x = r.x0 + (float(i) + 0.5f) * r.metersPerPixel, z = r.z0 + (float(j) + 0.5f) * r.metersPerPixel;
             Rgb c = kOutside;
             if (h[k] > kEmpty) {
-                c = surfaceColor(surf[k]);
+                c = paint[k] != Paint::None ? paintColor(paint[k]) : surfaceColor(surf[k]);
                 if (h[k] < in.waterLevel && x >= in.waterX0 && x <= in.waterX1 && z >= in.waterZ0 && z <= in.waterZ1) {
                     c = mix(kWaterShallow, kWaterDeep, std::clamp((in.waterLevel - h[k]) / 0.6f, 0.0f, 1.0f));
                     wet[k] = 1;

@@ -3,6 +3,7 @@
 #include "physics/PhysicsWorld.h"
 #include "sim/Autopilot.h"
 #include "sim/BodyImpacts.h"
+#include "sim/LapTimer.h"
 #include "sim/TireMarks.h"
 #include "sim/WaterQuery.h"
 #include "track/Level.h"
@@ -179,6 +180,8 @@ public:
     // Visual-only tire marks written from the wheel contact samples after every tick.
     TireMarks& tireMarks() { return m_tireMarks; }
     const TireMarks& tireMarks() const { return m_tireMarks; }
+    // Lap and sector timing of the mini handling track (no gates on the other worlds); reset on every respawn.
+    const LapTimer& lapTimer() const { return m_lapTimer; }
     // New contacts of the vehicle body during the last tick (observation only, for impact sounds).
     const std::vector<BodyImpact>& bodyImpacts() const { return m_impactListener.impacts(); }
     // Incremented whenever the vehicle is (re)created: start, R reset, teleport, rebuild, garage respawn.
@@ -261,6 +264,7 @@ private:
     StepTiming m_timing;
     double m_simTime = 0.0;
     TireMarks m_tireMarks;
+    LapTimer m_lapTimer;
 };
 
 } // namespace tf

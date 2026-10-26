@@ -222,6 +222,23 @@ void MeshData::append(const MeshData& other) {
     vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
 }
 
+namespace {
+Material paintMaterial(Paint p) {
+    switch (p) {
+    case Paint::Asphalt: return {MatId::Asphalt, {0.075f, 0.075f, 0.080f}, 0.82f, 0.0f, 0.0f};
+    case Paint::Line: return {MatId::Asphalt, {0.70f, 0.70f, 0.67f}, 0.65f, 0.0f, 0.0f};
+    case Paint::CurbRed: return {MatId::Asphalt, {0.50f, 0.045f, 0.035f}, 0.60f, 0.0f, 0.0f};
+    case Paint::CurbWhite: return {MatId::Asphalt, {0.74f, 0.74f, 0.71f}, 0.60f, 0.0f, 0.0f};
+    case Paint::Gravel: return {MatId::Asphalt, {0.34f, 0.31f, 0.26f}, 0.95f, 0.0f, 0.0f};
+    case Paint::Tyre: return {MatId::Rubber, {0.030f, 0.030f, 0.032f}, 0.85f, 0.0f, 0.0f};
+    case Paint::BarrierRed: return {MatId::Generic, {0.55f, 0.05f, 0.04f}, 0.55f, 0.0f, 0.0f};
+    case Paint::BarrierWhite: return {MatId::Generic, {0.78f, 0.78f, 0.76f}, 0.55f, 0.0f, 0.0f};
+    case Paint::None: break;
+    }
+    return {};
+}
+} // namespace
+
 MeshData buildTrackMesh(const TrackGeometry& g, const SurfaceTable& surfaces) {
     // Smooth normals: average face normals at shared positions, but only across faces within
     // ~50 degrees of each other (box edges of steps and walls stay sharp, terrain is smooth). Rocks are flat.
@@ -249,6 +266,19 @@ MeshData buildTrackMesh(const TrackGeometry& g, const SurfaceTable& surfaces) {
     for (std::size_t t = 0; t < triCount; ++t) {
         const glm::vec3 nf = safeNormalize(faceN[t]);
         glm::vec3 vn[3];
+        if (const Paint paint = g.paintOf(t); paint != Paint::None) {
+            // Mini handling track finishes (render only; the surface below decides the grip).
+            for (int k = 0; k < 3; ++k) {
+                glm::vec3 sum(0.0f);
+                for (std::uint32_t o : shared[key(pos(t, k))]) {
+                    const glm::vec3 no = safeNormalize(faceN[o]);
+                    if (glm::dot(no, nf) >= cosCrease) sum += faceN[o];
+                }
+                vn[k] = safeNormalize(sum, nf);
+            }
+            m.addTri(pos(t, 0), pos(t, 1), pos(t, 2), vn[0], vn[1], vn[2], paintMaterial(paint));
+            continue;
+        }
         if (g.surfaces[t] == SurfaceId::Rock) {
             // Rocks are flat-shaded so their cut facets read clearly (stylized low-poly).
             const auto& s = surfaces.get(SurfaceId::Rock);

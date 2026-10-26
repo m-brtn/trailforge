@@ -171,6 +171,12 @@ Command-line options:
   over a track feature (default 2, the diagonal twister), body-terrain contact ticks;
 - `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,
   climbs on dirt 20° and mud 15° per drive mode, the twister, steady-speed energy (electric only);
+- `minitrack [vehicle.json ...]` — scripted laps of the mini handling track for the SUV, the EV, `builtin` and
+  `rwd_test` (or `TRAILFORGE_VEHICLE`, plus any extra definitions on the command line): the autopilot drives a standing
+  and a flying lap per lateral-acceleration budget of its speed plan (5 … 10 m/s², `TRAILFORGE_MINITRACK_BUDGET`
+  for one), prints lap and sector times, max speed, max lateral g, steady g in the constant-radius corner, line
+  error and time off the asphalt, and a `RESULT` line with the best clean flying lap (`TRAILFORGE_MINITRACK_TRACE=1`
+  prints a trace);
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
@@ -213,7 +219,7 @@ One command per line, `#` starts a comment:
 | `until VAR OP VAL TIMEOUT` | wait for a condition (`< <= > >= == !=`); FAIL on timeout |
 | `expect VAR OP VAL` | check immediately |
 | `mark VAR` | remember a value; afterwards `d_VAR` = current − remembered |
-| `teleport N` / `resize W H` / `capture file.png` | teleport to point N, `SDL_SetWindowSize`, save a frame |
+| `teleport N\|NAME` / `resize W H` / `capture file.png` | teleport to point N (or the first point whose name contains NAME, case-insensitive, e.g. `teleport mini`), `SDL_SetWindowSize`, save a frame |
 | `click KEY` / `inputclick KEY` / `scrollto KEY` / `text STR` | click an ImGui widget, Cmd+click (number input), scroll the Tuning window to a widget, type text |
 | `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
 | `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
@@ -257,6 +263,8 @@ no overlapping callouts, wheel scroll, values kept, then a drive with the arrow 
 `/tmp/trailforge_controls_*.png`), `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
 and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
+`tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
+cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
@@ -336,6 +344,8 @@ choice in the level list), `submersion` (m below the water surface), `recoveries
 `water_depth` (render-only water over the ground at the vehicle), `road_dist`, `terrain_chunks`, `terrain_tris`,
 `tiles_loaded`, `tiles_async`, `tiles_sync`, `tiles_unloaded`, `tile_build_ms`, `tile_stall_ms`, `tile_update_ms`,
 `tile_x` / `tile_z`, `grass_dist` / `tree_detail` / `tree_dist` (applied render distances, m); `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
+lap timer (proving ground mini track): `lap_running`, `lap_count`, `lap_time` (current lap, s), `lap_last`,
+`lap_best`, `lap_next_gate` (0 = start / finish, 1 and 2 = sector gates),
 map: `map_open`, `map_ready`, `map_build_ms`, `map_pois`, `map_scale` (points per m), `map_cx` / `map_cz` (view center),
 `marker_set`, `marker_x` / `marker_z`, `marker_dist` (m, horizontal), `marker_bearing` (deg, relative to the heading, + = right),
 `heading` (deg clockwise from north), attract drive: `autopilot` (0 off, 1 drive, 2 hold), `autopilot_driven` (m),
@@ -1040,7 +1050,8 @@ Measured (headless, 120 Hz, Release):
 
 ## Proving ground (~100×100 m)
 
-Surrounded by an earth berm and concrete walls.
+Surrounded by an earth berm and concrete walls. South of its south wall is the walled mini handling track
+(see below).
 
 - **Start** — concrete pad (z ≈ −40).
 - **Lane A** (center):
@@ -1074,6 +1085,24 @@ Surrounded by an earth berm and concrete walls.
   hard ground, and the water surface is render-only. The ruts you see are tire marks, which are render-only too
   (see "Tire marks"). Deformable terrain is a later stage.
 
+- **Mini handling track** (`src/track/MiniTrack`, walled area x −185…185, z −232…−51 south of the proving ground,
+  teleport 17 "Mini handling track", `teleport mini` in scenarios): a 1044 m asphalt circuit, 10 m wide, driven
+  counter-clockwise from the map's view (east on the start / finish straight). Sections: a ~330 m start / finish
+  straight (the EV reaches 138 km/h in the probe), a R13 hairpin, a chicane
+  (8 m offset over 44 m), a R18 double-apex corner, a R32 constant-radius corner (steady lateral g window), a 150 m
+  slalom (±2.5 m) on the back straight and a R80 fast sweeper; the west half is 1.8 m higher than the east half
+  (smooth ramps). Flat red / white curbs (5 cm, 1.2 m wide) on the corners and the chicane, white edge lines, a
+  checkered start line, a pit wall along the straight, grass runoff, gravel traps (the rigid `Sand` surface, no
+  sinkage) outside the hairpins and the fast corners, and tyre stacks (octagonal prisms, collision) behind them.
+  The asphalt and the curbs are the `Concrete` surface (μ 0.95); their look is a render-only paint per triangle.
+  A **lap timer** (`src/sim/LapTimer`: start / finish line and two sector gates, crossing times interpolated
+  within a physics tick, a lap counts only through the gates in order) runs in the HUD (top center) on the proving
+  ground: `LAP n`, sector splits, last and best lap. Teleporting (or R) restarts the lap.
+  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 1:06.96 (112 km/h,
+  0.67 g), EV 1:03.49 (138 km/h, 0.72 g), `builtin` 1:04.27 (115 km/h, 0.79 g), `rwd_test` 1:01.67 (122 km/h,
+  0.85 g). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
+  hairpin entry (oversteer) and leaves the track.
+
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
 The outer backdrop (hills, trees beyond the walls, distant mountains) and grass are render-only and cannot be reached.
 Grip is computed per wheel: `SetCombineFriction` takes the material under the contact patch
@@ -1101,7 +1130,7 @@ hill start on 15° mud climbs slowly with the wheels spinning (14.1 s to the pla
 failed before), 20° mud is beyond the friction limit (μ 0.35 < tan 20°), and the 20° mud ramp is climbed only with
 momentum. Traction control results are under "Driver aids".
 
-Teleport points are in the Tuning window.
+Teleport points are in the Tuning window (17 on the proving ground; the map shows them and the mini track).
 
 ## Exploration Peaks (open-world level)
 
@@ -1762,7 +1791,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
-  sinkage, flotation or bulldozing; puddles have no water physics.
+  sinkage, flotation or bulldozing; puddles have no water physics. Mini track asphalt and curbs are the rigid
+  `Concrete` surface (the asphalt grain and curb colors are render-only); its gravel traps are rigid `Sand`.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
   message (the only teleports besides R, the F1 teleport buttons, the attract-drive reset behind the start menu and

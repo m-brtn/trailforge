@@ -213,7 +213,7 @@ AutopilotOutput Autopilot::update(const AutopilotInput& in, float dt) {
         out.throttle = std::clamp(0.06f + c.kp * e + c.ki * m_integral, 0.0f, cap);
     } else {
         m_integral = std::max(0.0f, m_integral - 2.0f * dt);
-        out.brake = std::clamp(0.05f + c.kb * (-e - 0.5f), 0.0f, 0.7f);
+        out.brake = std::clamp(0.05f + c.kb * (-e - 0.5f), 0.0f, c.maxBrake);
     }
 
     // Recovery conditions.

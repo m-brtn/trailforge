@@ -2,6 +2,7 @@
 
 #include "physics/PhysicsWorld.h"
 #include "track/Level.h"
+#include "track/MiniTrack.h"
 
 #include <Jolt/Geometry/Triangle.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -127,6 +128,7 @@ SurfaceId groundSurface(float x, float z) { return TestTrack::groundSurfaceAt(x,
 } // namespace
 
 SurfaceId TestTrack::groundSurfaceAt(float x, float z) {
+    if (insideMiniTrackArea(x, z)) return miniTrackSurface(x, z);
     if (x > kLaneA0 && x < kLaneA1 && z > kStartZ0 && z < kStartZ1) return SurfaceId::Concrete;
     if (x > kLaneA0 && x < kLaneA1 && z > kLowGripZ0 && z < kLowGripZ1) return SurfaceId::LowGrip;
     if (x > kSkidX0 && x < kSkidX1 && z > kSkidZ0 && z < kSkidZ1) return SurfaceId::Concrete;
@@ -153,6 +155,11 @@ float TestTrack::showcaseMudWeight(float x, float z) {
 }
 
 TrackBounds TestTrack::bounds() { return {kXMin, kXMax, kZMin, kZMax}; }
+
+TrackBounds TestTrack::worldBounds() {
+    const TrackBounds m = miniTrack().area;
+    return {std::min(kXMin, m.xMin), std::max(kXMax, m.xMax), std::min(kZMin, m.zMin), std::max(kZMax, m.zMax)};
+}
 
 TrackBounds TestTrack::wheatPatch() { return {-46.0f, -28.0f, 56.0f, 76.0f}; }
 
@@ -207,6 +214,11 @@ void TrackGeometry::addTriangle(Vec3Arg a, Vec3Arg b, Vec3Arg c, SurfaceId s) {
     positions.emplace_back(b.GetX(), b.GetY(), b.GetZ());
     positions.emplace_back(c.GetX(), c.GetY(), c.GetZ());
     surfaces.push_back(s);
+}
+
+void TrackGeometry::paintFrom(std::size_t firstTriangle, Paint p) {
+    paints.resize(triangleCount(), Paint::None);
+    std::fill(paints.begin() + std::ptrdiff_t(std::min(firstTriangle, paints.size())), paints.end(), p);
 }
 
 void TrackGeometry::addQuad(Vec3Arg a, Vec3Arg b, Vec3Arg c, Vec3Arg d, SurfaceId s) {
@@ -292,6 +304,7 @@ void TrackGeometry::addRock(Vec3Arg center, Vec3Arg radii, float yaw, std::uint3
 // ------------------------------------------------------------------ TestTrack
 
 float TestTrack::provingGroundHeight(float x, float z) {
+    if (insideMiniTrackArea(x, z)) return miniTrackGround(x, z);
     float h = 0.0f;
 
     // Lane A: a sequence of small bumps (0.18 m, 3 m apart).
@@ -469,6 +482,9 @@ void TestTrack::buildProvingGround() {
         m_rocks.push_back({-3.5f, 67.0f, 1.2f});
     }
 
+    // Mini handling track in its own walled area south of the proving ground (teleport only).
+    buildMiniTrack(g);
+
     auto feature = [&](const char* name, float x, float z) {
         m_features.push_back({name, Vec3(x, provingGroundHeight(x, z), z), 0.0f});
     };
@@ -490,6 +506,7 @@ void TestTrack::buildProvingGround() {
     feature("Meadow (grass)", 19.0f, 50.0f);
     feature("Puddle (splash)", pathCenterX(57.0f), 49.5f); // the first path puddle is 4-5 m ahead
     feature("Wheat patch (visual)", -37.0f, 52.5f);           // the patch starts 3.5 m ahead
+    m_features.push_back(miniTrack().start);                  // grid spot 12 m behind the start/finish line
 }
 
 void TestTrack::buildFlat(bool withPit) {

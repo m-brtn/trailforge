@@ -43,7 +43,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 83 tests, 74 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 85 tests, 76 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -68,7 +68,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 `trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
 `trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table); they drive the vehicle of
+`showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -83,6 +83,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
+./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
 ./build/release/trailforge --script tools/scenarios/wheel_fit.txt # visual wheels / arches follow a tire size change

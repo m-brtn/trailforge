@@ -3,9 +3,12 @@
 
 #include "input/KeyboardPedals.h"
 #include "sim/BodyMud.h"
+#include "sim/Autopilot.h"
 #include "sim/FixedStepClock.h"
+#include "sim/LapTimer.h"
 #include "sim/Simulation.h"
 #include "sim/WheelSpray.h"
+#include "track/MiniTrack.h"
 #include "track/TestTrack.h"
 #include "vehicle/VehicleDefinition.h"
 
@@ -1466,6 +1469,140 @@ void bodyMud() {
     CHECK(after < 0.4f * before, "puddle wash %.2f -> %.2f", before, after);
 }
 
+
+// Lap timer on synthetic gates: a square loop with the start/finish line and two sector gates.
+void lapTimerLogic() {
+    LapTimer lt;
+    // Gates on the sides of a 100 x 100 m square driven counterclockwise seen from +Y... in x/z: (0,0) -> (100,0) ->
+    // (100,100) -> (0,100) -> back. Start/finish on the first side, sectors on the second and third.
+    lt.setGates({{50.0f, 0.0f, 1.0f, 0.0f, 5.0f}, {100.0f, 50.0f, 0.0f, 1.0f, 5.0f}, {50.0f, 100.0f, -1.0f, 0.0f, 5.0f}});
+    struct P { float x, z; };
+    std::vector<P> loop;
+    for (int k = 0; k < 100; ++k) loop.push_back({float(k), 0.0f});
+    for (int k = 0; k < 100; ++k) loop.push_back({100.0f, float(k)});
+    for (int k = 0; k < 100; ++k) loop.push_back({100.0f - float(k), 100.0f});
+    for (int k = 0; k < 100; ++k) loop.push_back({0.0f, 100.0f - float(k)});
+    double t = 0.0;
+    auto drive = [&](int laps, double dt) {
+        for (int l = 0; l < laps; ++l)
+            for (std::size_t i = 0; i < loop.size(); ++i) {
+                const P& a = loop[i];
+                const P& b = loop[(i + 1) % loop.size()];
+                lt.update(a.x, a.z, b.x, b.z, t, t + dt);
+                t += dt;
+            }
+    };
+    drive(1, 0.1); // the first pass of the line starts the clock at x = 50 (t = 5.0 s)
+    CHECK(lt.running() && lt.laps() == 0, "running %d laps %d", lt.running(), lt.laps());
+    drive(1, 0.1);
+    CHECK(lt.laps() == 1, "laps %d", lt.laps());
+    CHECK(std::abs(lt.lastLap() - 40.0) < 1e-6, "lap %.6f s (400 m at 10 m/s)", lt.lastLap());
+    const auto& sec = lt.lastSectors();
+    CHECK(sec.size() == 3 && std::abs(sec[0] - 10.0) < 1e-6 && std::abs(sec[1] - 10.0) < 1e-6 && std::abs(sec[2] - 20.0) < 1e-6,
+          "sectors %zu: %.3f %.3f %.3f", sec.size(), sec.size() > 0 ? sec[0] : -1.0, sec.size() > 1 ? sec[1] : -1.0,
+          sec.size() > 2 ? sec[2] : -1.0);
+    drive(1, 0.05); // half of this lap was driven at 10 m/s, half at 20 m/s
+    CHECK(lt.laps() == 2 && std::abs(lt.lastLap() - 37.5) < 1e-6, "laps %d last %.3f", lt.laps(), lt.lastLap());
+    drive(1, 0.05);
+    CHECK(lt.laps() == 3 && std::abs(lt.lastLap() - 20.0) < 1e-6 && std::abs(lt.bestLap() - 20.0) < 1e-6,
+          "laps %d last %.3f best %.3f", lt.laps(), lt.lastLap(), lt.bestLap());
+    // Both sectors of the running lap are done: the next forward crossing of the line completes it.
+    lt.update(55.0f, 0.0f, 45.0f, 0.0f, t, t + 0.1); // backwards: nothing
+    CHECK(lt.laps() == 3 && lt.running() && lt.nextGate() == 0, "backward crossing changed the state");
+    lt.update(45.0f, 0.0f, 55.0f, 0.0f, t, t + 0.1);
+    CHECK(lt.laps() == 4 && lt.nextGate() == 1, "laps %d next gate %d", lt.laps(), lt.nextGate());
+    // A cut back to the line without the sectors restarts the clock and counts nothing.
+    lt.update(45.0f, 0.0f, 55.0f, 0.0f, t, t + 0.1);
+    CHECK(lt.laps() == 4 && lt.running() && lt.nextGate() == 1, "a lap without sectors counted (%d)", lt.laps());
+    lt.update(49.0f, 100.0f, 51.0f, 100.0f, t, t + 0.1); // wrong direction over gate 2: ignored
+    CHECK(lt.running(), "backward sector crossing voided the lap");
+    lt.update(51.0f, 100.0f, 49.0f, 100.0f, t, t + 0.1); // gate 2 before gate 1: void
+    CHECK(!lt.running(), "out-of-order sector did not void the lap");
+    // Outside the gate half width: no crossing.
+    lt.reset();
+    lt.update(45.0f, 20.0f, 55.0f, 20.0f, t, t + 0.1);
+    CHECK(!lt.running(), "crossing 20 m beside the line counted");
+}
+
+// Mini handling track: layout, clear asphalt, the teleport, and a scripted lap timed by the simulation.
+void miniTrackLap() {
+    const MiniTrackInfo& mt = miniTrack();
+    const std::size_t n = mt.center.size();
+    float maxGap = 0.0f;
+    for (std::size_t i = 0; i < n; ++i)
+        maxGap = std::max(maxGap, std::hypot(mt.center[(i + 1) % n].x - mt.center[i].x, mt.center[(i + 1) % n].z - mt.center[i].z));
+    std::printf("  lap %.1f m, %zu center points, max spacing %.2f m, gates at %.0f / %.0f m\n", mt.length, n, maxGap,
+                mt.gateArc[1], mt.gateArc[2]);
+    CHECK(mt.length > 800.0f && mt.length < 1500.0f, "lap length %.1f m", mt.length);
+    CHECK(maxGap < 1.5f, "center line spacing %.2f m", maxGap);
+
+    Simulation sim(settingsFor(TrackLayout::ProvingGround));
+    const auto& features = sim.track().features();
+    CHECK(features.size() == 17 && features.back().name == "Mini handling track", "%zu features, last '%s'",
+          features.size(), features.back().name.c_str());
+    // The asphalt is clear: a ray down every 5 m along the center line lands on the ribbon (no tyres, walls, rocks).
+    int blocked = 0;
+    for (std::size_t i = 0; i < n; i += 5) {
+        const float x = mt.center[i].x, z = mt.center[i].z, ground = miniTrackGround(x, z);
+        const auto hit = sim.castRayIgnoringVehicle(JPH::Vec3(x, ground + 5.0f, z), JPH::Vec3(x, ground - 5.0f, z));
+        const float y = hit ? ground + 5.0f - 10.0f * *hit : -1e9f;
+        if (std::abs(y - (ground + 0.03f)) > 0.02f) ++blocked;
+        if (TestTrack::groundSurfaceAt(x, z) != SurfaceId::Concrete) ++blocked;
+    }
+    CHECK(blocked == 0, "%d center line samples not on bare asphalt", blocked);
+
+    sim.requestTeleport(int(features.size()) - 1);
+    run(sim, 1.0, {.brake = 1.0f});
+    const JPH::Vec3 p0 = position(sim);
+    CHECK(std::hypot(p0.GetX() - mt.start.position.GetX(), p0.GetZ() - mt.start.position.GetZ()) < 0.5f,
+          "spawn at (%.1f, %.1f)", p0.GetX(), p0.GetZ());
+    CHECK(sim.lapTimer().hasGates() && !sim.lapTimer().running(), "lap timer before the line");
+
+    AutopilotSettings a;
+    a.lateralAccel = 5.0f;
+    a.planDecel = 5.0f;
+    a.planAccel = 40.0f;
+    a.maxThrottle = 1.0f;
+    a.steerEase = 0.6f;
+    a.kp = 0.5f;
+    a.kb = 0.6f;
+    a.maxBrake = 1.0f;
+    a.lookaheadMin = 6.0f;
+    a.lookaheadPerSpeed = 0.45f;
+    a.lookaheadMax = 26.0f;
+    a.cornerLookahead = 0.8f;
+    a.lookaheadCornerMin = 4.0f;
+    Autopilot driver(a);
+    driver.setRoute(mt.route(60.0f), sim.vehicleConfig().wheelBase,
+                    sim.vehicleConfig().axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f);
+    float maxLine = 0.0f, maxKmh = 0.0f;
+    for (double t = 0.0; t < 200.0 && sim.lapTimer().laps() < 1; t += sim.fixedStep()) {
+        const JPH::RMat44 xf = sim.vehicle().bodyTransform();
+        const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ();
+        AutopilotInput in;
+        in.x = p.GetX();
+        in.z = p.GetZ();
+        const float h = std::hypot(fwd.GetX(), fwd.GetZ());
+        in.fx = fwd.GetX() / h;
+        in.fz = fwd.GetZ() / h;
+        in.forwardY = fwd.GetY();
+        in.upDot = xf.GetAxisY().GetY();
+        in.forwardSpeed = sim.vehicle().telemetry().forwardSpeed;
+        const AutopilotOutput out = driver.update(in, float(sim.fixedStep()));
+        sim.setIntent({.throttle = out.throttle, .brake = out.brake, .steer = out.steer, .analog = true});
+        sim.tick();
+        maxLine = std::max(maxLine, driver.lateralError());
+        maxKmh = std::max(maxKmh, sim.vehicle().telemetry().speed * 3.6f);
+    }
+    const LapTimer& lt = sim.lapTimer();
+    std::printf("  builtin, 5 m/s^2 driver: lap %.2f s, sectors %zu, max %.0f km/h, line error max %.2f m\n",
+                lt.lastLap(), lt.lastSectors().size(), maxKmh, maxLine);
+    CHECK(lt.laps() == 1, "no complete lap (%d)", lt.laps());
+    CHECK(lt.lastLap() > 45.0 && lt.lastLap() < 90.0, "lap %.2f s", lt.lastLap());
+    CHECK(lt.lastSectors().size() == 3, "%zu sectors", lt.lastSectors().size());
+    CHECK(maxLine < 3.0f, "left the line by %.2f m", maxLine);
+    CHECK(maxKmh > 85.0f, "max %.0f km/h", maxKmh);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1493,6 +1630,8 @@ int main(int argc, char** argv) {
         {"friction_ellipse", frictionEllipse},
         {"tread_soil_surfaces", treadSoilSurfaces},
         {"body_mud", bodyMud},
+        {"lap_timer_logic", lapTimerLogic},
+        {"mini_track_lap", miniTrackLap},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

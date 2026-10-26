@@ -13,6 +13,8 @@
 //   trailforge_probe squeal           - squeal peak, length and release tail: launches, brakes, slides per surface
 //   trailforge_probe keyboard         - keyboard W / S as instant keys vs. the progressive KeyboardPedals
 //   trailforge_probe compare          - launches, stops, lift-off, cornering, climbs, articulation (+ EV energy)
+//   trailforge_probe minitrack [vehicle.json ...] - scripted laps of the mini handling track (path-following driver):
+//                                       lap times, max speed, lateral g; SUV, EV, builtin, rwd_test + the given files
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -22,6 +24,7 @@
 #include "audio/AudioMixer.h"
 #include "audio/VehicleAudioFeed.h"
 #include "input/KeyboardPedals.h"
+#include "sim/Autopilot.h"
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
@@ -1826,6 +1829,186 @@ void levelSlope(const char* path, const char* out) {
     std::printf("levelslope wrote %s (%d x %d, 2 m per pixel)\n", out, W, W);
 }
 
+
+// ------------------------------------------------------------------ mini handling track laps
+struct MiniLap {
+    double standing = -1.0, flying = -1.0; // s, from the simulation's lap timer
+    std::vector<double> sectors;           // of the flying lap
+    float maxKmh = 0.0f, maxLatG = 0.0f;   // flying lap; lateral g low-passed over ~0.2 s
+    float steadyLatG = 0.0f, steadyKmh = 0.0f; // mean in the middle of the constant-radius corner (flying lap)
+    float maxLateral = 0.0f;               // m from the center line (flying lap)
+    double offTrack = 0.0;                 // s with two or more wheels off the asphalt and curbs (flying lap)
+    int flips = 0;
+};
+
+MiniLap miniTrackLaps(const VehicleConfig& vehicle, float lateralAccel) {
+    SimulationSettings s;
+    s.vehicle = vehicle;
+    Simulation sim(s);
+    const auto& features = sim.track().features();
+    int feature = -1;
+    for (std::size_t k = 0; k < features.size(); ++k)
+        if (features[k].name == "Mini handling track") feature = int(k);
+    sim.requestTeleport(feature);
+    sim.setIntent({.brake = 1.0f});
+    for (int i = 0; i < 120; ++i) sim.tick();
+
+    // The menu autopilot with a racing setup: full pedals, a lateral acceleration budget, braking planned at the
+    // same budget, a longer pure-pursuit lookahead at speed. No resets.
+    AutopilotSettings a;
+    a.lateralAccel = lateralAccel;
+    a.planDecel = std::min(lateralAccel, 8.0f);
+    a.planAccel = 40.0f;
+    a.maxThrottle = 1.0f;
+    a.steerEase = 0.6f;
+    a.kp = 0.5f;
+    a.ki = 0.2f;
+    a.kb = 0.6f;
+    a.maxBrake = 1.0f;
+    a.lookaheadMin = 6.0f;
+    a.lookaheadPerSpeed = 0.45f;
+    a.lookaheadMax = 26.0f;
+    a.cornerLookahead = 0.8f;
+    a.lookaheadCornerMin = 4.0f;
+    a.downhillGrade = 1.0f;
+    a.offRouteDistance = a.stuckTime = a.flippedTime = 1e9f;
+    Autopilot driver(a);
+    const MiniTrackInfo& mt = miniTrack();
+    driver.setRoute(mt.route(60.0f), vehicle.wheelBase, vehicle.axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f);
+
+    MiniLap r;
+    const double dt = sim.fixedStep();
+    auto& bi = sim.world().bodies();
+    JPH::Vec3 prevV = bi.GetLinearVelocity(sim.vehicle().bodyId());
+    float latFilt = 0.0f;
+    double steadySumG = 0.0, steadySumV = 0.0;
+    int steadyN = 0;
+    for (double t = 0.0; t < 400.0 && sim.lapTimer().laps() < 2; t += dt) {
+        const JPH::RMat44 xf = sim.vehicle().bodyTransform();
+        const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ(), left = xf.GetAxisX();
+        AutopilotInput in;
+        in.x = p.GetX();
+        in.z = p.GetZ();
+        const float h = std::hypot(fwd.GetX(), fwd.GetZ());
+        if (h > 1e-3f) in.fx = fwd.GetX() / h, in.fz = fwd.GetZ() / h;
+        in.forwardY = fwd.GetY();
+        in.upDot = xf.GetAxisY().GetY();
+        in.forwardSpeed = sim.vehicle().telemetry().forwardSpeed;
+        AutopilotOutput out = driver.update(in, float(dt));
+        // Like a driver feeling the rear step out: lift as the body slip angle grows past 3 degrees.
+        {
+            const JPH::Vec3 vel = bi.GetLinearVelocity(sim.vehicle().bodyId());
+            const float vh = std::hypot(vel.GetX(), vel.GetZ());
+            if (vh > 3.0f) {
+                const float beta = std::acos(std::clamp((vel.GetX() * in.fx + vel.GetZ() * in.fz) / vh, -1.0f, 1.0f));
+                out.throttle *= std::clamp(1.0f - (beta * 57.3f - 3.0f) / 5.0f, 0.0f, 1.0f);
+            }
+        }
+        sim.setIntent({.throttle = out.throttle, .brake = out.brake, .steer = out.steer, .analog = true});
+        sim.tick();
+
+        const JPH::Vec3 v = bi.GetLinearVelocity(sim.vehicle().bodyId());
+        const float lat = float(((v - prevV) / float(dt)).Dot(left));
+        prevV = v;
+        latFilt += (lat - latFilt) * float(dt / 0.2);
+        const auto& tel = sim.vehicle().telemetry();
+        if (tel.upDot < 0.3f) ++r.flips;
+        if (std::getenv("TRAILFORGE_MINITRACK_TRACE") && std::fmod(t, 0.5) < dt)
+            std::printf("  t=%5.1f s=%6.1f pos=(%6.1f %5.2f %6.1f) %5.1f km/h target %5.1f thr %.2f brk %.2f str %+.2f "
+                        "line %.1f m up %.2f lap %d\n",
+                        t, driver.progress(), p.GetX(), p.GetY(), p.GetZ(), tel.speed * 3.6f, driver.targetSpeed() * 3.6f,
+                        out.throttle, out.brake, out.steer, driver.lateralError(), tel.upDot, sim.lapTimer().laps());
+        if (sim.lapTimer().laps() == 1) { // the flying lap is running
+            r.maxKmh = std::max(r.maxKmh, tel.speed * 3.6f);
+            r.maxLatG = std::max(r.maxLatG, std::abs(latFilt) / 9.81f);
+            r.maxLateral = std::max(r.maxLateral, driver.lateralError());
+            int off = 0;
+            for (const auto& w : tel.wheels) off += w.contact && w.surface != SurfaceId::Concrete;
+            if (off >= 2) r.offTrack += dt;
+            const float sArc = driver.progress();
+            if (sArc > mt.steadyArc0 && sArc < mt.steadyArc1) {
+                steadySumG += std::abs(lat) / 9.81;
+                steadySumV += tel.speed * 3.6;
+                ++steadyN;
+            }
+        }
+        if (sim.lapTimer().laps() >= 1 && r.standing < 0.0) r.standing = sim.lapTimer().lastLap();
+    }
+    if (sim.lapTimer().laps() >= 2) {
+        r.flying = sim.lapTimer().lastLap();
+        r.sectors = sim.lapTimer().lastSectors();
+    }
+    if (steadyN > 0) {
+        r.steadyLatG = float(steadySumG / steadyN);
+        r.steadyKmh = float(steadySumV / steadyN);
+    }
+    return r;
+}
+
+void miniTrackProbe(int argc, char** argv) {
+    const MiniTrackInfo& mt = miniTrack();
+    std::printf("minitrack layout: lap %.1f m, sectors end at %.1f / %.1f m, constant-radius corner R %.0f m "
+                "(steady window %.0f..%.0f m), start (%.1f, %.1f)\n",
+                mt.length, mt.gateArc[1], mt.gateArc[2], mt.steadyRadius, mt.steadyArc0, mt.steadyArc1,
+                mt.start.position.GetX(), mt.start.position.GetZ());
+    std::vector<std::string> paths;
+    if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) {
+        paths.push_back(env);
+    } else {
+        paths = {TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json",
+                 TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_ev/vehicle.json", "builtin",
+                 TRAILFORGE_SOURCE_DIR "/tests/data/vehicles/rwd_test/vehicle.json"};
+    }
+    for (int k = 2; k < argc; ++k) paths.push_back(argv[k]);
+    auto fmt = [](double s) {
+        static char buf[4][24];
+        static int slot = 0;
+        char* b = buf[slot++ % 4];
+        if (s < 0.0) std::snprintf(b, 24, "   --   ");
+        else std::snprintf(b, 24, "%d:%06.3f", int(s / 60.0), std::fmod(s, 60.0));
+        return b;
+    };
+    for (const std::string& path : paths) {
+        VehicleConfig cfg;
+        std::string id = "builtin";
+        if (path != "builtin") {
+            VehicleDefinition def;
+            std::vector<std::string> errors;
+            if (!loadVehicleDefinition(path, def, errors)) {
+                for (const auto& e : errors) std::fprintf(stderr, "%s\n", e.c_str());
+                continue;
+            }
+            cfg = def.config;
+            id = def.id;
+        }
+        std::printf("minitrack vehicle %s: %s, %.0f kg\n", id.c_str(), driveLayoutName(cfg.layout), cfg.mass);
+        std::vector<float> budgets = {5.0f, 5.5f, 6.0f, 6.5f, 7.0f, 8.0f, 9.0f, 10.0f};
+        if (const char* b = std::getenv("TRAILFORGE_MINITRACK_BUDGET")) budgets = {float(std::atof(b))};
+        float best = -1.0f;
+        MiniLap bestLap;
+        for (float b : budgets) {
+            const MiniLap r = miniTrackLaps(cfg, b);
+            const bool clean = r.flying > 0.0 && r.offTrack < 0.25 && r.maxLateral < 4.0f && r.flips == 0;
+            std::printf("minitrack   budget %4.1f m/s^2: standing %s flying %s", b, fmt(r.standing), fmt(r.flying));
+            for (std::size_t s = 0; s < r.sectors.size(); ++s) std::printf(" S%zu %.2f", s + 1, r.sectors[s]);
+            std::printf(" | max %.0f km/h, max lat %.2f g, steady R%.0f %.2f g at %.0f km/h, line error max %.1f m, "
+                        "off %.1f s%s%s\n",
+                        r.maxKmh, r.maxLatG, mt.steadyRadius, r.steadyLatG, r.steadyKmh, r.maxLateral, r.offTrack,
+                        r.flips ? ", ROLLED" : "", clean ? "" : "  (not clean)");
+            if (clean && (best < 0 || r.flying < bestLap.flying)) {
+                best = b;
+                bestLap = r;
+            }
+        }
+        if (best > 0.0f)
+            std::printf("minitrack RESULT %-14s best clean flying lap %s (budget %.1f m/s^2), standing %s, max %.0f km/h, "
+                        "max lat %.2f g, steady %.2f g\n",
+                        id.c_str(), fmt(bestLap.flying), best, fmt(bestLap.standing), bestLap.maxKmh, bestLap.maxLatG,
+                        bestLap.steadyLatG);
+        else std::printf("minitrack RESULT %-14s no clean lap\n", id.c_str());
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
     if (mode == "levelprofile" && argc > 6) {
@@ -1883,6 +2066,7 @@ int main(int argc, char** argv) {
     else if (mode == "diff") diffProbe();
     else if (mode == "layouts") layoutsProbe();
     else if (mode == "compare") compareProbe();
+    else if (mode == "minitrack") miniTrackProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

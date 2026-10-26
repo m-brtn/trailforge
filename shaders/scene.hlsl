@@ -45,6 +45,7 @@ static const int MAT_SAND = 15;
 static const int MAT_SNOW = 16;
 static const int MAT_TERRAIN = 17; // level terrain: splat weights rock / sand / snow in the color, the rest is dirt + mask
 static const int MAT_CLADDING = 18; // grained unpainted plastic (body cladding, bumpers, flares)
+static const int MAT_ASPHALT = 19;  // road finishes of the mini handling track: vertex color + aggregate noise
 
 // BodyMudRegion (src/sim/BodyMud.h).
 static const int kMudArchRearShader = 0;
@@ -871,6 +872,14 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         } else if (mat == MAT_RUBBER) {
             const float n = noiseTex.Sample(noiseSampler, vin.localPos.yz * 6.0).a;
             s.albedo *= 0.85 + 0.3 * n;
+        } else if (mat == MAT_ASPHALT) {
+            // Asphalt, road paint, curbs and gravel: the vertex color broken up by fine aggregate and coarse patches.
+            const float grain = noiseTex.Sample(noiseSampler, P.xz * 2.3).a;
+            const float patches = noiseTex.Sample(noiseSampler, P.xz * 0.07).r;
+            s.albedo *= 0.80 + 0.30 * grain + 0.25 * (patches - 0.5);
+            s.roughness = saturate(s.roughness + 0.15 * (grain - 0.5));
+            N = perturbNormal(N, P, grain * 0.02, 0.3);
+            s.ao = vehicleAO(P);
         } else if (mat == MAT_CLADDING) {
             // Stippled plastic: noise fixed to the vehicle, projected along the dominant local axis.
             const float3 an = abs(vin.localNormal);

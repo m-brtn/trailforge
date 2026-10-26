@@ -17,13 +17,30 @@ class Level;
 
 // Procedural static geometry: the same triangles go
 // to rendering (mesh) and to the Jolt MeshShape (collision), so they match by construction.
+// Render-only finish of a triangle; the physics surface stays TrackGeometry::surfaces (paint never changes grip).
+enum class Paint : std::uint8_t {
+    None = 0,     // the surface's own procedural material
+    Asphalt,
+    Line,         // white road paint
+    CurbRed,
+    CurbWhite,
+    Gravel,
+    Tyre,
+    BarrierRed,
+    BarrierWhite,
+};
+
 // Triangles are stored non-indexed (3 vertices per triangle), wound CCW
 // when viewed from outside (Jolt defines the front face the same way).
 struct TrackGeometry {
     std::vector<JPH::Float3> positions; // 3 per triangle, meters, world coordinates
     std::vector<SurfaceId> surfaces;    // 1 per triangle
+    std::vector<Paint> paints;          // empty or shorter than the triangles: the missing ones are Paint::None
 
     std::size_t triangleCount() const { return surfaces.size(); }
+    Paint paintOf(std::size_t t) const { return t < paints.size() ? paints[t] : Paint::None; }
+    // Paints triangles [firstTriangle, triangleCount()).
+    void paintFrom(std::size_t firstTriangle, Paint p);
 
     void addTriangle(JPH::Vec3Arg a, JPH::Vec3Arg b, JPH::Vec3Arg c, SurfaceId s);
     // Quad a-b-c-d, CCW when viewed from outside.
@@ -84,13 +101,15 @@ public:
 
     const std::vector<RockFootprint>& rocks() const { return m_rocks; }
 
-    // Procedural terrain height (without rocks/steps), meters.
+    // Procedural terrain height (without rocks/steps), meters; the mini handling track area has its own ground.
     static float provingGroundHeight(float x, float z);
     // Ground surface of the heightfield at (x, z) (rocks and steps are separate).
     static SurfaceId groundSurfaceAt(float x, float z);
     // 0..1: how "muddy" the showcase ground is at (x, z); Mud surface where > 0.45 or inside a puddle.
     static float showcaseMudWeight(float x, float z);
     static TrackBounds bounds();
+    // The proving ground plus the mini handling track area south of it (map extent).
+    static TrackBounds worldBounds();
     static WaterInfo water();
     // Wheat test patch in the west meadow: render-only stalks, the ground under them is the Grass surface.
     static TrackBounds wheatPatch();
