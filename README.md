@@ -1077,7 +1077,8 @@ RT, left stick, A, B), switches the minimap options and opens the proving-ground
 ## Attract drive (start menu)
 
 Behind the intro and the start menu the vehicle drives a looped route by itself (`src/sim/Autopilot.h`, in
-trailforge_sim): pure pursuit steering on the route (lookahead 7–16 m with speed), a speed profile from the route
+trailforge_sim): pure pursuit steering on the route (lookahead 7–16 m with speed, in tight curves at most 0.6 × the
+curve radius, so it does not cut corners), a speed profile from the route
 curvature (2 m/s² lateral, braking 1.6 m/s² before curves, accelerating 1.0 m/s² after them, slower downhill) and a
 PI speed controller (throttle capped at 0.65 and reduced with steering). Its only output is a `DriverIntent`
 (throttle, brake, steering) that goes through the same pedal smoothing as the player's; there are no forces and no
@@ -1087,7 +1088,8 @@ lane A. The vehicle page and the garage hold the vehicle with the brake. When th
 0.6 m/s), off the route (> 12 m for 4 s) or on its side (2.5 s), it is recreated at the route start like the R
 reset; Start and Quit to menu put it on the spawn. The menu camera follows the smoothed heading (3.5 s) and swings
 from behind to the side and back over 80 s. CTest `autopilot_loops`: one full loop without a reset for the gasoline
-SUV in 2H and 4H and the EV on both worlds (max 2.6 m off the line on Exploration Peaks).
+SUV in 2H and 4H and the EV on both worlds (max 0.75 m off the line on Exploration Peaks, 2.0 m on the proving
+ground where it joins the loop from the start pad).
 
 ## Rendering
 

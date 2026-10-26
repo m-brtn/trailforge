@@ -1014,7 +1014,7 @@ void autopilotLoops() {
             CHECK(sim.autopilotResets() == 0 && sim.recoveries() == 0 && !sim.hadPhysicsError(),
                   "%s: resets %d (%s after %.0f m at %.0f, %.0f), recoveries %d", name, sim.autopilotResets(),
                   sim.autopilotResetReason(), double(driven), double(last.GetX()), double(last.GetZ()), sim.recoveries());
-            CHECK(ap.maxLateralError() < 4.0f, "%s: %.2f m off the center line", name, double(ap.maxLateralError()));
+            CHECK(ap.maxLateralError() < 2.5f, "%s: %.2f m off the center line", name, double(ap.maxLateralError()));
             CHECK(maxKmh < 45.0, "%s: %.1f km/h", name, maxKmh);
             if (open) CHECK(length > 1000.0f, "level route only %.0f m", double(length));
         }

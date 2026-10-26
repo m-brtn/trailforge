@@ -25,6 +25,8 @@ struct AutopilotSettings {
     float lookaheadMin = 7.0f;       // m, pure pursuit target distance at a standstill
     float lookaheadPerSpeed = 0.8f;  // s: + speed * this
     float lookaheadMax = 16.0f;      // m
+    float cornerLookahead = 0.6f;    // in tight curves at most this times the curve radius (pure pursuit cuts corners
+    float lookaheadCornerMin = 3.5f; // by about lookahead^2 / 8 R), but not below this, m
     float lateralAccel = 2.0f;       // m/s^2 allowed in curves (gentle, passengers keep their coffee)
     float planDecel = 1.6f;          // m/s^2 used to slow down before curves
     float planAccel = 1.0f;          // m/s^2 used to speed up after them
@@ -89,6 +91,7 @@ private:
     DriveRoute m_route;
     std::vector<float> m_arc;   // cumulative arc length per point
     std::vector<float> m_limit; // speed limit per point (curvature + planning deceleration), m/s
+    std::vector<float> m_curvature; // 1/m per point
     float m_length = 0.0f;
     float m_wheelBase = 2.8f, m_maxSteer = 0.6f;
 

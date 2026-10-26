@@ -12,6 +12,7 @@ void Autopilot::setRoute(const DriveRoute& route, float wheelBase, float maxStee
     const std::size_t n = m_route.points.size();
     m_arc.assign(n, 0.0f);
     m_limit.assign(n, m_route.cruiseSpeed);
+    m_curvature.assign(n, 0.0f);
     m_length = 0.0f;
     if (!m_route.valid()) {
         restart();
@@ -35,6 +36,7 @@ void Autopilot::setRoute(const DriveRoute& route, float wheelBase, float maxStee
         if (la < 1e-3f || lb < 1e-3f) continue;
         const float turn = std::abs(std::atan2(ax * bz - az * bx, ax * bx + az * bz));
         const float curvature = turn / (0.5f * (la + lb));
+        m_curvature[i] = curvature;
         if (curvature > 1e-4f)
             m_limit[i] = std::min(m_limit[i], std::max(2.5f, std::sqrt(m_settings.lateralAccel / curvature)));
     }
@@ -178,7 +180,15 @@ AutopilotOutput Autopilot::update(const AutopilotInput& in, float dt) {
     m_maxLateral = std::max(m_maxLateral, dist);
 
     // Pure pursuit: the arc through the target point ahead on the route, as a front wheel angle.
-    const float lookahead = std::clamp(c.lookaheadMin + c.lookaheadPerSpeed * std::max(v, 0.0f), c.lookaheadMin, c.lookaheadMax);
+    float lookahead = std::clamp(c.lookaheadMin + c.lookaheadPerSpeed * std::max(v, 0.0f), c.lookaheadMin, c.lookaheadMax);
+    {
+        const std::size_t n = m_route.points.size();
+        const int i0 = int(std::upper_bound(m_arc.begin(), m_arc.end(), m_s) - m_arc.begin()) - 1;
+        const int steps = int(lookahead / std::max(m_length / float(n), 0.1f)) + 2;
+        float kMax = 0.0f;
+        for (int k = 0; k <= steps; ++k) kMax = std::max(kMax, m_curvature[std::size_t(i0 + k) % n]);
+        if (kMax > 1e-4f) lookahead = std::min(lookahead, std::max(c.lookaheadCornerMin, c.cornerLookahead / kMax));
+    }
     const RoutePoint target = pointAt(m_s + lookahead);
     const float dx = target.x - in.x, dz = target.z - in.z;
     const float ahead = dx * in.fx + dz * in.fz;
