@@ -20,9 +20,11 @@
 //   trailforge_probe drift [vehicle.json ...] - scripted drift attempts on the mini track's R 32 corner (traction
 //                                       control off, entry 45 / 55 / 65 km/h, power or hand brake initiation):
 //                                       DriftScorer score, max / mean slip angle; rwd_test, builtin, SUV, EV
-//   trailforge_probe tires [brake|minitrack|suncoast] - tire sets (SUV, EV): 60-0 stops per surface at the air
-//                                       temperature and warm; racing-autopilot laps from cold tires (lap times, tread
-//                                       and core temperatures per lap), warm-start laps
+//   trailforge_probe tires [brake|minitrack|suncoast|circle|limit|cooldown] - tire sets (SUV, EV): 60-0 stops per
+//                                       surface at the air temperature and warm; racing-autopilot laps from cold tires
+//                                       (lap times, tread and core temperatures per lap), warm-start laps; 150 s on a
+//                                       40 m circle at the limit; limit-driver laps (budget = k x g x current mu) with
+//                                       grip use; one slow lap from the middle of the window
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -2457,15 +2459,46 @@ struct TireLap {
     float surfaceAvg = 0.0f, surfaceMax = 0.0f, coreAvg = 0.0f, gripMin = 1.0f; // at the end of the lap
     float maxLatG = 0.0f, maxLateral = 0.0f;
     double offTrack = 0.0, heatJ = 0.0, slideJ = 0.0, groundJ = 0.0, airJ = 0.0; // all four tires over the lap
+    // Grip use: per tick the largest combined slip of the four tires relative to the peak of the fitted curves,
+    // u = sqrt((slip ratio / peak ratio)^2 + (slip angle / peak angle)^2) (1 = at the peak of the curve); lap mean and
+    // the time with u >= 0.8 (u capped at 2 in the mean).
+    double useSum = 0.0, limitTime = 0.0, budgetSum = 0.0;
+    long ticks = 0;
     bool flipped = false;
+    double useMean() const { return ticks ? useSum / double(ticks) : 0.0; }
+    double budgetMean() const { return ticks ? budgetSum / double(ticks) : 0.0; }
     bool clean() const { return offTrack < 0.25 && maxLateral < 4.0f && !flipped; }
 };
 
+float tireUse(const Vehicle& v) {
+    const VehicleTuning& t = v.effectiveTireTuning();
+    float u = 0.0f;
+    for (const WheelTelemetry& w : v.telemetry().wheels) {
+        if (!w.contact || !w.slipValid) continue;
+        const float a = w.longitudinalSlip / std::max(t.tirePeakSlipRatio, 1e-3f);
+        const float b = std::abs(w.lateralSlipDeg) / std::max(t.tirePeakSlipAngleDeg, 1e-3f);
+        u = std::max(u, std::sqrt(a * a + b * b));
+    }
+    return u;
+}
+
+// Peak lateral mu the tires offer on asphalt now: curve peak x asphalt x set x mean temperature grip factor.
+float tireLimitMu(Simulation& sim) {
+    const Vehicle& v = sim.vehicle();
+    const VehicleTuning& t = v.effectiveTireTuning();
+    float grip = 0.0f;
+    for (const WheelTelemetry& w : v.telemetry().wheels) grip += 0.25f * w.tireGrip;
+    return t.tirePeakLatFriction * sim.surfaces().get(SurfaceId::Asphalt).lateralFriction *
+           t.tireSurfaceGrip[std::size_t(SurfaceId::Asphalt)] * grip;
+}
+
 // Laps with the racing autopilot of miniTrackLaps at one lateral acceleration budget: the mini handling track (level
 // nullptr) or a circuit level's attract route. Tires start at the air temperature (or warm: the middle of the set's
-// window). Per completed lap: time and the tire state at the line.
+// window). Per completed lap: time and the tire state at the line. adaptK > 0: a limit driver instead of a fixed
+// budget: every second the budget is adaptK x g x tireLimitMu (the same share of the grip the tires offer now, so
+// cold tires are driven slower and warm slicks faster).
 std::vector<TireLap> budgetLaps(const VehicleConfig& vehicle, std::shared_ptr<const Level> level, float budget, int laps,
-                                bool warm) {
+                                bool warm, float adaptK = 0.0f) {
     SimulationSettings s;
     s.vehicle = vehicle;
     s.level = level;
@@ -2484,10 +2517,16 @@ std::vector<TireLap> budgetLaps(const VehicleConfig& vehicle, std::shared_ptr<co
     // corners at the budget of the run instead of its showcase pace.
     if (level) route.lateralAccel = budget;
     else route.cruiseSpeed = 70.0f;
+    auto adapt = [&] {
+        budget = adaptK * 9.81f * tireLimitMu(sim);
+        route.lateralAccel = budget;
+        if (!level) route.brakeDecel = std::min(budget, 8.0f);
+    };
     sim.setIntent({.brake = 1.0f});
     for (int i = 0; i < 120; ++i) sim.tick();
     if (warm) sim.setTireTemperatures(windowMiddle(vehicle.tireSet, sim.ambientTemperature()),
                                       windowMiddle(vehicle.tireSet, sim.ambientTemperature()));
+    if (adaptK > 0.0f) adapt();
     AutopilotSettings a;
     a.lateralAccel = budget;
     a.planDecel = std::min(budget, 8.0f);
@@ -2514,7 +2553,13 @@ std::vector<TireLap> budgetLaps(const VehicleConfig& vehicle, std::shared_ptr<co
     std::vector<TireLap> out;
     TireLap cur;
     const double limit = (level ? 400.0 : 120.0) * laps;
+    double nextAdapt = 1.0;
     for (double t = 0.0; t < limit && int(out.size()) < laps; t += dt) {
+        if (adaptK > 0.0f && t >= nextAdapt) {
+            nextAdapt += 1.0;
+            adapt();
+            driver.setRoute(route, vehicle.wheelBase, vehicle.axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f);
+        }
         const JPH::RMat44 xf = sim.vehicle().bodyTransform();
         const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ(), left = xf.GetAxisX();
         AutopilotInput in;
@@ -2546,6 +2591,11 @@ std::vector<TireLap> budgetLaps(const VehicleConfig& vehicle, std::shared_ptr<co
             for (const auto& w : tel.wheels) off += w.contact && w.surface != SurfaceId::Asphalt;
             if (off >= 2) cur.offTrack += dt;
             cur.flipped = cur.flipped || tel.upDot < 0.3f;
+            const float u = tireUse(sim.vehicle());
+            cur.useSum += std::min(u, 2.0f); // a spin reads as u >> 1: capped so one spin does not set the lap mean
+            if (u >= 0.8f) cur.limitTime += dt;
+            cur.budgetSum += budget;
+            ++cur.ticks;
             for (int i = 0; i < kWheelCount; ++i) {
                 const TireThermalState& th = sim.vehicle().tireThermal(i);
                 cur.heatJ += tel.wheels[std::size_t(i)].tireHeatW * dt;
@@ -2615,6 +2665,103 @@ TireStop tireStop(const VehicleConfig& vehicle, int lane, bool abs, bool warm) {
     r.distance = path * target * target / std::max(v0 * v0, 1.0f);
     r.ok = v0 >= 0.98f * target && worst < 2.5f;
     return r;
+}
+
+// Steady cornering at the grip limit on the flat concrete pad: the racing autopilot on a 40 m radius circle with its
+// lateral acceleration raised by 0.1 m/s^2 per second while it holds the line (radial error < 1 m) and lowered by
+// 0.5 m/s^2 per second while it runs wide (> 2 m), i.e. it keeps the vehicle just at the limit. Tires start at the air
+// temperature. Prints the state every 15 s.
+void tireLimitCircle(const std::string& id, const VehicleConfig& vehicle, double seconds) {
+    SimulationSettings s;
+    s.vehicle = vehicle;
+    s.layout = TrackLayout::Flat;
+    Simulation sim(s);
+    for (int i = 0; i < 120; ++i) sim.tick();
+    constexpr float kR = 40.0f;
+    DriveRoute route;
+    route.cruiseSpeed = 60.0f;
+    for (int k = 0; k < 126; ++k) {
+        const float a = float(k) / 126.0f * 6.2831853f;
+        route.points.push_back({kR - kR * std::cos(a), kR * std::sin(a)});
+    }
+    float accel = 5.0f;
+    route.lateralAccel = accel;
+    route.brakeDecel = 4.0f;
+    AutopilotSettings a;
+    a.planAccel = 40.0f;
+    a.maxThrottle = 1.0f;
+    a.steerEase = 0.0f;
+    a.kp = 0.5f;
+    a.ki = 0.2f;
+    a.kb = 0.6f;
+    a.maxBrake = 1.0f;
+    a.lookaheadMin = 6.0f;
+    a.lookaheadPerSpeed = 0.45f;
+    a.lookaheadMax = 26.0f;
+    a.offRouteDistance = a.stuckTime = a.flippedTime = 1e9f;
+    Autopilot driver(a);
+    const float maxSteer = vehicle.axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f;
+    driver.setRoute(route, vehicle.wheelBase, maxSteer);
+    setAids(sim, false, TractionMode::Off, 0);
+    const double dt = sim.fixedStep();
+    auto& bi = sim.world().bodies();
+    JPH::Vec3 prevV = bi.GetLinearVelocity(sim.vehicle().bodyId());
+    float latFilt = 0.0f;
+    double useSum = 0.0, latSum = 0.0, heat = 0.0, slide = 0.0;
+    long n = 0;
+    double nextAdapt = 1.0, nextPrint = 15.0;
+    for (double t = 0.0; t < seconds; t += dt) {
+        if (t >= nextAdapt) {
+            nextAdapt += 1.0;
+            const float err = driver.lateralError();
+            if (t > 10.0 && err < 1.0f) accel += 0.1f;
+            else if (err > 2.0f) accel = std::max(3.0f, accel - 0.5f);
+            route.lateralAccel = accel;
+            driver.setRoute(route, vehicle.wheelBase, maxSteer);
+        }
+        const JPH::RMat44 xf = sim.vehicle().bodyTransform();
+        const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ(), left = xf.GetAxisX();
+        AutopilotInput in;
+        in.x = p.GetX();
+        in.z = p.GetZ();
+        const float h = std::hypot(fwd.GetX(), fwd.GetZ());
+        if (h > 1e-3f) in.fx = fwd.GetX() / h, in.fz = fwd.GetZ() / h;
+        in.forwardY = fwd.GetY();
+        in.upDot = xf.GetAxisY().GetY();
+        in.forwardSpeed = sim.vehicle().telemetry().forwardSpeed;
+        const AutopilotOutput o = driver.update(in, float(dt));
+        sim.setIntent({.throttle = o.throttle, .brake = o.brake, .steer = o.steer, .analog = true});
+        sim.tick();
+        const JPH::Vec3 v = bi.GetLinearVelocity(sim.vehicle().bodyId());
+        latFilt += (float(((v - prevV) / float(dt)).Dot(left)) - latFilt) * float(dt / 0.5);
+        prevV = v;
+        useSum += tireUse(sim.vehicle());
+        latSum += std::abs(latFilt);
+        for (int i = 0; i < kWheelCount; ++i) {
+            heat += sim.vehicle().telemetry().wheels[std::size_t(i)].tireHeatW * dt;
+            slide += sim.vehicle().tireThermal(i).heatSliding * dt;
+        }
+        ++n;
+        if (t + dt >= nextPrint) {
+            nextPrint += 15.0;
+            const auto& tel = sim.vehicle().telemetry();
+            float sAvg = 0.0f, sMax = 0.0f, cAvg = 0.0f, grip = 0.0f;
+            for (const auto& w : tel.wheels) {
+                sAvg += 0.25f * w.tireSurfaceC;
+                sMax = std::max(sMax, w.tireSurfaceC);
+                cAvg += 0.25f * w.tireCoreC;
+                grip += 0.25f * w.tireGrip;
+            }
+            std::printf("tires circle %-14s %-8s t %4.0f s: %5.1f km/h, lat %.2f g (limit mu %.2f), grip use %.2f, tread avg "
+                        "%5.1f max %5.1f C, core %5.1f C, grip x%.3f, heat in %.2f kW per tire (sliding %.2f), line error "
+                        "%.1f m\n",
+                        id.c_str(), tireSetName(vehicle.tireSet), t + dt, tel.speed * 3.6f, latSum / n / 9.81,
+                        tireLimitMu(sim), useSum / n, sAvg, sMax, cAvg, grip, heat / (15.0 * 4000.0),
+                        slide / (15.0 * 4000.0), driver.lateralError());
+            useSum = latSum = heat = slide = 0.0;
+            n = 0;
+        }
+    }
 }
 
 void tiresProbe(int argc, char** argv) {
@@ -2693,10 +2840,11 @@ void tiresProbe(int argc, char** argv) {
                     const TireLap& l = bestRun[k];
                     std::printf("tires warmup %-10s %-14s %-8s lap %zu %8.3f s%s  tread avg %5.1f max %5.1f C, core avg %5.1f C, "
                                 "min grip x%.3f, max lat %.2f g, off %.2f s; per tire: heat in %.2f kW (sliding %.2f), to ground %.2f kW, "
-                                "to air %.2f kW\n",
+                                "to air %.2f kW; grip use mean %.2f, at >= 0.8 for %.0f %% of the lap\n",
                                 where, id.c_str(), tireSetName(set), k + 1, l.time, l.clean() ? " " : "*", l.surfaceAvg,
                                 l.surfaceMax, l.coreAvg, l.gripMin, l.maxLatG, l.offTrack, l.heatJ / l.time / 4000.0,
-                                l.slideJ / l.time / 4000.0, l.groundJ / l.time / 4000.0, l.airJ / l.time / 4000.0);
+                                l.slideJ / l.time / 4000.0, l.groundJ / l.time / 4000.0, l.airJ / l.time / 4000.0,
+                                l.useMean(), 100.0 * l.limitTime / l.time);
                 }
                 const std::vector<TireLap> warm = budgetLaps(cfg, level, bestBudget, 2, true);
                 if (warm.size() == 2)
@@ -2709,6 +2857,78 @@ void tiresProbe(int argc, char** argv) {
         // TRAILFORGE_TIRES_BUDGET=b: the SUV at that budget only (quick look).
         if (const char* b = std::getenv("TRAILFORGE_TIRES_BUDGET")) lapRows("minitrack", {vehicles[0]}, nullptr, {float(std::atof(b))}, 5);
         else lapRows("minitrack", vehicles, nullptr, {6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f}, 5);
+    }
+    if (section == "all" || section == "cooldown") {
+        // One slow lap of the mini track (lateral budget 3 m/s^2, about a third of the grip) with tires starting in
+        // the middle of their window: how much they cool.
+        for (const auto& [id, path] : vehicles)
+            for (TireSet set : sets) {
+                VehicleConfig cfg = loadProbeVehicle(path);
+                cfg.tireSet = set;
+                const std::vector<TireLap> run = budgetLaps(cfg, nullptr, 3.0f, 1, true);
+                if (run.empty()) continue;
+                const TireLap& l = run[0];
+                std::printf("tires cooldown %-14s %-8s from %5.1f C: slow lap %7.2f s, tread avg %5.1f max %5.1f C at the "
+                            "line, core %5.1f C, min grip x%.3f, heat in %.2f kW per tire, to air %.2f, to ground %.2f\n",
+                            id.c_str(), tireSetName(set), windowMiddle(set, kDefaultAmbientC), l.time, l.surfaceAvg,
+                            l.surfaceMax, l.coreAvg, l.gripMin, l.heatJ / l.time / 4000.0, l.airJ / l.time / 4000.0,
+                            l.groundJ / l.time / 4000.0);
+            }
+    }
+    if (section == "all" || section == "circle") {
+        for (const auto& [id, path] : vehicles)
+            for (TireSet set : sets) {
+                VehicleConfig cfg = loadProbeVehicle(path);
+                cfg.tireSet = set;
+                tireLimitCircle(id, cfg, 150.0);
+            }
+    }
+    if (section == "all" || section == "limit") {
+        // The limit driver (budget = k x g x the mu the tires offer now) on the mini track, 5 laps from cold, and on
+        // Suncoast, 3 laps; k swept, the best clean flying lap per set reported like the fixed budgets.
+        auto limitRows = [&](const char* where, const std::vector<std::pair<std::string, std::string>>& list,
+                             std::shared_ptr<const Level> level, const std::vector<float>& ks, int laps) {
+            for (const auto& [id, path] : list)
+                for (TireSet set : sets) {
+                    VehicleConfig cfg = loadProbeVehicle(path);
+                    cfg.tireSet = set;
+                    double best = -1.0;
+                    float bestK = 0.0f;
+                    std::vector<TireLap> bestRun;
+                    for (float k : ks) {
+                        const std::vector<TireLap> run = budgetLaps(cfg, level, 0.0f, laps, false, k);
+                        std::printf("tires limitlaps %-10s %-14s %-8s k %.2f:", where, id.c_str(), tireSetName(set), k);
+                        for (std::size_t j = 0; j < run.size(); ++j)
+                            std::printf(" L%zu %.2f s%s", j + 1, run[j].time, run[j].clean() ? "" : "*");
+                        std::printf("\n");
+                        for (std::size_t j = 1; j < run.size(); ++j)
+                            if (run[j].clean() && (best < 0.0 || run[j].time < best)) {
+                                best = run[j].time;
+                                bestK = k;
+                                bestRun = run;
+                            }
+                    }
+                    if (best < 0.0) {
+                        std::printf("tires LIMIT %-10s %-14s %-8s no clean flying lap\n", where, id.c_str(), tireSetName(set));
+                        continue;
+                    }
+                    std::printf("tires LIMIT %-10s %-14s %-8s best clean flying lap %.3f s (k %.2f)\n", where, id.c_str(),
+                                tireSetName(set), best, bestK);
+                    for (std::size_t j = 0; j < bestRun.size(); ++j) {
+                        const TireLap& l = bestRun[j];
+                        std::printf("tires limitlap %-10s %-14s %-8s lap %zu %8.3f s%s budget %.1f m/s^2, tread avg %5.1f max "
+                                    "%5.1f C, core %5.1f C, min grip x%.3f, max lat %.2f g, grip use mean %.2f, >= 0.8 %3.0f %%, "
+                                    "heat in %.2f kW per tire (sliding %.2f)\n",
+                                    where, id.c_str(), tireSetName(set), j + 1, l.time, l.clean() ? " " : "*", l.budgetMean(),
+                                    l.surfaceAvg, l.surfaceMax, l.coreAvg, l.gripMin, l.maxLatG, l.useMean(),
+                                    100.0 * l.limitTime / l.time, l.heatJ / l.time / 4000.0, l.slideJ / l.time / 4000.0);
+                    }
+                }
+        };
+        limitRows("minitrack", vehicles, nullptr, {0.65f, 0.70f, 0.75f, 0.80f, 0.85f, 0.90f}, 5);
+        std::string err;
+        auto level = Level::load(TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/level.json", &err);
+        if (level) limitRows("suncoast", {vehicles[0]}, level, {0.55f, 0.60f, 0.65f, 0.70f, 0.75f}, 3);
     }
     if (section == "all" || section == "suncoast") {
         std::string err;
