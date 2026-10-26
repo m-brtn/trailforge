@@ -79,6 +79,8 @@ struct SimulationSettings {
     InputSmoothing smoothing;
     AutoReverseSettings autoReverse;
     TireMarkSettings tireMarks;
+    // Air temperature on the proving ground and test layouts, C (a level brings its own, Level::ambientTemperature).
+    float ambientC = kDefaultAmbientC;
 };
 
 // Who drives: the player (setIntent), the autopilot along the world's attract route (the menu backdrop), or nobody
@@ -120,6 +122,13 @@ public:
     const char* autopilotResetReason() const { return m_autopilotResetReason; } // of the last reset
     // The current world's attract route (level.json "attractRoute", or the proving ground loop); may be empty.
     const DriveRoute& attractRoute() const { return m_autopilot.route(); }
+
+    // Air temperature for the tire thermal model, C. Applies now (cooling and heating toward it); the tires keep their
+    // temperatures until the next spawn, which starts them at the air temperature. A level switch sets the level's.
+    void setAmbientTemperature(float celsius);
+    float ambientTemperature() const { return m_ambientC; }
+    // All tire temperatures set directly (tests, probe, scenario `tires warm|cold`).
+    void setTireTemperatures(float surfaceC, float coreC) { m_vehicle->setTireTemperatures(surfaceC, coreC); }
 
     // Discrete commands run at the start of the next tick.
     void requestToggleDirection() { m_pendingToggleDirection = true; }
@@ -282,6 +291,7 @@ private:
     RenderSnapshot m_prev, m_curr;
     StepTiming m_timing;
     double m_simTime = 0.0;
+    float m_ambientC = kDefaultAmbientC;
     TireMarks m_tireMarks;
     LapTimer m_lapTimer;
     char m_lapMessage[96] = {};

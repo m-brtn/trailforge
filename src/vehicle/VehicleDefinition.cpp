@@ -136,7 +136,8 @@ void readAxle(Obj& axles, const char* key, AxleConfig& a, AxleTuning& t, bool fr
         w.num("rimRatio", a.rimRatio, 0.35, 0.85, "(rim / tire diameter, visual)", false);
         w.str("tread", a.tread, false);
         if (a.tread != "mud_terrain" && a.tread != "all_terrain")
-            w.error(w.child("tread"), "unknown tread '" + a.tread + "' (known: mud_terrain, all_terrain)");
+            w.error(w.child("tread"), "unknown tread '" + a.tread + "' (known: mud_terrain, all_terrain; road and slick "
+                                      "treads come with the tire set, tires.set)");
     }
     {
         Obj s(o.member("suspension"), o.child("suspension"), source, errors);
@@ -563,6 +564,14 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             ti.boolean("staticGrip", t.tireStaticGrip);
             ti.num("slipSpeedFloor", t.tireSlipSpeedFloor, 0.0, 5.0, "m/s");
             ti.boolean("frictionEllipse", t.tireFrictionEllipse);
+            {
+                // Tire set fitted by default (optional); the curve above is always the off-road set.
+                std::string set = tireSetKey(c.tireSet);
+                ti.str("set", set, false);
+                const TireSet parsed = tireSetFromKey(set);
+                if (parsed == TireSet::Count) ti.error(ti.child("set"), "unknown tire set '" + set + "' (known: offroad, road, slick)");
+                else c.tireSet = parsed;
+            }
             Obj sg(ti.member("surfaceGrip"), "tires.surfaceGrip", source, errors);
             // Surfaces added after the format was published (asphalt, gravel) are optional and default to 1.
             for (std::size_t i = 0; i < kSurfaceCount; ++i)

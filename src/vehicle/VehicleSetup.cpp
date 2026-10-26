@@ -79,6 +79,13 @@ std::vector<SetupParamInfo> buildParams() {
                  [](const C& c, const C& b) { return b.attachHeight - c.attachHeight; },
                  [](C& c, const C& b, float v) { c.attachHeight = b.attachHeight - v; }});
     // Tires
+    p.push_back({"tires.set", "TIRES", "Tire set", "", K::Choice, 1.0f, 0, 1.0f, 0.0f, float(kTireSetCount - 1), false,
+                 0.0f, float(kTireSetCount - 1), true, {tireSetName(TireSet::Offroad), tireSetName(TireSet::Road),
+                                                         tireSetName(TireSet::Slick)},
+                 [](const C& c, const C&) { return float(int(c.tireSet)); },
+                 [](C& c, const C&, float v) {
+                     c.tireSet = TireSet(std::clamp(int(std::lround(v)), 0, int(kTireSetCount) - 1));
+                 }});
     p.push_back({"tires.gripScale", "TIRES", "Grip scale (pressure proxy)", "x", K::Number, 1.0f, 2, 0.02f, 0.5f, 1.5f,
                  false, 0.85f, 1.15f, false, {},
                  [](const C& c, const C& b) { return c.tuning.tirePeakLongFriction / b.tuning.tirePeakLongFriction; },

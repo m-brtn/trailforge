@@ -53,6 +53,13 @@ struct WheelTelemetry {
     float brakeTorque = 0.0f;  // N*m commanded on the last tick (pedal x ABS pressure + TC brake)
     float absPressure = 1.0f;  // 0..1
     float tcBrake = 0.0f;      // N*m
+    // Tire thermal model (TireModel.h) after the last tick.
+    float tireSurfaceC = 20.0f;   // tread surface layer temperature
+    float tireCoreC = 20.0f;      // carcass / core temperature
+    float tireGrip = 1.0f;        // grip multiplier of the compound at tireSurfaceC (acts on the friction curve)
+    float tirePressureKPa = 0.0f; // gauge, ideal gas from the core temperature
+    float tireHeatW = 0.0f;       // heat into the tire: sliding share + rolling hysteresis
+    float tireCoolW = 0.0f;       // heat out: air + ground + rim
     SurfaceId surface = SurfaceId::PackedDirt;
     JPH::Vec3 contactPosition = JPH::Vec3::sZero(); // world, m
     JPH::Vec3 contactNormal = JPH::Vec3::sZero();
@@ -106,6 +113,8 @@ struct VehicleTelemetry {
     DiffMode frontDiff = DiffMode::Open, rearDiff = DiffMode::Open, centerDiff = DiffMode::Open; // effective modes
     float steerAngleDeg = 0.0f; // average front wheel angle, degrees
     float upDot = 1.0f;         // cosine of the angle between the body Y axis and vertical
+    TireSet tireSet = TireSet::Offroad;
+    float ambientC = kDefaultAmbientC; // air and ground temperature used by the tire thermal model
     std::array<WheelTelemetry, kWheelCount> wheels;
     EvTelemetry ev;
 };
@@ -151,6 +160,17 @@ public:
 
     // Apply settings that do not require recreation. Call between steps.
     void applyTuning(const VehicleTuning& tuning);
+
+    // Air (and ground) temperature for the tire thermal model; resetTires also puts all tires at it (new tires).
+    void setAmbientTemperature(float celsius, bool resetTires);
+    // Tire temperatures set directly (tests, probe and scenario `tires warm`: tires taken off warmers).
+    void setTireTemperatures(float surfaceC, float coreC);
+    const TireCompound& tireCompound() const { return tf::tireCompound(m_config.tireSet); }
+    const TireThermalParams& tireThermalParams(int wheel) const { return m_tireParams[wheel < 2 ? 0 : 1]; }
+    const TireThermalState& tireThermal(int wheel) const { return m_tireHeat[std::size_t(wheel)]; }
+    // The vehicle's tire curve with the tire set applied (what the friction callbacks use).
+    const VehicleTuning& effectiveTireTuning() const { return m_tireTuning; }
+    static VehicleTuning tireSetTuning(const VehicleTuning& base, TireSet set);
     // True if switching from config a to b needs a new Jolt body / constraint (geometry, wheels, engine, gearbox,
     // layout, mass); false if b differs only in VehicleTuning.
     static bool needsRebuild(const VehicleConfig& a, const VehicleConfig& b);
@@ -183,10 +203,18 @@ private:
     void applyDrag();
     void applyRollingResistance();
     void prePhysicsElectric(const DriverCommand& cmd, float dt);
+    void updateTireThermal(float dt);
 
     PhysicsWorld& m_world;
     const SurfaceTable& m_surfaces;
     VehicleConfig m_config;
+    VehicleTuning m_tireTuning; // m_config.tuning with the tire set applied to the tire fields
+    std::array<TireThermalParams, 2> m_tireParams{}; // per axle
+    std::array<TireThermalState, kWheelCount> m_tireHeat{};
+    // Grip multiplier of each tire from its temperature, written after a tick and used by the next one.
+    std::array<float, kWheelCount> m_tireGrip{1.0f, 1.0f, 1.0f, 1.0f};
+    float m_ambientC = kDefaultAmbientC;
+    float m_tickDt = 0.0f; // full physics tick (prePhysics), s
     JPH::BodyID m_bodyId;
     JPH::AABox m_bodyBounds;
     JPH::Body* m_body = nullptr;

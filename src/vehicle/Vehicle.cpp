@@ -321,7 +321,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
                 // Loose surfaces stretch the slip axis of both curves (slip / scale is the slip on the tire's curve).
                 const float scale = std::max(s.peakSlipScale, 0.1f);
                 const float slip = curveSlip(wheel) / scale;
-                const VehicleTuning& t = m_config.tuning;
+                const VehicleTuning& t = m_tireTuning;
                 const float lon = looseCurve(m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip,
                                              t.tirePeakSlipRatio, t.tirePeakLongFriction, s.slideDrop);
                 ioLong = staticGripFriction(lon, slip);
@@ -334,7 +334,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
                 m_contactSurface[wheel] = id;
                 updateEllipseSlip(wheel, slip, scale);
             }
-            const float tire = m_config.tuning.tireSurfaceGrip[std::size_t(id)];
+            // Tire set and temperature act only here, on the friction the controller uses (no other force).
+            const float tire = m_tireTuning.tireSurfaceGrip[std::size_t(id)] * (wheel < kWheelCount ? m_tireGrip[wheel] : 1.0f);
             ioLong *= s.longitudinalFriction * tire;
             ioLat *= s.lateralFriction * tire;
         });
@@ -348,6 +349,11 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
 
     world.system().AddConstraint(m_constraint);
     world.system().AddStepListener(m_constraint);
+
+    for (int a = 0; a < 2; ++a)
+        m_tireParams[std::size_t(a)] = tf::tireThermalParams(c.axles[std::size_t(a)].wheelRadius, c.axles[std::size_t(a)].wheelWidth,
+                                                             c.axles[std::size_t(a)].wheelMass, tireCompound());
+    setAmbientTemperature(kDefaultAmbientC, true);
 
     m_controls.abs = c.tuning.aids.absEnabled;
     m_controls.traction = c.tuning.aids.traction;
@@ -394,7 +400,7 @@ float Vehicle::looseCurve(float curve, float slip, float peakSlip, float peak, f
 // cycle that reads as wheelspin on every launch, from rest up to ~8 m/s. A tire that has not broken away (slip
 // below the peak) may therefore pass up to the peak friction; sliding wheels keep the curve value.
 float Vehicle::staticGripFriction(float curveFriction, float slip) const {
-    const VehicleTuning& t = m_config.tuning;
+    const VehicleTuning& t = m_tireTuning;
     if (!t.tireStaticGrip) return curveFriction;
     if (slip >= t.tirePeakSlipRatio) return curveFriction;
     return std::max(curveFriction, t.tirePeakLongFriction);
@@ -404,7 +410,7 @@ float Vehicle::staticGripFriction(float curveFriction, float slip) const {
 // rotation reads as a full slide (sliding mu) and a hill start can never stay at the peak. Here the denominator has
 // a floor of tireSlipSpeedFloor (a common low-speed treatment in tire models); above it this equals Jolt's value.
 float Vehicle::curveSlip(JPH::uint wheel) const {
-    const VehicleTuning& t = m_config.tuning;
+    const VehicleTuning& t = m_tireTuning;
     const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
     if (t.tireSlipSpeedFloor <= 0.0f) return w->mLongitudinalSlip;
     JPH::Vec3 v = m_body->GetPointVelocity(w->GetContactPosition()) - w->GetContactPointVelocity();
@@ -417,7 +423,7 @@ float Vehicle::curveSlip(JPH::uint wheel) const {
 // floor) over its peak, slip angle over its peak. The blend fades the ellipse in between 1 and 3 m/s of contact
 // patch speed: at a crawl Jolt's slip angle and slip ratio are numerically undefined.
 void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip, float slipScale) {
-    const VehicleTuning& t = m_config.tuning;
+    const VehicleTuning& t = m_tireTuning;
     const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
     EllipseSlip& e = m_ellipseSlip[wheel];
     e.sx = slip / std::max(t.tirePeakSlipRatio, 1e-3f);
@@ -432,7 +438,7 @@ void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip, float slipScale) {
 // scaled by its share of the normalized slip (sx / s, sy / s): the force lies on an ellipse with the two limits as
 // semi-axes and points along the combined slip, like a sliding contact patch. Below the peak nothing changes.
 void Vehicle::frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const {
-    if (!m_config.tuning.tireFrictionEllipse) return;
+    if (!m_tireTuning.tireFrictionEllipse) return;
     const EllipseSlip& e = m_ellipseSlip[wheel];
     const float s = std::sqrt(e.sx * e.sx + e.sy * e.sy);
     if (s <= 1.0f) return;
@@ -452,7 +458,8 @@ void Vehicle::applyTuning(const VehicleTuning& t) {
         w->mMaxBrakeTorque = a.brakeTorque;
         w->mMaxHandBrakeTorque = a.handBrakeTorque;
     }
-    buildTireCurves(t);
+    m_tireTuning = tireSetTuning(t, m_config.tireSet);
+    buildTireCurves(m_tireTuning);
 
     auto& bars = m_constraint->GetAntiRollBars();
     bars[0].mStiffness = t.axles[kFrontAxle].antiRoll;
@@ -669,6 +676,7 @@ bool Vehicle::setTransfer(TransferMode mode) {
 // Electric: the motor commands (drive split, per-axle TC, regen blend) come from ElectricDrive; the friction brakes
 // keep ABS and the TC brake of DrivingAids, with the pedal torque reduced by what regen already brakes.
 void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
+    m_tickDt = dt;
     const VehicleTuning& vt = m_config.tuning;
     const DrivingAidTuning& at = vt.aids;
     const float driveSign = m_direction == DriveDirection::Forward ? 1.0f : -1.0f;
@@ -747,6 +755,7 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
 
 void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     m_command = cmd;
+    m_tickDt = dt;
     if (m_electric != nullptr) {
         prePhysicsElectric(cmd, dt);
         return;
@@ -951,6 +960,80 @@ void Vehicle::postPhysics(float dt) {
         if (i < 2) steerSum += wt.steerAngleDeg;
     }
     t.steerAngleDeg = 0.5f * steerSum;
+    updateTireThermal(m_tickDt > 0.0f ? m_tickDt : dt);
+}
+
+// The tire set scales the vehicle's (off-road) tire: peak slip ratio and slip angle, the sliding level relative to the
+// peak, and the per-surface grip. The off-road set multiplies by exactly 1.
+VehicleTuning Vehicle::tireSetTuning(const VehicleTuning& base, TireSet set) {
+    const TireCompound& c = tf::tireCompound(set);
+    VehicleTuning t = base;
+    t.tirePeakSlipRatio *= c.peakSlipScale;
+    t.tirePeakSlipAngleDeg *= c.peakSlipAngleScale;
+    t.tireSlideLongFriction *= c.slideRatioScale;
+    t.tireSlideLatFriction *= c.slideRatioScale;
+    for (std::size_t i = 0; i < kSurfaceCount; ++i) t.tireSurfaceGrip[i] *= c.surfaceGrip[i];
+    return t;
+}
+
+void Vehicle::setAmbientTemperature(float celsius, bool resetTires) {
+    m_ambientC = celsius;
+    m_telemetry.ambientC = celsius;
+    m_telemetry.tireSet = m_config.tireSet;
+    if (resetTires) setTireTemperatures(celsius, celsius);
+}
+
+void Vehicle::setTireTemperatures(float surfaceC, float coreC) {
+    for (int i = 0; i < kWheelCount; ++i) {
+        TireThermalState& s = m_tireHeat[std::size_t(i)];
+        s.reset(m_ambientC);
+        s.surfaceC = surfaceC;
+        s.coreC = coreC;
+        m_tireGrip[std::size_t(i)] = compoundGripFactor(tireCompound(), surfaceC);
+        WheelTelemetry& w = m_telemetry.wheels[std::size_t(i)];
+        w.tireSurfaceC = surfaceC;
+        w.tireCoreC = coreC;
+        w.tireGrip = m_tireGrip[std::size_t(i)];
+        w.tirePressureKPa = s.pressureKPa(tireThermalParams(i));
+    }
+}
+
+// Tire temperatures, once per physics tick from the contact state of the tick. Heat input is the friction power in
+// the patch, F_x * V_sx + F_y * V_sy (Pacejka, Tire and Vehicle Dynamics, 1.2): the longitudinal sliding speed of
+// the patch after the step (wheel spin / lock), and the lateral slip speed |V| sin(slip angle) with the slip angle Jolt
+// used for the step (its tire curve sets the lateral force from it), times the tire forces of the step. The new grip
+// multiplier applies from the next tick.
+void Vehicle::updateTireThermal(float dt) {
+    const TireCompound& compound = tireCompound();
+    for (int i = 0; i < kWheelCount; ++i) {
+        WheelTelemetry& w = m_telemetry.wheels[std::size_t(i)];
+        const WheelContactSample& c = m_contacts[std::size_t(i)];
+        TireThermalInput in;
+        in.contact = w.contact;
+        in.ambientC = m_ambientC;
+        in.airSpeed = m_telemetry.speed;
+        if (w.contact) {
+            const float lateralSlipSpeed = c.velocity.Length() * std::sin(std::min(std::abs(w.lateralSlipDeg), 90.0f) * kDegToRad);
+            in.load = std::max(w.load, 0.0f);
+            in.slidingPower = std::abs(w.longitudinalForce * c.longitudinalSlipSpeed) + std::abs(w.lateralForce) * lateralSlipSpeed;
+            in.rollingSpeed = std::abs(w.rollingSpeed);
+            in.groundC = surfaceGroundTemperature(w.surface, m_ambientC);
+            in.groundEffusivity = surfaceEffusivity(w.surface);
+            in.slidingShare = surfaceSlidingHeatFactor(w.surface);
+        }
+        TireThermalState& s = m_tireHeat[std::size_t(i)];
+        const TireThermalParams& p = tireThermalParams(i);
+        stepTireThermal(p, in, dt, s);
+        m_tireGrip[std::size_t(i)] = compoundGripFactor(compound, s.surfaceC);
+        w.tireSurfaceC = s.surfaceC;
+        w.tireCoreC = s.coreC;
+        w.tireGrip = m_tireGrip[std::size_t(i)];
+        w.tirePressureKPa = s.pressureKPa(p);
+        w.tireHeatW = s.heatSliding + s.heatRolling;
+        w.tireCoolW = s.toAir + s.toGround + s.toRim;
+    }
+    m_telemetry.tireSet = m_config.tireSet;
+    m_telemetry.ambientC = m_ambientC;
 }
 
 JPH::RMat44 Vehicle::bodyTransform() const {

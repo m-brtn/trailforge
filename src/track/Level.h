@@ -213,6 +213,8 @@ public:
     float cell() const { return m_cell; }
     float bakeHalfExtent() const { return -m_origin; }
     float playHalfExtent() const { return m_playHalf; }
+    // Air temperature, C (level.json "ambientTemperature", default 20): the tire thermal model's air and ground.
+    float ambientTemperature() const { return m_ambientC; }
     const std::vector<float>& heights() const { return m_height; }
     float heightSample(int i, int j) const { return m_height[std::size_t(j) * m_n + i]; }
     // Height of the triangulated surface at (x, z), the same triangles as Jolt's HeightFieldShape:
@@ -290,6 +292,7 @@ private:
     std::string m_id, m_name;
     int m_n = 0;
     float m_origin = 0.0f, m_cell = 1.0f, m_playHalf = 1000.0f, m_snowLine = 200.0f;
+    float m_ambientC = 20.0f;
     std::vector<float> m_height, m_water;
     std::vector<WaterKind> m_waterKind;
     std::vector<SurfaceId> m_surface;

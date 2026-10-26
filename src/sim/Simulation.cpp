@@ -50,6 +50,7 @@ float spawnHeight(const VehicleConfig& config) {
 void Simulation::buildWorld() {
     m_terrain.reset();
     m_track.reset();
+    m_ambientC = m_settings.level ? m_settings.level->ambientTemperature() : m_settings.ambientC;
     if (m_settings.level) {
         m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, *m_settings.level);
         m_terrain = std::make_unique<TerrainTiles>(*m_world, m_surfaces, m_settings.level, m_settings.terrain);
@@ -127,6 +128,7 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);
+    m_vehicle->setAmbientTemperature(m_ambientC, true);
     if (m_aidSwitches) {
         AidControls c = m_vehicle->aidControls();
         c.abs = m_aidSwitches->abs;
@@ -150,6 +152,11 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_tireMarks.breakRibbons();
     m_curr = captureSnapshot();
     m_prev = m_curr;
+}
+
+void Simulation::setAmbientTemperature(float celsius) {
+    m_ambientC = celsius;
+    m_vehicle->setAmbientTemperature(celsius, false);
 }
 
 void Simulation::respawnInPlace(VehicleConfig config) {

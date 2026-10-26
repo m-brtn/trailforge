@@ -553,6 +553,11 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
     m_seed = std::uint32_t(doc["seed"].numberOr(1));
     m_half = float(doc["bakeHalfExtent"].numberOr(1280));
     L.m_playHalf = float(doc["playHalfExtent"].numberOr(1000));
+    L.m_ambientC = float(doc["ambientTemperature"].numberOr(20));
+    if (L.m_ambientC < -40.0f || L.m_ambientC > 50.0f) {
+        err = "level: ambientTemperature must be -40..50 C";
+        return false;
+    }
     if (m_half < 256.0f || m_half > 4096.0f || L.m_playHalf <= 0.0f || L.m_playHalf > m_half - 16.0f) {
         err = "level: bakeHalfExtent must be 256..4096 m and larger than playHalfExtent + 16 m";
         return false;

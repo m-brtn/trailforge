@@ -1,6 +1,7 @@
 #pragma once
 
 #include "track/SurfaceProperties.h"
+#include "vehicle/TireModel.h"
 #include "vehicle/TireSound.h"
 
 #include <array>
@@ -135,7 +136,8 @@ struct VehicleTuning {
     std::array<AxleTuning, 2> axles{AxleTuning{}, AxleTuning{.handBrakeTorque = 3500.0f}};
 
     // Tires: longitudinal grip curve mu(slip ratio) and lateral mu(slip angle) of an all-terrain tire on dry
-    // concrete; the surface multipliers scale the whole curve (SurfaceTable).
+    // concrete; the surface multipliers scale the whole curve (SurfaceTable). This is the off-road tire set; the
+    // other sets (VehicleConfig::tireSet) are applied on top of it by the vehicle (TireModel.h).
     float tirePeakLongFriction = 1.00f; // mu at the peak
     float tireSlideLongFriction = 0.80f; // mu at full slide (slip ratio >= 1)
     float tirePeakSlipRatio = 0.10f;    // dimensionless
@@ -215,7 +217,7 @@ struct AxleConfig {
     // Visual only (wheel mesh; no effect on physics). The tire's outer radius and width are always
     // wheelRadius / wheelWidth; these only shape the rim and the tread.
     float rimRatio = 0.58f;            // rim diameter / tire diameter (sidewall height = (1 - rimRatio) * radius)
-    std::string tread = "mud_terrain"; // mud_terrain | all_terrain
+    std::string tread = "mud_terrain"; // mud_terrain | all_terrain | road | slick
 
     float wheelInertiaOrDisc() const { return wheelInertia > 0.0f ? wheelInertia : 0.5f * wheelMass * wheelRadius * wheelRadius; }
     bool operator==(const AxleConfig&) const = default;
@@ -274,6 +276,10 @@ struct VehicleConfig {
     float lowRangeRatio = 2.72f;     // transfer case low range (1 = none)
 
     DriveLayout layout = DriveLayout::Awd;
+
+    // Tire set on all four wheels (vehicle.json tires.set, garage "tires.set"). Fitting another set recreates the
+    // vehicle: the new tires start at the ambient temperature.
+    TireSet tireSet = TireSet::Offroad;
 
     // Electric powertrain (engineType Electric, layout DualMotor); the engine and gearbox fields above are unused.
     ElectricConfig electric;

@@ -42,6 +42,7 @@ add_library(trailforge_sim STATIC
     src/vehicle/ElectricDrive.cpp
     src/vehicle/VehicleDefinition.cpp
     src/vehicle/VehicleSetup.cpp
+    src/vehicle/TireModel.cpp
     src/sim/Simulation.cpp
     src/sim/Autopilot.cpp
     src/sim/LapTimer.cpp
@@ -218,7 +219,9 @@ if(TRAILFORGE_BUILD_TESTS)
             ev_torque_split
             ev_regen_blend
             ev_battery
-            ev_simulation)
+            ev_simulation
+            tire_thermal_model
+            tire_sets)
         add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()

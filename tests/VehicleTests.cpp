@@ -854,8 +854,160 @@ void evSimulation() {
 
 } // namespace
 
+// Tire thermal model on its own: energy balance of the heat input, exponential cooling with the expected time constant,
+// steady state (input = losses), and the compound grip windows.
+void tireThermalModel() {
+    const TireThermalParams base = tireThermalParams(0.40f, 0.30f, 35.0f, tireCompound(TireSet::Offroad));
+    std::printf("    SUV tire: surface %.0f J/K, core %.0f J/K, surface-core %.1f W/K, tread %.3f m^2, sidewalls %.3f m^2\n",
+                base.surfaceCapacity, base.coreCapacity, base.surfaceCoreConductance, base.treadArea, base.sidewallArea);
+    CHECK(base.surfaceCapacity > 3000.0f && base.surfaceCapacity < 6000.0f, "surface capacity %.0f", base.surfaceCapacity);
+
+    // 1. Energy: no losses, 10 kW of sliding for 10 s -> the stored heat is the tire's share of 100 kJ.
+    {
+        TireThermalParams p = base;
+        p.convection = false;
+        p.rimConductance = 0.0f;
+        TireThermalState s;
+        s.reset(20.0f);
+        TireThermalInput in{.contact = true, .load = 5000.0f, .slidingPower = 10000.0f, .rollingSpeed = 0.0f};
+        const float dt = 1.0f / 120.0f;
+        for (int i = 0; i < 1200; ++i) stepTireThermal(p, in, dt, s);
+        const double stored = double(p.surfaceCapacity) * (s.surfaceC - 20.0) + double(p.coreCapacity) * (s.coreC - 20.0);
+        const double expected = double(p.slidingHeatShare) * 10000.0 * 10.0;
+        std::printf("    energy: stored %.0f J, expected %.0f J (surface %.1f C, core %.1f C)\n", stored, expected, s.surfaceC, s.coreC);
+        CHECK(std::abs(stored - expected) < 0.002 * expected, "energy balance off: %.0f vs %.0f J", stored, expected);
+        CHECK(s.surfaceC > s.coreC, "the patch heats the surface first");
+    }
+    // 2. Cooling: surface only (no core coupling), still air at 20 m/s: excess falls to 1/e after C / (h A).
+    {
+        TireThermalParams p = base;
+        p.surfaceCoreConductance = 0.0f;
+        const float h = p.naturalConvection + tireForcedConvection(p.diameter, 20.0f);
+        const float tau = p.surfaceCapacity / (h * p.treadArea);
+        TireThermalState s;
+        s.reset(20.0f);
+        s.surfaceC = 80.0f;
+        TireThermalInput in{.contact = false, .airSpeed = 20.0f, .ambientC = 20.0f};
+        const float dt = 1.0f / 120.0f;
+        for (int i = 0; i < int(std::lround(tau / dt)); ++i) stepTireThermal(p, in, dt, s);
+        const float ratio = (s.surfaceC - 20.0f) / 60.0f;
+        std::printf("    cooling at 20 m/s: h %.1f W/(m^2 K), tau %.0f s, excess after tau %.4f (1/e = 0.3679)\n", h, tau, ratio);
+        CHECK(h > 15.0f && h < 80.0f, "convection coefficient %.1f out of the expected range", h);
+        CHECK(std::abs(ratio - 0.3679f) < 0.003f, "cooling does not follow exp(-t/tau): %.4f", ratio);
+    }
+    // 3. Steady state: constant cornering-like input on asphalt for 2 h of simulated time; input = losses.
+    {
+        TireThermalState s;
+        s.reset(20.0f);
+        TireThermalInput in{.contact = true, .load = 5000.0f, .slidingPower = 3000.0f, .rollingSpeed = 20.0f,
+                            .airSpeed = 20.0f, .ambientC = 20.0f, .groundC = 20.0f,
+                            .groundEffusivity = surfaceEffusivity(SurfaceId::Asphalt)};
+        const float dt = 1.0f / 120.0f;
+        for (int i = 0; i < 7200 * 120; ++i) stepTireThermal(base, in, dt, s);
+        const float in_ = s.heatSliding + s.heatRolling, out = s.toAir + s.toGround + s.toRim;
+        std::printf("    steady: surface %.1f C core %.1f C, in %.0f W, out %.0f W (air %.0f, ground %.0f, rim %.0f), %.0f kPa\n",
+                    s.surfaceC, s.coreC, in_, out, s.toAir, s.toGround, s.toRim, s.pressureKPa(base));
+        CHECK(std::abs(in_ - out) < 0.01f * in_, "not in balance: in %.0f W, out %.0f W", in_, out);
+        CHECK(s.surfaceC > 30.0f && s.coreC > 30.0f, "surface %.1f core %.1f", s.surfaceC, s.coreC);
+        CHECK(s.pressureKPa(base) > base.coldPressureKPa, "hot pressure not above cold");
+    }
+    // 4. Grip windows.
+    const TireCompound& off = tireCompound(TireSet::Offroad);
+    const TireCompound& road = tireCompound(TireSet::Road);
+    const TireCompound& slick = tireCompound(TireSet::Slick);
+    CHECK(compoundGripFactor(off, 20.0f) == 1.0f && compoundGripFactor(off, 90.0f) == 1.0f, "off-road not flat in its window");
+    CHECK(compoundGripFactor(slick, 95.0f) == 1.0f, "slick not at full grip in its window");
+    CHECK(compoundGripFactor(slick, 20.0f) < 0.65f, "cold slick %.3f", compoundGripFactor(slick, 20.0f));
+    CHECK(compoundGripFactor(road, 20.0f) > compoundGripFactor(slick, 20.0f), "cold road below cold slick");
+    CHECK(compoundGripFactor(slick, 140.0f) < 0.9f && compoundGripFactor(slick, 140.0f) > 0.7f, "overheated slick %.3f",
+          compoundGripFactor(slick, 140.0f));
+    for (float t = -40.0f; t < 200.0f; t += 1.0f)
+        for (const TireCompound* c : {&off, &road, &slick})
+            CHECK(compoundGripFactor(*c, t) > 0.5f && compoundGripFactor(*c, t) <= 1.0f, "grip out of range at %.0f C", t);
+    CHECK(tireSetFromKey("slick") == TireSet::Slick && tireSetFromKey("summer") == TireSet::Count, "tire set keys");
+}
+
+// Tire sets on the vehicle: off-road leaves the vehicle's tire exactly as it is; road / slick change the stop on
+// asphalt and gravel in the expected direction; temperature acts through the grip; garage and vehicle.json.
+void tireSets() {
+    const VehicleDefinition suv = loadOne(kAssets, "trailforge_suv");
+    CHECK(Vehicle::tireSetTuning(suv.config.tuning, TireSet::Offroad) == suv.config.tuning, "off-road set changes the tire");
+
+    // 60-0 km/h with ABS on the asphalt (lane 0) and gravel (lane 2) lanes; tires preheated or at the air temperature.
+    auto stop = [&](TireSet set, int lane, bool warm, float* surfaceAfter) {
+        VehicleConfig c = suv.config;
+        c.tireSet = set;
+        SimulationSettings s = settings(c, TrackLayout::RoadLanes);
+        Simulation sim(s);
+        sim.requestTeleport(lane);
+        for (int i = 0; i < 120; ++i) sim.tick();
+        sim.requestAidControls({true, TractionMode::On, 0});
+        const TireCompound& tc = tireCompound(set);
+        const float t = warm ? 0.5f * (std::max(tc.optimumLowC, 20.0f) + tc.optimumHighC) : 20.0f;
+        sim.setTireTemperatures(t, t);
+        while (sim.vehicle().telemetry().speed < 60.0f / 3.6f && sim.simTime() < 30.0) {
+            sim.setIntent({.throttle = 1.0f});
+            sim.tick();
+        }
+        sim.setTireTemperatures(t, t);
+        const float v0 = sim.vehicle().telemetry().speed;
+        float path = 0.0f;
+        for (int i = 0; i < 2400 && sim.vehicle().telemetry().speed > 0.05f; ++i) {
+            sim.setIntent({.brake = 1.0f});
+            sim.tick();
+            path += sim.vehicle().telemetry().speed * float(sim.fixedStep());
+        }
+        float hottest = 0.0f;
+        for (const WheelTelemetry& w : sim.vehicle().telemetry().wheels) hottest = std::max(hottest, w.tireSurfaceC);
+        if (surfaceAfter) *surfaceAfter = hottest;
+        return path * (60.0f / 3.6f) * (60.0f / 3.6f) / (v0 * v0);
+    };
+    float offHot = 0.0f;
+    const float offAsphalt = stop(TireSet::Offroad, 0, false, &offHot);
+    const float roadAsphalt = stop(TireSet::Road, 0, true, nullptr);
+    const float slickWarm = stop(TireSet::Slick, 0, true, nullptr);
+    const float slickCold = stop(TireSet::Slick, 0, false, nullptr);
+    const float offGravel = stop(TireSet::Offroad, 2, false, nullptr);
+    const float slickGravel = stop(TireSet::Slick, 2, true, nullptr);
+    std::printf("    60-0 asphalt: off-road %.2f m (hottest tire after %.1f C), road warm %.2f m, slick warm %.2f m, "
+                "slick cold %.2f m; gravel: off-road %.2f m, slick warm %.2f m\n",
+                offAsphalt, offHot, roadAsphalt, slickWarm, slickCold, offGravel, slickGravel);
+    CHECK(roadAsphalt < 0.95f * offAsphalt, "road tires do not stop shorter on asphalt");
+    CHECK(slickWarm < roadAsphalt, "warm slicks do not stop shorter than road tires");
+    CHECK(slickCold > 1.3f * slickWarm, "cold slicks not clearly worse than warm ones");
+    CHECK(slickGravel > 1.2f * offGravel, "slicks not worse on gravel");
+    CHECK(offHot > 20.5f, "braking did not heat the tires (%.2f C)", offHot);
+
+    // Garage: the set is a rebuild choice; vehicle.json tires.set.
+    VehicleSetup setup;
+    setup.values["tires.set"] = 2.0f;
+    VehicleConfig c;
+    std::vector<std::string> warnings;
+    CHECK(buildSetupConfig(suv, setup, c, warnings) && c.tireSet == TireSet::Slick, "garage tire set");
+    CHECK(Vehicle::needsRebuild(suv.config, c), "a tire set change must rebuild the vehicle");
+    const std::string dir = (std::filesystem::temp_directory_path() / "tf_tire_set_test").string();
+    std::filesystem::create_directories(dir + "/rwd_test");
+    std::ifstream src(kTestData + "/rwd_test/vehicle.json");
+    std::string text((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+    const std::size_t at = text.find("\"tires\": {");
+    CHECK(at != std::string::npos, "rwd_test has no tires block");
+    for (const char* value : {"road", "summer"}) {
+        std::string t = text;
+        t.insert(at + 10, std::string("\"set\": \"") + value + "\", ");
+        std::ofstream(dir + "/rwd_test/vehicle.json") << t;
+        VehicleDefinition d;
+        std::vector<std::string> errors;
+        const bool ok = loadVehicleDefinition(dir + "/rwd_test/vehicle.json", d, errors);
+        if (std::string(value) == "road") CHECK(ok && d.config.tireSet == TireSet::Road, "tires.set road not read");
+        else CHECK(!ok, "unknown tire set accepted");
+    }
+    std::filesystem::remove_all(dir);
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"tire_thermal_model", tireThermalModel},
+        {"tire_sets", tireSets},
         {"vehicle_catalog_sweep", vehicleCatalogSweep},
         {"vehicle_definition_validation", vehicleDefinitionValidation},
         {"drivetrain_layouts", drivetrainLayouts},
