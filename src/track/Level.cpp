@@ -2953,8 +2953,8 @@ void LevelBaker::bakeBaked(std::chrono::steady_clock::time_point t0) {
     st.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-// Physics surface and render masks from the exported surface classes. Gravel is the packed dirt surface drawn with
-// the road gravel layer; asphalt is the concrete surface drawn as asphalt (splat snow weight, asphaltLayer).
+// Physics surface and render masks from the exported surface classes. Gravel is the Gravel surface drawn with the
+// road gravel layer; asphalt is the Asphalt surface (drawn through the splat snow weight, asphaltLayer).
 void LevelBaker::bakeBakedSurfaces() {
     const int cn = m_n - 1;
     const std::size_t cells = std::size_t(cn) * std::size_t(cn);
@@ -2970,8 +2970,9 @@ void LevelBaker::bakeBakedSurfaces() {
             const LevelSurfaceClass cls = LevelSurfaceClass(m_bakedClass[c]);
             SurfaceId s = SurfaceId::Grass;
             switch (cls) {
-            case LevelSurfaceClass::Asphalt: s = SurfaceId::Concrete; break;
-            case LevelSurfaceClass::Gravel: case LevelSurfaceClass::Dirt: s = SurfaceId::PackedDirt; break;
+            case LevelSurfaceClass::Asphalt: s = SurfaceId::Asphalt; break;
+            case LevelSurfaceClass::Gravel: s = SurfaceId::Gravel; break;
+            case LevelSurfaceClass::Dirt: s = SurfaceId::PackedDirt; break;
             case LevelSurfaceClass::Mud: s = SurfaceId::Mud; break;
             case LevelSurfaceClass::Sand: s = SurfaceId::Sand; break;
             case LevelSurfaceClass::Rock: s = SurfaceId::Rock; break;
@@ -3122,7 +3123,7 @@ void LevelBaker::bakeMarkings(const LevelRoad& road, const BakedMarkings& mk) {
         piece(PropStyle::LinePaint);
         const Vec3 a = P(s0, u0, kPaint), b = P(s0, u1, kPaint), c = P(s1, u1, kPaint), d = P(s1, u0, kPaint);
         // +u is left: (s0, u1) -> (s1, u1) -> (s1, u0) is counter-clockwise seen from above.
-        g.addQuad(a, d, c, b, SurfaceId::Concrete);
+        g.addQuad(a, d, c, b, SurfaceId::Asphalt);
         done(PropStyle::LinePaint);
     };
     if (mk.edgeLine > 0.0f) {
@@ -3166,7 +3167,7 @@ void LevelBaker::bakeMarkings(const LevelRoad& road, const BakedMarkings& mk) {
             const Vec3 centre = 0.25f * (top[0][1] + top[0][2] + top[1][1] + top[1][2]) - Vec3(0, 0.03f, 0);
             auto tri = [&](Vec3 p0, Vec3 p1, Vec3 p2) {
                 if ((p1 - p0).Cross(p2 - p0).Dot((p0 + p1 + p2) / 3.0f - centre) < 0.0f) std::swap(p1, p2);
-                g.addTriangle(p0, p1, p2, SurfaceId::Concrete);
+                g.addTriangle(p0, p1, p2, SurfaceId::Asphalt);
             };
             auto quad = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) { tri(p0, p1, p2), tri(p0, p2, p3); };
             for (int q = 0; q < 3; ++q) quad(top[0][q], top[0][q + 1], top[1][q + 1], top[1][q]); // ramp, top, ramp

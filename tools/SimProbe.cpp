@@ -2090,7 +2090,7 @@ MiniLap miniTrackLaps(const VehicleConfig& vehicle, float lateralAccel) {
             r.maxLatG = std::max(r.maxLatG, std::abs(latFilt) / 9.81f);
             r.maxLateral = std::max(r.maxLateral, driver.lateralError());
             int off = 0;
-            for (const auto& w : tel.wheels) off += w.contact && w.surface != SurfaceId::Concrete;
+            for (const auto& w : tel.wheels) off += w.contact && w.surface != SurfaceId::Asphalt;
             if (off >= 2) r.offTrack += dt;
             const float sArc = driver.progress();
             if (sArc > mt.steadyArc0 && sArc < mt.steadyArc1) {
@@ -2216,7 +2216,7 @@ void lapProbe(const char* path, int laps) {
                 maxLat = std::max(maxLat, double(std::abs(acc.Dot(side))));
             }
             int n = 0;
-            for (const auto& w : tel.wheels) n += w.contact && w.surface == SurfaceId::Concrete;
+            for (const auto& w : tel.wheels) n += w.contact && w.surface == SurfaceId::Asphalt;
             onAsphalt += n == 4;
             ++ticks;
         }

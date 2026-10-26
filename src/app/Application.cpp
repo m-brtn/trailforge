@@ -2750,6 +2750,14 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         }
         return n == "air" ? air : n == "lowgrip_wheels" ? low : n == "max_slip" ? slip : load;
     }
+    if (n == "surface") { // SurfaceId under most of the wheels in contact, -1 in the air
+        int count[kSurfaceCount] = {}, best = -1;
+        for (const auto& w : t.wheels)
+            if (w.contact) ++count[int(w.surface)];
+        for (int i = 0; i < int(kSurfaceCount); ++i)
+            if (count[i] > 0 && (best < 0 || count[i] > count[best])) best = i;
+        return double(best);
+    }
     return std::nullopt;
 }
 

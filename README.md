@@ -195,10 +195,14 @@ Command-line options:
   time, marks, 0-30 km/h, stopping time and distance); `launchmarks` — rubber laid by gentle / keyboard / hard /
   full-pedal launches in 2H and 4H and by 1 / 2 / 5 s stationary burnouts on the concrete lane (ribbon length, peak,
   mean, dark length and width; burnout stamps composited per spot);
-- `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on six
-  flat surface lanes, rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
+- `surfaces` — effective friction per surface: full-throttle launches (high and low range) and 50 km/h stops on the
+  flat surface lanes (with the asphalt and gravel lanes of `TrackLayout::RoadLanes`), rolling climbs and hill starts on 15° / 20° ramps of every surface (`TrackLayout::SurfaceRamps`,
   headless only); `climb [lane]` — the force balance of one ramp climb;
-- `abs [0|1]` — 50 and 100 km/h full stops on the concrete, rock, dirt, sand, grass and mud lanes, straight and with
+- `surfacecmp` — asphalt vs concrete vs gravel (`TrackLayout::RoadLanes`): 100-0 km/h stops ABS off / on (run-up
+  with traction control, distance scaled to exactly 100 km/h), the maximum lateral g (1 s mean) at 35 % steer while
+  the speed ramps up on the flat pad given the lane's surface, and a 5 s coast from 60 km/h with the rolling
+  resistance force;
+- `abs [0|1]` — 50 and 100 km/h full stops on the asphalt, concrete, rock, dirt, gravel, sand, grass and mud lanes, straight and with
   40 % steer, ABS off / on: distance, heading after 1 s, locked wheel-seconds, ABS cycle rate (steered runs are cut
   when the vehicle leaves its lane); the argument sets the friction ellipse off / on;
 - `ellipse` — friction ellipse off / on: steady cornering at 30 / 60 / 100 % steer on concrete, dirt and mud
@@ -273,7 +277,9 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `tools/scenarios/track_check.txt` (Suncoast Raceway: an autopilot lap through every checkpoint with sector times,
 the stored best lap, R to the last checkpoint, the map, fixed cameras, frame times per preset;
 `/tmp/trailforge_track_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
-cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`),
+cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`), `tools/scenarios/surfaces.txt` (asphalt rubber
+marks after a locked-wheel stop on the mini track, gravel spray and displaced-gravel tracks in a trap;
+`/tmp/trailforge_surfaces_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
@@ -332,7 +338,7 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 `soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`,
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
@@ -342,7 +348,7 @@ speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `buildings` (placed on the
 level), `model_instances` / `model_tris` / `model_draws` (level models drawn, main view), `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
-0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
+0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand, 7 Snow, 8 Asphalt, 9 Gravel), `tread_soil_max` (most soil on any tread, 0..1),
 `spray` (live spray particles), `spray_emitted`, `spray_drawn`, `spray_max`, `spray_fine` (share of fine bits),
 `body_mud_max`, `body_mud_<region>` (`arch_rear_<w>`, `arch_front_<w>`, `behind_<w>` with `w` = fl/fr/rl/rr,
 `rear_bumper`, `front_bumper`), `wheel_width_r`, `wheel_visual_radius_r` / `wheel_visual_width_r` (measured rear
@@ -851,7 +857,7 @@ folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks th
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
 | `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
-| `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`} |
+| `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`; optional `asphalt`, `gravel` (default 1)} |
 | `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
 | `engine` | `type` (`combustion` or `electric`); combustion: `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
 | `engine` (electric) | `motors` {`front`, `rear`: `maxTorque` (N·m at the shaft), `maxPowerKW`, `maxRPM`, `reduction` (motor / axle speed), `rotorInertia` (kg·m² at the shaft), `regenTorque` (≤ maxTorque)}, `battery` {`capacityKWh` (usable), `initialSoC`, `auxPowerKW`, `maxChargePowerKW` (regen limit)}, `efficiency` {`drive`, `regen`}, `regen` {`liftOffDecel` (m/s²), `fadeSpeed` (m/s)}. The base speed maxPower / maxTorque must be below `maxRPM`; an electric vehicle has no `gearbox` section and needs `drivetrain.layout` `dual_motor` |
@@ -1166,17 +1172,19 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   (8 m offset over 44 m), a R18 double-apex corner, a R32 constant-radius corner (steady lateral g window), a 150 m
   slalom (±2.5 m) on the back straight and a R80 fast sweeper; the west half is 1.8 m higher than the east half
   (smooth ramps). Flat red / white curbs (5 cm, 1.2 m wide) on the corners and the chicane, white edge lines, a
-  checkered start line, a pit wall along the straight, grass runoff, gravel traps (the rigid `Sand` surface, no
+  checkered start line, a pit wall along the straight, grass runoff, gravel traps (the rigid `Gravel` surface, no
   sinkage) outside the hairpins and the fast corners, and tyre stacks (octagonal prisms, collision) behind them.
-  The asphalt and the curbs are the `Concrete` surface (μ 0.95); their look is a render-only paint per triangle.
+  The circuit and the curbs are the `Asphalt` surface (μ 1.00); the curb colors and the edge lines are render-only
+  paint per triangle.
   A **lap timer** (`src/sim/LapTimer`: start / finish line and two sector gates, crossing times interpolated
   within a physics tick, a lap counts only through the gates in order; the same timer as on
   [Suncoast Raceway](#suncoast-raceway-race-circuit)) shows the lap panel below the compass once a lap was started:
   `LAP n`, the running time, last and best lap, the sector times. Teleporting (or R) restarts the lap; best laps
   driven by the player are stored per vehicle like on the circuit.
-  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 0:59.69 (114 km/h,
-  0.88 g), EV 1:00.83 (141 km/h, 0.76 g), `builtin` 1:04.22 (115 km/h, 0.75 g), `rwd_test` 0:59.41 (124 km/h,
-  0.90 g) (kit bodies, box collision, v0.24.0 brakes; with the v0.23.0 brakes 1:04.57 / 1:01.25 / 1:06.51 / 0:58.62). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
+  Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap, `Asphalt`): SUV 0:59.35
+  (114 km/h, 0.92 g), EV 0:58.51 (145 km/h, 0.90 g), `builtin` 1:04.18 (115 km/h, 0.73 g), `rwd_test` 0:58.86
+  (124 km/h, 0.95 g) (kit bodies, box collision, v0.24.0 brakes; on the earlier `Concrete` circuit 0:59.69 / 1:00.83
+  / 1:04.22 / 0:59.41; with the v0.23.0 brakes 1:04.57 / 1:01.25 / 1:06.51 / 0:58.62). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
   hairpin entry (oversteer) and leaves the track.
 
 Rendering and collision are built from the same triangles (`TrackGeometry`). Each triangle has its own material.
@@ -1189,9 +1197,11 @@ the surface multipliers therefore are the effective peak μ:
 
 | Surface | Longitudinal | Lateral | Was (tire 1.20 / 1.15 × old multiplier) |
 |---|---|---|---|
+| Asphalt | 1.00 | 1.00 | new (mini track, level roads) |
 | Concrete | 0.95 | 0.95 | 1.20 / 1.15 |
 | Rock | 0.75 | 0.75 | 1.08 / 1.04 |
 | Packed dirt | 0.70 | 0.68 | 1.02 / 0.98 |
+| Gravel (loose) | 0.62 | 0.58 | new: peak slip × 2, slide drop × 0.4, rolling resistance 0.015 |
 | Sand | 0.55 | 0.52 | new in v0.3.0 |
 | Grass | 0.50 | 0.48 | 0.96 / 0.90 |
 | Mud | 0.35 | 0.32 | 0.72 / 0.63 |
@@ -1206,6 +1216,32 @@ hill start on 15° mud climbs slowly with the wheels spinning (14.1 s to the pla
 failed before), 20° mud is beyond the friction limit (μ 0.35 < tan 20°), and the 20° mud ramp is climbed only with
 momentum. Traction control results are under "Driver aids".
 
+**Asphalt and gravel** (`SurfaceId::Asphalt` / `Gravel`, keys `"asphalt"` / `"gravel"`). Sources: dry asphalt and
+concrete peak μ 0.8–0.9 for passenger tires on a locked-wheel tester and up to ~1.0–1.1 for modern road tires (Wong,
+*Theory of Ground Vehicles*, table 1.3; Bosch *Automotive Handbook*), gravel peak ~0.6 with a slide value ~0.55
+(Wong, table 1.3); rolling resistance coefficients ~0.010–0.015 on paved roads and ~0.02–0.03 on gravel (Wong,
+Gillespie, *Fundamentals of Vehicle Dynamics*). Asphalt is 5 % above the concrete pad (1.00 / 1.00) and otherwise
+behaves like concrete (rubber marks, squeal, no spray). Gravel is 0.62 / 0.58 with a loose-surface tire response:
+the slip axis of both curves is stretched × 2 (peak at slip ratio 0.20 and ~12°), and past the peak the drop toward
+the sliding value is cut to 40 % (slide / peak ≈ 0.92), because a sliding tire digs into the loose layer; the friction
+ellipse uses the stretched peak. These two numbers are assumptions chosen to match the qualitative behavior (a
+wide, flat peak), not fitted data. Gravel adds a rolling resistance force of 0.015 × wheel load (the gravel value
+minus a paved one) at each contact patch against the patch's rolling direction, faded in below 0.5 m/s so it never
+pushes a stopped wheel; paved rolling resistance is still not modeled. Gravel is rigid: no sinkage, no ruts in the
+collision, no bulldozing. Measured with `trailforge_probe surfacecmp` (120 Hz; 100-0 km/h ABS off / on, max lateral
+g at 35 % steer, 60 km/h 5 s coast loss):
+
+| Vehicle | Asphalt | Concrete | Gravel |
+|---|---|---|---|
+| SUV | 48.9 / 40.9 m, 0.88 g, −6.8 km/h | 51.5 / 42.8 m, 0.84 g, −6.8 km/h | 65.2 / 61.9 m, 0.47 g, −9.0 km/h (295 N) |
+| EV | 46.9 / 38.0 m, 0.93 g, −21.2 km/h | 50.3 / 39.9 m, 0.89 g, −21.2 km/h | 61.3 / 57.6 m, 0.56 g, −23.6 km/h (390 N) |
+| `builtin` | 46.6 / 41.7 m, 0.91 g, −4.7 km/h | 50.7 / 43.6 m, 0.87 g, −4.7 km/h | 66.6 / 63.2 m, 0.55 g, −6.9 km/h (295 N) |
+| `rwd_test` | 45.8 / 40.4 m, 0.90 g, −7.5 km/h | 48.8 / 42.0 m, 0.86 g, −7.5 km/h | 62.6 / 60.1 m, 0.51 g, −9.6 km/h (245 N) |
+
+The coast loss on asphalt and concrete is drag, wheel damping and (EV) regeneration only. CTest
+`asphalt_gravel_surfaces` checks the table, the data keys, 80-0 km/h stops on the three lanes and the gravel rolling
+resistance.
+
 Teleport points are in the Tuning window (17 on the proving ground; the map shows them and the mini track).
 
 ## Exploration Peaks (open-world level)
@@ -1215,12 +1251,13 @@ The first level, after `external_assets/images/Exploration.png`. Chosen with the
 the development level and is what scenarios and `--demo` start on.
 
 - **Data:** `assets/levels/exploration_peaks/level.json` — elevation control points and peaks, coast polygons and
-  beaches, 2 lakes, 4 rivers, 11 spline roads (width, banking, trail flag), forests, a wheat field, flats for the POI
+  beaches, 2 lakes, 4 rivers, 11 spline roads (width, banking, trail flag, `surface`: `dirt` (default), `gravel`
+  or `asphalt`; the main roads Valley Road, Coast Road and Canyon Road are gravel, the trails packed dirt), forests, a wheat field, flats for the POI
   sites, 13 POIs, the spawn. `Level` bakes it at load (about 0.4 s in Release on the M-series Mac) into a 2561 × 2561 grid at 1 m
   (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
   flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
-  shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
-  road ruts, snow above a noisy snow line), render masks, ~22.1k trees (thinning out over the last ~200 m before the bake edge), ~1.2k rocks, logs, cliff faces and scree
+  shoulders), then the per-cell surface (the road's own surface on the road, rock above 40° over ~4 m, grass, sand,
+  mud on wet banks and in dirt road ruts, snow above a noisy snow line), render masks, ~22.1k trees (thinning out over the last ~200 m before the bake edge), ~1.2k rocks, logs, cliff faces and scree
   boulders, and the POI buildings
   ([Buildings](#buildings)).
 - **Steep ground:** no straight walls from the bake itself. A lake whose surroundings are lower than its water keeps
@@ -1295,15 +1332,15 @@ licences in `assets/levels/suncoast_raceway/CREDITS.md`; the OSM way ids, the bo
   (rms 0.21 m, 48.76–50.55 m, max grade 0.8 %), with the bank = the fit's cross slope. The DEM is a surface model
   of 30 m cells with decimetre noise: it cannot show real bumps or camber, so the circuit is smooth by
   construction.
-- **Surface:** asphalt is the `Concrete` surface (μ 0.95) drawn with the asphalt layer, gravel traps the gravel
-  class (`PackedDirt`), no mud, no water, no jumps. CTest `level_baked_track_smooth` casts rays onto the physics
+- **Surface:** asphalt is the `Asphalt` surface (μ 1.00) drawn with the asphalt layer, gravel traps the `Gravel`
+  surface (μ 0.62 / 0.58, loose curve, rolling resistance), no mud, no water, no jumps. CTest `level_baked_track_smooth` casts rays onto the physics
   tiles and props every 0.5 m along and across the circuit up to 0.6 m inside the edges (107,778 points): the
   height deviates from the chord between the points 1 m before and after by at most 4.1 mm (the 4 mm painted start
   line; limit 6 mm), max grade 0.9 %. The carve keeps a 1.5 m flat shoulder beside the edge (the 1 m height grid
   would otherwise bring the cut bank onto the asphalt).
 - **Markings and curbs** (layout.json road `markings`): edge lines, the start line and grid brackets are 4 mm paint
   quads, curbs are 1.3 m wide prisms, 4.5 cm high, sunk 5 cm into the ground; all of them are prop triangles
-  (`LinePaint`, `CurbRed`, `CurbWhite` styles, the `Concrete` surface), drawn and collided as the same triangles.
+  (`LinePaint`, `CurbRed`, `CurbWhite` styles, the `Asphalt` surface), drawn and collided as the same triangles.
 - **Timing:** gate 0 is the start / finish line, then checkpoints and the two sector lines (`"sector": true`) in
   driving order, 6 gates. The lap panel (below the compass): lap number and checkpoints, the running time, last and
   best lap (the best of the session and of `best_laps.cfg`), S1 … S3 of the running lap (purple: a session-best
@@ -1312,8 +1349,9 @@ licences in `assets/levels/suncoast_raceway/CREDITS.md`; the OSM way ids, the bo
   autopilot and the player stop the lap. Best laps driven by the player are stored per level and vehicle in
   `best_laps.cfg` in the user data directory (`level vehicle seconds` lines).
 - **Autopilot laps** (`trailforge_probe lap`, the attract-drive autopilot at the level's `attractRoute` pace: 130
-  km/h cruise, 5 m/s² in curves, 4 m/s² planned braking, full throttle allowed): SUV 2:16.32 (S1 39.79, S2 61.96,
-  S3 34.57; 100.5 km/h max, 7.5 m/s² peak lateral), EV 2:14.39 (100.6 km/h, 7.5 m/s²), both 100 % of the ticks on
+  km/h cruise, 5 m/s² in curves, 4 m/s² planned braking, full throttle allowed): SUV 2:16.25 (S1 39.77, S2 61.93,
+  S3 34.55; 100.5 km/h max, 7.7 m/s² peak lateral), EV 2:14.32 (100.6 km/h, 7.5 m/s²) on the `Asphalt` surface
+  (2:16.32 / 2:14.39 when the circuit was `Concrete`), both 100 % of the ticks on
   four asphalt wheels, no resets (flying laps; CTest `level_baked_lap` / `level_baked_lap_ev` drive the first lap).
   A gentle driver, not the vehicles' limit.
 - **Size:** 4.0 MB of plain files (heightmap 2.1 MB, surfaces 1.0 MB, layout 0.66 MB, source data 0.38 MB), not in
@@ -1714,7 +1752,8 @@ and radius. `TireMarks` (`src/sim`, headless, no SDL) turns these samples into o
 segment stores both end points, the half-width vector in the contact plane (width from the wheel), surface, birth
 time, and two intensities per end:
 
-- **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9, sand 0.9 at static load);
+- **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9, sand 0.9, gravel 0.7 at
+  static load; gravel is drawn as displaced stones with raised edges, asphalt marks like concrete);
   on hard surfaces it is the soil print of the tread (see below);
 - **slip** — rubber on hard surfaces, churn on soft ones, from the patch sliding speed *and* the slip ratio
   (sliding speed / max(patch speed, rolling speed)). The ratio gate keeps normal driving clean: a steady 12 % slip in
@@ -1723,7 +1762,7 @@ time, and two intensities per end:
 
 Rubber marks use a per-wheel gate (`rubberSlide`): wheelspin / lock-up 1..5 m/s at slip ratio 0.2..0.55, sideways
 sliding 2.5..7 m/s at 0.4..0.8. Tire squeal has its own, stricter gate (`squealSlip`, see "Audio"), so a launch with
-some wheelspin leaves marks but stays silent. Only concrete, rock and the low-grip patch squeal; loose surfaces
+some wheelspin leaves marks but stays silent. Only concrete, asphalt, rock and the low-grip patch squeal; loose surfaces
 drive their own layers. Soil in the tread suppresses both. Lock-up, braking slip and sideways sliding follow a patch
 "heat" that builds up over ~0.35 s of sliding and drops within ~0.1 s when the slide ends, and scale with √load, so a
 locked stop starts faint, stays even and does not darken toward the end (the front wheels lock later than the rears
@@ -1786,9 +1825,10 @@ almost nothing (the rate grows with slip above 0.6 m/s, plus a small amount per 
 | Mud | wet droplets (radius 1.5 mm–1.3 cm, skewed to the small end), rare small clods (1–2.6 cm, ~1 per 100 bits), a wet haze | a few droplets |
 | Packed dirt | specks (1.2 mm–0.9 cm), rare clods, dust | rare specks, dust above 6 m/s |
 | Sand | fine grains (0.8–4 mm), a dust cloud, no clods | a few grains, a little dust |
+| Gravel | stones (4–12 mm, lighter tints of the ground), dust | a few stones, dust |
 | Grass | thin torn blade bits, soil specks | rare specks |
 | Puddles | muddy water drops (by slip and speed) | splashes by speed |
-| Concrete, rock, low grip | nothing | nothing |
+| Concrete, asphalt, rock, low grip | nothing | nothing |
 
 The colour mixes the ground's soil with what the tread carries. Nothing piles up: a landing bit becomes a flat splat
 on the ground that shrinks and fades within 0.06–0.12 s (dry grains), 0.15–0.35 s (wet droplets) or 0.3–0.5 s
@@ -1958,10 +1998,12 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   No Pacejka model, heat, pressure or sidewall deformation.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
-  sinkage, flotation or bulldozing; puddles have no water physics. Mini track asphalt and curbs are the rigid
-  `Concrete` surface (the asphalt grain and curb colors are render-only); its gravel traps are rigid `Sand`.
+  sinkage, flotation or bulldozing; puddles have no water physics. `Gravel` (mini track traps, the level's main
+  roads) is rigid too: only lower μ, a stretched slip curve with a flatter drop and a rolling resistance force — no
+  sinkage, ruts or stones in the physics. Mini track asphalt and curbs are the rigid `Asphalt` surface (the curb
+  colors are render-only).
 - Suncoast Raceway: the curbs are rigid prisms (no rumble model beyond their shape), the gravel traps are the rigid
-  packed-dirt surface with gravel paint (no sinkage or deceleration bed), the tyre walls and armco are rigid
+  `Gravel` surface (no sinkage or deceleration bed), the tyre walls and armco are rigid
   convex pieces (no energy absorption), and the track surface is a smooth fit to a 30 m DEM, not a survey of the
   real asphalt (real bumps and camber are unknown). The lap timer and the best laps only observe the body position.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
@@ -2028,7 +2070,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - ABS and TC read the true contact-point ground speed instead of estimating it from wheel speeds, and act through
   brake torque and a throttle factor only. ABS at 60 Hz is coarser (see "Driver aids").
 - Aerodynamics: drag only, F = ½ ρ Cd·A v² against the body velocity at the centre of mass (`dragArea`, SUV 1.3 m²),
-  no lift, downforce, side force or wind. No rolling resistance (linear damping = 0).
+  no lift, downforce, side force or wind. Rolling resistance only on gravel (0.015 × load at each contact patch);
+  none on paved or other ground (linear damping = 0).
   The engine is a torque curve, with no flywheel inertia beyond Jolt's model.
 - Compression / rebound damping: Jolt has one damping coefficient per wheel; before each step it is set to the
   compression or the rebound ratio by the direction the suspension moved in the previous step (one step of lag).
@@ -2228,7 +2271,7 @@ Everything below was actually run on macOS 27 / M-series.
     The climb is borderline: in one Debug run, where the vehicle stopped slightly closer to the step,
     it spun its wheels for about 6 s before climbing;
   - on 35°, cresting at full throttle can roll the vehicle over (roll is not limited);
-  - there is no rolling resistance, so after releasing the brake the vehicle rolls a few centimeters;
+  - there is no rolling resistance (except on gravel, added later), so after releasing the brake the vehicle rolls a few centimeters;
   - in low range the automatic reaches 5th gear at about 49 km/h;
   - once Rebuild did not trigger, and once a second C press was lost. Neither reproduced in isolation.
     Suspected cause: the real mouse cursor — the ImGui SDL3 backend substitutes the global cursor position when the window

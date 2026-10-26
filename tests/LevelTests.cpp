@@ -1526,7 +1526,7 @@ void levelBakedLayout() {
                 for (float u : {-0.4f, 0.0f, 0.4f})
                 {
                     const float x = p.x + p.dz * u * r.width, z = p.z - p.dx * u * r.width;
-                    if (lv.surfaceAt(x, z) == SurfaceId::Concrete) continue;
+                    if (lv.surfaceAt(x, z) == SurfaceId::Asphalt) continue;
                     if (++offTrack <= 5) std::printf("    off asphalt at (%.1f, %.1f) s %.0f u %.2f\n", double(x), double(z), double(p.s), double(u));
                 }
     CHECK(offTrack == 0, "%d circuit points not on asphalt", offTrack);
@@ -1538,15 +1538,16 @@ void levelBakedLayout() {
     }
     std::printf("  markings: %d paint triangles, %d curb triangles\n", paint, curbs);
     CHECK(paint > 5000 && curbs > 5000, "paint %d curbs %d triangles", paint, curbs);
-    // Asphalt is the concrete surface, gravel and dirt packed dirt, mud mud.
+    // Asphalt is the Asphalt surface, gravel Gravel, dirt packed dirt, mud mud.
     int mism = 0;
     const int cn = lv.samples() - 1;
     for (int j = 0; j < cn; ++j)
         for (int i = 0; i < cn; ++i) {
             const auto k = LevelSurfaceClass(lv.surfaceClasses()[std::size_t(j) * std::size_t(cn) + std::size_t(i)]);
             const SurfaceId s = lv.cellSurface(i, j);
-            const SurfaceId want = k == LevelSurfaceClass::Asphalt ? SurfaceId::Concrete
-                                   : (k == LevelSurfaceClass::Gravel || k == LevelSurfaceClass::Dirt) ? SurfaceId::PackedDirt
+            const SurfaceId want = k == LevelSurfaceClass::Asphalt ? SurfaceId::Asphalt
+                                   : k == LevelSurfaceClass::Gravel ? SurfaceId::Gravel
+                                   : k == LevelSurfaceClass::Dirt ? SurfaceId::PackedDirt
                                    : k == LevelSurfaceClass::Mud ? SurfaceId::Mud : k == LevelSurfaceClass::Sand ? SurfaceId::Sand
                                    : k == LevelSurfaceClass::Rock ? SurfaceId::Rock : k == LevelSurfaceClass::Snow ? SurfaceId::Snow
                                                                                                            : SurfaceId::Grass;

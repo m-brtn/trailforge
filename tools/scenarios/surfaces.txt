@@ -1,0 +1,90 @@
+# Asphalt and gravel on the proving ground mini handling track (captures /tmp/trailforge_surfaces_*.png):
+#   ./build/release/trailforge --script tools/scenarios/surfaces.txt --no-audio
+# The circuit is the Asphalt surface, its traps the Gravel surface (rigid, loose-surface friction). Marks and spray are
+# render-only. marks_s8 / marks_s9 count live tire mark segments on Asphalt / Gravel. ABS off: locked wheels.
+set ui 0
+set hud 0
+set auto_reverse 0
+time Noon
+quality High
+set motion_blur 0
+
+# ---------------------------------------------------------------- asphalt: grid launch (+X), locked-wheel stop
+teleport mini
+wait 1.5
+expect surface == 8
+set abs 0
+set marks_clear 1
+set spray_clear 1
+down W
+until speed_kmh > 50 8
+up W
+expect marks_s8 < 5              # rolling on asphalt: no rubber
+mark marks_s8
+down S
+until speed_kmh < 0.5 8
+up S
+log asphalt_stop
+expect surface == 8
+expect d_marks_s8 > 40           # locked wheels lay rubber on asphalt
+expect spray < 40                # asphalt throws no stones
+camera vehicle three_quarter_rear 14
+wait 0.6
+capture /tmp/trailforge_surfaces_asphalt_marks.png
+wait 0.3
+
+# ---------------------------------------------------------------- gravel trap (west hairpin, +Z): spin-up, lock-up
+place -173 -162 0
+wait 1.5
+expect surface == 9
+set marks_clear 1
+set spray_clear 1
+camera -167.0 3.6 -154.0 -173.0 3.0 -160.5
+down W
+wait 0.8
+log gravel_spin
+expect spray > 20                # wheelspin throws gravel stones and dust
+capture /tmp/trailforge_surfaces_gravel_spray.png
+wait 0.3
+until z > -147 8
+up W
+down S
+camera -167.5 3.7 -133.0 -173.0 3.0 -141.5
+wait 0.3
+log gravel_lock
+capture /tmp/trailforge_surfaces_gravel_lock_spray.png
+wait 0.3
+until speed_kmh < 0.5 8
+up S
+log gravel_stop
+expect surface == 9
+expect marks_s9 > 20             # displaced gravel tracks
+set spray_clear 1
+camera -169.0 5.5 -130.0 -173.5 2.6 -150.0
+wait 0.6
+capture /tmp/trailforge_surfaces_gravel_marks.png
+wait 0.3
+
+# ---------------------------------------------------------------- Exploration Peaks: the gravel road at the spawn
+# Marks on the textured level ground take the ground's own layers (splat + terrain textures) and only darken and
+# flatten them: compressed stones with the tread, no flat band.
+camera follow
+level exploration_peaks
+until level == 1 10
+pedal brake 1
+wait 4
+expect surface == 9
+set marks_clear 1
+pedal brake 0
+pedal throttle 0.45
+wait 4
+pedal throttle 0
+pedal brake 0.35
+until speed_kmh < 0.5 10
+pedal brake 0
+expect marks_s9 > 40
+camera vehicle rear 9
+wait 0.6
+capture /tmp/trailforge_surfaces_level_gravel_road.png
+wait 0.3
+quit
