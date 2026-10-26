@@ -570,7 +570,7 @@ void Renderer::createScenePipelines() {
                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 4, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 2, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
+    m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 3, 0, 6, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
     m_sprayPipe = createPipeline("spray_vs", "spray_fs", 2, 1, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
@@ -2353,6 +2353,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         mu.widthA = glm::vec4(width[0], width[1], width[2], width[3]);
         mu.widthB = glm::vec4(width[4], width[5], width[6], width[7]);
         mu.widthC = glm::vec4(width[8], width[9], width[10], width[11]);
+        const bool levelGround = m_terrainSamples > 0 && m_terrainTexUniforms.params.x > 0.5f;
+        mu.ground = glm::vec4(levelGround ? 1.0f : 0.0f, m_terrainOrigin, m_terrainCell, float(std::max(m_terrainSamples - 1, 1)));
     }
 
     // ---- Grass trample mask: re-rendered when segments were added or removed, and every half second while marks
@@ -2591,7 +2593,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 1, &mu, sizeof(mu));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_PushGPUFragmentUniformData(cmd, 2, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
+            // Off the level the splat slot only needs a valid texture (mu.ground.x = 0 skips it).
+            const SDL_GPUTextureSamplerBinding markTex[6] = {
+                litTex[0], litTex[1], litTex[2], {m_terrainAlbedo.tex, m_terrainSampler},
+                {m_terrainNra.tex, m_terrainSampler}, {m_terrainSplat.tex ? m_terrainSplat.tex : m_mask.tex, m_clampSampler}};
+            SDL_BindGPUFragmentSamplers(pass, 0, markTex, 6);
             SDL_BindGPUVertexStorageBuffers(pass, 0, &m_markBuffer, 1);
             SDL_DrawGPUPrimitives(pass, 6, markCount, 0, 0);
             ++m_stats.drawCalls;

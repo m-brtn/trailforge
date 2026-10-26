@@ -1750,7 +1750,9 @@ center and normal, suspension load, longitudinal/lateral slip speed of the patch
 and radius. `TireMarks` (`src/sim`, headless, no SDL) turns these samples into one ribbon per wheel: a segment every
 0.15 m of patch travel, written into a fixed ring buffer (default 16,384 segments, the oldest is overwritten). Each
 segment stores both end points, the half-width vector in the contact plane (width from the wheel), surface, birth
-time, and two intensities per end:
+time, and two intensities per end (on the textured level ground the fragment shader rebuilds the ground under a
+soft mark from the same splat and terrain layers as the terrain and only darkens / flattens it, so a gravel track is
+the road's own stones pressed down, not a painted band):
 
 - **imprint** — rolling imprint on soft surfaces, ∝ load (dirt 0.85, mud 1.0, grass 0.9, sand 0.9, gravel 0.7 at
   static load; gravel is drawn as displaced stones with raised edges, asphalt marks like concrete);

@@ -1007,6 +1007,10 @@ Texture2D<float4> noiseTex : TEX(1);
 SamplerState noiseSampler : SMP(1);
 Texture2D<float4> mask : TEX(2);
 SamplerState maskSampler : SMP(2);
+#endif
+
+// Layer sampling, shared with mark_fs (tire marks over the level ground).
+#if defined(TF_ENTRY_terrain_fs) || defined(TF_ENTRY_mark_fs)
 Texture2DArray<float4> layerAlbedo : TEX(3);
 SamplerState layerAlbedoSampler : SMP(3);
 Texture2DArray<float4> layerNra : TEX(4);
@@ -1018,7 +1022,11 @@ struct TerrainTextureUniforms {
     float4 tint[6];    // rgb albedo multiplier per layer
     float4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength, z: snow weight is asphalt
 };
+#if defined(TF_ENTRY_mark_fs)
+ConstantBuffer<TerrainTextureUniforms> tt : UBO(2);
+#else
 ConstantBuffer<TerrainTextureUniforms> tt : UBO(1);
+#endif
 
 static const int LAYER_GRASS = 0;
 static const int LAYER_SOIL = 1;
@@ -1118,6 +1126,9 @@ void blendLayer(inout LayerSample g, LayerSample l, float t) {
     g.rough = lerp(g.rough, l.rough, t);
     g.ao = lerp(g.ao, l.ao, t);
 }
+#endif
+
+#if defined(TF_ENTRY_terrain_fs)
 
 float4 terrain_fs(LitOut vin) : SV_Target0 {
     float3 N = normalize(vin.normal);
@@ -2518,6 +2529,7 @@ struct MarkUniforms {
     float4 widthA; // mark width / tire width per surface, same order
     float4 widthB;
     float4 widthC;
+    float4 ground; // level terrain under the marks: x 1 = textured level ground, y origin (m), z cell (m), w cells
 };
 
 // SurfaceId (src/track/SurfaceProperties.h).
@@ -2635,6 +2647,89 @@ Texture2D<float4> noiseTex : TEX(1);
 SamplerState ns : SMP(1);
 Texture2D<float4> mask : TEX(2);
 SamplerState maskSampler : SMP(2);
+Texture2D<float4> terrainSplat : TEX(5);
+SamplerState terrainSplatSampler : SMP(5);
+
+// The textured level ground under a mark, built like terrain_fs (layers by the baked splat and the mask, macro
+// tone, mud, wet ground, litter) without the rock wall beds and the far grass canopy, so a mark tints the ground it
+// lies on instead of painting its own.
+struct MarkGround {
+    float3 albedo;
+    float3 soil; // the soil layer alone (torn turf)
+    float3 dn;
+    float rough;
+    float ao;
+};
+
+MarkGround levelGround(float3 P, float3 N, float4 m) {
+    const float dist = length(P - f.cameraPos.xyz);
+    const float farTex = smoothstep(15.0, 120.0, dist), fadeTex = smoothstep(60.0, 250.0, dist);
+    const float2 ij = (P.xz - mu.ground.y) / mu.ground.z;
+    const float4 sp = terrainSplat.SampleLevel(terrainSplatSampler, ij / mu.ground.w, 0);
+    const float sandSnow = sp.b * (255.0 / 127.5) - 1.0;
+    const float2 nz = noiseTex.Sample(ns, P.xz * 0.13).rg;
+    const float slope = sqrt(max(1.0 - N.y * N.y, 0.0)) / max(N.y, 0.1);
+    const GrassZones zones = grassZones(noiseTex, ns, P.xz, m.r, slope);
+    const float grass = saturate(m.r * lerp(zones.patch, 1.0, fadeTex) * 1.2);
+    const float road = saturate(sp.r * 1.3 - 0.15 + (nz.r - 0.5) * 0.35) * step(0.01, sp.r);
+    const float rock = saturate((sp.g - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, sp.g);
+    const float sand = saturate((max(sandSnow, 0.0) - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, sandSnow);
+    const float snow = saturate((max(-sandSnow, 0.0) - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, -sandSnow);
+    LayerSample g = sampleLayer(LAYER_SOIL, P, farTex, fadeTex);
+    const float3 soil = g.albedo;
+    if (grass > 0.001) {
+        const LayerSample l = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+        blendLayer(g, l, heightBlend(grass, l.height, g.height));
+    }
+    if (road > 0.001) {
+        const LayerSample l = sampleLayer(LAYER_ROAD, P, farTex, fadeTex);
+        blendLayer(g, l, heightBlend(road, l.height, g.height));
+    }
+    if (sand > 0.001) {
+        const LayerSample l = sampleLayer(LAYER_SAND, P, farTex, fadeTex);
+        blendLayer(g, l, heightBlend(sand, l.height, g.height));
+    }
+    if (rock > 0.001) {
+        const LayerSample l = sampleLayer(LAYER_ROCK, P, farTex, fadeTex);
+        blendLayer(g, l, heightBlend(rock, l.height, g.height));
+    }
+    if (snow > 0.001) {
+        const LayerSample l = sampleLayer(LAYER_SNOW, P, farTex, fadeTex);
+        blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
+    }
+    const float macro = noiseTex.Sample(ns, P.xz * 0.011).r;
+    float3 albedo = g.albedo * (0.86 + 0.28 * macro);
+    float rough = g.rough;
+    float flat = 1.0;
+    const float mudBlend = smoothstep(0.30, 0.55, m.g + (nz.g - 0.5) * 0.30);
+    if (mudBlend > 0.0) {
+        const float wetN = smoothstep(0.45, 0.65, nz.r * 0.7 + macro * 0.3);
+        const float wet = saturate(wetN * 0.8 + m.b * 0.5);
+        const float3 mudAlb = lerp(float3(0.125, 0.078, 0.042), float3(0.045, 0.029, 0.016), wet) * (0.8 + 0.4 * g.height);
+        albedo = lerp(albedo, mudAlb, mudBlend);
+        rough = lerp(rough, lerp(0.85, 0.40, wet), mudBlend);
+        flat = lerp(1.0, 0.5, mudBlend * wet);
+    }
+    const float wetG = m.b * lerp(1.0, 0.5, rock);
+    albedo *= lerp(1.0, 0.6, wetG);
+    rough = lerp(rough, 0.38, wetG * 0.8);
+    flat *= 1.0 - 0.5 * wetG;
+    const float canopy = smoothstep(0.05, 0.6, sp.a) * (1.0 - road) * (1.0 - snow);
+    if (canopy > 0.0) {
+        const float litterN = noiseTex.Sample(ns, P.xz * 0.37).r;
+        const float lum = dot(albedo, float3(0.3, 0.5, 0.2));
+        const float3 litter = lerp(float3(0.040, 0.032, 0.022), float3(0.085, 0.066, 0.042), litterN) * (0.55 + 2.2 * lum);
+        albedo = lerp(albedo, litter, canopy * (0.8 + 0.2 * nz.g));
+        rough = lerp(rough, 0.9, canopy * 0.5);
+    }
+    MarkGround r;
+    r.albedo = albedo;
+    r.soil = soil * (0.86 + 0.28 * macro);
+    r.dn = g.dn * flat;
+    r.rough = rough;
+    r.ao = lerp(1.0, g.ao, 0.8) * (1.0 - 0.35 * canopy);
+    return r;
+}
 
 float4 mark_fs(MarkOut vin) : SV_Target0 {
     const float3 P = vin.worldPos;
@@ -2657,14 +2752,26 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     float h;          // relief (m) for the bump normal
     float cover;      // blend weight over the ground
     float cavity = 0.0;
+    const bool level = mu.ground.x > 0.5;
+    float3 groundDn = ((float3)(0.0)); // level: normal offset of the ground texture (pressed flatter under the tire)
+    float groundAo = 1.0;
     if (softSurface(surface)) {
         const int mat = surface == SURF_MUD ? MAT_MUD : surface == SURF_GRASS ? MAT_GRASS : surface == SURF_SAND ? MAT_SAND
                       : surface == SURF_SNOW ? MAT_SNOW : MAT_DIRT;
-        const GroundSurface ground = groundMaterial(mat, P, N0, m, noiseTex, ns, grassFar(P));
-        const GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, 0.0), noiseTex, ns, 0.0);
+        GroundSurface ground = groundMaterial(mat, P, N0, m, noiseTex, ns, grassFar(P));
+        GroundSurface soil = groundMaterial(MAT_DIRT, P, N0, float4(0.0, m.g, m.b, 0.0), noiseTex, ns, 0.0);
         const float under = 1.0 - smoothstep(0.82, 0.98, atv);
         const float lugs = treadLugs(u, tv) * lugAA * (1.0 - smoothstep(0.2, 0.7, slip));
         const float churn = smoothstep(0.05, 0.6, slip);
+        if (level) {
+            const MarkGround lg = levelGround(P, N0, m);
+            ground.albedo = lg.albedo;
+            ground.roughness = lg.rough;
+            ground.bump = 0.0;
+            soil.albedo = lg.soil;
+            groundDn = lg.dn * lerp(1.0, 0.3, under * saturate(max(imprint, slip) * 1.5) * (1.0 - churn));
+            groundAo = lg.ao;
+        }
         const float baseH = ground.height * 0.035 * ground.bump;
         if (surface == SURF_MUD) {
             // Wet rut: dark glossy floor, lug pits holding water, edges pushed up into lighter berms.
@@ -2707,17 +2814,20 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
             // Loose gravel: the tread presses the stones into a flatter floor where the darker fines show and shoves
             // them aside into low ridges along both edges; wheelspin and slides scatter loose stones over the track.
             const float stones = noiseTex.Sample(ns, P.xz * 9.7).b;
-            const float3 base = float3(0.30, 0.275, 0.23) * (0.8 + 0.35 * rag);
+            const float3 base = level ? ground.albedo : float3(0.30, 0.275, 0.23) * (0.8 + 0.35 * rag);
             const float berm = smoothstep(0.85, 1.05, atv) * (1.0 - smoothstep(1.05, 1.4, atv));
             const float stone = 1.0 - smoothstep(0.15, 0.35, stones); // round cells: single stones
             h = -(0.010 * imprint + 0.02 * slip) * under - lugs * 0.003 * under +
                 (0.008 * imprint + 0.02 * slip) * berm * (0.6 + 0.8 * clods) + stone * 0.006 * (berm + churn * under);
-            const float3 pressed = base * 0.72 * (1.0 - 0.08 * lugs);
-            const float3 ridge = base * lerp(0.95, 1.2, clods);
-            const float3 scattered = lerp(base * 0.62, base * 1.3, stone);
+            // On the textured level ground the stones are the ground's own: the track only darkens them a little
+            // (fines pressed up between them) and the lugs a little more, with a stony, ragged edge.
+            const float3 pressed = base * (level ? 0.66 : 0.72) * (1.0 - (level ? 0.22 : 0.08) * lugs) *
+                                   (level ? 0.85 + 0.3 * stones : 1.0);
+            const float3 ridge = base * lerp(0.95, level ? 1.08 : 1.2, clods);
+            const float3 scattered = lerp(base * (level ? 0.75 : 0.62), base * (level ? 1.1 : 1.3), stone);
             albedo = lerp(lerp(pressed, ridge, berm), scattered, churn * under);
-            rough = 0.93;
-            cover = saturate(max(imprint * 0.8, slip * 1.3));
+            rough = level ? ground.roughness : 0.93;
+            cover = saturate(max(imprint * 0.8, slip * 1.3)) * (1.0 - smoothstep(0.7, 1.0, abs(v) + (stones - 0.5) * 0.4));
             cavity = under * 0.08 + berm * 0.05;
         } else if (surface == SURF_SAND) {
             // Dry sand: the tread presses crisp lugs into a slightly darker, smoother floor; spinning digs a loose
@@ -2735,10 +2845,12 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
             // Packed dirt: compacted (darker, smoother) with the tread imprint; spinning smears it into loose soil.
             h = -(0.008 * imprint + 0.02 * slip) * under - lugs * 0.008 * under + churn * (clods - 0.5) * 0.03 * under +
                 baseH * lerp(1.0, 0.4, imprint);
-            const float3 compact = soil.albedo * 0.72 * (1.0 - 0.18 * lugs);
-            const float3 loose = soil.albedo * lerp(0.75, 1.25, clods);
+            // Level: the ground under it (a road layer on the trails, the soil layer off them), not a soil colour.
+            const float3 dirtC = level ? ground.albedo : soil.albedo;
+            const float3 compact = dirtC * (level ? 0.8 : 0.72) * (1.0 - 0.18 * lugs);
+            const float3 loose = dirtC * lerp(0.75, 1.25, clods);
             albedo = lerp(compact, loose, churn);
-            rough = lerp(0.86, 0.97, churn);
+            rough = lerp(level ? ground.roughness * 0.95 : 0.86, 0.97, churn);
             cover = saturate(max(imprint * 0.9, slip * 1.3));
             cavity = under * 0.1 * lugs;
         }
@@ -2768,6 +2880,7 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     }
     cover *= edge * vin.fade;
     float3 N = perturbNormal(N0, P, h, 1.0);
+    if (level) N = normalize(N + groundDn);
     if (cover < 0.003) discard;
     if (f.options.x > 0.0) {
         const float2 cell = abs(frac(P.xz) - 0.5);
@@ -2781,7 +2894,7 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     s.N = N;
     s.V = V;
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, N0) * cloudShadow(P);
-    s.ao = vehicleAO(P) * (1.0 - cavity);
+    s.ao = vehicleAO(P) * groundAo * (1.0 - cavity);
     s.specOcclusion = 0.75;
     s.emissive = ((float3)(0.0));
     s.clearCoat = 0.0;

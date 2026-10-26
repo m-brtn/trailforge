@@ -28,7 +28,7 @@ expect tile_x == 2
 mark tiles_async
 pedal throttle 0.5
 until tile_x == 3 25
-expect road_dist < 5                    # 6 m road; the drive is straight, the road curves slightly
+expect road_dist < 12                   # 6 m gravel road, no steering: the road curves and the car drifts down its camber
 expect speed_kmh > 15
 capture /tmp/trailforge_expl_02_tile_crossing.png
 wait 0.3

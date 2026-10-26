@@ -157,6 +157,7 @@ struct MarkUniforms {
     glm::vec4 widthA; // mark width / tire width per surface (SurfaceMarkResponse::widthScale), same order
     glm::vec4 widthB;
     glm::vec4 widthC;
+    glm::vec4 ground; // level terrain under the marks: x 1 = textured level ground, y origin (m), z cell (m), w cells
 };
 
 // GPU vertex buffer with explicit ownership (released in the destructor).
