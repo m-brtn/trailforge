@@ -103,7 +103,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         remember("hud", true);
         ImGui::End();
         drawDriveHud(sim);
-        drawLapTimer(sim);
+        drawLapHud(sim);
     }
 
     if (gfx.visible) drawGraphics(sim, stats, gfx);
@@ -219,34 +219,69 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     ImGui::End();
 }
 
-// Mini handling track: running lap, sector splits, last and best lap (after the first start/finish crossing).
-void DebugUI::drawLapTimer(const Simulation& sim) {
+namespace {
+
+std::string lapClock(double t) {
+    if (t <= 0.0) return "-:--.---";
+    char buf[24];
+    const int m = int(t / 60.0);
+    std::snprintf(buf, sizeof(buf), "%d:%06.3f", m, t - 60.0 * m);
+    return buf;
+}
+
+} // namespace
+
+// Top-center lap timing on a level with a circuit: the running lap, the checkpoints passed, the last lap and the
+// best (this session or best_laps.cfg, whichever is faster).
+void DebugUI::drawLapHud(const Simulation& sim) {
     const LapTimer& lt = sim.lapTimer();
-    if (!lt.hasGates() || (!lt.running() && lt.laps() == 0)) return;
-    auto fmt = [](double s, char* buf, std::size_t n) {
-        if (s < 0.0) std::snprintf(buf, n, "--:--.---");
-        else std::snprintf(buf, n, "%d:%06.3f", int(s / 60.0), std::fmod(s, 60.0));
-        return buf;
-    };
+    // On the proving ground (the mini handling track) only once a lap was started there.
+    if (!lt.active() || (!sim.level() && !lt.running() && lt.laps() == 0)) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos(ImVec2(0.5f * display.x, 64.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    ImGui::SetNextWindowPos(ImVec2(lapHudX >= 0.0f ? lapHudX : 0.5f * display.x, lapHudTop), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.5f);
-    ImGui::Begin("##laptimer", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
-    char a[24], b[24], c[24];
-    ImGui::PushFont(nullptr, 1.6f * ImGui::GetStyle().FontSizeBase);
-    if (lt.running()) ImGui::Text("LAP %d  %s", lt.laps() + 1, fmt(lt.currentLap(sim.simTime()), a, sizeof(a)));
-    else ImGui::TextDisabled("LAP --  cross the start line");
+    ImGui::Begin("##laphud", nullptr, flags);
+    remember("lap_hud", true);
+    const int checkpoints = int(lt.gates().size()) - 1;
+    ImGui::BeginGroup();
+    if (lt.running()) ImGui::Text("LAP %d", lt.laps() + 1);
+    else ImGui::TextDisabled("LAP");
+    ImGui::TextDisabled("CP %d/%d", lt.checkpointsPassed(), checkpoints);
+    ImGui::EndGroup();
+    ImGui::SameLine(0.0f, 18.0f);
+    ImGui::PushFont(nullptr, 2.0f * ImGui::GetStyle().FontSizeBase);
+    if (lt.running()) ImGui::Text("%s", lapClock(lt.lapTime(sim.simTime())).c_str());
+    else ImGui::TextDisabled("cross the start line");
     ImGui::PopFont();
-    std::string splits;
-    for (std::size_t k = 0; k < lt.currentSectors().size(); ++k) {
-        std::snprintf(a, sizeof(a), "%sS%zu %.2f", k ? "  " : "", k + 1, lt.currentSectors()[k]);
-        splits += a;
+    ImGui::SameLine(0.0f, 18.0f);
+    ImGui::BeginGroup();
+    ImGui::TextDisabled("LAST %s", lapClock(lt.lastLap()).c_str());
+    double best = lt.bestLap();
+    if (storedBestLap > 0.0 && (best <= 0.0 || storedBestLap < best)) best = storedBestLap;
+    ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), "BEST %s", lapClock(best).c_str());
+    ImGui::EndGroup();
+    // Sectors: this lap's finished sectors (white; purple when a session best), the last lap's otherwise (dim).
+    if (lt.sectorCount() > 1) {
+        for (int k = 0; k < lt.sectorCount(); ++k) {
+            ImGui::SameLine(0.0f, 14.0f);
+            ImGui::BeginGroup();
+            const double now = lt.sectorTime(k), last = lt.lastSectorTime(k);
+            ImGui::TextDisabled("S%d", k + 1);
+            if (now > 0.0) {
+                const bool bestSector = lt.bestSectorTime(k) <= 0.0 || now <= lt.bestSectorTime(k) + 1e-6;
+                ImGui::TextColored(bestSector ? ImVec4(0.8f, 0.5f, 1.0f, 1) : ImVec4(1, 1, 1, 1), "%.3f", now);
+            } else if (last > 0.0) {
+                ImGui::TextDisabled("%.3f", last);
+            } else {
+                ImGui::TextDisabled("--.---");
+            }
+            ImGui::EndGroup();
+        }
     }
-    if (!splits.empty()) ImGui::TextUnformatted(splits.c_str());
-    ImGui::TextDisabled("last %s  best %s", fmt(lt.lastLap(), b, sizeof(b)), fmt(lt.bestLap(), c, sizeof(c)));
-    remember("lap_timer", true);
     ImGui::End();
 }
 

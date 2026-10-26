@@ -14,6 +14,8 @@ void Autopilot::setRoute(const DriveRoute& route, float wheelBase, float maxStee
     m_limit.assign(n, m_route.cruiseSpeed);
     m_curvature.assign(n, 0.0f);
     m_length = 0.0f;
+    const float lateral = m_route.lateralAccel > 0.0f ? m_route.lateralAccel : m_settings.lateralAccel;
+    const float decel = m_route.brakeDecel > 0.0f ? m_route.brakeDecel : m_settings.planDecel;
     if (!m_route.valid()) {
         restart();
         return;
@@ -38,7 +40,7 @@ void Autopilot::setRoute(const DriveRoute& route, float wheelBase, float maxStee
         const float curvature = turn / (0.5f * (la + lb));
         m_curvature[i] = curvature;
         if (curvature > 1e-4f)
-            m_limit[i] = std::min(m_limit[i], std::max(2.5f, std::sqrt(m_settings.lateralAccel / curvature)));
+            m_limit[i] = std::min(m_limit[i], std::max(2.5f, std::sqrt(lateral / curvature)));
     }
     // Slow down ahead of curves and speed up gently after them: walk the loop backwards and forwards twice so the
     // ramps wrap around the start.
@@ -46,7 +48,7 @@ void Autopilot::setRoute(const DriveRoute& route, float wheelBase, float maxStee
     for (int pass = 0; pass < 2; ++pass) {
         for (std::size_t j = n; j-- > 0;) {
             const std::size_t next = (j + 1) % n;
-            m_limit[j] = std::min(m_limit[j], std::sqrt(m_limit[next] * m_limit[next] + 2.0f * m_settings.planDecel * segment(j)));
+            m_limit[j] = std::min(m_limit[j], std::sqrt(m_limit[next] * m_limit[next] + 2.0f * decel * segment(j)));
         }
         for (std::size_t j = 0; j < n; ++j) {
             const std::size_t next = (j + 1) % n;
@@ -209,7 +211,7 @@ AutopilotOutput Autopilot::update(const AutopilotInput& in, float dt) {
     const float e = target_v - v;
     if (e > -0.5f) {
         m_integral = std::clamp(m_integral + e * dt, 0.0f, 6.0f);
-        const float cap = c.maxThrottle * (1.0f - c.steerEase * std::abs(out.steer));
+        const float cap = (m_route.maxThrottle > 0.0f ? m_route.maxThrottle : c.maxThrottle) * (1.0f - c.steerEase * std::abs(out.steer));
         out.throttle = std::clamp(0.06f + c.kp * e + c.ki * m_integral, 0.0f, cap);
     } else {
         m_integral = std::max(0.0f, m_integral - 2.0f * dt);

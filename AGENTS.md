@@ -44,7 +44,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 86 tests, 77 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 93 tests, 84 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -69,7 +69,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 `trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
 `trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps); they drive the vehicle of
+`showcase`, `surfaces`, `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `lap` (autopilot laps of a circuit level); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -84,6 +84,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
+./build/release/trailforge --script tools/scenarios/track_check.txt # Achna Speedway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
@@ -149,7 +150,8 @@ hardware" in the release notes.
 src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape), Level (level.json
               bake: heights, surfaces, render-only water, trees, rocks, POIs, buildings), BuildingKit (procedural buildings:
-              render LODs + convex collision pieces from the same solid parts), TerrainTiles (streamed HeightFieldShape tiles)
+              render LODs + convex collision pieces from the same solid parts), TerrainTiles (streamed HeightFieldShape tiles),
+              LevelFiles (baked level files: 16-bit / 8-bit PGM), MiniTrack (proving ground mini handling track)
 src/core/     Json (reader, writer, merge), Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
@@ -160,7 +162,7 @@ src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, contr
               parameters, setup files), WheelSweep (space a tire sweeps over travel + steering), VehicleBody (body.glb
               reader / writer, roles, validation against every config; no SDL)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
-              BodyImpacts (chassis contact listener for impact sounds)
+              BodyImpacts (chassis contact listener for impact sounds), LapTimer (gates, checkpoints, sectors; pure logic)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
@@ -170,7 +172,7 @@ src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actio
               labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
 src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), Garage (setup model, no SDL),
-              GameSettings (settings.cfg),
+              GameSettings (settings.cfg), BestLaps (best_laps.cfg: best lap per level and vehicle),
               Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
               dir via SDL_GetPrefPath), main
 shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
@@ -183,13 +185,17 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
               texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain and building texture rebuild),
  cars/ (trace_blueprint.py + <id>.keypoints.json hand corrections, compare_silhouettes.py IoU / half-half images,
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
- blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py)
+ blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py),
+ levels/ (fetch_osm_track.py: OSM + DEM source data with a sha256 lock; blender/: tf_level.py, import_level.py,
+ export_level.py, carve_track.py, make_achna_speedway.py; README "Editing a level in Blender")
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke; manual only)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
  <id>/blueprint.json traced body (generated; README "Vehicle blueprints"), optional <id>/body.glb Blender
  body (Git LFS; README "Blender bodies (body.glb)")
-assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id)
+assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id); achna_speedway/ is a
+ baked level (heightmap.pgm, surfaces.pgm, layout.json from Blender, plain files, not LFS; source/ raw OSM (ODbL) +
+ DEM data, CREDITS.md)
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; buildings/
  buildings.json + the same per layer (kit materials); CREDITS.md
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);

@@ -2,6 +2,7 @@
 // garage model (setups, ranges, persistence, applying to a running simulation).
 // Usage: trailforge_app_tests <test_name>
 
+#include "app/BestLaps.h"
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
@@ -35,6 +36,34 @@ int g_failures = 0;
             ++g_failures;                                                       \
         }                                                                       \
     } while (0)
+
+// Best laps per level and vehicle: only faster times replace a stored one, the file survives a round trip,
+// malformed lines are skipped.
+void bestLapsFile() {
+    BestLaps b;
+    CHECK(b.best("achna_speedway", "trailforge_suv") == 0.0, "empty table");
+    CHECK(b.submit("achna_speedway", "trailforge_suv", 171.25), "first lap stored");
+    CHECK(!b.submit("achna_speedway", "trailforge_suv", 180.0), "a slower lap is not stored");
+    CHECK(b.submit("achna_speedway", "trailforge_suv", 165.5) && b.best("achna_speedway", "trailforge_suv") == 165.5, "faster lap");
+    CHECK(b.submit("achna_speedway", "trailforge_ev", 150.125), "per vehicle");
+    CHECK(!b.submit("Achna Speedway", "trailforge_ev", 10.0) && !b.submit("achna_speedway", "x", -1.0), "invalid ids / times");
+    BestLaps c;
+    c.parse(b.serialize());
+    CHECK(c.size() == 2 && c.best("achna_speedway", "trailforge_ev") == 150.125 && c.best("achna_speedway", "trailforge_suv") == 165.5,
+          "round trip: %zu entries", c.size());
+    int skipped = 0;
+    c.parse("# comment\nachna_speedway trailforge_suv 99.5\nbroken line\nachna_speedway a b c\nlevel veh -3\n\n", &skipped);
+    CHECK(c.size() == 1 && skipped == 3, "%zu entries, %d skipped", c.size(), skipped);
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
+    std::filesystem::create_directories(dir);
+    const std::string path = (dir / "best_laps.cfg").string();
+    std::string error;
+    CHECK(b.save(path, &error), "save failed: %s", error.c_str());
+    BestLaps d;
+    CHECK(d.load(path) && d.size() == 2 && d.best("achna_speedway", "trailforge_suv") == 165.5, "load: %zu entries", d.size());
+    std::filesystem::remove(path);
+    CHECK(!d.load(path) && d.size() == 0, "a missing file clears the table");
+}
 
 void settingsRoundtrip() {
     const GameSettings defaults;
@@ -928,6 +957,7 @@ int main(int argc, char** argv) {
         {"map_view_math", mapViewMath},
         {"map_level_raster", mapLevelRaster},
         {"settings_roundtrip", settingsRoundtrip},
+        {"best_laps_file", bestLapsFile},
         {"menu_navigation", menuNavigation},
         {"pause_freezes_ticks", pauseFreezesTicks},
         {"garage_model", garageModel},

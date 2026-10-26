@@ -25,7 +25,9 @@ enum class WaterKind : std::uint8_t { None = 0, Sea, Lake, River };
 // Visual style of a level prop triangle (render colors only; the surface id decides the physics). Hidden: collision
 // of a kit building (LevelBuilding), drawn by the model renderer from the same kit parts instead.
 enum class PropStyle : std::uint8_t {
-    Wood = 0, DarkWood, Stone, DarkStone, Plaster, RoofRed, RoofDark, Metal, Rust, Canvas, Marker, Beacon, Hidden, Count
+    Wood = 0, DarkWood, Stone, DarkStone, Plaster, RoofRed, RoofDark, Metal, Rust, Canvas, Marker, Beacon,
+    CurbRed, CurbWhite, LinePaint, // race circuit: curb stripes, painted lines (baked layout road markings)
+    Hidden, Count
 };
 
 struct LevelPoi {
@@ -159,6 +161,20 @@ struct LevelBridge {
     float length() const;
 };
 
+// A timing gate of a circuit (level layout "checkpoints"): a line across the track through (x, z), driven through
+// along the unit direction (dx, dz), halfWidth m to each side. Gate 0 is the start / finish line.
+struct LevelGate {
+    float x = 0.0f, z = 0.0f, dx = 0.0f, dz = 1.0f, halfWidth = 8.0f;
+    bool sector = false; // ends a timing sector (gate 0, the finish line, always does)
+};
+
+// Closed track of a baked level: its road (a roads() entry) and the timing gates in driving order.
+struct LevelCircuit {
+    std::string road;
+    std::vector<LevelGate> gates; // empty: the level has no circuit
+    float length = 0.0f;          // m along the road center line
+};
+
 struct LevelBakeStats {
     double totalMs = 0.0;
     int samples = 0;       // per side
@@ -236,6 +252,19 @@ public:
 
     const LevelBakeStats& bakeStats() const { return m_stats; }
 
+    // Baked levels (level.json "baked": heightmap, surface map and layout exported from Blender by
+    // tools/levels/blender/export_level.py): the heights and surfaces are used as they are (no relief, carving or
+    // surface rules), the objects are placed where the layout puts them (not moved off the roads).
+    bool baked() const { return m_baked; }
+    // Surface class per cell of a baked level (LevelFiles.h LevelSurfaceClass; empty for generated levels).
+    const std::vector<std::uint8_t>& surfaceClasses() const { return m_surfaceClass; }
+    // Render: the splat's snow weight is drawn as asphalt (level.json "asphaltLayer").
+    bool asphaltLayer() const { return m_asphaltLayer; }
+    const LevelCircuit& circuit() const { return m_circuit; }
+    // Layout rule violations found by the bake (objects on the road, structures in water, gates off the circuit,
+    // anything outside the play area). The shipped levels have none (CTest level_baked_layout).
+    const std::vector<std::string>& layoutIssues() const { return m_layoutIssues; }
+
 private:
     Level() = default;
     friend class LevelBaker;
@@ -263,6 +292,10 @@ private:
     DriveRoute m_attractRoute;
     float m_spawnX = 0.0f, m_spawnZ = 0.0f, m_spawnTowardX = 0.0f, m_spawnTowardZ = 1.0f;
     LevelBakeStats m_stats;
+    bool m_baked = false, m_asphaltLayer = false;
+    std::vector<std::uint8_t> m_surfaceClass;
+    LevelCircuit m_circuit;
+    std::vector<std::string> m_layoutIssues;
 };
 
 // Small deterministic helpers shared with the tests.

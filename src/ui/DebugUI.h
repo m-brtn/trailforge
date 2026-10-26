@@ -97,6 +97,8 @@ public:
     bool drawPhysicsDebug = false; // off by default so the scene reads cleanly; Tuning > Debug drawing
     bool linesOnTop = true;
     VehicleDebugOptions debug;
+    double storedBestLap = 0.0; // s, best lap of this level and vehicle from best_laps.cfg (0: none)
+    float lapHudX = -1.0f, lapHudTop = 12.0f; // lap panel top-center (below the compass bar; x < 0: screen center)
 
     // The short driving hint (latest Simulation message) is on screen.
     bool hintVisible(const Simulation& sim) const;
@@ -110,7 +112,7 @@ private:
     std::map<std::string, UiItemRect> m_items;
 
     void drawDriveHud(const Simulation& sim);
-    void drawLapTimer(const Simulation& sim);
+    void drawLapHud(const Simulation& sim);
     void drawAidIndicators(const Simulation& sim);
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);

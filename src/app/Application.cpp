@@ -209,6 +209,16 @@ Application::Application(const AppOptions& options)
             std::printf("Settings: defaults (%s)\n", m_settingsPath.empty() ? "no user data directory" : "no settings file yet");
     }
 
+    if (m_scenario) {
+        m_bestLapsPath = (std::filesystem::temp_directory_path() / "trailforge_scenario_best_laps.cfg").string();
+        std::error_code ec;
+        std::filesystem::remove(m_bestLapsPath, ec);
+    } else if (const std::string dir = userDataDir(); !dir.empty()) {
+        m_bestLapsPath = dir + "best_laps.cfg";
+    }
+    if (!m_bestLapsPath.empty() && m_bestLaps.load(m_bestLapsPath))
+        std::printf("Best laps: %zu loaded from %s\n", m_bestLaps.size(), m_bestLapsPath.c_str());
+
     // Garage setups: <user data>/setups/<vehicle id>.json; scenario runs use a scratch directory that starts empty.
     if (!m_vehicles.empty()) {
         std::string setupDir;
@@ -324,6 +334,7 @@ void Application::processEvents() {
     if (screen == Screen::Intro || screen == Screen::MainMenu) autopilot = AutopilotMode::Drive;
     if (screen == Screen::Garage || (screen == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle))
         autopilot = AutopilotMode::Hold;
+    if (m_scenarioAutopilot && screen == Screen::Playing) autopilot = AutopilotMode::Drive;
     m_sim.setAutopilot(autopilot);
     if (m_flow.menuActive() || mapHandled) {
         // Menus and the map own the input (also in the frame that closes the map): no gameplay actions, no pedals.
@@ -448,6 +459,31 @@ void Application::closeGarage() {
     m_flow.closeGarage();
     if (m_garageCameraMode != Camera::Mode::Free) m_camera.setMode(m_garageCameraMode);
     if (m_flow.screen() == Screen::MainMenu) m_menuCamTime = 0.0;
+}
+
+std::string Application::currentLevelId() const {
+    return m_sim.level() ? m_sim.level()->id() : std::string("proving_ground");
+}
+
+std::string Application::currentVehicleId() const {
+    return m_garage ? m_garage->vehicle().id : std::string("builtin");
+}
+
+// A lap completed with the player driving (or the scenario autopilot) goes into best_laps.cfg if it is the best.
+void Application::updateBestLaps() {
+    const LapTimer& lt = m_sim.lapTimer();
+    if (lt.laps() > m_lapsSeen) {
+        const bool counts = m_sim.autopilotMode() == AutopilotMode::Off || (m_scenario && m_scenarioAutopilot);
+        if (counts && m_bestLaps.submit(currentLevelId(), currentVehicleId(), lt.lastLap())) {
+            std::string error;
+            if (!m_bestLapsPath.empty() && m_bestLaps.save(m_bestLapsPath, &error))
+                std::printf("Best laps: %s / %s %.3f s saved to %s\n", currentLevelId().c_str(), currentVehicleId().c_str(),
+                            lt.lastLap(), m_bestLapsPath.c_str());
+            else if (!m_bestLapsPath.empty())
+                std::printf("Best laps: %s\n", error.c_str());
+        }
+    }
+    m_lapsSeen = lt.laps();
 }
 
 bool Application::selectVehicle(const std::string& id) {
@@ -715,6 +751,7 @@ void Application::buildWorldContent() {
         src.cell = level->cell();
         src.heights = level->heights().data();
         src.splat = level->splatTexels().data();
+        src.asphalt = level->asphaltLayer();
         m_renderer->setTerrain(&src);
         std::vector<std::string> modelPaths;
         std::vector<ModelPlacement> placements;
@@ -943,6 +980,11 @@ void Application::drawMapHud() {
         if (const UiItemRect* hud = m_ui.item("hud")) cx = std::max(cx, hud->x1 + 14.0f + 0.5f * w);
         cx = std::min(cx, D.x - 10.0f - 0.5f * w);
         m_mapUI.drawCompass(cx, 10.0f, w, open ? 900.0f : 120.0f, m_marker, p);
+        m_ui.lapHudX = cx;
+        m_ui.lapHudTop = 10.0f + std::clamp(0.075f * w, 30.0f, 42.0f) + 8.0f;
+    } else {
+        m_ui.lapHudX = -1.0f;
+        m_ui.lapHudTop = 12.0f;
     }
     if (m_settings.minimap) {
         static constexpr float kSize[] = {0.085f, 0.11f, 0.145f};
@@ -1096,6 +1138,8 @@ void Application::renderFrame(float frameTime) {
     stats.autoExposureEv = rs.autoExposureEv;
     stats.markUploadBytes = rs.markUploadBytes;
     m_gfx.sprayDrawn = rs.sprayParticles;
+    updateBestLaps();
+    m_ui.storedBestLap = m_bestLaps.best(currentLevelId(), currentVehicleId());
     const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
     if (m_gfx.fillMarks) {
         fillTireMarks();
@@ -1935,6 +1979,17 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         std::printf("SCENARIO: no teleport matching '%s'\n", arg.c_str());
         return Exec::Failed;
     }
+    if (c.op == "autopilot") {
+        // autopilot drive|off: the autopilot drives the world's attract route while driving (laps count as
+        // best laps in scenario mode only).
+        if (arg != "drive" && arg != "off") return Exec::Failed;
+        m_scenarioAutopilot = arg == "drive";
+        return Exec::Done;
+    }
+    if (c.op == "reset") {
+        m_sim.requestReset();
+        return Exec::Done;
+    }
     if (c.op == "level") {
         // level ID: switch the world like the start menu row (proving_ground or an assets/levels id).
         if (!selectLevel(arg)) {
@@ -2325,16 +2380,33 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
     if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls, 4 vehicle
     if (n == "autopilot") return double(int(m_sim.autopilotMode())); // 0 off, 1 drive, 2 hold
+    if (n == "lap_active") return m_sim.lapTimer().active() ? 1.0 : 0.0;
+    if (n == "lap_running") return m_sim.lapTimer().running() ? 1.0 : 0.0;
+    if (n == "lap_count") return m_sim.lapTimer().laps();
+    if (n == "lap_time") return m_sim.lapTimer().lapTime(m_sim.simTime());
+    if (n == "lap_last") return m_sim.lapTimer().lastLap();
+    if (n == "lap_best") return m_sim.lapTimer().bestLap();
+    if (n == "lap_stored_best") return m_bestLaps.best(currentLevelId(), currentVehicleId());
+    if (n == "lap_saved") return double(m_bestLaps.size());
+    if (n == "lap_best_gap") return m_sim.lapTimer().bestLap() - m_sim.lapTimer().lastLap();
+    if (n == "lap_stored_gap") return m_bestLaps.best(currentLevelId(), currentVehicleId()) - m_sim.lapTimer().bestLap();
+    if (n == "lap_next") return m_sim.lapTimer().nextGate();
+    if (n == "lap_last_gate") return m_sim.lapTimer().lastGate();
+    if (n == "lap_checkpoints") return m_sim.lapTimer().checkpointsPassed();
+    if (n == "lap_gates") return double(m_sim.lapTimer().gates().size());
+    if (n == "lap_sectors") return m_sim.lapTimer().sectorCount();
+    if (n.rfind("lap_sector_", 0) == 0) return m_sim.lapTimer().lastSectorTime(std::atoi(n.c_str() + 11) - 1); // last lap, 1-based
+    if (n.rfind("lap_gate_dist_", 0) == 0) { // distance from the body to gate N, m
+        const int g = std::atoi(n.c_str() + 14);
+        const auto& gates = m_sim.lapTimer().gates();
+        if (g < 0 || g >= int(gates.size())) return std::nullopt;
+        return std::hypot(p.GetX() - gates[std::size_t(g)].x, p.GetZ() - gates[std::size_t(g)].z);
+    }
     if (n == "autopilot_driven") return m_sim.autopilot().distanceDriven(); // m along the route since it took over
     if (n == "autopilot_progress") return m_sim.autopilot().progress();     // m from the route start
     if (n == "autopilot_lateral") return m_sim.autopilot().lateralError();
     if (n == "autopilot_resets") return m_sim.autopilotResets();
-    if (n == "lap_running") return m_sim.lapTimer().running() ? 1.0 : 0.0; // mini handling track lap timer
-    if (n == "lap_count") return m_sim.lapTimer().laps();
-    if (n == "lap_last") return m_sim.lapTimer().lastLap();
-    if (n == "lap_best") return m_sim.lapTimer().bestLap();
-    if (n == "lap_time") return m_sim.lapTimer().currentLap(m_sim.simTime());
-    if (n == "lap_next_gate") return m_sim.lapTimer().nextGate();
+    if (n == "lap_next_gate") return m_sim.lapTimer().nextGate(); // = lap_next
     if (n == "vehicle_index") return m_garage ? m_garage->vehicleIndex() : 0.0; // catalog order, 0 = default vehicle
     if (n == "vehicle_choice") return m_flow.vehicleIndex(m_settings);         // the vehicle page's choice
     if (n == "vehicle_cards") return double(m_menu.vehicleCardCount());

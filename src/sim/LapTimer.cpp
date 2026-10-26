@@ -4,65 +4,82 @@
 
 namespace tf {
 
-void LapTimer::setGates(std::vector<TimingGate> gates) {
+void LapTimer::setGates(std::vector<LevelGate> gates) {
     m_gates = std::move(gates);
-    clearAll();
+    m_bestLap = m_lastLap = 0.0;
+    m_laps = 0;
+    m_sectorCount = 1;
+    for (std::size_t k = 1; k < m_gates.size(); ++k)
+        if (m_gates[k].sector && m_sectorCount < kMaxSectors) ++m_sectorCount;
+    m_lastSector.fill(0.0);
+    m_bestSector.fill(0.0);
+    reset();
+}
+
+void LapTimer::endSector(double tc) {
+    if (m_sectorIndex < kMaxSectors) m_sector[std::size_t(m_sectorIndex)] = tc - m_sectorStart;
+    ++m_sectorIndex;
+    m_sectorStart = tc;
 }
 
 void LapTimer::reset() {
     m_running = false;
     m_next = 0;
-    m_sectors.clear();
+    m_last = -1;
+    m_split = 0.0;
+    m_sectorIndex = 0;
+    m_sector.fill(0.0);
 }
 
-void LapTimer::clearAll() {
-    reset();
-    m_laps = 0;
-    m_lastLap = m_bestLap = -1.0;
-    m_lastSectors.clear();
+bool LapTimer::crossed(const LevelGate& g, float x0, float z0, float x1, float z1, float& frac) const {
+    const float a0 = along(g, x0, z0), a1 = along(g, x1, z1);
+    if (!(a0 < 0.0f && a1 >= 0.0f)) return false;
+    frac = a0 / (a0 - a1);
+    const float x = x0 + (x1 - x0) * frac, z = z0 + (z1 - z0) * frac;
+    return std::abs(across(g, x, z)) <= g.halfWidth;
 }
 
-double LapTimer::crossing(const TimingGate& g, float x0, float z0, float x1, float z1, double t0, double t1) const {
-    const float s0 = (x0 - g.x) * g.dirX + (z0 - g.z) * g.dirZ;
-    const float s1 = (x1 - g.x) * g.dirX + (z1 - g.z) * g.dirZ;
-    if (!(s0 < 0.0f && s1 >= 0.0f)) return -1.0;
-    const float f = -s0 / (s1 - s0);
-    const float x = x0 + (x1 - x0) * f, z = z0 + (z1 - z0) * f;
-    const float lateral = (x - g.x) * g.dirZ - (z - g.z) * g.dirX;
-    if (std::abs(lateral) > g.halfWidth) return -1.0;
-    return t0 + (t1 - t0) * double(f);
-}
-
-void LapTimer::update(float x0, float z0, float x1, float z1, double t0, double t1) {
-    if (m_gates.empty()) return;
-    const int count = int(m_gates.size());
-    for (int k = 0; k < count; ++k) {
-        const double t = crossing(m_gates[std::size_t(k)], x0, z0, x1, z1, t0, t1);
-        if (t < 0.0) continue;
-        if (k == 0) {
-            if (m_running && m_next == 0) {
-                // A complete lap: the last sector ends here.
-                m_sectors.push_back(t - m_splitStart);
-                const double lap = t - m_lapStart;
+LapTimer::Event LapTimer::update(float x0, float z0, float x1, float z1, double t0, double t1) {
+    const double t = t1, dt = t1 - t0;
+    if (m_gates.empty()) return Event::None;
+    float frac = 0.0f;
+    const LevelGate& finish = m_gates[0];
+    if (crossed(finish, x0, z0, x1, z1, frac)) {
+        const double tc = t - dt + dt * double(frac);
+        Event e = Event::Started;
+        if (m_running) {
+            if (m_next == 0) {
+                m_lastLap = tc - m_lapStart;
+                if (m_bestLap <= 0.0 || m_lastLap < m_bestLap) m_bestLap = m_lastLap;
+                endSector(tc);
+                m_lastSector = m_sector;
+                for (int k = 0; k < m_sectorCount; ++k)
+                    if (m_bestSector[std::size_t(k)] <= 0.0 || m_sector[std::size_t(k)] < m_bestSector[std::size_t(k)])
+                        m_bestSector[std::size_t(k)] = m_sector[std::size_t(k)];
                 ++m_laps;
-                m_lastLap = lap;
-                m_lastSectors = m_sectors;
-                if (m_bestLap < 0.0 || lap < m_bestLap) m_bestLap = lap;
+                e = Event::Lap;
+            } else {
+                e = Event::Invalid;
             }
-            // Start (or restart after a voided lap) the clock.
-            m_running = true;
-            m_lapStart = m_splitStart = t;
-            m_next = count > 1 ? 1 : 0;
-            m_sectors.clear();
-        } else if (m_running && k == m_next) {
-            m_sectors.push_back(t - m_splitStart);
-            m_splitStart = t;
-            m_next = (k + 1) % count;
-        } else if (m_running) {
-            // A sector gate out of order: the lap is void until the next start/finish crossing.
-            reset();
         }
+        m_running = true;
+        m_lapStart = tc;
+        m_next = m_gates.size() > 1 ? 1 : 0;
+        m_last = 0;
+        m_split = 0.0;
+        m_sectorIndex = 0;
+        m_sector.fill(0.0);
+        m_sectorStart = tc;
+        return e;
     }
+    if (!m_running || m_next == 0) return Event::None;
+    const LevelGate& g = m_gates[std::size_t(m_next)];
+    if (!crossed(g, x0, z0, x1, z1, frac)) return Event::None;
+    m_split = t - dt + dt * double(frac) - m_lapStart;
+    if (g.sector && m_sectorIndex + 1 < m_sectorCount) endSector(m_lapStart + m_split);
+    m_last = m_next;
+    m_next = m_next + 1 < int(m_gates.size()) ? m_next + 1 : 0;
+    return Event::Checkpoint;
 }
 
 } // namespace tf

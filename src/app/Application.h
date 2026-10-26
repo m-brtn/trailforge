@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/BestLaps.h"
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
@@ -169,6 +170,15 @@ private:
     GameSettings m_settings;
     GameSettings m_applied;      // what applySettings last pushed to the renderer / simulation / mixer
     std::string m_settingsPath;  // empty: settings are not persisted (scenario mode)
+    // Best lap per level and vehicle (best_laps.cfg in the user data directory; scenario runs: a scratch file that
+    // starts empty). Laps count when the player drove them (or the scenario `autopilot drive`, not the menu backdrop).
+    BestLaps m_bestLaps;
+    std::string m_bestLapsPath;
+    int m_lapsSeen = 0;
+    bool m_scenarioAutopilot = false;
+    void updateBestLaps();
+    std::string currentLevelId() const;
+    std::string currentVehicleId() const;
     // Scenario-only overrides for the Controls page captures: key cap wording and the connected pad type.
     std::optional<KeyboardStyle> m_keyboardOverride;
     std::optional<PadType> m_padTypeOverride;

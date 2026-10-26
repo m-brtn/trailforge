@@ -654,10 +654,15 @@ GroundSurface mixGround(GroundSurface a, GroundSurface b, float t) {
     return r;
 }
 
-// Level terrain: packed dirt / grass (from the mask) under rock, sand and snow by the baked splat weights. The edges
-// are sharpened with noise so the layers do not blur into each other over the 1 m splat cells.
+// Asphalt (levels with asphaltLayer: the snow splat weight): dark grey aggregate with a fine speckle, little bump.
+float3 asphaltAlbedo(float3 P, float speckle) {
+    return float3(0.068, 0.068, 0.072) * (0.8 + 0.4 * speckle);
+}
+
+// Level terrain: packed dirt / grass (from the mask) under rock, sand and snow (or asphalt) by the baked splat
+// weights. The edges are sharpened with noise so the layers do not blur into each other over the 1 m splat cells.
 GroundSurface terrainMaterial(float3 w, float road, float3 P, float3 N, float4 mask, Texture2D<float4> noiseTex, SamplerState ns,
-                              float far) {
+                              float far, float asphalt) {
     const float2 nz = noiseTex.Sample(ns, P.xz * 0.13).rg;
     const float rock = saturate((w.x - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, w.x);
     const float sand = saturate((w.y - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, w.y);
@@ -673,7 +678,16 @@ GroundSurface terrainMaterial(float3 w, float road, float3 P, float3 N, float4 m
     }
     if (sand > 0.0) g = mixGround(g, groundMaterial(MAT_SAND, P, N, mask, noiseTex, ns, far), sand);
     if (rock > 0.0) g = mixGround(g, groundMaterial(MAT_ROCK, P, N, mask, noiseTex, ns, far), rock);
-    if (snow > 0.0) g = mixGround(g, groundMaterial(MAT_SNOW, P, N, mask, noiseTex, ns, far), snow);
+    if (snow > 0.0 && asphalt > 0.5) {
+        const float sharp = saturate((w.z - 0.5) * 6.0 + 0.5) * step(0.01, w.z);
+        const float speckle = noiseTex.Sample(ns, P.xz * 3.1).r;
+        g.albedo = lerp(g.albedo, asphaltAlbedo(P, speckle), sharp);
+        g.roughness = lerp(g.roughness, 0.78, sharp);
+        g.bump *= 1.0 - 0.85 * sharp;
+        g.height = lerp(g.height, 0.5, sharp);
+    } else if (snow > 0.0) {
+        g = mixGround(g, groundMaterial(MAT_SNOW, P, N, mask, noiseTex, ns, far), snow);
+    }
     return g;
 }
 
@@ -829,7 +843,7 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         const float4 m = sampleMask(mask, maskSampler, P.xz);
         // if / else, not ?: — DXC rejects a conditional operator with a struct result.
         GroundSurface g;
-        if (mat == MAT_TERRAIN) g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, grassFar(P));
+        if (mat == MAT_TERRAIN) g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, grassFar(P), 0.0);
         else g = groundMaterial(mat, P, N, m, noiseTex, noiseSampler, grassFar(P));
         s.albedo = g.albedo;
         s.roughness = g.roughness;
@@ -996,7 +1010,7 @@ SamplerState layerNraSampler : SMP(4);
 struct TerrainTextureUniforms {
     float4 invTile[2]; // 1 / repeat size (m): grass, soil, road, rock | sand, snow
     float4 tint[6];    // rgb albedo multiplier per layer
-    float4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength
+    float4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength, z: snow weight is asphalt
 };
 ConstantBuffer<TerrainTextureUniforms> tt : UBO(1);
 
@@ -1113,7 +1127,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.specOcclusion = 0.75;
     s.ao = vehicleAO(P);
     if (tt.params.x < 0.5) {
-        const GroundSurface g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, far);
+        const GroundSurface g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, far, tt.params.z);
         s.albedo = g.albedo;
         s.roughness = g.roughness;
         N = perturbNormal(N, P, g.height * 0.035, g.bump);
@@ -1180,7 +1194,18 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             }
             blendLayer(g, l, heightBlend(rock, l.height, g.height));
         }
-        if (snow > 0.001) {
+        const bool asphalt = tt.params.z > 0.5;
+        if (snow > 0.001 && asphalt) {
+            // Asphalt: the road layer's grain at 4x the frequency for the aggregate, desaturated and dark, flat.
+            LayerSample l = sampleProjection(LAYER_ROAD, P.xz * layerInvTile(LAYER_ROAD) * 4.0, float3(1, 0, 0),
+                                             float3(0, 0, 1), farTex, fadeTex);
+            const float grain = dot(l.albedo, float3(0.3, 0.55, 0.15));
+            l.albedo = asphaltAlbedo(P, saturate(grain * 2.2));
+            l.dn *= 0.25;
+            l.rough = 0.78;
+            l.height = 0.5;
+            blendLayer(g, l, saturate((w.z - 0.5) * 6.0 + 0.5) * step(0.01, w.z));
+        } else if (snow > 0.001) {
             const LayerSample l = sampleLayer(LAYER_SNOW, P, farTex, fadeTex);
             blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
         }

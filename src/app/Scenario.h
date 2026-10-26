@@ -22,6 +22,8 @@ namespace tf {
 //   inputclick ITEM              Cmd+click (macOS; Ctrl+click on other OSes): slider -> number input field
 //   scrollto ITEM                scroll the Tuning window with the wheel until the widget is visible
 //   teleport INDEX               same as the teleport button in the UI
+//   autopilot drive|off          the autopilot drives the world's attract route while driving (lap checks)
+//   reset                        same as R (on a circuit: back to the last gate of the running lap)
 //   resize W H                   SDL_SetWindowSize (points)
 //   capture PATH                 save a frame (BMP/PNG by extension)
 //   mark VAR                     remember a value; then d_VAR = current - remembered

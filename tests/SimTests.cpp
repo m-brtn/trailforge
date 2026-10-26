@@ -1471,7 +1471,8 @@ void lapTimerLogic() {
     LapTimer lt;
     // Gates on the sides of a 100 x 100 m square driven counterclockwise seen from +Y... in x/z: (0,0) -> (100,0) ->
     // (100,100) -> (0,100) -> back. Start/finish on the first side, sectors on the second and third.
-    lt.setGates({{50.0f, 0.0f, 1.0f, 0.0f, 5.0f}, {100.0f, 50.0f, 0.0f, 1.0f, 5.0f}, {50.0f, 100.0f, -1.0f, 0.0f, 5.0f}});
+    lt.setGates({{50.0f, 0.0f, 1.0f, 0.0f, 5.0f, false}, {100.0f, 50.0f, 0.0f, 1.0f, 5.0f, true},
+                 {50.0f, 100.0f, -1.0f, 0.0f, 5.0f, true}});
     struct P { float x, z; };
     std::vector<P> loop;
     for (int k = 0; k < 100; ++k) loop.push_back({float(k), 0.0f});
@@ -1512,8 +1513,10 @@ void lapTimerLogic() {
     CHECK(lt.laps() == 4 && lt.running() && lt.nextGate() == 1, "a lap without sectors counted (%d)", lt.laps());
     lt.update(49.0f, 100.0f, 51.0f, 100.0f, t, t + 0.1); // wrong direction over gate 2: ignored
     CHECK(lt.running(), "backward sector crossing voided the lap");
-    lt.update(51.0f, 100.0f, 49.0f, 100.0f, t, t + 0.1); // gate 2 before gate 1: void
-    CHECK(!lt.running(), "out-of-order sector did not void the lap");
+    lt.update(51.0f, 100.0f, 49.0f, 100.0f, t, t + 0.1); // gate 2 before gate 1: not counted, gate 1 still next
+    CHECK(lt.running() && lt.nextGate() == 1, "out-of-order sector counted (next gate %d)", lt.nextGate());
+    CHECK(lt.update(45.0f, 0.0f, 55.0f, 0.0f, t, t + 0.1) == LapTimer::Event::Invalid && lt.laps() == 4,
+          "a lap with a missed sector counted (%d)", lt.laps());
     // Outside the gate half width: no crossing.
     lt.reset();
     lt.update(45.0f, 20.0f, 55.0f, 20.0f, t, t + 0.1);

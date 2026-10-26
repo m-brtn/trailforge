@@ -914,6 +914,7 @@ void Renderer::setTerrain(const TerrainSource* src) {
     for (auto& level : m_terrainNodes) level.clear();
     m_terrainSamples = 0;
     m_terrainRoots = 0;
+    m_terrainAsphalt = src && src->asphalt;
     if (!src || src->samples < 2) return;
     const int n = src->samples, cells = n - 1;
     const int rootCells = kTerrainPatch << (kTerrainLevels - 1);
@@ -2524,6 +2525,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_terrainPipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            m_terrainTexUniforms.params.z = m_terrainAsphalt ? 1.0f : 0.0f;
             SDL_PushGPUFragmentUniformData(cmd, 1, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
             const SDL_GPUTextureSamplerBinding terrainTex[5] = {litTex[0], litTex[1], litTex[2],
                                                                 {m_terrainAlbedo.tex, m_terrainSampler},

@@ -1,0 +1,143 @@
+# Achna Speedway check (assets/levels/achna_speedway: the real layout from OpenStreetMap, built in Blender by
+# tools/levels/blender/make_achna_speedway.py):
+#   ./build/release/trailforge --script tools/scenarios/track_check.txt --no-audio
+# Level switch, start line, one autopilot lap through every checkpoint and both sector lines (lap timer, sector
+# times, best lap stored in a scratch best_laps.cfg), an R reset to the last checkpoint, the map, fixed-camera
+# captures /tmp/trailforge_track_*.png and frame times per quality preset (PERF lines). Exit code 1 on FAIL. Takes
+# about 4 minutes (the lap is real time).
+controls pad_type none
+set ui 0
+set auto_reverse 0
+set vsync 0
+quality High
+time 11
+level achna_speedway
+until level == 1 30
+until map_ready == 1 10
+wait 1.5
+expect lap_active == 1
+expect lap_gates == 6
+expect lap_sectors == 3
+expect lap_running == 0
+expect lap_saved == 0
+expect map_pois == 6
+expect water_depth == 0
+expect recoveries == 0
+capture /tmp/trailforge_track_01_grid_hud.png     # pole slot, lap panel on top, minimap bottom right
+wait 0.3
+
+# ---------------------------------------------------------------- one lap on the autopilot
+mark recoveries
+mark autopilot_resets
+autopilot drive
+until lap_running == 1 20
+expect lap_next == 1
+expect lap_count == 0
+until lap_checkpoints >= 3 90
+expect lap_last_gate == 3
+capture /tmp/trailforge_track_02_lap_running.png
+wait 0.3
+until lap_count >= 1 240
+expect lap_last > 120
+expect lap_last < 170
+expect lap_sector_1 > 30
+expect lap_sector_2 > 45
+expect lap_sector_3 > 25
+expect lap_best_gap == 0
+expect lap_stored_gap == 0
+expect lap_saved == 1
+expect lap_running == 1                # the finish line starts the next lap
+expect lap_next == 1
+expect d_recoveries == 0
+expect d_autopilot_resets == 0
+capture /tmp/trailforge_track_03_lap_done.png
+wait 0.3
+
+# ---------------------------------------------------------------- R reset: back to the last checkpoint of the lap
+until lap_last_gate == 2 90
+wait 2.0
+reset
+wait 0.5
+expect lap_running == 1
+expect lap_last_gate == 2
+expect lap_gate_dist_2 < 8
+capture /tmp/trailforge_track_04_reset_checkpoint.png
+wait 0.3
+autopilot off
+wait 0.2
+expect lap_running == 0                # handing over to the player stops the lap
+expect lap_count == 1
+
+# ---------------------------------------------------------------- map
+tap M
+wait 0.3
+expect map_open == 1
+capture /tmp/trailforge_track_05_map.png
+wait 0.1
+tap M
+wait 0.3
+expect map_open == 0
+
+# ---------------------------------------------------------------- fixed cameras
+set hud 0
+camera -104.0 57.0 -140.0 -30.0 50.0 -115.0
+wait 1.5
+capture /tmp/trailforge_track_06_grid.png
+wait 0.3
+camera -46.0 53.5 -140.0 -62.0 52.0 -120.0
+wait 1.2
+capture /tmp/trailforge_track_07_gantry.png
+wait 0.3
+camera -86.0 53.0 -130.0 -93.0 53.0 -112.0
+wait 1.2
+capture /tmp/trailforge_track_08_grandstands.png
+wait 0.3
+camera -95.0 57.0 -133.0 -115.0 51.0 -160.0
+wait 1.2
+capture /tmp/trailforge_track_09_pit_garages.png
+wait 0.3
+camera 36.0 50.6 -62.0 28.0 49.6 -71.0
+wait 1.2
+capture /tmp/trailforge_track_10_curbs.png
+wait 0.3
+camera -150.0 60.0 -40.0 -168.0 49.0 -61.0
+wait 1.2
+capture /tmp/trailforge_track_11_gravel_trap.png
+wait 0.3
+camera -160.0 62.0 -95.0 -180.0 49.5 -116.0
+wait 1.2
+capture /tmp/trailforge_track_12_hairpin.png
+wait 0.3
+camera 30.0 60.0 280.0 7.0 49.0 312.0
+wait 1.2
+capture /tmp/trailforge_track_13_drag_strip.png
+wait 0.3
+camera 0.0 520.0 -380.0 0.0 49.0 30.0
+wait 2.0
+capture /tmp/trailforge_track_14_overview.png
+wait 0.3
+
+# ---------------------------------------------------------------- frame times per preset (grid + paddock view)
+camera -104.0 57.0 -140.0 -30.0 50.0 -115.0
+quality Low
+wait 2.0
+perf_begin track_low
+wait 4
+perf_end
+quality Medium
+wait 2.0
+perf_begin track_medium
+wait 4
+perf_end
+quality High
+wait 2.0
+perf_begin track_high
+wait 4
+perf_end
+quality Ultra
+wait 2.0
+perf_begin track_ultra
+wait 4
+perf_end
+camera follow
+quality High

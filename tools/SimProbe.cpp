@@ -29,6 +29,7 @@
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
+#include "track/MiniTrack.h"
 #include "vehicle/VehicleDefinition.h"
 
 #include <algorithm>
@@ -2063,6 +2064,66 @@ void miniTrackProbe(int argc, char** argv) {
     }
 }
 
+// Autopilot laps of a circuit level (its attractRoute pace): lap and sector times, top and mean speed, the
+// largest lateral acceleration and the share of ticks with all four wheels on asphalt.
+void lapProbe(const char* path, int laps) {
+    std::string err;
+    auto level = Level::load(path, &err);
+    if (!level || level->circuit().gates.empty()) {
+        std::fprintf(stderr, "lap: %s: %s\n", path, level ? "no circuit gates" : err.c_str());
+        std::exit(1);
+    }
+    SimulationSettings s = probeSettings();
+    s.level = level;
+    s.terrain.async = false;
+    Simulation sim(s);
+    const LapTimer& lt = sim.lapTimer();
+    sim.setAutopilot(AutopilotMode::Drive);
+    double t = 0.0, maxKmh = 0.0, maxLat = 0.0;
+    long ticks = 0, onAsphalt = 0;
+    int done = 0;
+    // Lateral acceleration from the body path: velocity and acceleration by differences, smoothed over ~0.2 s.
+    JPH::Vec3 prevPos = sim.currentSnapshot().body.position, prevVel = JPH::Vec3::sZero(), acc = JPH::Vec3::sZero();
+    std::printf("lap %s: circuit %.0f m, %zu gates, %d sectors\n", level->id().c_str(), double(level->circuit().length),
+                lt.gates().size(), lt.sectorCount());
+    while (t < 300.0 * laps + 60.0 && lt.laps() < laps && sim.autopilotResets() == 0) {
+        sim.tick();
+        t += sim.fixedStep();
+        const VehicleTelemetry& tel = sim.vehicle().telemetry();
+        const JPH::Vec3 pos = sim.currentSnapshot().body.position;
+        const float dt = sim.fixedStep();
+        const JPH::Vec3 vel = (pos - prevPos) / dt;
+        acc += ((vel - prevVel) / dt - acc) * std::min(1.0f, dt / 0.2f);
+        prevPos = pos;
+        prevVel = vel;
+        if (lt.running()) {
+            maxKmh = std::max(maxKmh, double(tel.forwardSpeed) * 3.6);
+            const JPH::Vec3 vh(vel.GetX(), 0.0f, vel.GetZ());
+            if (vh.Length() > 3.0f) {
+                const JPH::Vec3 side = JPH::Vec3(0, 1, 0).Cross(vh).Normalized();
+                maxLat = std::max(maxLat, double(std::abs(acc.Dot(side))));
+            }
+            int n = 0;
+            for (const auto& w : tel.wheels) n += w.contact && w.surface == SurfaceId::Concrete;
+            onAsphalt += n == 4;
+            ++ticks;
+        }
+        if (lt.laps() > done) {
+            done = lt.laps();
+            std::printf("lap %d: %.3f s", done, lt.lastLap());
+            for (int k = 0; k < lt.sectorCount(); ++k) std::printf("  S%d %.3f", k + 1, lt.lastSectorTime(k));
+            std::printf("\n");
+        }
+    }
+    const double best = lt.bestLap();
+    std::printf("lap best %.3f s (%.1f km/h mean), max %.1f km/h, max lateral %.2f m/s^2, all wheels on asphalt %.1f %% "
+                "of the ticks, resets %d (%s), recoveries %d\n",
+                best, best > 0.0 ? double(level->circuit().length) / best * 3.6 : 0.0, maxKmh, maxLat,
+                100.0 * double(onAsphalt) / double(std::max(ticks, 1L)), sim.autopilotResets(), sim.autopilotResetReason(),
+                sim.recoveries());
+    if (done < laps || sim.autopilotResets() > 0) std::exit(1);
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
     if (mode == "levelprofile" && argc > 6) {
@@ -2098,7 +2159,9 @@ int main(int argc, char** argv) {
         levelMap(argc > 2 ? argv[2] : "assets/levels/exploration_peaks/level.json", argc > 3 ? argv[3] : "/tmp/trailforge_levelmap.ppm");
         return 0;
     }
-    if (mode == "brake") brake();
+    if (mode == "lap") lapProbe(argc > 2 ? argv[2] : TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/level.json",
+                                argc > 3 ? std::max(1, std::atoi(argv[3])) : 2);
+    else if (mode == "brake") brake();
     else if (mode == "course") course(argc > 2 ? std::atof(argv[2]) : 120.0);
     else if (mode == "demo") demoLoads();
     else if (mode == "hillbrake") hillBrake();

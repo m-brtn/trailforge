@@ -93,7 +93,7 @@ struct ShadowUniforms {
 struct TerrainTextureUniforms {
     glm::vec4 invTile[2]; // 1 / repeat size (m) per layer: grass, soil, road, rock | sand, snow
     glm::vec4 tint[6];    // rgb albedo multiplier per layer
-    glm::vec4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength
+    glm::vec4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength, z: snow weight is asphalt
 };
 
 struct TreeUniforms {
@@ -295,6 +295,7 @@ struct TerrainSource {
     float origin = 0.0f, cell = 1.0f;         // sample (0, 0) at (origin, origin)
     const float* heights = nullptr;           // samples^2, row-major by z
     const std::uint32_t* splat = nullptr;     // (samples - 1)^2 RGBA8: road paint, rock, sand, snow
+    bool asphalt = false;                     // the snow weight draws asphalt (level.json asphaltLayer)
 };
 
 // SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
@@ -529,6 +530,7 @@ private:
     GpuMesh m_terrainPatch;
     int m_terrainSamples = 0;
     float m_terrainOrigin = 0.0f, m_terrainCell = 1.0f;
+    bool m_terrainAsphalt = false;
     int m_terrainRoots = 0;                         // root nodes per side (step 8)
     std::array<std::vector<TerrainNode>, 4> m_terrainNodes; // per level (step 8, 4, 2, 1), row-major
     std::vector<TerrainChunk> m_terrainScratch, m_terrainShadowScratch;

@@ -107,8 +107,10 @@ public:
     // and vehicle model as a player). When it gets stuck, flips or leaves the route it puts the vehicle back at the
     // route start (counted in autopilotResets). Off: setIntent drives.
     // Drive picks the route up again from the vehicle's current position (nearest point, timers cleared).
+    // A mode change stops the running lap (a lap is driven by one of them from line to line).
     void setAutopilot(AutopilotMode mode) {
         if (mode == AutopilotMode::Drive && m_autopilotMode != AutopilotMode::Drive) m_autopilot.restart();
+        if (mode != m_autopilotMode) m_lapTimer.reset();
         m_autopilotMode = mode;
     }
     AutopilotMode autopilotMode() const { return m_autopilotMode; }
@@ -178,11 +180,13 @@ public:
     const VehicleConfig& vehicleConfig() const { return m_vehicle->config(); }
     const StepTiming& timing() const { return m_timing; }
     double simTime() const { return m_simTime; } // s, sum of all fixed steps
+    // Lap timing on a level with a circuit and on the proving ground's mini handling track (inactive elsewhere). On a
+    // level R resets to the last gate passed in the running lap; other resets, teleports, placing, rebuilds, level
+    // changes and autopilot recoveries stop the running lap.
+    const LapTimer& lapTimer() const { return m_lapTimer; }
     // Visual-only tire marks written from the wheel contact samples after every tick.
     TireMarks& tireMarks() { return m_tireMarks; }
     const TireMarks& tireMarks() const { return m_tireMarks; }
-    // Lap and sector timing of the mini handling track (no gates on the other worlds); reset on every respawn.
-    const LapTimer& lapTimer() const { return m_lapTimer; }
     // New contacts of the vehicle body during the last tick (observation only, for impact sounds).
     const std::vector<BodyImpact>& bodyImpacts() const { return m_impactListener.impacts(); }
     // Incremented whenever the vehicle is (re)created: start, R reset, teleport, rebuild, garage respawn.
@@ -212,6 +216,8 @@ private:
     void resolvePedals(float dt);
     void smoothInput(float dt);
     void runAutopilot(float dt);
+    void updateLapTimer(const JPH::Vec3& before);
+    TrackFeature gateResetPoint(int gate) const;
 
     JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
     SimulationSettings m_settings;
@@ -266,6 +272,7 @@ private:
     double m_simTime = 0.0;
     TireMarks m_tireMarks;
     LapTimer m_lapTimer;
+    char m_lapMessage[96] = {};
 };
 
 } // namespace tf

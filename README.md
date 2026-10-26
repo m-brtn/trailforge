@@ -154,7 +154,7 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
   choice on the vehicle page (not in scenario mode);
-- `--level ID` — start on level ID (`exploration_peaks`, `proving_ground`); scenarios and `--demo` start on the
+- `--level ID` — start on level ID (`exploration_peaks`, `achna_speedway`, `proving_ground`); scenarios and `--demo` start on the
   proving ground unless it is given;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
@@ -180,6 +180,9 @@ Command-line options:
 - `brakedetail` — a 100 km/h concrete stop with ABS off and on, averaged per axle while above 5 km/h: pedal / ABS
   pressure, brake torque, load, |Fx|, μ of the curve × surface, Fx / (μ load) (how much of the available grip is used)
   and slip;
+- `lap [level.json] [laps]` — autopilot laps of a circuit level (default Achna Speedway, 2 laps) at its
+  `attractRoute` pace: lap and sector times, max speed, max lateral acceleration (from the body path, ~0.2 s
+  smoothing), share of ticks with all four wheels on asphalt, resets; exit code 1 without the laps;
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
@@ -248,7 +251,8 @@ One command per line, `#` starts a comment:
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
-| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `achna_speedway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
 
 **Scenario clock.** While a script runs, every frame advances the game by a fixed 1/120 s (physics ticks, menu
@@ -266,7 +270,9 @@ no overlapping callouts, wheel scroll, values kept, then a drive with the arrow 
 `/tmp/trailforge_controls_*.png`), `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
 and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
-`tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
+`tools/scenarios/track_check.txt` (Achna Speedway: an autopilot lap through every checkpoint with sector times,
+the stored best lap, R to the last checkpoint, the map, fixed cameras, frame times per preset;
+`/tmp/trailforge_track_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
 cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
@@ -353,6 +359,11 @@ map: `map_open`, `map_ready`, `map_build_ms`, `map_pois`, `map_scale` (points pe
 `marker_set`, `marker_x` / `marker_z`, `marker_dist` (m, horizontal), `marker_bearing` (deg, relative to the heading, + = right),
 `heading` (deg clockwise from north), attract drive: `autopilot` (0 off, 1 drive, 2 hold), `autopilot_driven` (m),
 `autopilot_progress`, `autopilot_lateral` (m from the route), `autopilot_resets`,
+lap timing (Achna Speedway, the mini handling track): `lap_active`, `lap_running`, `lap_count`, `lap_time` (running
+lap, s), `lap_last`, `lap_best` (session), `lap_stored_best` (best_laps.cfg, this level and vehicle), `lap_saved`
+(entries in it), `lap_best_gap` (best − last), `lap_stored_gap` (stored − session best), `lap_next` / `lap_next_gate`,
+`lap_last_gate`, `lap_checkpoints`, `lap_gates`, `lap_gate_dist_N` (m from gate N), `lap_sectors`, `lap_sector_N`
+(last lap, 1-based; a scenario stores its best laps in `<tmp>/trailforge_scenario_best_laps.cfg`, emptied at start),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -1149,8 +1160,10 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   sinkage) outside the hairpins and the fast corners, and tyre stacks (octagonal prisms, collision) behind them.
   The asphalt and the curbs are the `Concrete` surface (μ 0.95); their look is a render-only paint per triangle.
   A **lap timer** (`src/sim/LapTimer`: start / finish line and two sector gates, crossing times interpolated
-  within a physics tick, a lap counts only through the gates in order) runs in the HUD (top center) on the proving
-  ground: `LAP n`, sector splits, last and best lap. Teleporting (or R) restarts the lap.
+  within a physics tick, a lap counts only through the gates in order; the same timer as on
+  [Achna Speedway](#achna-speedway-race-circuit)) shows the lap panel below the compass once a lap was started:
+  `LAP n`, the running time, last and best lap, the sector times. Teleporting (or R) restarts the lap; best laps
+  driven by the player are stored per vehicle like on the circuit.
   Probe laps (`trailforge_probe minitrack`, autopilot driver, best clean flying lap): SUV 0:59.69 (114 km/h,
   0.88 g), EV 1:00.83 (141 km/h, 0.76 g), `builtin` 1:04.22 (115 km/h, 0.75 g), `rwd_test` 0:59.41 (124 km/h,
   0.90 g) (kit bodies, box collision, v0.24.0 brakes; with the v0.23.0 brakes 1:04.57 / 1:01.25 / 1:06.51 / 0:58.62). These are the autopilot's laps, not the vehicles' limits: with a higher lateral budget it overdrives the
@@ -1244,6 +1257,92 @@ the development level and is what scenarios and `--demo` start on.
   at the quarry, 95 FPS looking across the Alpine Lake; Ultra 89 FPS in the village. Details in the devlog. v0.14.0 distances (grass 110 m, tree detail 650 m on High)
   against the v0.13.0 ones (45 m, 380 m), GPU ms with VSync off (medians of 3, a background VM running): forest
   view High 6.90 vs 6.85, Ultra 11.3 vs 9.2; village view High 7.6–11.0 vs 6.9–10.5 (noisy).
+
+## Achna Speedway (race circuit)
+
+The real circuit near Dasaki Achnas, Cyprus, copied from OpenStreetMap: the LEVEL row of the start menu (ACHNA
+SPEEDWAY), `--level achna_speedway`, scenario `level achna_speedway`. Map data © OpenStreetMap contributors, ODbL;
+heights from the Copernicus GLO-30 DEM (credits and licences in `assets/levels/achna_speedway/CREDITS.md`).
+
+- **What is real:** the plan geometry of every asphalt way of the venue (OSM raceway way 734690065: the drag strip and
+  the full course; way 734690066, the short course connector; way 734691195, the paddock access; the venue fence
+  734690068 and the farmland around it), converted from WGS84 to local metres (east = +X, north = −Z) about 35.02546 N,
+  33.80017 E. Measured full course: 1979 m along the OSM polyline, 1989 m along the smoothed center line in the game
+  (centripetal Catmull-Rom through the nodes; tightest radius 14.6 m). Published: 2.21 km (11 turns, 12–15 m wide;
+  vetkuro.com, myracingcareer.com), so the mapped course is 10 % shorter than the published figure; the course shape
+  matches the published full-course map, which is the closed loop of the OSM ways (no invented sections). Drag strip
+  423 m (OSM spine), short course connector 369 m.
+- **Not mapped, placed by the generator:** the width (OSM has no width tags; 12 m, published 12–15 m), the driving
+  direction (clockwise on the map), the start line and the two sector lines (after the published map), painted edge
+  lines and a 12-slot start grid, red / white curbs at the apexes and exits (33 curbs, 770 m), gravel traps (the
+  gravel surface) outside the tighter corners and asphalt run-off elsewhere, grass beyond, tyre walls and armco
+  barriers, the pit lane (8 m, north of the start straight) with 8 garages and race control, two grandstands, 12
+  marshal posts, the start gantry with five start lights, flags, and trees and rocks only outside the track
+  boundary.
+- **Elevation:** the DEM tile cropped to the venue (`source/dem.json`, 30 m samples, 43–57 m above the geoid) is
+  the terrain; the track surface is a quadratic least-squares fit to the smoothed DEM along every asphalt way
+  (rms 0.21 m, 48.76–50.55 m, max grade 0.8 %), with the bank = the fit's cross slope. The DEM is a surface model
+  of 30 m cells with decimetre noise: it cannot show real bumps or camber, so the circuit is smooth by
+  construction.
+- **Surface:** asphalt is the `Concrete` surface (μ 0.95) drawn with the asphalt layer, gravel traps the gravel
+  class (`PackedDirt`), no mud, no water, no jumps. CTest `level_baked_track_smooth` casts rays onto the physics
+  tiles and props every 0.5 m along and across the circuit up to 0.6 m inside the edges (107,778 points): the
+  height deviates from the chord between the points 1 m before and after by at most 4.1 mm (the 4 mm painted start
+  line; limit 6 mm), max grade 0.9 %. The carve keeps a 1.5 m flat shoulder beside the edge (the 1 m height grid
+  would otherwise bring the cut bank onto the asphalt).
+- **Markings and curbs** (layout.json road `markings`): edge lines, the start line and grid brackets are 4 mm paint
+  quads, curbs are 1.3 m wide prisms, 4.5 cm high, sunk 5 cm into the ground; all of them are prop triangles
+  (`LinePaint`, `CurbRed`, `CurbWhite` styles, the `Concrete` surface), drawn and collided as the same triangles.
+- **Timing:** gate 0 is the start / finish line, then checkpoints and the two sector lines (`"sector": true`) in
+  driving order, 6 gates. The lap panel (below the compass): lap number and checkpoints, the running time, last and
+  best lap (the best of the session and of `best_laps.cfg`), S1 … S3 of the running lap (purple: a session-best
+  sector) and of the last lap. A lap counts only through every checkpoint in order; R during a lap puts the vehicle
+  4 m past the last gate passed (the lap keeps running); teleports, placing, rebuilds and handing over between the
+  autopilot and the player stop the lap. Best laps driven by the player are stored per level and vehicle in
+  `best_laps.cfg` in the user data directory (`level vehicle seconds` lines).
+- **Autopilot laps** (`trailforge_probe lap`, the attract-drive autopilot at the level's `attractRoute` pace: 130
+  km/h cruise, 5 m/s² in curves, 4 m/s² planned braking, full throttle allowed): SUV 2:16.32 (S1 39.79, S2 61.96,
+  S3 34.57; 100.5 km/h max, 7.5 m/s² peak lateral), EV 2:14.39 (100.6 km/h, 7.5 m/s²), both 100 % of the ticks on
+  four asphalt wheels, no resets (flying laps; CTest `level_baked_lap` / `level_baked_lap_ev` drive the first lap).
+  A gentle driver, not the vehicles' limit.
+- **Size:** 4.0 MB of plain files (heightmap 2.1 MB, surfaces 1.0 MB, layout 0.66 MB, source data 0.38 MB), not in
+  Git LFS; bake ~45 ms.
+
+### Editing a level in Blender
+
+A baked level (`level.json` `"baked": {"heightmap", "surfaces", "layout"}`) is three plain files: `heightmap.pgm`
+(16-bit P5, samples² heights over `layout.json` `grid.heightMin..heightMax`), `surfaces.pgm` (8-bit P5, one surface
+class per 1 m cell: asphalt, gravel, dirt, mud, grass, sand, rock, snow) and `layout.json` (roads as 2 m center line
+samples with bank plus the Bezier they came from, painted `markings`, water polygons, placements, spawn, checkpoints
+with `sector`, POIs). `Level` loads them as they are: no relief, carve or class is recomputed in the game, and the
+physics tiles, the render terrain and the prop triangles come from them. The Blender scripts (run only with Blender
+5.3 Beta; `tools/levels/blender/`, the format in `tf_level.py`) turn them into a scene and back:
+
+```sh
+B=/Applications/Blender.app/Contents/MacOS/Blender
+# level files -> .blend (TERRAIN mesh with a surface colour attribute, TRACKS curves, WATER, PLACEMENTS, MARKERS)
+$B -b --factory-startup --python-exit-code 1 --python tools/levels/blender/import_level.py -- \
+   --level assets/levels/achna_speedway --out build/levels/achna_speedway.blend
+# after editing a track curve: cut the tracks into the terrain again (from the uncarved base heights)
+$B -b build/levels/achna_speedway.blend --python-exit-code 1 --python tools/levels/blender/carve_track.py -- --save
+# .blend -> level files (validated: placements off the roads and out of water, gates on the circuit, play area)
+$B -b build/levels/achna_speedway.blend --python-exit-code 1 --python tools/levels/blender/export_level.py -- \
+   --out assets/levels/achna_speedway
+# the whole level again from the raw data (OSM + DEM): make_achna_speedway.py; numbers only: --plan
+$B -b --factory-startup --python-exit-code 1 --python tools/levels/blender/make_achna_speedway.py
+```
+
+In Blender: move the TRACKS curve points or handles (tilt = bank; custom properties `tf_width`, `tf_kind`,
+`tf_segment_surface`, `tf_markings`), paint the `tf_surface` colour attribute of TERRAIN with the palette in
+`tf_level.py`, sculpt TERRAIN, move or duplicate PLACEMENTS empties (`tf_kind`, `tf_ref`), move the MARKERS
+(`SPAWN`, `CP_00` = start / finish, `CP_nn` checkpoints with `tf_half_width` and `tf_sector`, `POI_nn`). From a live
+session the same steps are `import carve_track; carve_track.run()` and `import export_level;
+export_level.run(out=...)` after `sys.path.insert(0, "<repo>/tools/levels/blender")`. Imported curves keep FREE
+handles (exact); the generator uses ALIGNED ones. CTest `level_blender_roundtrip` (where Blender is installed)
+imports the shipped level, exports it without edits and requires the same three files byte for byte and the same
+bake (`trailforge_level_tests level_baked_compare`). The raw data is fetched by `tools/levels/fetch_osm_track.py`
+(venv: `tools/levels/requirements.txt`), which compares it with `source/sources.lock.json` (sha256; `--check`
+verifies the committed files, `--update-lock` accepts new OSM edits).
 
 ## Map, waypoint and compass
 
@@ -1850,9 +1949,13 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
   sinkage, flotation or bulldozing; puddles have no water physics. Mini track asphalt and curbs are the rigid
   `Concrete` surface (the asphalt grain and curb colors are render-only); its gravel traps are rigid `Sand`.
+- Achna Speedway: the curbs are rigid prisms (no rumble model beyond their shape), the gravel traps are the rigid
+  packed-dirt surface with gravel paint (no sinkage or deceleration bed), the tyre walls and armco are rigid
+  convex pieces (no energy absorption), and the track surface is a smooth fit to a 30 m DEM, not a survey of the
+  real asphalt (real bumps and camber are unknown). The lap timer and the best laps only observe the body position.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
-  message (the only teleports besides R, the F1 teleport buttons, the attract-drive reset behind the start menu and
+  message (the only teleports besides R (on Achna Speedway during a lap: to the last gate passed), the F1 teleport buttons, the attract-drive reset behind the start menu and
   scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;

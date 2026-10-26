@@ -1202,6 +1202,132 @@ void bench(Builder& b, const BuildingSpec& s) {
     }
 }
 
+
+void barrier(Builder& b, const BuildingSpec& s) {
+    const float L = s.w > 0.0f ? s.w : 4.0f;
+    if (s.variant == 1) {
+        const int posts = std::max(2, int(std::round(L / 2.0f)) + 1);
+        for (int k = 0; k < posts; ++k) {
+            const float x = -0.5f * L + L * float(k) / float(posts - 1);
+            b.abox(KitMat::MetalDark, ALL, true, V(x - 0.05f, -0.5f, -0.12f), V(x + 0.05f, 0.75f, -0.02f));
+        }
+        b.abox(KitMat::Metal, ALL, true, V(-0.5f * L, 0.42f, -0.02f), V(0.5f * L, 0.74f, 0.06f));
+        return;
+    }
+    b.abox(KitMat::Concrete, ALL, true, V(-0.5f * L, -0.3f, -0.3f), V(0.5f * L, 0.28f, 0.3f), FALL & ~FNY);
+    b.abox(KitMat::Concrete, ALL, true, V(-0.5f * L, 0.28f, -0.12f), V(0.5f * L, 0.82f, 0.12f), FALL & ~FNY);
+    const int stripes = std::max(1, int(L / 1.0f));
+    for (int k = 0; k < stripes; k += 2) {
+        const float x0 = -0.5f * L + L * float(k) / float(stripes), x1 = -0.5f * L + L * float(k + 1) / float(stripes);
+        for (float sz : {-1.0f, 1.0f})
+            b.abox(KitMat::PaintRed, NEAR, false, V(x0, 0.3f, sz > 0 ? 0.12f : -0.132f), V(x1, 0.8f, sz > 0 ? 0.132f : -0.12f),
+                   sz > 0 ? FPZ : FNZ);
+    }
+}
+
+// Columns of three tyres; the collision is one box around the stack (the tyres touch its faces).
+void tyreWall(Builder& b, const BuildingSpec& s) {
+    const float L = s.w > 0.0f ? s.w : 6.0f, R = 0.33f, T = 0.26f;
+    b.abox(KitMat::MetalDark, FAR, true, V(-0.5f * L, -0.2f, -R), V(0.5f * L, 3.0f * T, R), FALL & ~FNY);
+    const int cols = std::max(1, int(L / (2.0f * R)));
+    for (int c = 0; c < cols; ++c) {
+        const float x = -0.5f * L + R + (L - 2.0f * R) * (cols > 1 ? float(c) / float(cols - 1) : 0.5f);
+        for (int r = 0; r < 3; ++r) {
+            const KitMat m = s.variant == 1 ? ((c + r) % 2 ? KitMat::PaintWhite : KitMat::PaintRed) : KitMat::MetalDark;
+            b.cyl(m, NEAR, false, V(x, T * float(r), 0), V(x, T * float(r + 1) - 0.01f, 0), R, R, 12, 2);
+        }
+        b.cyl(KitMat::Shadow, NEAR, false, V(x, 3.0f * T - 0.008f, 0), V(x, 3.0f * T - 0.002f, 0), 0.6f * R, 0.6f * R, 12, 2);
+    }
+}
+
+void flag(Builder& b, const BuildingSpec& s) {
+    const float H = s.h > 0.0f ? s.h : 5.0f;
+    static constexpr KitMat cloth[] = {KitMat::PaintRed, KitMat::PaintWhite, KitMat::NylonOrange, KitMat::NylonGreen};
+    b.abox(KitMat::Concrete, ALL, true, V(-0.25f, -0.4f, -0.25f), V(0.25f, 0.2f, 0.25f), FALL & ~FNY);
+    b.cyl(KitMat::MetalWhite, ALL, true, V(0, 0.2f, 0), V(0, H, 0), 0.05f, 0.04f, 8);
+    b.abox(cloth[std::size_t(s.variant) % 4], ALL, true, V(0.05f, H - 0.9f, -0.01f), V(1.35f, H - 0.05f, 0.01f));
+}
+
+void grandstand(Builder& b, const BuildingSpec& s) {
+    const float W = s.w, D = s.d;
+    constexpr int kRows = 5;
+    const float rowD = (D - 1.2f) / float(kRows), rise = 0.45f;
+    for (int k = 0; k < kRows; ++k) {
+        const float zf = 0.5f * D - 1.2f - rowD * float(k), y = rise * float(k + 1);
+        b.abox(KitMat::Concrete, ALL, true, V(-0.5f * W, -1.0f, -0.5f * D), V(0.5f * W, y, zf), FALL & ~FNY);
+        b.abox(k % 2 ? KitMat::PaintWhite : KitMat::PaintRed, NEAR, false, V(-0.5f * W + 0.3f, y, zf - 0.75f),
+               V(0.5f * W - 0.3f, y + 0.12f, zf - 0.35f), FALL & ~FNY);
+    }
+    const float top = rise * float(kRows);
+    b.abox(KitMat::Concrete, ALL, true, V(-0.5f * W, -1.0f, 0.5f * D - 1.2f), V(0.5f * W, 0.15f, 0.5f * D), FALL & ~FNY);
+    b.abox(KitMat::Siding, ALL, true, V(-0.5f * W, top, -0.5f * D), V(0.5f * W, top + 2.8f, -0.5f * D + 0.15f));
+    for (float sx : {-1.0f, 1.0f}) b.abox(KitMat::Siding, ALL, true, V(sx > 0 ? 0.5f * W - 0.15f : -0.5f * W, 0.15f, -0.5f * D),
+                                          V(sx > 0 ? 0.5f * W : -0.5f * W + 0.15f, top + 2.8f, -0.5f * D + 0.4f * D));
+    const int posts = std::max(2, int(W / 6.0f) + 1);
+    for (int k = 0; k < posts; ++k) {
+        const float x = -0.5f * W + 0.3f + (W - 0.6f) * float(k) / float(posts - 1);
+        b.abox(KitMat::MetalWhite, ALL, true, V(x - 0.1f, top, -0.5f * D + 0.15f), V(x + 0.1f, top + 2.8f, -0.5f * D + 0.35f));
+        b.beam(KitMat::MetalWhite, ALL, true, V(x, top + 2.8f, -0.5f * D + 0.2f), V(x, top + 3.1f, 0.5f * D - 0.4f), 0.08f, 0.1f);
+    }
+    b.box(KitMat::CorrugatedRed, ALL, true, V(0, top + 3.05f, 0.05f), kX, norm(V(0, 1.0f, -0.03f)), norm(V(0, 0.03f, 1.0f)),
+          V(0.5f * W + 0.3f, 0.06f, 0.5f * D + 0.1f));
+    for (int k = 0; k <= int(W / 2.0f); ++k) {
+        const float x = -0.5f * W + 0.2f + (W - 0.4f) * float(k) / float(int(W / 2.0f));
+        b.abox(KitMat::MetalDark, ALL, true, V(x - 0.025f, 0.15f, 0.5f * D - 0.15f), V(x + 0.025f, 1.15f, 0.5f * D - 0.1f));
+    }
+    b.abox(KitMat::MetalDark, ALL, true, V(-0.5f * W, 1.05f, 0.5f * D - 0.16f), V(0.5f * W, 1.15f, 0.5f * D - 0.08f));
+}
+
+void startGantry(Builder& b, const BuildingSpec& s) {
+    const float W = s.w, H = s.h > 0.0f ? s.h : 6.0f, B = 1.4f;
+    for (float sx : {-1.0f, 1.0f}) {
+        const float x = sx * (0.5f * W + 0.25f);
+        b.abox(KitMat::Concrete, ALL, true, V(x - 0.45f, -0.6f, -0.45f), V(x + 0.45f, 0.3f, 0.45f), FALL & ~FNY);
+        b.abox(KitMat::MetalWhite, ALL, true, V(x - 0.25f, 0.3f, -0.25f), V(x + 0.25f, H + B + 0.4f, 0.25f));
+    }
+    b.abox(KitMat::MetalDark, ALL, true, V(-0.5f * W, H, -0.2f), V(0.5f * W, H + B, 0.2f));
+    const int cols = std::max(4, int(W / (0.5f * B)));
+    const float cw = W / float(cols), ch = 0.5f * B;
+    for (int c = 0; c < cols; ++c)
+        for (int r = 0; r < 2; ++r) {
+            if ((c + r) % 2) continue;
+            const float x0 = -0.5f * W + cw * float(c), y0 = H + ch * float(r);
+            b.abox(KitMat::PaintWhite, ALL, false, V(x0, y0, 0.2f), V(x0 + cw, y0 + ch, 0.212f), FPZ);
+            b.abox(KitMat::PaintWhite, ALL, false, V(x0, y0, -0.212f), V(x0 + cw, y0 + ch, -0.2f), FNZ);
+        }
+    b.abox(KitMat::MetalRed, ALL, true, V(-0.5f * W - 0.5f, H + B, -0.25f), V(0.5f * W + 0.5f, H + B + 0.4f, 0.25f));
+    // Start lights: a dark box under the banner, five red lamps towards the grid (-Z).
+    b.abox(KitMat::MetalDark, ALL, true, V(-1.6f, H - 0.75f, -0.18f), V(1.6f, H, 0.18f));
+    for (int k = 0; k < 5; ++k) {
+        const float x = -1.28f + 0.64f * float(k);
+        b.abox(KitMat::MetalRed, ALL, false, V(x - 0.2f, H - 0.58f, -0.192f), V(x + 0.2f, H - 0.18f, -0.18f), FNZ);
+    }
+}
+
+void marshalPost(Builder& b, const BuildingSpec&) {
+    b.abox(KitMat::Concrete, ALL, true, V(-1.1f, -0.4f, -1.1f), V(1.1f, 0.15f, 1.1f), FALL & ~FNY);
+    b.abox(KitMat::PlasterWhite, ALL, true, V(-0.9f, 0.15f, -0.9f), V(0.9f, 2.3f, -0.78f));
+    for (float sx : {-1.0f, 1.0f})
+        b.abox(KitMat::PlasterWhite, ALL, true, V(sx > 0 ? 0.78f : -0.9f, 0.15f, -0.78f), V(sx > 0 ? 0.9f : -0.78f, 2.3f, 0.9f));
+    b.abox(KitMat::PlasterWhite, ALL, true, V(-0.78f, 0.15f, 0.78f), V(0.78f, 1.05f, 0.9f));
+    b.abox(KitMat::CorrugatedRed, ALL, true, V(-1.05f, 2.3f, -1.05f), V(1.05f, 2.42f, 1.05f));
+    b.abox(KitMat::NylonOrange, ALL, false, V(0.9f, 1.25f, -0.5f), V(0.912f, 1.75f, 0.5f), FPX);
+}
+
+void raceControl(Builder& b, const BuildingSpec& s) {
+    const float W = s.w, D = s.d, H1 = 3.2f, H2 = 6.2f;
+    b.abox(KitMat::Concrete, ALL, true, V(-0.5f * W, -3.0f, -0.5f * D), V(0.5f * W, H1, 0.5f * D), FALL & ~FNY);
+    b.abox(KitMat::PlasterWhite, ALL, true, V(-0.5f * W, H1, -0.5f * D), V(0.5f * W, H2, 0.5f * D - 1.6f));
+    b.abox(KitMat::Glass, ALL, false, V(-0.5f * W + 0.3f, H1 + 0.9f, 0.5f * D - 1.6f), V(0.5f * W - 0.3f, H2 - 0.4f, 0.5f * D - 1.588f), FPZ);
+    b.abox(KitMat::Concrete, ALL, true, V(-0.5f * W - 0.3f, H2, -0.5f * D - 0.3f), V(0.5f * W + 0.3f, H2 + 0.35f, 0.5f * D + 0.3f));
+    b.abox(KitMat::MetalDark, ALL, true, V(-0.5f * W, H1 + 1.0f, 0.5f * D - 0.06f), V(0.5f * W, H1 + 1.1f, 0.5f * D));
+    for (float sx : {-1.0f, 1.0f})
+        b.abox(KitMat::MetalDark, ALL, true, V(sx * 0.5f * W - 0.04f, H1, 0.5f * D - 0.08f), V(sx * 0.5f * W + 0.04f, H1 + 1.1f, 0.5f * D));
+    b.abox(KitMat::Glass, ALL, false, V(-1.2f, 0.0f, 0.5f * D), V(1.2f, 2.4f, 0.5f * D + 0.012f), FPZ);
+    b.abox(KitMat::Shadow, ALL, false, V(-0.5f * W + 1.0f, 0.4f, 0.5f * D), V(-0.5f * W + 3.0f, 2.2f, 0.5f * D + 0.012f), FPZ);
+    b.abox(KitMat::MetalRed, ALL, true, V(-0.3f * W, H2 + 0.35f, 0.5f * D - 0.1f), V(0.3f * W, H2 + 1.35f, 0.5f * D + 0.1f));
+    b.abox(KitMat::PaintWhite, ALL, false, V(-0.3f * W + 0.2f, H2 + 0.55f, 0.5f * D + 0.1f), V(0.3f * W - 0.2f, H2 + 1.15f, 0.5f * D + 0.112f), FPZ);
+}
 } // namespace
 
 const KitMaterial& kitMaterial(KitMat m) { return kMaterials[std::min(int(m), kKitMatCount - 1)]; }
@@ -1211,6 +1337,7 @@ bool buildingIsStructure(BuildingKind k) {
     case BuildingKind::House: case BuildingKind::FuelShop: case BuildingKind::Garage: case BuildingKind::Lighthouse:
     case BuildingKind::RadioMast: case BuildingKind::RadioHut: case BuildingKind::RuinWall: case BuildingKind::RuinTower:
     case BuildingKind::RuinGate: case BuildingKind::Crusher: case BuildingKind::Silo: case BuildingKind::FuelCanopy:
+    case BuildingKind::Grandstand: case BuildingKind::RaceControl:
         return true;
     default: return false;
     }
@@ -1219,7 +1346,7 @@ bool buildingIsStructure(BuildingKind k) {
 float buildingPlinthDepth(BuildingKind k) {
     switch (k) {
     case BuildingKind::House: case BuildingKind::Garage: case BuildingKind::FuelShop: case BuildingKind::RadioHut:
-    case BuildingKind::Lighthouse: return 3.0f;
+    case BuildingKind::Lighthouse: case BuildingKind::RaceControl: return 3.0f;
     case BuildingKind::RuinWall: case BuildingKind::RuinTower: case BuildingKind::RuinGate: return 3.5f;
     case BuildingKind::FuelCanopy: return 1.5f;
     default: return 1.0f;
@@ -1230,7 +1357,8 @@ const char* buildingKindName(BuildingKind k) {
     static const char* const names[] = {"house", "fuel_canopy", "fuel_shop", "pylon", "garage", "lighthouse", "radio_mast",
                                         "radio_hut", "ruin_wall", "ruin_tower", "ruin_gate", "crusher", "conveyor", "silo",
                                         "dock", "tent", "fence", "garden", "power_pole", "wire", "woodpile", "cairn",
-                                        "signpost", "well", "shelter", "bench"};
+                                        "signpost", "well", "shelter", "bench", "barrier", "tyre_wall", "flag", "grandstand",
+                                        "start_gantry", "race_control", "marshal_post"};
     static_assert(std::size(names) == std::size_t(BuildingKind::Count));
     return names[std::min(std::size_t(k), std::size(names) - 1)];
 }
@@ -1266,6 +1394,13 @@ BuildingGeometry buildBuilding(const BuildingSpec& spec, bool render) {
     case BuildingKind::Well: well(b, spec), fx = fz = 1.2f; break;
     case BuildingKind::Shelter: shelter(b, spec); break;
     case BuildingKind::Bench: bench(b, spec), fx = 0.5f * spec.w, fz = 0.25f; break;
+    case BuildingKind::Barrier: barrier(b, spec), fx = 0.5f * (spec.w > 0.0f ? spec.w : 4.0f), fz = 0.3f; break;
+    case BuildingKind::TyreWall: tyreWall(b, spec), fx = 0.5f * (spec.w > 0.0f ? spec.w : 6.0f), fz = 0.33f; break;
+    case BuildingKind::Flag: flag(b, spec), fx = fz = 0.25f; break;
+    case BuildingKind::Grandstand: grandstand(b, spec); break;
+    case BuildingKind::StartGantry: startGantry(b, spec), fx = 0.5f * spec.w + 0.7f, fz = 0.45f; break;
+    case BuildingKind::RaceControl: raceControl(b, spec); break;
+    case BuildingKind::MarshalPost: marshalPost(b, spec), fx = fz = 1.1f; break;
     case BuildingKind::Count: break;
     }
     g.footprintX = fx;

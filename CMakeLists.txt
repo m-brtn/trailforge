@@ -34,6 +34,7 @@ add_library(trailforge_sim STATIC
     src/track/TestTrack.cpp
     src/track/MiniTrack.cpp
     src/track/Level.cpp
+    src/track/LevelFiles.cpp
     src/track/BuildingKit.cpp
     src/track/TerrainTiles.cpp
     src/vehicle/Vehicle.cpp
@@ -91,6 +92,7 @@ endif()
 add_library(trailforge_flow STATIC
     src/app/GameFlow.cpp
     src/app/GameSettings.cpp
+    src/app/BestLaps.cpp
     src/app/Garage.cpp
     src/app/MapData.cpp
     src/app/MapView.cpp
@@ -250,10 +252,25 @@ if(TRAILFORGE_BUILD_TESTS)
             building_kit_parts
             building_kit_materials
             level_buildings
-            level_poi_buildings)
+            level_poi_buildings
+            level_baked_layout
+            lap_timer_gates
+            level_baked_track_smooth
+            level_baked_lap
+            level_baked_lap_ev)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
+    # Blender level pipeline: import -> export without edits gives the same files and the same bake (only where
+    # Blender is installed; README "Editing a level in Blender").
+    find_program(TRAILFORGE_BLENDER NAMES blender Blender PATHS /Applications/Blender.app/Contents/MacOS NO_CACHE)
+    if(TRAILFORGE_BLENDER)
+        add_test(NAME level_blender_roundtrip
+                 COMMAND ${CMAKE_COMMAND} -D BLENDER=${TRAILFORGE_BLENDER} -D SOURCE_DIR=${CMAKE_SOURCE_DIR}
+                         -D LEVEL=achna_speedway -D WORK=${CMAKE_BINARY_DIR}/level_roundtrip
+                         -D TESTS=$<TARGET_FILE:trailforge_level_tests> -P ${CMAKE_SOURCE_DIR}/cmake/LevelRoundtrip.cmake)
+        set_tests_properties(level_blender_roundtrip PROPERTIES TIMEOUT 300)
+    endif()
 
     # Audio parameter mapping and the offline mixer (no audio device).
     add_executable(trailforge_audio_tests tests/AudioTests.cpp)
@@ -278,7 +295,7 @@ if(TRAILFORGE_BUILD_TESTS)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model vehicle_page controls_layout pad_glyph_detect
-                         callout_spread map_view_math map_level_raster)
+                         callout_spread map_view_math map_level_raster best_laps_file)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

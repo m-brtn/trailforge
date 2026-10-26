@@ -68,6 +68,14 @@ enum class BuildingKind : std::uint8_t {
     Well,           // village well with a roof
     Shelter,        // w x d open timber shelter (lean-to roof on posts)
     Bench,          // w m long park bench facing +Z
+    Barrier,        // w m long along x; variant 0: concrete barrier with red / white stripes, 1: steel guard rail
+    TyreWall,       // w m long wall of stacked tyres along x; variant 0: black, 1: red / white painted
+    Flag,           // h m pole (5 m if 0) with a flag; variant: colour 0 red, 1 white, 2 orange, 3 green
+    Grandstand,     // w x d stepped concrete stand with a roof, facing +Z
+    StartGantry,    // gantry spanning w m along x with h m clearance (6 m if 0), chequered banner on both faces,
+                    // five start lights (unlit) facing -Z
+    RaceControl,    // w x d two-storey race control building, glazed upper floor facing +Z
+    MarshalPost,    // trackside marshal booth on a concrete pad, open towards +Z, orange flag board
     Count
 };
 

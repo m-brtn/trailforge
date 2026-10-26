@@ -2,6 +2,7 @@
 
 #include "core/Json.h"
 #include "core/ModelAsset.h"
+#include "track/LevelFiles.h"
 
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -314,6 +316,7 @@ private:
     std::vector<RouteLeg> m_routeLegs;
     std::string m_routeName;
     float m_routeSpeed = 9.0f;
+    float m_routeLateral = 0.0f, m_routeDecel = 0.0f, m_routeThrottle = 0.0f;
     struct Peak { float x, z, h, r; };
     struct Beach { float x, z, r; };
     struct Lake { std::string name; float level, depth; Polygon poly; float shore = 0.0f; };
@@ -458,6 +461,45 @@ private:
     std::vector<int> m_conifers, m_saplings, m_broadleaf, m_bushes, m_ferns, m_debris, m_rockModels, m_logs, m_cliffModels;
     std::vector<float> m_waterDist;            // 8 m grid
     int m_wn = 0;
+
+    // Baked levels (level.json "baked", files from tools/levels/blender/export_level.py).
+    // Painted lines and curbs of a race circuit road (layout road "markings"); s in m along the exported samples.
+    struct BakedMarkings {
+        float edgeLine = 0.0f, edgeInset = 0.3f; // edge line width (0: none) and its gap to the road edge
+        float startLine = -1.0f;                 // s of the start / finish line (< 0: none)
+        int gridSlots = 0;                       // staggered start grid behind the start line
+        float gridPitch = 8.0f;
+        struct Curb { float s0, s1, side; };     // side +1 left, -1 right of the direction of travel
+        std::vector<Curb> curbs;
+    };
+    struct BakedRoad {
+        std::string name, kind;
+        float width;
+        bool closed;
+        std::vector<Float3> samples; // x, z, bank
+        BakedMarkings markings;
+    };
+    void bakeMarkings(const LevelRoad& road, const BakedMarkings& mk);
+    struct BakedPlacement {
+        std::string kind, model;
+        BuildingSpec spec;
+        float x = 0, z = 0, yaw = 0, scale = 1, width = 1, sx = 1, sy = 1, sz = 1, sink = 0.3f;
+    };
+    bool parseBaked(const json::Value& doc, std::string& err);
+    void bakeBaked(std::chrono::steady_clock::time_point t0);
+    void bakeBakedSurfaces();
+    void placeBaked();
+    void checkBakedLayout();
+    float roadGap(const std::vector<P2>& hull) const; // m from a footprint to the nearest road edge
+    bool m_baked = false;
+    std::vector<float> m_bakedHeight;
+    std::vector<std::uint8_t> m_bakedClass;
+    std::vector<BakedRoad> m_bakedRoads;
+    std::vector<BakedPlacement> m_placements;
+    std::vector<LevelGate> m_gates;
+    std::string m_circuitRoad;
+    float m_spawnYaw = 0.0f;
+    std::map<std::string, int> m_modelByRef; // vegetation entry ("fir_tree_01/fir_tree_01_a") -> L.m_models index
 };
 
 float LevelBaker::sampleGrid(const std::vector<float>& g, float x, float z) const {
@@ -522,6 +564,7 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
         err = "level: bakeHalfExtent must be 256..4096 m and larger than playHalfExtent + 16 m";
         return false;
     }
+    if (doc.has("baked")) return parseBaked(doc, err);
     const json::Value& snow = doc["snow"];
     m_snowLine = float(snow["line"].numberOr(1e9));
     m_snowNoise = float(snow["noise"].numberOr(0));
@@ -660,7 +703,9 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
         return false;
     }
     if (m_baseDir.empty()) return true; // no file location (text-only bake): procedural trees and rocks
-    const std::string dir = m_baseDir + "/" + veg["dir"].stringOr("../../models") + "/";
+    const std::string vdir = veg["dir"].stringOr("../../models");
+    const bool absolute = !vdir.empty() && (vdir[0] == '/' || (vdir.size() > 1 && vdir[1] == ':'));
+    const std::string dir = (absolute ? vdir : m_baseDir + "/" + vdir) + "/";
     const std::pair<const char*, std::vector<int>*> roles[] = {
         {"conifers", &m_conifers}, {"saplings", &m_saplings}, {"broadleaf", &m_broadleaf}, {"bushes", &m_bushes},
         {"ferns", &m_ferns},       {"debris", &m_debris},     {"rocks", &m_rockModels},   {"logs", &m_logs},
@@ -705,6 +750,7 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
                 return false;
             }
             list->push_back(int(L.m_models.size()));
+            m_modelByRef[v.string] = int(L.m_models.size());
             L.m_models.push_back(std::move(m));
         }
         if (!warning.empty()) break;
@@ -714,6 +760,7 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
         L.m_modelError = warning.empty() ? "vegetation: no conifers" : warning;
         L.m_models.clear();
         for (const auto& [key, list] : roles) list->clear();
+        m_modelByRef.clear();
     }
     return true;
 }
@@ -1232,7 +1279,7 @@ void LevelBaker::bakeRoads() {
         for (int j = j0; j <= j1; ++j)
             for (int i = 0; i < m_n; ++i) {
                 const std::size_t k = std::size_t(j - j0) * rowN + std::size_t(i);
-                if (sumW[k] <= 0.0f) continue;
+                if (sumW[k] <= 0.0f || m_baked) continue; // baked heights are final (carved in Blender)
                 const std::size_t g = idx(i, j);
                 m_h[g] = lerp(h0[g], sumWY[k] / sumW[k], maxW[k]);
             }
@@ -2079,6 +2126,10 @@ void LevelBaker::settle(std::size_t firstTri, std::size_t firstPiece, std::size_
     pts.reserve(3 * (lastTri - firstTri));
     for (std::size_t v = 3 * firstTri; v < 3 * lastTri; ++v) pts.push_back({g.positions[v].x, g.positions[v].z});
     const std::vector<P2> hull = convexHull(pts);
+    if (m_baked) { // placed where the layout puts it; checkBakedLayout reports rule violations
+        m_sites.push_back(hull);
+        return;
+    }
     float margin = 0.0f;
     bool building = false;
     for (std::size_t k = firstPiece; k < L.m_props.pieceRoles.size(); ++k) {
@@ -2573,6 +2624,7 @@ void LevelBaker::bake() {
     m_roadClear.assign(total, 1e30f);
     m_flatSurface.assign(total, SurfaceId::Count);
     m_nearWater.assign(total, 0);
+    if (m_baked) return bakeBaked(t0);
 
     bakeBase();
     bakeCoast();
@@ -2609,6 +2661,624 @@ void LevelBaker::bake() {
     st.minHeight = *mn;
     st.maxHeight = *mx;
     st.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// ------------------------------------------------------------------------------------------------- baked levels
+// level.json "baked": {"heightmap", "surfaces", "layout"} names files next to level.json, written by
+// tools/levels/blender/export_level.py. The layout grid must match bakeHalfExtent (1 m cells).
+bool LevelBaker::parseBaked(const json::Value& doc, std::string& err) {
+    if (m_baseDir.empty()) {
+        err = "level: a baked level is read from its folder (Level::load)";
+        return false;
+    }
+    m_baked = true;
+    L.m_baked = true;
+    m_snowLine = 1.0e9f;
+    L.m_asphaltLayer = doc["asphaltLayer"].boolOr(false);
+    m_routeName = doc["attractRoute"]["name"].stringOr("circuit");
+    m_routeSpeed = float(doc["attractRoute"]["speedKmh"].numberOr(40.0)) / 3.6f;
+    m_routeLateral = float(doc["attractRoute"]["lateralAccel"].numberOr(0.0));
+    m_routeDecel = float(doc["attractRoute"]["brakeDecel"].numberOr(0.0));
+    m_routeThrottle = float(doc["attractRoute"]["maxThrottle"].numberOr(0.0));
+    const json::Value& files = doc["baked"];
+    const std::string dir = m_baseDir + "/";
+    std::ifstream lf(dir + files["layout"].stringOr("layout.json"), std::ios::binary);
+    if (!lf) {
+        err = "level: cannot open the baked layout " + dir + files["layout"].stringOr("layout.json");
+        return false;
+    }
+    std::stringstream ls;
+    ls << lf.rdbuf();
+    json::Value lay;
+    if (!json::parse(ls.str(), lay, &err)) {
+        err = "level: layout: " + err;
+        return false;
+    }
+    if (int(lay["format"].numberOr(0)) != 1) {
+        err = "level: layout: unsupported format (expected 1)";
+        return false;
+    }
+    const json::Value& grid = lay["grid"];
+    const int n = int(std::lround(2.0f * m_half)) + 1;
+    if (int(grid["samples"].numberOr(0)) != n || float(grid["cell"].numberOr(0)) != 1.0f ||
+        float(grid["origin"].numberOr(0)) != -m_half) {
+        err = "level: layout grid does not match bakeHalfExtent (" + std::to_string(n) + " samples at 1 m)";
+        return false;
+    }
+    const float lo = float(grid["heightMin"].numberOr(0)), hi = float(grid["heightMax"].numberOr(0));
+    if (!(hi > lo)) {
+        err = "level: layout heightMin / heightMax";
+        return false;
+    }
+    PgmImage hm, sm;
+    if (!readPgm(dir + files["heightmap"].stringOr("heightmap.pgm"), hm, err) ||
+        !readPgm(dir + files["surfaces"].stringOr("surfaces.pgm"), sm, err)) {
+        err = "level: " + err;
+        return false;
+    }
+    if (hm.width != n || hm.height != n || hm.maxValue != 65535) {
+        err = "level: the heightmap must be " + std::to_string(n) + "^2 16-bit samples";
+        return false;
+    }
+    if (sm.width != n - 1 || sm.height != n - 1 || sm.maxValue != 255) {
+        err = "level: the surface map must be " + std::to_string(n - 1) + "^2 8-bit cells";
+        return false;
+    }
+    const float step = (hi - lo) / 65535.0f;
+    m_bakedHeight.resize(hm.data.size());
+    for (std::size_t k = 0; k < hm.data.size(); ++k) m_bakedHeight[k] = lo + float(hm.data[k]) * step;
+    m_bakedClass.resize(sm.data.size());
+    for (std::size_t k = 0; k < sm.data.size(); ++k) {
+        if (sm.data[k] >= std::uint16_t(LevelSurfaceClass::Count)) {
+            err = "level: surface map value " + std::to_string(sm.data[k]) + " is not a surface class";
+            return false;
+        }
+        m_bakedClass[k] = std::uint8_t(sm.data[k]);
+    }
+
+    for (const json::Value& r : lay["roads"].array) {
+        BakedRoad road{r["name"].stringOr("road"), r["kind"].stringOr("road"), float(r["width"].numberOr(6)),
+                       r["closed"].boolOr(false), {}, {}};
+        for (const json::Value& p : r["samples"].array)
+            if (p.isArray() && p.array.size() >= 3)
+                road.samples.push_back(Float3(float(p.array[0].number), float(p.array[1].number), float(p.array[2].number)));
+        if (road.samples.size() < 4 || road.width < 2.0f) {
+            err = "level: layout road " + road.name + " needs 4 samples and width >= 2 m";
+            return false;
+        }
+        if (const json::Value& mk = r["markings"]; mk.isObject()) {
+            BakedMarkings& m = road.markings;
+            m.edgeLine = float(mk["edgeLine"].numberOr(0));
+            m.edgeInset = float(mk["edgeInset"].numberOr(0.3));
+            m.startLine = float(mk["startLine"].numberOr(-1));
+            m.gridSlots = int(mk["gridSlots"].numberOr(0));
+            m.gridPitch = float(mk["gridPitch"].numberOr(8));
+            for (const json::Value& c : mk["curbs"].array)
+                if (c.isArray() && c.array.size() == 3)
+                    m.curbs.push_back({float(c.array[0].number), float(c.array[1].number), c.array[2].number < 0 ? -1.0f : 1.0f});
+        }
+        if (road.kind == "circuit") m_circuitRoad = road.name;
+        m_bakedRoads.push_back(std::move(road));
+    }
+    for (const json::Value& w : lay["water"].array) {
+        Lake lake{w["name"].stringOr("water"), float(w["level"].numberOr(0)), 0.0f, readPolygon(w["polygon"]), 0.0f};
+        if (lake.poly.p.size() < 3) {
+            err = "level: layout water " + lake.name + " needs a polygon";
+            return false;
+        }
+        m_lakes.push_back(std::move(lake));
+    }
+    for (const json::Value& p : lay["placements"].array) {
+        BakedPlacement b;
+        b.kind = p["kind"].stringOr("");
+        b.model = p["model"].stringOr("");
+        b.x = float(p["x"].numberOr(0));
+        b.z = float(p["z"].numberOr(0));
+        b.yaw = float(p["yaw"].numberOr(0));
+        if (b.kind == "tree") {
+            b.scale = float(p["scale"].numberOr(1));
+            b.width = float(p["width"].numberOr(1));
+        } else if (b.kind == "rock") {
+            const json::Value& sc = p["scale"];
+            if (sc.isArray() && sc.array.size() == 3) {
+                b.sx = float(sc.array[0].number);
+                b.sy = float(sc.array[1].number);
+                b.sz = float(sc.array[2].number);
+            }
+            b.sink = float(p["sink"].numberOr(0.3));
+        } else if (b.kind == "building") {
+            const std::string type = p["type"].stringOr("");
+            b.spec.kind = BuildingKind::Count;
+            for (int k = 0; k < int(BuildingKind::Count); ++k)
+                if (type == buildingKindName(BuildingKind(k))) b.spec.kind = BuildingKind(k);
+            if (b.spec.kind == BuildingKind::Count) {
+                err = "level: layout building type '" + type + "' is not a kit kind";
+                return false;
+            }
+            b.spec.w = float(p["w"].numberOr(8));
+            b.spec.d = float(p["d"].numberOr(8));
+            b.spec.h = float(p["h"].numberOr(0));
+            b.spec.floors = int(p["floors"].numberOr(1));
+            b.spec.variant = int(p["variant"].numberOr(0));
+        } else {
+            err = "level: layout placement kind '" + b.kind + "' (tree, rock or building)";
+            return false;
+        }
+        m_placements.push_back(std::move(b));
+    }
+    for (const json::Value& g : lay["checkpoints"].array) {
+        const float yaw = float(g["yaw"].numberOr(0));
+        m_gates.push_back({float(g["x"].numberOr(0)), float(g["z"].numberOr(0)), std::sin(yaw), std::cos(yaw),
+                           float(g["halfWidth"].numberOr(8)), g["sector"].boolOr(false)});
+    }
+    if (!m_gates.empty() && m_circuitRoad.empty()) {
+        err = "level: layout checkpoints need a road of kind circuit";
+        return false;
+    }
+    for (const json::Value& p : lay["pois"].array) {
+        LevelPoi poi;
+        poi.id = int(p["id"].numberOr(0));
+        poi.name = p["name"].stringOr("POI");
+        poi.kind = p["kind"].stringOr("");
+        poi.x = float(p["x"].numberOr(0));
+        poi.z = float(p["z"].numberOr(0));
+        if (!readPoint(p["at"], poi.atX, poi.atZ)) {
+            poi.atX = poi.x;
+            poi.atZ = poi.z;
+        }
+        L.m_pois.push_back(poi);
+    }
+    const json::Value& sp = lay["spawn"];
+    L.m_spawnX = float(sp["x"].numberOr(0));
+    L.m_spawnZ = float(sp["z"].numberOr(0));
+    m_spawnYaw = float(sp["yaw"].numberOr(0));
+    L.m_spawnTowardX = L.m_spawnX + std::sin(m_spawnYaw);
+    L.m_spawnTowardZ = L.m_spawnZ + std::cos(m_spawnYaw);
+    if (std::abs(L.m_spawnX) > L.m_playHalf || std::abs(L.m_spawnZ) > L.m_playHalf) {
+        err = "level: spawn outside the play area";
+        return false;
+    }
+    return loadModels(doc["vegetation"], err);
+}
+
+void LevelBaker::bakeBaked(std::chrono::steady_clock::time_point t0) {
+    m_h = m_bakedHeight;
+    // Roads from the exported center line samples (every ~2 m; a closed road repeats its first sample at the end).
+    for (const BakedRoad& def : m_bakedRoads) {
+        LevelRoad road;
+        road.name = def.name;
+        road.trail = def.kind == "trail";
+        road.width = def.width;
+        std::vector<Float3> pts = def.samples;
+        if (def.closed) pts.push_back(pts.front());
+        const std::size_t n = pts.size();
+        road.samples.resize(n);
+        float s = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            RoadSample& r = road.samples[i];
+            r.x = pts[i].x;
+            r.z = pts[i].y;
+            r.bank = pts[i].z;
+            if (i > 0) s += std::hypot(r.x - pts[i - 1].x, r.z - pts[i - 1].y);
+            r.s = s;
+            std::size_t a = i > 0 ? i - 1 : (def.closed ? n - 2 : i), b = i + 1 < n ? i + 1 : (def.closed ? 1 : i);
+            const float dx = pts[b].x - pts[a].x, dz = pts[b].y - pts[a].y, len = std::max(1e-4f, std::hypot(dx, dz));
+            r.dx = dx / len;
+            r.dz = dz / len;
+            r.y = sampleGrid(m_h, r.x, r.z);
+        }
+        if (def.name == m_circuitRoad) L.m_circuit.length = s;
+        L.m_roads.push_back(std::move(road));
+    }
+    bakeRoads(); // corridor distances only: no road definitions to profile, no carving
+    for (std::size_t li = 0; li < m_lakes.size(); ++li) {
+        const Polygon& poly = m_lakes[li].poly;
+        for (int j = std::max(0, int((poly.z0 - m_origin) / m_cell)); j <= std::min(m_n - 1, int((poly.z1 - m_origin) / m_cell) + 1); ++j)
+            for (int i = std::max(0, int((poly.x0 - m_origin) / m_cell)); i <= std::min(m_n - 1, int((poly.x1 - m_origin) / m_cell) + 1); ++i)
+                if (poly.inside(X(i), X(j))) m_lakeId[idx(i, j)] = std::uint8_t(li + 1);
+    }
+    L.m_height = m_h;
+    buildRoadPoints();
+    bakeWater();
+    bakeBakedSurfaces();
+    bakeWaterDistance();
+    placeBaked();
+    bakeCanopy();
+    // Forest floor for the ground cover: the density of the placed trees (about 1 within 9 m of four trees).
+    {
+        const int cn = m_n - 1;
+        m_forest.assign(std::size_t(cn) * std::size_t(cn), 0.0f);
+        for (const LevelTree& t : L.m_trees) {
+            const float r = 9.0f;
+            const int i0 = std::max(0, int((t.x - r - m_origin) / m_cell)), i1 = std::min(cn - 1, int((t.x + r - m_origin) / m_cell));
+            const int j0 = std::max(0, int((t.z - r - m_origin) / m_cell)), j1 = std::min(cn - 1, int((t.z + r - m_origin) / m_cell));
+            for (int j = j0; j <= j1; ++j)
+                for (int i = i0; i <= i1; ++i) {
+                    const float d = std::hypot(X(i) + 0.5f - t.x, X(j) + 0.5f - t.z);
+                    float& f = m_forest[std::size_t(j) * std::size_t(cn) + std::size_t(i)];
+                    f = std::min(1.0f, f + 0.25f * (1.0f - smoothstep(0.5f * r, r, d)));
+                }
+        }
+    }
+    bakeScatter();
+    L.m_props.styles.resize(L.m_props.geometry.triangleCount(), PropStyle::Stone);
+    for (std::size_t k = 0; k < m_bakedRoads.size(); ++k) bakeMarkings(L.m_roads[k], m_bakedRoads[k].markings);
+    L.m_surfaceClass = m_bakedClass;
+
+    // Circuit gates and the attract route: the circuit center line as a closed loop.
+    L.m_circuit.road = m_circuitRoad;
+    L.m_circuit.gates = m_gates;
+    for (const LevelRoad& r : L.m_roads)
+        if (r.name == m_circuitRoad) {
+            DriveRoute route;
+            route.name = m_routeName;
+            route.cruiseSpeed = m_routeSpeed;
+            route.lateralAccel = m_routeLateral;
+            route.brakeDecel = m_routeDecel;
+            route.maxThrottle = m_routeThrottle;
+            for (const RoadSample& p : r.samples) route.points.push_back({p.x, p.z});
+            if (route.points.size() > 1) route.points.pop_back(); // the repeated first sample
+            // Start at the sample nearest to the spawn (the autopilot recovers to the route start).
+            std::size_t best = 0;
+            float bd = 1e30f;
+            for (std::size_t k = 0; k < route.points.size(); ++k) {
+                const float d = std::hypot(route.points[k].x - L.m_spawnX, route.points[k].z - L.m_spawnZ);
+                if (d < bd) bd = d, best = k;
+            }
+            std::rotate(route.points.begin(), route.points.begin() + std::ptrdiff_t(best), route.points.end());
+            L.m_attractRoute = std::move(route);
+        }
+    checkBakedLayout();
+
+    LevelBakeStats& st = L.m_stats;
+    st.samples = m_n;
+    st.trees = L.m_trees.size();
+    st.rocks = L.m_rocks.size();
+    st.scatter = L.m_scatter.size();
+    st.buildings = L.m_buildings.size();
+    st.propTriangles = L.m_props.geometry.triangleCount();
+    const auto [mn, mx] = std::minmax_element(L.m_height.begin(), L.m_height.end());
+    st.minHeight = *mn;
+    st.maxHeight = *mx;
+    st.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// Physics surface and render masks from the exported surface classes. Gravel is the packed dirt surface drawn with
+// the road gravel layer; asphalt is the concrete surface drawn as asphalt (splat snow weight, asphaltLayer).
+void LevelBaker::bakeBakedSurfaces() {
+    const int cn = m_n - 1;
+    const std::size_t cells = std::size_t(cn) * std::size_t(cn);
+    L.m_surface.assign(cells, SurfaceId::Grass);
+    m_forest.assign(cells, 0.0f);
+    std::vector<std::uint32_t> mask(cells), splat(cells);
+    std::vector<float> keep(cells, 1.0f);
+    parallelFor(cn, m_threads, [&](int j) {
+        for (int i = 0; i < cn; ++i) {
+            const std::size_t c = std::size_t(j) * std::size_t(cn) + std::size_t(i);
+            const float x = X(i) + 0.5f * m_cell, z = X(j) + 0.5f * m_cell;
+            const std::size_t a = idx(i, j), b = idx(i + 1, j), cc = idx(i, j + 1), d = idx(i + 1, j + 1);
+            const LevelSurfaceClass cls = LevelSurfaceClass(m_bakedClass[c]);
+            SurfaceId s = SurfaceId::Grass;
+            switch (cls) {
+            case LevelSurfaceClass::Asphalt: s = SurfaceId::Concrete; break;
+            case LevelSurfaceClass::Gravel: case LevelSurfaceClass::Dirt: s = SurfaceId::PackedDirt; break;
+            case LevelSurfaceClass::Mud: s = SurfaceId::Mud; break;
+            case LevelSurfaceClass::Sand: s = SurfaceId::Sand; break;
+            case LevelSurfaceClass::Rock: s = SurfaceId::Rock; break;
+            case LevelSurfaceClass::Snow: s = SurfaceId::Snow; break;
+            default: break;
+            }
+            L.m_surface[c] = s;
+            float wd = 0.0f;
+            for (std::size_t q : {a, b, cc, d})
+                if (L.m_water[q] > Level::kNoWater) wd += 0.25f * std::max(0.0f, L.m_water[q] - m_h[q]);
+            const float near = float(std::max({m_nearWater[a], m_nearWater[b], m_nearWater[cc], m_nearWater[d]})) / 255.0f;
+            const float meadow = fbm(x / 40.0f, z / 40.0f, 3, m_seed + 67u);
+            const float patch = fbm(x / 16.0f, z / 16.0f, 3, m_seed + 61u);
+            const float clear = std::min({m_roadClear[a], m_roadClear[b], m_roadClear[cc], m_roadClear[d]});
+            keep[c] = smoothstep(1.5f, 2.7f, clear);
+            float grass = 0.0f;
+            if (cls == LevelSurfaceClass::Grass) grass = 0.35f + 0.65f * smoothstep(0.3f, 0.7f, meadow);
+            else if (cls == LevelSurfaceClass::Dirt && clear > 1.0f) grass = 0.12f * smoothstep(0.4f, 0.7f, patch);
+            const float paint = cls == LevelSurfaceClass::Gravel ? 1.0f : 0.0f;
+            const float rock = cls == LevelSurfaceClass::Rock ? 1.0f : 0.0f;
+            const float sand = cls == LevelSurfaceClass::Sand ? 1.0f : 0.0f;
+            const float dark = cls == LevelSurfaceClass::Snow || (cls == LevelSurfaceClass::Asphalt && L.m_asphaltLayer) ? 1.0f : 0.0f;
+            const float mud = cls == LevelSurfaceClass::Mud ? 1.0f : 0.0f;
+            const float wet = wd > 0.0f ? 1.0f : std::max(0.55f * near, 0.35f * mud);
+            mask[c] = packRgba(grass, mud, wet, 0.0f);
+            splat[c] = packRgba(paint, rock, 0.5f + 0.5f * (sand - dark), 0.0f);
+        }
+    });
+    auto blur = [&](const std::vector<std::uint32_t>& src, std::vector<std::uint32_t>& dst) {
+        dst.resize(src.size());
+        parallelFor(cn, m_threads, [&](int j) {
+            for (int i = 0; i < cn; ++i) {
+                float acc[4] = {0, 0, 0, 0};
+                for (int dj = -1; dj <= 1; ++dj)
+                    for (int di = -1; di <= 1; ++di) {
+                        const std::uint32_t v = src[std::size_t(std::clamp(j + dj, 0, cn - 1)) * std::size_t(cn) +
+                                                    std::size_t(std::clamp(i + di, 0, cn - 1))];
+                        for (int k = 0; k < 4; ++k) acc[k] += channel(v, k);
+                    }
+                dst[std::size_t(j) * std::size_t(cn) + std::size_t(i)] =
+                    packRgba(acc[0] / 9.0f, acc[1] / 9.0f, acc[2] / 9.0f, acc[3] / 9.0f);
+            }
+        });
+    };
+    blur(mask, L.m_mask);
+    blur(splat, L.m_splat);
+    for (std::size_t c = 0; c < cells; ++c)
+        if (keep[c] < 1.0f) {
+            const std::uint32_t v = L.m_mask[c];
+            L.m_mask[c] = packRgba(channel(v, 0) * keep[c], channel(v, 1), channel(v, 2), channel(v, 3) * keep[c]);
+        }
+}
+
+// Trees, rocks and kit buildings where the layout puts them, on the ground: trees 0.3 m into it, rocks by their
+// sink fraction of the height, buildings by the kit floor rule (groundFloor).
+void LevelBaker::placeBaked() {
+    const bool library = !L.m_models.empty();
+    auto model = [&](const std::string& ref, const char* kind) -> int {
+        const auto it = m_modelByRef.find(ref);
+        if (!library || it == m_modelByRef.end()) return -1;
+        return L.m_models[std::size_t(it->second)].kind == kind ? it->second : -1;
+    };
+    for (const BakedPlacement& p : m_placements) {
+        if (p.kind == "tree") {
+            LevelTree t;
+            t.x = p.x;
+            t.z = p.z;
+            t.y = L.heightAt(p.x, p.z) - 0.3f;
+            t.yaw = p.yaw;
+            t.width = p.width;
+            t.hue = hashUnit(int(std::floor(p.x * 4.0f)), int(std::floor(p.z * 4.0f)), m_seed + 131u);
+            const int id = model(p.model, "tree");
+            if (id >= 0) {
+                const LevelModel& m = L.m_models[std::size_t(id)];
+                t.model = std::int16_t(id);
+                t.scale = p.scale;
+                t.height = m.height * p.scale;
+                t.kind = std::find(m_broadleaf.begin(), m_broadleaf.end(), id) != m_broadleaf.end() ? TreeKind::Broadleaf
+                         : std::find(m_saplings.begin(), m_saplings.end(), id) != m_saplings.end() ? TreeKind::Sapling
+                                                                                                    : TreeKind::Conifer;
+            } else {
+                if (library) L.m_layoutIssues.push_back("tree model '" + p.model + "' is not in the vegetation library");
+                t.height = 12.0f * p.scale; // procedural pine
+            }
+            L.m_trees.push_back(t);
+        } else if (p.kind == "rock") {
+            LevelRock r;
+            r.x = p.x;
+            r.z = p.z;
+            r.yaw = p.yaw;
+            r.seed = hash3(int(std::floor(p.x * 4.0f)), int(std::floor(p.z * 4.0f)), m_seed + 227u);
+            const int id = model(p.model, "rock") >= 0 ? model(p.model, "rock") : model(p.model, "log");
+            if (id >= 0) {
+                const LevelModel& m = L.m_models[std::size_t(id)];
+                r.model = std::int16_t(id);
+                r.sx = p.sx;
+                r.sy = p.sy;
+                r.sz = p.sz;
+                r.rx = 0.5f * (m.boundsMax.x - m.boundsMin.x) * p.sx;
+                r.ry = 0.5f * (m.boundsMax.y - m.boundsMin.y) * p.sy;
+                r.rz = 0.5f * (m.boundsMax.z - m.boundsMin.z) * p.sz;
+            } else {
+                if (library) L.m_layoutIssues.push_back("rock model '" + p.model + "' is not in the vegetation library");
+                r.rx = p.sx, r.ry = p.sy, r.rz = p.sz; // procedural rock of about the model size
+            }
+            r.y = L.heightAt(p.x, p.z) - p.sink * r.ry;
+            L.m_rocks.push_back(r);
+        } else {
+            building(p.spec, p.x, p.z, p.yaw);
+        }
+    }
+}
+
+// Curbs and painted lines on the baked terrain (props: collision == render). Every piece follows the heightfield
+// (vertices at heightAt): paint is a 4 mm slab, a curb a 1 m long prism 1.15 m wide and 4.5 cm high whose inner
+// edge starts 0.15 m inside the road edge, red and white per metre.
+void LevelBaker::bakeMarkings(const LevelRoad& road, const BakedMarkings& mk) {
+    if (road.samples.size() < 2 || (mk.edgeLine <= 0.0f && mk.startLine < 0.0f && mk.curbs.empty())) return;
+    const std::vector<RoadSample>& sm = road.samples;
+    const float length = sm.back().s, hw = 0.5f * road.width;
+    struct Frame { float x, z, dx, dz; };
+    auto at = [&](float s) {
+        s = std::fmod(s, length);
+        if (s < 0.0f) s += length;
+        const auto it = std::upper_bound(sm.begin(), sm.end(), s, [](float v, const RoadSample& r) { return v < r.s; });
+        const std::size_t b = std::min<std::size_t>(std::size_t(it - sm.begin()), sm.size() - 1), a = b > 0 ? b - 1 : 0;
+        const float t = sm[b].s > sm[a].s ? (s - sm[a].s) / (sm[b].s - sm[a].s) : 0.0f;
+        const float dx = sm[a].dx + (sm[b].dx - sm[a].dx) * t, dz = sm[a].dz + (sm[b].dz - sm[a].dz) * t;
+        const float l = std::max(1e-6f, std::hypot(dx, dz));
+        return Frame{sm[a].x + (sm[b].x - sm[a].x) * t, sm[a].z + (sm[b].z - sm[a].z) * t, dx / l, dz / l};
+    };
+    // Point u m left of the center line at s, h m above the ground.
+    auto P = [&](float s, float u, float h) {
+        const Frame f = at(s);
+        const float x = f.x + f.dz * u, z = f.z - f.dx * u;
+        return Vec3(x, L.heightAt(x, z) + h, z);
+    };
+    TrackGeometry& g = L.m_props.geometry;
+    auto piece = [&](PropStyle style) {
+        L.m_props.pieceStarts.push_back(std::uint32_t(g.triangleCount()));
+        L.m_props.pieceRoles.push_back(PropRole::Prop);
+        (void)style;
+    };
+    auto done = [&](PropStyle style) { L.m_props.styles.resize(g.triangleCount(), style); };
+    constexpr float kPaint = 0.004f;
+    // Paint quad between (s0, u0) and (s1, u1): top face only (it lies on the asphalt).
+    auto paint = [&](float s0, float s1, float u0, float u1) {
+        piece(PropStyle::LinePaint);
+        const Vec3 a = P(s0, u0, kPaint), b = P(s0, u1, kPaint), c = P(s1, u1, kPaint), d = P(s1, u0, kPaint);
+        // +u is left: (s0, u1) -> (s1, u1) -> (s1, u0) is counter-clockwise seen from above.
+        g.addQuad(a, d, c, b, SurfaceId::Concrete);
+        done(PropStyle::LinePaint);
+    };
+    if (mk.edgeLine > 0.0f) {
+        const float u1 = hw - mk.edgeInset, u0 = u1 - mk.edgeLine;
+        const int steps = std::max(1, int(std::ceil(length)));
+        for (int k = 0; k < steps; ++k) {
+            const float s0 = length * float(k) / float(steps), s1 = length * float(k + 1) / float(steps);
+            paint(s0, s1, u0, u1);
+            paint(s0, s1, -u1, -u0);
+        }
+    }
+    if (mk.startLine >= 0.0f) {
+        const float u1 = hw - mk.edgeInset - mk.edgeLine;
+        for (float u = -u1; u < u1 - 1e-3f; u += 1.0f) paint(mk.startLine - 0.3f, mk.startLine + 0.3f, u, std::min(u1, u + 1.0f));
+        // Staggered grid boxes: an open bracket (front bar and two side legs) per slot, pole on the left.
+        for (int k = 0; k < mk.gridSlots; ++k) {
+            const float s = mk.startLine - 6.0f - float(k) * 0.5f * mk.gridPitch;
+            const float c = (k % 2 == 0 ? 1.0f : -1.0f) * 0.25f * road.width;
+            paint(s - 0.2f, s, c - 1.1f, c + 1.1f);
+            paint(s - 1.5f, s - 0.2f, c - 1.1f, c - 0.95f);
+            paint(s - 1.5f, s - 0.2f, c + 0.95f, c + 1.1f);
+        }
+    }
+    // Curb cross-section: distance outward from 0.15 m inside the edge and height above the ground.
+    static constexpr float kCurbU[4] = {0.0f, 0.25f, 0.95f, 1.15f};
+    static constexpr float kCurbH[4] = {0.002f, 0.045f, 0.045f, 0.0f};
+    for (const BakedMarkings::Curb& c : mk.curbs) {
+        const float s1 = c.s1 >= c.s0 ? c.s1 : c.s1 + length;
+        const int n = std::max(1, int(std::lround(s1 - c.s0)));
+        for (int k = 0; k < n; ++k) {
+            const float a = c.s0 + (s1 - c.s0) * float(k) / float(n), b = c.s0 + (s1 - c.s0) * float(k + 1) / float(n);
+            const PropStyle style = ((int(std::floor(a)) + int(c.side > 0)) % 2) ? PropStyle::CurbRed : PropStyle::CurbWhite;
+            piece(style);
+            Vec3 top[2][4], bot[2][4];
+            for (int e = 0; e < 2; ++e)
+                for (int q = 0; q < 4; ++q) {
+                    const float u = c.side * (hw - 0.15f + kCurbU[q]);
+                    top[e][q] = P(e ? b : a, u, kCurbH[q]);
+                    bot[e][q] = P(e ? b : a, u, -0.05f);
+                }
+            const Vec3 centre = 0.25f * (top[0][1] + top[0][2] + top[1][1] + top[1][2]) - Vec3(0, 0.03f, 0);
+            auto tri = [&](Vec3 p0, Vec3 p1, Vec3 p2) {
+                if ((p1 - p0).Cross(p2 - p0).Dot((p0 + p1 + p2) / 3.0f - centre) < 0.0f) std::swap(p1, p2);
+                g.addTriangle(p0, p1, p2, SurfaceId::Concrete);
+            };
+            auto quad = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) { tri(p0, p1, p2), tri(p0, p2, p3); };
+            for (int q = 0; q < 3; ++q) quad(top[0][q], top[0][q + 1], top[1][q + 1], top[1][q]); // ramp, top, ramp
+            quad(top[0][0], top[1][0], bot[1][0], bot[0][0]);                                       // inner side
+            quad(top[0][3], top[1][3], bot[1][3], bot[0][3]);                                       // outer side
+            for (int e = 0; e < 2; ++e) {                                                           // end caps
+                quad(bot[e][0], top[e][0], top[e][1], bot[e][1]);
+                quad(bot[e][1], top[e][1], top[e][2], bot[e][2]);
+                quad(bot[e][2], top[e][2], top[e][3], bot[e][3]);
+            }
+            done(style);
+        }
+    }
+}
+
+float LevelBaker::roadGap(const std::vector<P2>& hull) const {
+    float x0 = 1e30f, z0 = 1e30f, x1 = -1e30f, z1 = -1e30f;
+    for (const P2& p : hull) x0 = std::min(x0, p.x), z0 = std::min(z0, p.z), x1 = std::max(x1, p.x), z1 = std::max(z1, p.z);
+    const float reach = 40.0f;
+    float best = 1e30f;
+    const int bi0 = std::max(0, int((x0 - reach - m_origin) / 32.0f)), bi1 = std::min(m_bucketSide - 1, int((x1 + reach - m_origin) / 32.0f));
+    const int bj0 = std::max(0, int((z0 - reach - m_origin) / 32.0f)), bj1 = std::min(m_bucketSide - 1, int((z1 + reach - m_origin) / 32.0f));
+    for (int bj = bj0; bj <= bj1; ++bj)
+        for (int bi = bi0; bi <= bi1; ++bi)
+            for (const RoadPoint& p : m_roadBuckets[std::size_t(bj) * std::size_t(m_bucketSide) + std::size_t(bi)])
+                best = std::min(best, polygonDistance(hull, p.x, p.z) - p.hw);
+    return best;
+}
+
+// Rules for authored layouts (the same as export_level.py validates): nothing on a road (trees and rocks 1 m from
+// the edge, kit props 0.3 m, structures 3 m), structures out of the water, everything in the play area, the spawn
+// and the gates on the circuit, gates spanning the road, the water on the circuit at most 0.45 m deep.
+void LevelBaker::checkBakedLayout() {
+    std::vector<std::string>& out = L.m_layoutIssues;
+    char buf[256];
+    auto inPlay = [&](float x, float z, const char* what) {
+        if (L.insidePlayArea(x, z)) return;
+        std::snprintf(buf, sizeof(buf), "%s at (%.1f, %.1f) is outside the play area", what, double(x), double(z));
+        out.push_back(buf);
+    };
+    for (const LevelTree& t : L.m_trees) {
+        inPlay(t.x, t.z, "tree");
+        float r = 0.3f;
+        if (t.model >= 0) r = L.m_models[std::size_t(t.model)].trunkRadius * t.scale * t.width;
+        const float gap = roadGap({P2{t.x, t.z}}) - r;
+        if (gap < 1.0f) {
+            std::snprintf(buf, sizeof(buf), "tree at (%.1f, %.1f) is %.2f m from a road edge (min 1 m)", double(t.x), double(t.z), double(gap));
+            out.push_back(buf);
+        }
+    }
+    for (const LevelRock& r : L.m_rocks) {
+        inPlay(r.x, r.z, "rock");
+        const float gap = roadGap({P2{r.x, r.z}}) - std::max(r.rx, r.rz);
+        if (gap < 1.0f) {
+            std::snprintf(buf, sizeof(buf), "rock at (%.1f, %.1f) is %.2f m from a road edge (min 1 m)", double(r.x), double(r.z), double(gap));
+            out.push_back(buf);
+        }
+    }
+    for (const LevelBuilding& b : L.m_buildings) {
+        const LevelBuildingType& t = L.m_buildingTypes[b.type];
+        const float c = std::cos(b.yaw), sn = std::sin(b.yaw);
+        std::vector<P2> hull;
+        for (float u : {t.boundsMin.x, t.boundsMax.x})
+            for (float v : {t.boundsMin.z, t.boundsMax.z}) hull.push_back({b.x + c * u + sn * v, b.z - sn * u + c * v});
+        hull = convexHull(hull);
+        const bool structure = buildingIsStructure(t.spec.kind);
+        const float need = structure ? kBuildingMargin : 0.3f;
+        float gap = roadGap(hull);
+        if (t.spec.kind == BuildingKind::StartGantry) { // spans the road: only its pillars stand beside it
+            gap = 1e30f;
+            for (float sx : {-1.0f, 1.0f}) {
+                std::vector<P2> pillar;
+                const float u0 = sx * (0.5f * t.spec.w + 0.25f);
+                for (float u : {u0 - 0.45f, u0 + 0.45f})
+                    for (float v : {-0.45f, 0.45f}) pillar.push_back({b.x + c * u + sn * v, b.z - sn * u + c * v});
+                gap = std::min(gap, roadGap(convexHull(pillar)));
+            }
+        }
+        inPlay(b.x, b.z, buildingKindName(t.spec.kind));
+        if (gap < need) {
+            std::snprintf(buf, sizeof(buf), "%s at (%.1f, %.1f) is %.2f m from a road edge (min %.1f m)",
+                          buildingKindName(t.spec.kind), double(b.x), double(b.z), double(gap), double(need));
+            out.push_back(buf);
+        }
+        if (structure)
+            for (const P2& p : hull)
+                if (L.waterAt(p.x, p.z)) {
+                    std::snprintf(buf, sizeof(buf), "%s at (%.1f, %.1f) stands in water", buildingKindName(t.spec.kind), double(b.x), double(b.z));
+                    out.push_back(buf);
+                    break;
+                }
+    }
+    const LevelRoad* circuit = nullptr;
+    for (const LevelRoad& r : L.m_roads)
+        if (r.name == m_circuitRoad) circuit = &r;
+    auto onCircuit = [&](float x, float z) {
+        float best = 1e30f;
+        if (circuit)
+            for (const RoadSample& s : circuit->samples) best = std::min(best, std::hypot(s.x - x, s.z - z));
+        return best;
+    };
+    if (circuit) {
+        for (std::size_t g = 0; g < m_gates.size(); ++g) {
+            const LevelGate& gate = m_gates[g];
+            const float d = onCircuit(gate.x, gate.z);
+            if (d > 2.0f || gate.halfWidth < 0.5f * circuit->width) {
+                std::snprintf(buf, sizeof(buf), "checkpoint %zu is %.1f m off the circuit or narrower than the road", g, double(d));
+                out.push_back(buf);
+            }
+        }
+        if (onCircuit(L.m_spawnX, L.m_spawnZ) > 3.0f) out.push_back("spawn is not on the circuit");
+        for (const RoadSample& s : circuit->samples) {
+            const std::optional<float> w = L.waterAt(s.x, s.z);
+            if (w && *w - L.heightAt(s.x, s.z) > 0.45f) {
+                std::snprintf(buf, sizeof(buf), "circuit at (%.1f, %.1f) is %.2f m under water (max 0.45 m)", double(s.x),
+                              double(s.z), double(*w - L.heightAt(s.x, s.z)));
+                out.push_back(buf);
+                break;
+            }
+        }
+    }
+    if (L.waterAt(L.m_spawnX, L.m_spawnZ)) out.push_back("spawn is in water");
 }
 
 float LevelBridge::length() const { return std::max(1e-3f, std::hypot(x1 - x0, z1 - z0)); }
@@ -2697,6 +3367,7 @@ std::shared_ptr<const Level> Level::fromJsonText(const std::string& text, std::s
 // Each leg runs along one road's baked center line between the samples nearest to its end points (in either
 // direction); consecutive legs share their junction point.
 bool LevelBaker::buildAttractRoute(std::string& err) {
+    if (m_baked) return true; // the circuit loop, set by bakeBaked
     DriveRoute route;
     route.name = m_routeName;
     route.cruiseSpeed = m_routeSpeed;

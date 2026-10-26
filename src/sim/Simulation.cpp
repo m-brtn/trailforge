@@ -1,5 +1,7 @@
 #include "sim/Simulation.h"
 
+#include "track/MiniTrack.h"
+
 #include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -7,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 
 namespace tf {
 namespace {
@@ -54,13 +57,16 @@ void Simulation::buildWorld() {
         m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, m_settings.layout);
         m_water = provingGroundWater();
     }
-    // Lap timing on the proving ground's mini handling track.
-    if (!m_settings.level && m_settings.layout == TrackLayout::ProvingGround) {
-        const auto& gates = miniTrack().gates;
-        m_lapTimer.setGates({gates.begin(), gates.end()});
-    } else {
-        m_lapTimer.setGates({});
+    // Lap timing: the circuit of a level, or the proving ground's mini handling track (start / finish and two sector
+    // lines).
+    std::vector<LevelGate> gates;
+    if (m_settings.level) {
+        gates = m_settings.level->circuit().gates;
+    } else if (m_settings.layout == TrackLayout::ProvingGround) {
+        for (const TimingGate& g : miniTrack().gates)
+            gates.push_back({g.x, g.z, g.dirX, g.dirZ, g.halfWidth, !gates.empty()});
     }
+    m_lapTimer.setGates(std::move(gates));
     m_tireMarks.setWater(m_water);
     m_tireMarks.clear();
     m_spawnFeature = 0;
@@ -95,6 +101,7 @@ void Simulation::checkRecovery(float dt) {
     if (!message) return;
     const TrackFeature at = roadRecoveryPoint();
     const AidControls controls = m_vehicle->aidControls();
+    m_lapTimer.reset();
     spawnVehicle(m_vehicle->config(), at);
     m_vehicle->setAidControls(controls);
     m_submersion = m_submergedTime = 0.0f;
@@ -131,7 +138,6 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_tireMarks.breakRibbons();
     m_curr = captureSnapshot();
     m_prev = m_curr;
-    m_lapTimer.reset();
 }
 
 void Simulation::respawnInPlace(VehicleConfig config) {
@@ -148,6 +154,7 @@ void Simulation::respawnInPlace(VehicleConfig config) {
     TrackFeature at;
     at.position = JPH::Vec3(p.GetX(), ground, p.GetZ());
     at.yaw = yaw;
+    m_lapTimer.reset();
     spawnVehicle(std::move(config), at);
     m_vehicle->setAidControls(controls);
     if (old.layout == DriveLayout::PartTime) m_vehicle->setTransfer(old.transfer);
@@ -189,6 +196,7 @@ void Simulation::processCommands() {
     if (m_pendingRebuild) {
         spawnVehicle(*m_pendingRebuild, m_track->features()[m_spawnFeature]);
         m_pendingRebuild.reset();
+        m_lapTimer.clearAll();
         m_pendingReset = false;
         setMessage("Vehicle rebuilt");
     }
@@ -198,21 +206,31 @@ void Simulation::processCommands() {
         m_pendingTeleport.reset();
         m_pendingReset = true;
         teleported = true;
+        m_lapTimer.reset();
     }
     if (m_pendingPlace) {
         spawnVehicle(m_vehicle->config(), *m_pendingPlace);
         m_pendingPlace.reset();
         m_pendingReset = false;
         teleported = false;
+        m_lapTimer.reset();
         setMessage("Vehicle placed");
     }
     if (m_pendingReset) {
         // Recreation resets the body, wheels, engine and gearbox to the initial state. On an open-world level the R
         // reset puts the vehicle on the nearest road point instead of the far-away spawn.
-        if (m_settings.level && !teleported) {
+        if (m_settings.level && !teleported && m_lapTimer.running() && m_lapTimer.lastGate() >= 0) {
+            spawnVehicle(m_vehicle->config(), gateResetPoint(m_lapTimer.lastGate()));
+            std::snprintf(m_lapMessage, sizeof(m_lapMessage), m_lapTimer.lastGate() == 0
+                              ? "Vehicle reset to the start line (lap timer running)"
+                              : "Vehicle reset to checkpoint %d (lap timer running)", m_lapTimer.lastGate());
+            setMessage(m_lapMessage);
+        } else if (m_settings.level && !teleported) {
+            m_lapTimer.reset();
             spawnVehicle(m_vehicle->config(), roadRecoveryPoint());
             setMessage("Vehicle reset to the nearest road");
         } else {
+            m_lapTimer.reset();
             spawnVehicle(m_vehicle->config(), m_track->features()[m_spawnFeature]);
             setMessage("Vehicle reset to spawn point");
         }
@@ -221,6 +239,7 @@ void Simulation::processCommands() {
     if (m_pendingConfig) {
         if (Vehicle::needsRebuild(m_vehicle->config(), *m_pendingConfig)) {
             respawnInPlace(*m_pendingConfig);
+            m_lapTimer.reset();
             setMessage("Vehicle rebuilt in place");
         } else {
             m_vehicle->applyTuning(m_pendingConfig->tuning);
@@ -386,6 +405,7 @@ void Simulation::runAutopilot(float dt) {
         m_autopilotResetReason = m_autopilot.resetReason();
         spawnVehicle(m_vehicle->config(), at);
         ++m_autopilotResets;
+        m_lapTimer.reset();
         intent.brake = 1.0f;
         m_intent = intent;
         return;
@@ -411,6 +431,7 @@ void Simulation::tick() {
     resolvePedals(dt);
     smoothInput(dt);
 
+    const JPH::Vec3 before(m_vehicle->bodyTransform().GetTranslation());
     const auto t0 = Clock::now();
     m_vehicle->prePhysics(m_smoothed, dt);
     m_impactListener.beginTick();
@@ -427,8 +448,7 @@ void Simulation::tick() {
 
     m_prev = m_curr;
     m_curr = captureSnapshot();
-    m_lapTimer.update(m_prev.body.position.GetX(), m_prev.body.position.GetZ(), m_curr.body.position.GetX(),
-                      m_curr.body.position.GetZ(), m_simTime - m_settings.fixedStep, m_simTime);
+    updateLapTimer(before);
     checkRecovery(dt);
 
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -436,6 +456,45 @@ void Simulation::tick() {
     m_timing.avgStepMs = m_timing.ticks == 0 ? ms : m_timing.avgStepMs * 0.98 + ms * 0.02;
     m_timing.maxStepMs = std::max(ms, m_timing.maxStepMs * (1.0 - dt / 2.0));
     ++m_timing.ticks;
+}
+
+void Simulation::updateLapTimer(const JPH::Vec3& before) {
+    if (!m_lapTimer.active()) return;
+    const JPH::Vec3 p(m_vehicle->bodyTransform().GetTranslation());
+    const LapTimer::Event e = m_lapTimer.update(before.GetX(), before.GetZ(), p.GetX(), p.GetZ(),
+                                                m_simTime - m_settings.fixedStep, m_simTime);
+    auto clock = [](double t, char* out, std::size_t n) {
+        const int m = int(t / 60.0);
+        std::snprintf(out, n, "%d:%06.3f", m, t - 60.0 * m);
+    };
+    char a[24], b[24];
+    switch (e) {
+    case LapTimer::Event::Started: setMessage("Lap started"); break;
+    case LapTimer::Event::Checkpoint:
+        clock(m_lapTimer.lastSplit(), a, sizeof(a));
+        std::snprintf(m_lapMessage, sizeof(m_lapMessage), "Checkpoint %d  %s", m_lapTimer.lastGate(), a);
+        setMessage(m_lapMessage);
+        break;
+    case LapTimer::Event::Lap:
+        clock(m_lapTimer.lastLap(), a, sizeof(a));
+        clock(m_lapTimer.bestLap(), b, sizeof(b));
+        std::snprintf(m_lapMessage, sizeof(m_lapMessage), "Lap %d  %s  (best %s)", m_lapTimer.laps(), a, b);
+        setMessage(m_lapMessage);
+        break;
+    case LapTimer::Event::Invalid: setMessage("Lap not counted: a checkpoint was missed (new lap started)"); break;
+    case LapTimer::Event::None: break;
+    }
+}
+
+// On the track 4 m past the gate, facing along it (the gate itself is behind, so the reset does not cross it).
+TrackFeature Simulation::gateResetPoint(int gate) const {
+    const LevelGate& g = m_lapTimer.gates()[std::size_t(gate)];
+    const float x = g.x + 4.0f * g.dx, z = g.z + 4.0f * g.dz;
+    TrackFeature at;
+    at.name = "checkpoint";
+    at.position = JPH::Vec3(x, m_settings.level->heightAt(x, z), z);
+    at.yaw = std::atan2(g.dx, g.dz);
+    return at;
 }
 
 std::optional<float> Simulation::castRayIgnoringVehicle(JPH::Vec3Arg from, JPH::Vec3Arg to) const {

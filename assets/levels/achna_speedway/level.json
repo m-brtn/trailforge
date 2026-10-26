@@ -1,0 +1,26 @@
+{
+ "format": 1,
+ "id": "achna_speedway",
+ "name": "Achna Speedway",
+ "description": "Achna Speedway near Dasaki Achnas, Cyprus, in real size: the 2.0 km full course, drag strip and short course connector from OpenStreetMap (ODbL), the ground from the Copernicus GLO-30 DEM. Asphalt, painted lines, start grid, curbs, gravel traps, pit lane and paddock (not mapped: placed by the generator). Built in Blender (tools/levels/blender/make_achna_speedway.py). World meters: +X east, -Z north, Y up.",
+ "seed": 3517,
+ "bakeHalfExtent": 512,
+ "playHalfExtent": 480,
+ "baked": {"heightmap": "heightmap.pgm", "surfaces": "surfaces.pgm", "layout": "layout.json"},
+ "asphaltLayer": true,
+ "attractRoute": {"name": "Full course lap", "speedKmh": 130, "lateralAccel": 5.0, "brakeDecel": 4.0, "maxThrottle": 1.0},
+ "vegetation": {
+  "dir": "../../models",
+  "conifers": ["fir_tree_01/fir_tree_01_a", "fir_tree_01/fir_tree_01_b", "fir_tree_01/fir_tree_01_c"],
+  "saplings": ["fir_sapling_medium/fir_sapling_medium_a", "fir_sapling_medium/fir_sapling_medium_b",
+               "fir_sapling_medium/fir_sapling_medium_c"],
+  "broadleaf": ["tree_small_02/tree_small_02", "island_tree_01/island_tree_01"],
+  "bushes": ["shrub_02/shrub_02_a", "shrub_02/shrub_02_b", "shrub_02/shrub_02_c", "shrub_02/shrub_02_d"],
+  "ferns": ["fern_02/fern_02_a", "fern_02/fern_02_b", "fern_02/fern_02_c", "fern_02/fern_02_d"],
+  "debris": ["logs/dry_branches_a", "logs/dry_branches_b", "logs/dry_branches_c"],
+  "rocks": ["rocks/boulder_01", "rocks/boulder_02", "rocks/boulder_05", "rocks/rock_moss_01", "rocks/rock_moss_02",
+            "rocks/rock_moss_03", "rocks/rock_moss_04", "rocks/rock_moss_05", "rocks/rock_moss_06"],
+  "logs": ["logs/dead_tree_trunk", "logs/tree_stump_01"],
+  "cliffs": ["cliffs/rock_face_01", "cliffs/rock_face_02"]
+ }
+}

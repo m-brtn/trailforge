@@ -10,7 +10,9 @@
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
+#include "track/LevelFiles.h"
 #include "track/TerrainTiles.h"
+#include "track/TestTrack.h"
 #include "vehicle/VehicleDefinition.h"
 
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -1145,7 +1147,9 @@ std::vector<BuildingSpec> kitSpecs() {
         {BK::Fence, 9.0f, 0, 0, 0, 2}, {BK::Garden, 6.0f, 5.0f, 0, 0, 1}, {BK::PowerPole, 0, 0, 8.0f, 0, 0},
         {BK::Wire, 18.0f, 0, 0.5f, 0, 0}, {BK::Woodpile, 5.0f, 0, 0, 0, 0}, {BK::Cairn, 0, 0, 0, 0, 0},
         {BK::Signpost, 0, 0, 0, 0, 0}, {BK::Well, 0, 0, 0, 0, 0}, {BK::Shelter, 5.0f, 4.0f, 0, 0, 0},
-        {BK::Bench, 1.8f, 0, 0, 0, 0},
+        {BK::Bench, 1.8f, 0, 0, 0, 0}, {BK::Barrier, 4.0f, 0, 0, 0, 0}, {BK::Barrier, 6.0f, 0, 0, 0, 1},
+        {BK::TyreWall, 6.0f, 0, 0, 0, 0}, {BK::TyreWall, 4.0f, 0, 0, 0, 1}, {BK::Flag, 0, 0, 5.0f, 0, 2},
+        {BK::Grandstand, 24.0f, 9.0f, 0, 0, 0}, {BK::StartGantry, 14.0f, 0, 6.0f, 0, 0}, {BK::RaceControl, 12.0f, 8.0f, 0, 0, 0}, {BK::MarshalPost, 0, 0, 0, 0, 0},
     };
     return v;
 }
@@ -1394,9 +1398,358 @@ void levelPoiBuildings() {
     CHECK(dipping == 0, "%d cliff slabs dip into water", dipping);
 }
 
+// ------------------------------------------------------------------------------------------------- baked levels
+const std::string kCircuit = TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/level.json";
+
+std::shared_ptr<const Level> loadOrExit(const std::string& path) {
+    std::string err;
+    auto lv = Level::load(path, &err);
+    if (!lv) {
+        std::printf("  cannot load %s: %s\n", path.c_str(), err.c_str());
+        std::exit(1);
+    }
+    return lv;
+}
+
+const std::shared_ptr<const Level>& circuitLevel() {
+    static const std::shared_ptr<const Level> l = [] {
+        auto lv = loadOrExit(kCircuit);
+        std::printf("  bake %.0f ms: %d^2 samples, %.1f..%.1f m, %zu trees, %zu rocks, %zu buildings, %zu scatter\n",
+                    lv->bakeStats().totalMs, lv->samples(), lv->bakeStats().minHeight, lv->bakeStats().maxHeight,
+                    lv->bakeStats().trees, lv->bakeStats().rocks, lv->bakeStats().buildings, lv->bakeStats().scatter);
+        return lv;
+    }();
+    return l;
+}
+
+// Differences between two bakes (empty: identical heights, surfaces, water, roads, placements, gates and spawn).
+std::vector<std::string> bakeDifferences(const Level& a, const Level& b) {
+    std::vector<std::string> d;
+    auto note = [&](bool same, const char* what) {
+        if (!same) d.push_back(what);
+    };
+    note(a.samples() == b.samples() && a.heights() == b.heights(), "heights");
+    note(a.cellSurfaces() == b.cellSurfaces() && a.surfaceClasses() == b.surfaceClasses(), "surfaces");
+    note(a.waterSurfaces() == b.waterSurfaces(), "water");
+    note(a.maskTexels() == b.maskTexels() && a.splatTexels() == b.splatTexels(), "ground masks");
+    bool roads = a.roads().size() == b.roads().size();
+    for (std::size_t r = 0; roads && r < a.roads().size(); ++r) {
+        const LevelRoad &ra = a.roads()[r], &rb = b.roads()[r];
+        roads = ra.name == rb.name && ra.width == rb.width && ra.samples.size() == rb.samples.size();
+        for (std::size_t k = 0; roads && k < ra.samples.size(); ++k)
+            roads = ra.samples[k].x == rb.samples[k].x && ra.samples[k].z == rb.samples[k].z &&
+                    ra.samples[k].y == rb.samples[k].y && ra.samples[k].bank == rb.samples[k].bank;
+    }
+    note(roads, "roads");
+    bool trees = a.trees().size() == b.trees().size();
+    for (std::size_t k = 0; trees && k < a.trees().size(); ++k) {
+        const LevelTree &ta = a.trees()[k], &tb = b.trees()[k];
+        trees = ta.x == tb.x && ta.y == tb.y && ta.z == tb.z && ta.yaw == tb.yaw && ta.scale == tb.scale && ta.model == tb.model;
+    }
+    note(trees, "trees");
+    bool rocks = a.rocks().size() == b.rocks().size();
+    for (std::size_t k = 0; rocks && k < a.rocks().size(); ++k) {
+        const LevelRock &ra = a.rocks()[k], &rb = b.rocks()[k];
+        rocks = ra.x == rb.x && ra.y == rb.y && ra.z == rb.z && ra.yaw == rb.yaw && ra.sx == rb.sx && ra.model == rb.model;
+    }
+    note(rocks, "rocks");
+    bool bld = a.buildings().size() == b.buildings().size();
+    for (std::size_t k = 0; bld && k < a.buildings().size(); ++k) {
+        const LevelBuilding &ba = a.buildings()[k], &bb = b.buildings()[k];
+        bld = ba.x == bb.x && ba.y == bb.y && ba.z == bb.z && ba.yaw == bb.yaw &&
+              a.buildingTypes()[ba.type].spec == b.buildingTypes()[bb.type].spec;
+    }
+    note(bld, "buildings");
+    note(a.props().geometry.triangleCount() == b.props().geometry.triangleCount(), "prop collision");
+    note(a.scatter().size() == b.scatter().size(), "ground cover");
+    bool gates = a.circuit().gates.size() == b.circuit().gates.size() && a.circuit().length == b.circuit().length;
+    for (std::size_t k = 0; gates && k < a.circuit().gates.size(); ++k) {
+        const LevelGate &ga = a.circuit().gates[k], &gb = b.circuit().gates[k];
+        gates = ga.x == gb.x && ga.z == gb.z && ga.dx == gb.dx && ga.dz == gb.dz && ga.halfWidth == gb.halfWidth;
+    }
+    note(gates, "checkpoints");
+    const TrackFeature sa = a.spawn(), sb = b.spawn();
+    note(sa.position == sb.position && sa.yaw == sb.yaw, "spawn");
+    return d;
+}
+
+// The shipped Blender-authored level: no layout issues, the model library, the circuit and its gates, the surface
+// classes, the heights exactly the 16-bit heightmap, the physics tiles on the same grid, a deterministic bake.
+void levelBakedLayout() {
+    const Level& lv = *circuitLevel();
+    CHECK(lv.baked() && lv.asphaltLayer(), "baked %d, asphaltLayer %d", int(lv.baked()), int(lv.asphaltLayer()));
+    for (const std::string& issue : lv.layoutIssues()) std::printf("    layout: %s\n", issue.c_str());
+    CHECK(lv.layoutIssues().empty(), "%zu layout issues", lv.layoutIssues().size());
+    CHECK(lv.modelError().empty() && !lv.models().empty(), "model library: %s", lv.modelError().c_str());
+    const LevelCircuit& c = lv.circuit();
+    std::printf("  circuit '%s' %.0f m, %zu gates; %zu roads, %zu POIs\n", c.road.c_str(), double(c.length), c.gates.size(),
+                lv.roads().size(), lv.pois().size());
+    // Achna Speedway full course: 1979 m as mapped in OpenStreetMap, the smoothed center line a little longer.
+    CHECK(c.length > 1950.0f && c.length < 2050.0f, "circuit %.0f m", double(c.length));
+    CHECK(c.gates.size() >= 6, "%zu gates", c.gates.size());
+    CHECK(lv.trees().size() > 2000 && lv.rocks().size() > 50 && lv.buildings().size() > 100, "trees %zu rocks %zu buildings %zu",
+          lv.trees().size(), lv.rocks().size(), lv.buildings().size());
+    CHECK(lv.attractRoute().points.size() > 500, "attract route %zu points", lv.attractRoute().points.size());
+    int count[int(LevelSurfaceClass::Count)] = {};
+    for (std::uint8_t k : lv.surfaceClasses()) ++count[k];
+    std::printf("  cells:");
+    for (int k = 0; k < int(LevelSurfaceClass::Count); ++k)
+        std::printf(" %s %d", levelSurfaceClassName(LevelSurfaceClass(k)), count[k]);
+    std::printf("\n");
+    for (LevelSurfaceClass k : {LevelSurfaceClass::Asphalt, LevelSurfaceClass::Gravel, LevelSurfaceClass::Dirt,
+                                LevelSurfaceClass::Grass})
+        CHECK(count[int(k)] > 500, "%d %s cells", count[int(k)], levelSurfaceClassName(k));
+    CHECK(count[int(LevelSurfaceClass::Mud)] == 0, "%d mud cells on a race circuit", count[int(LevelSurfaceClass::Mud)]);
+    // Every circuit sample on asphalt.
+    int offTrack = 0;
+    for (const LevelRoad& r : lv.roads())
+        if (r.name == c.road)
+            for (const RoadSample& p : r.samples)
+                for (float u : {-0.4f, 0.0f, 0.4f})
+                {
+                    const float x = p.x + p.dz * u * r.width, z = p.z - p.dx * u * r.width;
+                    if (lv.surfaceAt(x, z) == SurfaceId::Concrete) continue;
+                    if (++offTrack <= 5) std::printf("    off asphalt at (%.1f, %.1f) s %.0f u %.2f\n", double(x), double(z), double(p.s), double(u));
+                }
+    CHECK(offTrack == 0, "%d circuit points not on asphalt", offTrack);
+    // Painted lines and curbs.
+    int paint = 0, curbs = 0;
+    for (PropStyle st : lv.props().styles) {
+        paint += st == PropStyle::LinePaint;
+        curbs += st == PropStyle::CurbRed || st == PropStyle::CurbWhite;
+    }
+    std::printf("  markings: %d paint triangles, %d curb triangles\n", paint, curbs);
+    CHECK(paint > 5000 && curbs > 5000, "paint %d curbs %d triangles", paint, curbs);
+    // Asphalt is the concrete surface, gravel and dirt packed dirt, mud mud.
+    int mism = 0;
+    const int cn = lv.samples() - 1;
+    for (int j = 0; j < cn; ++j)
+        for (int i = 0; i < cn; ++i) {
+            const auto k = LevelSurfaceClass(lv.surfaceClasses()[std::size_t(j) * std::size_t(cn) + std::size_t(i)]);
+            const SurfaceId s = lv.cellSurface(i, j);
+            const SurfaceId want = k == LevelSurfaceClass::Asphalt ? SurfaceId::Concrete
+                                   : (k == LevelSurfaceClass::Gravel || k == LevelSurfaceClass::Dirt) ? SurfaceId::PackedDirt
+                                   : k == LevelSurfaceClass::Mud ? SurfaceId::Mud : k == LevelSurfaceClass::Sand ? SurfaceId::Sand
+                                   : k == LevelSurfaceClass::Rock ? SurfaceId::Rock : k == LevelSurfaceClass::Snow ? SurfaceId::Snow
+                                                                                                           : SurfaceId::Grass;
+            mism += s != want;
+        }
+    CHECK(mism == 0, "%d cells with a physics surface not of their class", mism);
+    // Heights: exactly the decoded heightmap.
+    PgmImage hm;
+    std::string err;
+    CHECK(readPgm(TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/heightmap.pgm", hm, err), "%s", err.c_str());
+    std::ifstream lf(TRAILFORGE_SOURCE_DIR "/assets/levels/achna_speedway/layout.json");
+    std::stringstream ls;
+    ls << lf.rdbuf();
+    json::Value lay;
+    CHECK(json::parse(ls.str(), lay, &err), "layout: %s", err.c_str());
+    const float lo = float(lay["grid"]["heightMin"].numberOr(0)), hi = float(lay["grid"]["heightMax"].numberOr(0));
+    int off = 0;
+    for (std::size_t k = 0; k < hm.data.size() && k < lv.heights().size(); ++k)
+        off += lv.heights()[k] != lo + float(hm.data[k]) * ((hi - lo) / 65535.0f);
+    CHECK(hm.data.size() == lv.heights().size() && off == 0, "%d of %zu heights differ from the heightmap", off, hm.data.size());
+    int wet = 0;
+    for (const LevelRoad& r : lv.roads())
+        for (const RoadSample& p : r.samples) wet += lv.waterAt(p.x, p.z).has_value();
+    CHECK(wet == 0, "%d road samples under water", wet);
+    // Physics tiles: rays onto the heightfield hit the baked surface.
+    {
+        JoltRuntime runtime;
+        PhysicsWorld world;
+        SurfaceTable surfaces;
+        TerrainTiles::Settings ts;
+        ts.async = false;
+        TerrainTiles tiles(world, surfaces, circuitLevel(), ts);
+        float worst = 0.0f;
+        int rays = 0;
+        Lcg rng{7u};
+        for (int k = 0; k < 400; ++k) {
+            const float x = -470.0f + 940.0f * rng.next(), z = -470.0f + 940.0f * rng.next();
+            tiles.update(x, z);
+            const JPH::RRayCast ray(JPH::RVec3(x, 400.0f, z), JPH::Vec3(0, -800.0f, 0));
+            JPH::RayCastResult hit;
+            if (!world.system().GetNarrowPhaseQuery().CastRay(ray, hit)) continue;
+            const float y = 400.0f - 800.0f * hit.mFraction;
+            if (y < lv.heightAt(x, z) - 0.05f) continue;
+            if (y > lv.heightAt(x, z) + 0.05f) continue; // a prop or rock above the ground
+            worst = std::max(worst, std::abs(y - lv.heightAt(x, z)));
+            ++rays;
+        }
+        CHECK(rays > 300 && worst < 0.02f, "%d rays, worst %.3f m", rays, double(worst));
+    }
+    auto again = loadOrExit(kCircuit);
+    const std::vector<std::string> diff = bakeDifferences(lv, *again);
+    for (const std::string& what : diff) std::printf("    second bake differs: %s\n", what.c_str());
+    CHECK(diff.empty(), "%zu differences between two bakes", diff.size());
+}
+
+// Gate crossing: start, checkpoints in order, an interpolated lap time, a missed checkpoint voids the lap.
+void lapTimerGates() {
+    LapTimer t;
+    // Square loop 100 m: start at (0, 0) heading +z, gates on each side.
+    t.setGates({{0, 0, 0, 1, 6}, {50, 50, 1, 0, 6}, {0, 100, 0, -1, 6}, {-50, 50, -1, 0, 6}});
+    CHECK(t.update(0, -1, 0, 1, 0.5, 1.0) == LapTimer::Event::Started, "start");
+    CHECK(t.running() && t.nextGate() == 1 && t.lastGate() == 0, "next %d", t.nextGate());
+    CHECK(t.update(49, 50, 51, 50, 10.5, 11.0) == LapTimer::Event::Checkpoint, "checkpoint 1");
+    CHECK(t.update(0, 99, 0, 101, 20.5, 21.0) == LapTimer::Event::None, "a gate crossed backwards does not count");
+    CHECK(t.update(1, 101, -1, 99, 20.5, 21.0) == LapTimer::Event::Checkpoint, "checkpoint 2");
+    CHECK(t.update(-20, 50, -20, 50, 24.5, 25.0) == LapTimer::Event::None, "no move");
+    CHECK(t.update(-49, 50, -51, 50, 30.5, 31.0) == LapTimer::Event::Checkpoint && t.checkpointsPassed() == 3, "checkpoint 3");
+    // Finish at t = 40.875 s (crossing at 3/4 of the tick 40.5 .. 41.0 s); the lap started at 0.75 s.
+    CHECK(t.update(0, -3, 0, 1, 40.5, 41.0) == LapTimer::Event::Lap, "lap");
+    CHECK(std::abs(t.lastLap() - 40.125) < 1e-6 && t.bestLap() == t.lastLap() && t.laps() == 1, "lap %.4f best %.4f",
+          t.lastLap(), t.bestLap());
+    CHECK(t.update(20, 0, 20, 2, 44.5, 45.0) == LapTimer::Event::None, "outside the half width");
+    CHECK(t.update(49, 50, 51, 50, 49.5, 50.0) == LapTimer::Event::Checkpoint, "checkpoint 1, lap 2");
+    CHECK(t.update(0, -1, 0, 1, 59.5, 60.0) == LapTimer::Event::Invalid && t.laps() == 1, "short cut voids the lap");
+    CHECK(t.running() && t.nextGate() == 1, "a new lap started at the line");
+    t.reset();
+    CHECK(!t.running() && t.bestLap() > 0.0, "reset keeps the best lap");
+}
+
+// The racing surface as the tires meet it (rays onto the terrain tiles and the props): along the circuit every
+// 0.5 m, across it every 0.5 m up to 0.6 m inside the edges (the curbs start beyond), the height deviates from the
+// chord between the points 1 m before and after by a few millimetres at most (painted lines are 4 mm).
+void levelBakedTrackSmooth() {
+    const Level& lv = *circuitLevel();
+    const LevelRoad* road = nullptr;
+    for (const LevelRoad& r : lv.roads())
+        if (r.name == lv.circuit().road) road = &r;
+    CHECK(road && road->samples.size() > 100, "circuit road");
+    if (!road) return;
+    JoltRuntime runtime;
+    PhysicsWorld world;
+    SurfaceTable surfaces;
+    TerrainTiles::Settings ts;
+    ts.async = false;
+    TerrainTiles tiles(world, surfaces, circuitLevel(), ts);
+    TestTrack props(world, surfaces, lv);
+    world.system().OptimizeBroadPhase();
+    auto heightAt = [&](float x, float z) {
+        // From 1 m above the ground: under the start gantry and the bridges of other levels.
+        const float top = lv.heightAt(x, z) + 1.0f;
+        const JPH::RRayCast ray(JPH::RVec3(x, top, z), JPH::Vec3(0, -2.0f, 0));
+        JPH::RayCastResult hit;
+        return world.system().GetNarrowPhaseQuery().CastRay(ray, hit) ? top - 2.0f * hit.mFraction : -1000.0f;
+    };
+    const float hw = 0.5f * road->width - 0.6f;
+    const int lanes = int(2.0f * hw / 0.5f) + 1;
+    float worst = 0.0f, worstX = 0.0f, worstZ = 0.0f, grade = 0.0f;
+    int points = 0;
+    const std::vector<RoadSample>& rs = road->samples;
+    for (std::size_t k = 0; k < rs.size(); ++k) {
+        const RoadSample &a = rs[k], &b = rs[(k + 1) % rs.size()];
+        tiles.update(a.x, a.z);
+        const float len = std::hypot(b.x - a.x, b.z - a.z);
+        for (float t = 0.0f; t < len; t += 0.5f) {
+            const float f = t / len, x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
+            float dx = a.dx + (b.dx - a.dx) * f, dz = a.dz + (b.dz - a.dz) * f;
+            const float n = std::hypot(dx, dz);
+            dx /= n;
+            dz /= n;
+            for (int l = 0; l < lanes; ++l) {
+                const float u = -hw + 0.5f * float(l), px = x + dz * u, pz = z - dx * u;
+                const float h0 = heightAt(px - dx, pz - dz), h1 = heightAt(px, pz), h2 = heightAt(px + dx, pz + dz);
+                const float dev = std::abs(h1 - 0.5f * (h0 + h2));
+                grade = std::max(grade, std::abs(h2 - h0) * 0.5f);
+                if (dev > worst) worst = dev, worstX = px, worstZ = pz;
+                ++points;
+            }
+        }
+    }
+    std::printf("  %d surface points: largest bump %.1f mm at (%.1f, %.1f), max grade %.2f %%\n", points,
+                double(worst) * 1000.0, double(worstX), double(worstZ), double(grade) * 100.0);
+    CHECK(points > 50000 && worst < 0.006f, "%d points, bump %.1f mm", points, double(worst) * 1000.0);
+}
+
+// The autopilot drives one lap of the circuit: the timer starts at the line, passes every checkpoint and sector
+// line in order and counts the lap with its sector times; R then puts the vehicle 4 m past the last gate, facing
+// along it.
+void levelBakedLap(const char* id) {
+    SimulationSettings s;
+    s.level = circuitLevel();
+    s.vehicle = vehicle(id);
+    s.terrain.async = false;
+    Simulation sim(s);
+    const LapTimer& lt = sim.lapTimer();
+    CHECK(lt.active() && !lt.running(), "timer active %d running %d", int(lt.active()), int(lt.running()));
+    sim.setAutopilot(AutopilotMode::Drive);
+    double t = 0.0, maxKmh = 0.0;
+    int lastGate = -1, order = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::string> trace;
+    while (t < 600.0 && lt.laps() == 0 && sim.autopilotResets() == 0) {
+        if (int(t * 120.0) % 60 == 0) {
+            const Autopilot& ap = sim.autopilot();
+            const VehicleTelemetry& tel = sim.vehicle().telemetry();
+            const JPH::Vec3 q = sim.currentSnapshot().body.position;
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "    t %.1f s %.0f (%.1f %.1f %.1f) v %.1f tgt %.1f lat %.2f steer %+.2f up %.2f wheels %d",
+                          t, double(ap.progress()), double(q.GetX()), double(q.GetY()), double(q.GetZ()),
+                          double(tel.forwardSpeed), double(ap.targetSpeed()), double(ap.lateralError()),
+                          double(tel.command.steer), double(tel.upDot), wheelsInContact(sim));
+            trace.push_back(buf);
+        }
+        sim.tick();
+        t += sim.fixedStep();
+        maxKmh = std::max(maxKmh, double(sim.vehicle().telemetry().forwardSpeed) * 3.6);
+        if (lt.running() && lt.lastGate() != lastGate) {
+            order += lt.lastGate() == (lastGate + 1) % int(lt.gates().size()) ? 0 : 1;
+            lastGate = lt.lastGate();
+        }
+    }
+    if (sim.autopilotResets() > 0 || std::getenv("TF_AP_DEBUG"))
+        for (std::size_t k = trace.size() > 30 ? trace.size() - 30 : 0; k < trace.size(); ++k) std::printf("%s\n", trace[k].c_str());
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  %s autopilot lap: %.3f s (sim %.1f s, max %.1f km/h), %d laps, resets %d, recoveries %d, %.1f s wall\n",
+                id, lt.lastLap(), t, maxKmh, lt.laps(), sim.autopilotResets(), sim.recoveries(), wall);
+    double sectors = 0.0;
+    for (int k = 0; k < lt.sectorCount(); ++k) {
+        std::printf("    S%d %.3f s\n", k + 1, lt.lastSectorTime(k));
+        sectors += lt.lastSectorTime(k);
+    }
+    CHECK(lt.sectorCount() == 3 && std::abs(sectors - lt.lastLap()) < 1e-6, "%d sectors, sum %.4f lap %.4f",
+          lt.sectorCount(), sectors, lt.lastLap());
+    CHECK(lt.laps() == 1 && lt.lastLap() > 60.0 && order == 0, "laps %d, lap %.1f s, %d out of order", lt.laps(), lt.lastLap(), order);
+    CHECK(sim.autopilotResets() == 0 && sim.recoveries() == 0 && !sim.hadPhysicsError(), "resets %d (%s), recoveries %d",
+          sim.autopilotResets(), sim.autopilotResetReason(), sim.recoveries());
+    // Drive on past the next gate, then reset: back to that gate, the lap timer keeps running.
+    const int target = lt.nextGate();
+    while (t < 700.0 && lt.lastGate() != target) {
+        sim.tick();
+        t += sim.fixedStep();
+    }
+    runFor(sim, 3.0);
+    sim.requestReset();
+    runFor(sim, 0.05);
+    const LevelGate& g = lt.gates()[std::size_t(target)];
+    const JPH::Vec3 p = sim.currentSnapshot().body.position;
+    const float along = LapTimer::along(g, p.GetX(), p.GetZ()), across = LapTimer::across(g, p.GetX(), p.GetZ());
+    CHECK(lt.running() && lt.lastGate() == target && along > 2.0f && along < 6.0f && std::abs(across) < 1.0f,
+          "reset to gate %d: running %d, last %d, %.1f m along, %.1f m across", target, int(lt.running()), lt.lastGate(),
+          double(along), double(across));
+    // Handing the wheel from the autopilot to the player stops the lap (no lap is driven by both).
+    sim.setAutopilot(AutopilotMode::Off);
+    CHECK(!lt.running() && lt.laps() == 1, "after autopilot off: running %d, laps %d", int(lt.running()), lt.laps());
+}
+
+// Round trip (CTest level_blender_roundtrip): the bake of a level.json with the original files and with the files
+// exported again from Blender are identical.
+int levelBakedCompare(const char* a, const char* b) {
+    auto la = loadOrExit(a), lb = loadOrExit(b);
+    const std::vector<std::string> diff = bakeDifferences(*la, *lb);
+    for (const std::string& what : diff) std::printf("  differs: %s\n", what.c_str());
+    std::printf("  %s vs %s: %s (%zu trees, %zu rocks, %zu buildings, %zu layout issues)\n", a, b,
+                diff.empty() ? "identical bakes" : "DIFFERENT", lb->trees().size(), lb->rocks().size(),
+                lb->buildings().size(), lb->layoutIssues().size());
+    return diff.empty() && lb->layoutIssues().empty() ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 4 && std::strcmp(argv[1], "level_baked_compare") == 0) return levelBakedCompare(argv[2], argv[3]);
     const std::vector<std::pair<const char*, void (*)()>> tests = {
         {"level_heightfield_sampling", levelHeightfieldSampling},
         {"level_tile_streaming", levelTileStreaming},
@@ -1415,6 +1768,11 @@ int main(int argc, char** argv) {
         {"building_kit_materials", buildingKitMaterials},
         {"level_buildings", levelBuildings},
         {"level_poi_buildings", levelPoiBuildings},
+        {"level_baked_layout", levelBakedLayout},
+        {"lap_timer_gates", lapTimerGates},
+        {"level_baked_track_smooth", levelBakedTrackSmooth},
+        {"level_baked_lap", [] { levelBakedLap("trailforge_suv"); }},
+        {"level_baked_lap_ev", [] { levelBakedLap("trailforge_ev"); }},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

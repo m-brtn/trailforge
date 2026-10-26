@@ -25,6 +25,9 @@ Material styleMaterial(PropStyle s) {
     case PropStyle::Canvas: return {MatId::Generic, {0.40f, 0.36f, 0.26f}, 0.90f, 0.0f, 0.2f};
     case PropStyle::Marker: return {MatId::Paint, {0.80f, 0.25f, 0.03f}, 0.45f, 0.0f, 0.0f};
     case PropStyle::Beacon: return {MatId::Amber, {1.0f, 0.35f, 0.05f}, 0.5f, 0.0f, 0.0f};
+    case PropStyle::CurbRed: return {MatId::Paint, {0.55f, 0.04f, 0.03f}, 0.55f, 0.0f, 0.0f};
+    case PropStyle::CurbWhite: return {MatId::Paint, {0.78f, 0.78f, 0.76f}, 0.55f, 0.0f, 0.0f};
+    case PropStyle::LinePaint: return {MatId::Paint, {0.80f, 0.80f, 0.78f}, 0.50f, 0.0f, 0.0f};
     case PropStyle::Hidden: case PropStyle::Count: break;
     }
     return {};
