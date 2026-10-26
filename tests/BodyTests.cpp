@@ -288,7 +288,9 @@ void bodyValidationRules() {
 void bodyDefinition() {
     const VehicleDefinition def = load(kTestDir + "/vehicle.json");
     const VehicleConfig& c = def.config;
-    CHECK(c.bodyModel == kTestDir + "/body.glb", "body.model resolved to '%s'", c.bodyModel.c_str());
+    std::error_code ec;
+    CHECK(std::filesystem::equivalent(c.bodyModel, kTestDir + "/body.glb", ec), "body.model resolved to '%s'",
+          c.bodyModel.c_str());
     CHECK(c.bodyHulls.size() == 7, "%zu collision pieces", c.bodyHulls.size());
     CHECK(c.bodyPaint.count("paint_primary") && c.bodyPaint.at("paint_primary")[0] == 0.58f, "body.paint");
     const VehicleDefinition suv = load(kSuv);
