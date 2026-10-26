@@ -1,0 +1,792 @@
+{
+  "comment": "Hand-placed corrections for tracing Cars.png car #1 (gasoline SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: drawn parts the game does not model (antennas, roof spare); masked out of both the concept and the render for the silhouette IoU. accessories: bolt-on parts the body loft must not be traced from (roof rack and cargo, mirrors, rear spare, rock sliders); they stay in the IoU silhouette. shadow: ground shadow and underbody mass between the tires that the automatic shadow removal keeps (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "id": "trailforge_suv",
+  "restHubY": -0.3645,
+  "column": 0,
+  "vehicle": "assets/vehicles/trailforge_suv/vehicle.json",
+  "lights": [
+    {
+      "view": "front",
+      "kind": "head",
+      "box": [
+        [
+          220,
+          198
+        ],
+        [
+          276,
+          230
+        ]
+      ]
+    },
+    {
+      "view": "front",
+      "kind": "head",
+      "box": [
+        [
+          458,
+          198
+        ],
+        [
+          514,
+          230
+        ]
+      ]
+    },
+    {
+      "view": "rear",
+      "kind": "tail",
+      "box": [
+        [
+          214,
+          160
+        ],
+        [
+          236,
+          200
+        ]
+      ]
+    },
+    {
+      "view": "rear",
+      "kind": "tail",
+      "box": [
+        [
+          492,
+          160
+        ],
+        [
+          514,
+          200
+        ]
+      ]
+    }
+  ],
+  "palette": {
+    "paint": [
+      [
+        69,
+        73,
+        51
+      ],
+      [
+        96,
+        94,
+        79
+      ],
+      [
+        173,
+        175,
+        143
+      ],
+      [
+        120,
+        124,
+        88
+      ],
+      [
+        84,
+        92,
+        60
+      ]
+    ],
+    "accent": [
+      [
+        226,
+        129,
+        58
+      ],
+      [
+        238,
+        132,
+        58
+      ],
+      [
+        190,
+        100,
+        45
+      ]
+    ],
+    "white": [
+      [
+        219,
+        218,
+        210
+      ],
+      [
+        238,
+        234,
+        228
+      ]
+    ],
+    "red": [
+      [
+        200,
+        40,
+        30
+      ],
+      [
+        230,
+        70,
+        50
+      ]
+    ],
+    "dark": [
+      [
+        6,
+        6,
+        6
+      ],
+      [
+        21,
+        22,
+        23
+      ],
+      [
+        34,
+        34,
+        34
+      ],
+      [
+        47,
+        46,
+        45
+      ],
+      [
+        61,
+        64,
+        67
+      ]
+    ]
+  },
+  "side": {
+    "rimRadiusPx": [
+      26,
+      40
+    ],
+    "archVoidGray": 24,
+    "ignore": [
+      [
+        [
+          174,
+          36
+        ],
+        [
+          192,
+          154
+        ]
+      ],
+      [
+        [
+          603,
+          32
+        ],
+        [
+          626,
+          104
+        ]
+      ],
+      [
+        [
+          392,
+          52
+        ],
+        [
+          520,
+          97
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          288,
+          36
+        ],
+        [
+          612,
+          36
+        ],
+        [
+          612,
+          101
+        ],
+        [
+          288,
+          101
+        ]
+      ],
+      [
+        [
+          612,
+          80
+        ],
+        [
+          674,
+          80
+        ],
+        [
+          674,
+          226
+        ],
+        [
+          650,
+          226
+        ],
+        [
+          650,
+          112
+        ],
+        [
+          612,
+          112
+        ]
+      ],
+      [
+        [
+          250,
+          277
+        ],
+        [
+          470,
+          277
+        ],
+        [
+          470,
+          298
+        ],
+        [
+          250,
+          298
+        ]
+      ]
+    ],
+    "extraDoorCutsPx": [
+      488
+    ]
+  },
+  "top": {
+    "classOverride": [
+      {
+        "class": "white",
+        "poly": [
+          [
+            357,
+            104
+          ],
+          [
+            585,
+            104
+          ],
+          [
+            585,
+            288
+          ],
+          [
+            357,
+            288
+          ]
+        ]
+      }
+    ],
+    "accessories": [
+      [
+        [
+          276,
+          25
+        ],
+        [
+          312,
+          25
+        ],
+        [
+          312,
+          72
+        ],
+        [
+          276,
+          72
+        ]
+      ],
+      [
+        [
+          276,
+          330
+        ],
+        [
+          312,
+          330
+        ],
+        [
+          312,
+          380
+        ],
+        [
+          276,
+          380
+        ]
+      ],
+      [
+        [
+          110,
+          20
+        ],
+        [
+          248,
+          20
+        ],
+        [
+          248,
+          61
+        ],
+        [
+          110,
+          61
+        ]
+      ],
+      [
+        [
+          470,
+          20
+        ],
+        [
+          592,
+          20
+        ],
+        [
+          592,
+          61
+        ],
+        [
+          470,
+          61
+        ]
+      ]
+    ],
+    "comment": "Mirrors; the right-side (image top) flare and tire bumps (the plan is measured on the image-top edge, the drop shadow falls on the other side)."
+  },
+  "front": {
+    "shadow": [
+      [
+        [
+          246,
+          318
+        ],
+        [
+          454,
+          376
+        ]
+      ]
+    ],
+    "ignore": [
+      [
+        [
+          256,
+          0
+        ],
+        [
+          272,
+          82
+        ]
+      ],
+      [
+        [
+          300,
+          36
+        ],
+        [
+          440,
+          82
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          230,
+          30
+        ],
+        [
+          500,
+          30
+        ],
+        [
+          500,
+          88
+        ],
+        [
+          230,
+          88
+        ]
+      ],
+      [
+        [
+          186,
+          128
+        ],
+        [
+          226,
+          128
+        ],
+        [
+          226,
+          172
+        ],
+        [
+          186,
+          172
+        ]
+      ],
+      [
+        [
+          512,
+          128
+        ],
+        [
+          552,
+          128
+        ],
+        [
+          552,
+          172
+        ],
+        [
+          512,
+          172
+        ]
+      ]
+    ]
+  },
+  "rear": {
+    "shadow": [
+      [
+        [
+          236,
+          306
+        ],
+        [
+          462,
+          376
+        ]
+      ]
+    ],
+    "ignore": [
+      [
+        [
+          466,
+          0
+        ],
+        [
+          482,
+          60
+        ]
+      ],
+      [
+        [
+          300,
+          16
+        ],
+        [
+          440,
+          58
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          230,
+          14
+        ],
+        [
+          500,
+          14
+        ],
+        [
+          500,
+          62
+        ],
+        [
+          230,
+          62
+        ]
+      ],
+      [
+        [
+          172,
+          112
+        ],
+        [
+          214,
+          112
+        ],
+        [
+          214,
+          156
+        ],
+        [
+          172,
+          156
+        ]
+      ],
+      [
+        [
+          512,
+          112
+        ],
+        [
+          552,
+          112
+        ],
+        [
+          552,
+          156
+        ],
+        [
+          512,
+          156
+        ]
+      ]
+    ]
+  },
+  "anchors": [
+    {
+      "name": "winch",
+      "view": "front",
+      "box": [
+        [
+          344,
+          244
+        ],
+        [
+          394,
+          265
+        ]
+      ]
+    },
+    {
+      "name": "tow_hook",
+      "view": "front",
+      "box": [
+        [
+          284,
+          261
+        ],
+        [
+          303,
+          290
+        ]
+      ]
+    },
+    {
+      "name": "tow_hook",
+      "view": "front",
+      "box": [
+        [
+          434,
+          261
+        ],
+        [
+          453,
+          290
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "front",
+      "box": [
+        [
+          192,
+          136
+        ],
+        [
+          224,
+          162
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "front",
+      "box": [
+        [
+          512,
+          136
+        ],
+        [
+          546,
+          162
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "side",
+      "box": [
+        [
+          270,
+          156
+        ],
+        [
+          296,
+          180
+        ]
+      ]
+    },
+    {
+      "name": "spare",
+      "view": "rear",
+      "box": [
+        [
+          294,
+          98
+        ],
+        [
+          438,
+          242
+        ]
+      ]
+    },
+    {
+      "name": "jerry_can",
+      "view": "rear",
+      "box": [
+        [
+          242,
+          114
+        ],
+        [
+          280,
+          195
+        ]
+      ]
+    },
+    {
+      "name": "jerry_can",
+      "view": "rear",
+      "box": [
+        [
+          446,
+          114
+        ],
+        [
+          487,
+          195
+        ]
+      ]
+    },
+    {
+      "name": "slider",
+      "view": "side",
+      "box": [
+        [
+          250,
+          277
+        ],
+        [
+          470,
+          298
+        ]
+      ]
+    },
+    {
+      "name": "rack",
+      "view": "side",
+      "box": [
+        [
+          288,
+          36
+        ],
+        [
+          612,
+          101
+        ]
+      ]
+    },
+    {
+      "name": "skid",
+      "view": "front",
+      "box": [
+        [
+          280,
+          280
+        ],
+        [
+          460,
+          315
+        ]
+      ]
+    },
+    {
+      "name": "skid",
+      "view": "rear",
+      "box": [
+        [
+          250,
+          276
+        ],
+        [
+          470,
+          304
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "rear",
+      "box": [
+        [
+          175,
+          120
+        ],
+        [
+          212,
+          161
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "rear",
+      "box": [
+        [
+          512,
+          120
+        ],
+        [
+          550,
+          161
+        ]
+      ]
+    },
+    {
+      "name": "case",
+      "view": "side",
+      "box": [
+        [
+          336,
+          77
+        ],
+        [
+          386,
+          92
+        ]
+      ]
+    },
+    {
+      "name": "case",
+      "view": "side",
+      "box": [
+        [
+          520,
+          75
+        ],
+        [
+          586,
+          92
+        ]
+      ]
+    }
+  ]
+}

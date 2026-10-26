@@ -1,0 +1,5 @@
+# tools/cars (trace_blueprint.py, compare_silhouettes.py); install into a venv, never globally:
+#   python3 -m venv /tmp/tf-cars-venv && /tmp/tf-cars-venv/bin/pip install -r tools/cars/requirements.txt
+numpy==2.0.2
+opencv-python-headless==5.0.0.93
+pillow==11.3.0
