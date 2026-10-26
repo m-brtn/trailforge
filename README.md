@@ -246,6 +246,7 @@ One command per line, `#` starts a comment:
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` / `camera close` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the close follow camera / the hood camera (query `cam_mode`: 0 follow, 1 close follow, 2 hood, 3 free; `cam_behind` / `cam_height`: camera behind the rear bumper along the vehicle heading / above the body origin, m; `cam_road_ahead`: nearest ground point straight ahead of the front bumper that is in the view and not hidden by the vehicle's collision shape, m, -1 if none within 40 m) |
 | `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` / `gamepad button south\|east\|west\|north\|lb\|rb\|back\|start 1\|0` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`) |
+| `tires offroad\|road\|slick` / `tires warm\|cold` / `tires ambient C` | fit a tire set through the garage parameter `tires.set` (rebuild in place, new tires at the air temperature) / put all four tires (surface and core) in the middle of the set's window or at the air temperature / set the air temperature live (`tools/scenarios/tires.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
@@ -330,7 +331,9 @@ brake tap, audible for lock-up and handbrake slides, never while the mud layer i
 regen, blended braking, SoC and energy counters, drive modes, the low range message, reverse, an empty battery, the
 mud bath in OFF-ROAD; `/tmp/trailforge_ev_*.png`), `tools/scenarios/ev_audio.txt` (EV launch, regen and stop for an
 `--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/car2_views.txt` (EV model views
-for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`).
+for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`), `tools/scenarios/tires.txt` (tire sets and
+temperature: cold slicks, warming on the mini track, slicks taken off warmers, the telemetry grid, the road set fitted
+on a 35 C day; `/tmp/trailforge_tires_*.png`).
 
 Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
@@ -366,7 +369,10 @@ level), `model_instances` / `model_tris` / `model_draws` (level models drawn, ma
 `body_mud_max`, `body_mud_<region>` (`arch_rear_<w>`, `arch_front_<w>`, `behind_<w>` with `w` = fl/fr/rl/rr,
 `rear_bumper`, `front_bumper`), `wheel_width_r`, `wheel_visual_radius_r` / `wheel_visual_width_r` (measured rear
 wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference over both axles, m),
-`msg:<substring>` (1 if the latest UI message contains the substring),
+`msg:<substring>` (1 if the latest UI message contains the substring), tires: `tire_set` (0 offroad, 1 road,
+2 slick), `ambient` (air temperature, C), `tire_surface_<w>` / `tire_core_<w>` (C), `tire_grip_<w>` (temperature
+grip factor), `tire_kpa_<w>` (gauge pressure) with `w` = fl/fr/rl/rr, `tire_surface_max` / `tire_surface_min`,
+`tire_hud` / `tire_temps` (1 while the HUD widget / the telemetry grid is drawn),
 levels: `level` (1 on an open-world level, 0 on the proving ground), `level_choice` (index of the remembered
 choice in the level list), `submersion` (m below the water surface), `recoveries`,
 `water_depth` (render-only water over the ground at the vehicle), `above_grid` (body height over the level's height
@@ -854,6 +860,59 @@ v0.14.0 back, with the later changes kept (below).
   and the per-vertex receptivity of each material; the arch and bumper zones come from the model's axle positions,
   arch height and body width (`VehicleVisual::mudArch` / `mudBody`).
 
+### Tire sets and temperature
+
+Three tire sets (`src/vehicle/TireModel`), chosen in the garage (`tires.set`, rebuild) or in `vehicle.json`
+(`tires.set`). The vehicle's own `tires` curves describe its off-road (all-terrain) tire; a set multiplies them, so
+OFF-ROAD multiplies by exactly 1 and behaves as before (the `tire_sets` test checks the tuning is bit-identical).
+
+| Set | Surface multiplier (asphalt / concrete / gravel / dirt / grass / mud / snow) | Peak slip / slip angle / sliding μ | Window | Cold / hot loss | Crr |
+|---|---|---|---|---|---|
+| OFF-ROAD | 1 everywhere | ×1 / ×1 / ×1 | −10..100 C | 10 % over 30 K / 20 % over 60 K | 0.013 |
+| ROAD | 1.15 / 1.15 / 0.85 / 0.90 / 0.75 / 0.55 / 0.60 | ×0.8 / ×0.75 / ×0.95 | 40..95 C | 20 % over 45 K / 15 % over 40 K | 0.010 |
+| SLICK | 1.40 / 1.35 / 0.70 / 0.75 / 0.55 / 0.35 / 0.40 | ×0.7 / ×0.65 / ×0.90 | 80..110 C | 40 % over 60 K / 25 % over 40 K | 0.014 |
+
+Sources for the shape (the numbers are hand-tuned within them): peak μ on dry tarmac ~0.9–1.0 for all-terrain, ~1.1
+for performance street, 1.3–1.5 for racing slicks; stiffer tires peak at smaller slip (Milliken & Milliken, Race Car
+Vehicle Dynamics ch. 2; Pacejka, Tire and Vehicle Dynamics ch. 1; Wong, Theory of Ground Vehicles ch. 1). Open tread
+blocks bite into loose ground, a smooth tread floats on it (Wong ch. 2); rolling resistance 0.010–0.015 (Gillespie,
+Fundamentals of Vehicle Dynamics; TRB Special Report 286). Rubber friction peaks at a temperature set by the compound's
+glass transition (Grosch 1963), hence a window per compound; the window limits and losses are hand-tuned.
+
+**Thermal model (per wheel, every physics tick, explicit Euler).** Two nodes: a 2 mm tread surface layer (S) and the
+core (C: the rest of the tread, belts and carcass; 0.6 × the wheel mass).
+
+- Heat in: sliding power in the patch P = |Fx·Vsx| + |Fy|·|V|·sin|α| (Jolt's forces and slip of the step). On paved
+  ground 0.85 of it stays in the tire (rubber friction on rough roads is mostly hysteresis inside the tread, Persson
+  2001); on loose or wet ground less (dirt / low grip 0.6, gravel / grass 0.4, sand 0.3, mud / snow 0.2: the slip is
+  soil shear, Wong ch. 2; hand-tuned). Rolling hysteresis Crr·N·|v|: 20 % into S, 80 % into C.
+- S ↔ C: conduction k·A/d (rubber k 0.25 W/(m K), tread band area, d = 6 mm).
+- S → air over the tread band, C → air over the sidewalls: h = 5 + Churchill–Bernstein for a cylinder of the tire
+  diameter at the vehicle speed (still air).
+- S → ground: patch area = load / inflation pressure, contact time = patch length / rolling speed (≥ 0.5 m/s);
+  h = 2·e_eff / √(π·t_c) for two semi-infinite bodies (Carslaw & Jaeger) with the rubber and ground effusivities
+  (concrete 1680, asphalt 1260, gravel 780, snow 450 W s^0.5/(m² K), from Incropera), over 30 % of the patch (real
+  contact area, hand-tuned), in series with conduction through the surface layer. Ground temperature = air
+  temperature (snow at most 0 C).
+- C → rim → air: 5 W/K.
+- Pressure: ideal gas at constant volume from the core temperature, 240 kPa gauge set at the start temperature
+  (telemetry only).
+- Grip: the friction callback multiplies the surface μ by the set's factor at the surface temperature: 1 inside the
+  window, a smoothstep down to (1 − loss) over the cold / hot width outside it. The factor computed after a tick is
+  used in the next one.
+
+SUV tire (R 0.40 m, 0.30 m wide, 35 kg wheel): surface 3121 J/K, core 28899 J/K, S ↔ C 31.4 W/K, tread band 0.754 m²,
+sidewalls 0.643 m². Air temperature: `level.json` `ambientTemperature` (−40..50 C, default 20 C), the Tuning panel
+slider, or `tires ambient C`. Tires start at the air temperature on spawn, reset and every rebuild; the Tuning panel
+and `tires warm` put them in the middle of the window (as if taken off tire warmers). Telemetry shows a 2×2 grid
+(surface temperature, grip factor, core temperature, pressure, coloured blue cold / green in the window / red hot),
+the wheel table the heat flows; the drive HUD shows a compact grid with the set name. The wheel mesh has a road tread
+(shallow grooves) or no tread (slick) per set at the same physics size.
+
+Measured with `trailforge_probe tires` (see "Verification results"). With the autopilot on the mini track and
+Suncoast Raceway the treads settle at 30–45 C after a few laps, so slicks fitted cold stay below their window and are
+not faster than road tires there; taken off warmers they cool toward that level within about a lap.
+
 ## Vehicle data format
 
 Every vehicle is a folder `assets/vehicles/<id>/` with a `vehicle.json`; the folder name must equal `id`. All values
@@ -879,7 +938,7 @@ folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks th
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
 | `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
-| `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`; optional `asphalt`, `gravel` (default 1)} |
+| `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`; optional `asphalt`, `gravel` (default 1)}, optional `set` (`offroad` default, `road`, `slick`: the tire set fitted by default, see "Tire sets and temperature"; the curves above always describe the vehicle's own off-road tire) |
 | `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
 | `engine` | `type` (`combustion` or `electric`); combustion: `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
 | `engine` (electric) | `motors` {`front`, `rear`: `maxTorque` (N·m at the shaft), `maxPowerKW`, `maxRPM`, `reduction` (motor / axle speed), `rotorInertia` (kg·m² at the shaft), `regenTorque` (≤ maxTorque)}, `battery` {`capacityKWh` (usable), `initialSoC`, `auxPowerKW`, `maxChargePowerKW` (regen limit)}, `efficiency` {`drive`, `regen`}, `regen` {`liftOffDecel` (m/s²), `fadeSpeed` (m/s)}. The base speed maxPower / maxTorque must be below `maxRPM`; an electric vehicle has no `gearbox` section and needs `drivetrain.layout` `dual_motor` |
@@ -1035,9 +1094,10 @@ structure and loader; no kit content for the SUV yet, the test vehicle has one) 
 definition / kit (or the defaults of `VehicleSetup.cpp`, always containing the base value):
 
 - Suspension: spring frequency, compression and rebound damping, preload, anti-roll bar per axle; ride height.
-- Tires: grip scale (a stand-in for pressure: scales both peak and sliding μ), peak slip ratio and peak slip angle
-  (stand-ins for longitudinal / cornering stiffness: they move the peak of the μ(slip) curves), static grip on / off.
-  Nothing here is a tire pressure model.
+- Tires: tire set (OFF-ROAD / ROAD / SLICK, rebuild; see "Tire sets and temperature"), grip scale (a stand-in for
+  pressure: scales both peak and sliding μ), peak slip ratio and peak slip angle (stand-ins for longitudinal /
+  cornering stiffness: they move the peak of the μ(slip) curves), static grip on / off. The pressure shown in
+  telemetry follows the tire temperature; it is not a garage setting and does not change the curves.
 - Engine and gearbox: torque scale, rev limit, final drive. Brakes: torque scale, front share.
 - Drivetrain: layout, front torque share, front / rear / center differential, LSD ratio.
 - Driving aids: ABS release slip, TC slip thresholds (the on / off switches stay in Settings and the B / T keys).
@@ -2103,7 +2163,18 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - The suspension is virtual: in Jolt it is a raycast or cylinder cast along the spring axis, with no arms or axles.
   Solid axles and articulation are not modeled; every wheel is independent.
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
-  No Pacejka model, heat, pressure or sidewall deformation.
+  No Pacejka model or sidewall deformation.
+- Tire sets and temperature ("Tire sets and temperature"): a set only scales the off-road curves (peak slip, sliding
+  μ, μ per surface); the per-surface and window values are hand-tuned within published ranges. Temperature is a
+  2-node lumped model (tread surface layer, core) per wheel; it changes grip only through one factor on μ, at the
+  surface temperature, one tick late. Not modelled: temperature across the tread width (camber, pressure), flash
+  temperatures in the patch, wear, graining, blistering, rubber laid on the road, sun-heated or wet ground (the
+  ground is at the air temperature), brake heat reaching the tire through the rim, cooling by water or mud. The
+  pressure is computed (ideal gas) but changes neither stiffness nor the patch size used by the curves; the set's
+  rolling resistance only heats the tire (the rolling resistance force applied to the vehicle is still the
+  surface's). Many coefficients are estimates (heat share of sliding power, real contact area, convection inside a
+  wheel arch): the resulting temperatures (30–45 C in autopilot laps) are lower than typical track measurements, so
+  cold slicks in this model rarely reach their window.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
   sinkage, flotation or bulldozing; puddles have no water physics. `Gravel` (mini track traps, the level's main
@@ -2369,6 +2440,25 @@ Everything below was actually run on macOS 27 / M-series.
     cricket lines in the spectrogram), the day bed shows short bird chirps instead;
   - audio CPU 2.3 % of real time in capture (≈ 190 µs per 400-frame tick), 20 voices at most.
   Nobody has listened to the result yet: everything above is measured, not judged by ear.
+- **Tire sets and temperature** (`trailforge_probe tires`, Release, 20 C air; v0.26 era). 60-0 km/h with ABS on,
+  tires at 20 C / in the middle of their window:
+
+  | SUV | asphalt | concrete | gravel | dirt | grass | mud |
+  |---|---|---|---|---|---|---|
+  | OFF-ROAD | 15.69 / 15.69 m | 16.37 / 16.37 | 23.50 / 23.50 | 22.65 / 22.65 | 29.94 / 29.94 | 41.09 / 41.09 |
+  | ROAD | 14.97 / 14.03 | 15.65 / 14.57 | 30.08 / 27.77 | 26.45 / 23.87 | 42.07 / 40.24 | no run-up |
+  | SLICK | 18.42 / 13.32 | 19.95 / 13.54 | no run-up / 32.76 | 47.81 / 29.33 | no run-up | no run-up |
+
+  "No run-up": the 2H SUV did not reach 60 km/h within 2.5 m of the lane line. EV slicks: asphalt 17.48 / 13.06 m,
+  gravel 49.24 / 30.71 m, mud — / 108.32 m. Racing-autopilot laps from cold tires, best clean flying lap: mini track
+  SUV OFF-ROAD 59.35 s, ROAD 56.80 s, SLICK 59.17 s (grip x0.67 at a 41 C tread after 5 laps); EV 58.56 / 55.32 /
+  52.47 s (the EV slick lap is a single clean lap at budget 9 after a lap off the track that heated the treads to
+  65 C average). Suncoast Raceway SUV 112.27 / 107.55 / 112.18 s, treads 30–35 C after 3 laps. Slicks taken off
+  warmers (95 C) cool to a 52–62 C tread average within one lap. Off-road identity: `brake`, `compare`,
+  `surfacecmp`, `surfaces`, `tc`, `lap` and every clean `minitrack` row print exactly what they printed before the
+  tire model; `abs` (mud, dirt and grass lanes, runs cut for leaving the lane) and unclean `minitrack` rows differ
+  because sustained wheelspin there heats a tread past 100 C, where the off-road compound loses grip too (with the
+  grip factor pinned to 1 the outputs are identical).
 - **Found and fixed during this verification:**
   - with `collision steps` > 1 the UI forces were N times too low: the lambda is the impulse of the last substep,
     but it was divided by the full step;
