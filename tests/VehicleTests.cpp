@@ -92,6 +92,18 @@ void vehicleCatalogSweep() {
             CHECK(drift < 0.05f && v < 0.05f, "%s: no clean settle (drift %.3f m, v %.3f)", def.id.c_str(), drift, v);
             CHECK(sim.vehicle().telemetry().upDot > 0.999f, "%s: not level", def.id.c_str());
             for (const auto& w : sim.vehicle().telemetry().wheels) CHECK(w.contact, "%s: wheel without contact", def.id.c_str());
+            // Collision bounds in body space (the close follow camera is sized from them): around the body origin,
+            // the roof above it, the bottom below it.
+            const JPH::AABox& b = sim.vehicle().bodyBounds();
+            std::printf("    bounds x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f m\n", b.mMin.GetX(), b.mMax.GetX(),
+                        b.mMin.GetY(), b.mMax.GetY(), b.mMin.GetZ(), b.mMax.GetZ());
+            CHECK(b.mMin.GetZ() < -1.0f && b.mMax.GetZ() > 1.0f && b.mMin.GetY() < 0.0f && b.mMax.GetY() > 0.6f &&
+                      b.mMax.GetZ() - b.mMin.GetZ() < 7.0f,
+                  "%s: body bounds not in body space", def.id.c_str());
+            if (c.bodyHulls.empty() && c.bodyShape == "kit")
+                CHECK(std::abs(b.mMax.GetY() - 1.30f) < 1e-3f && std::abs(b.mMin.GetZ() + 2.30f) < 1e-3f,
+                      "%s: kit bounds top %.4f rear %.4f (boxes 1.30 / -2.30 m)", def.id.c_str(), b.mMax.GetY(),
+                      b.mMin.GetZ());
         }
         {
             // Launch on the concrete lane up to 50 km/h, then a full stop.

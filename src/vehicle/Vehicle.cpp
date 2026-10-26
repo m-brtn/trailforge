@@ -181,6 +181,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     if (compoundResult.HasError())
         throw std::runtime_error(std::string("Vehicle shape: ") + compoundResult.GetError().c_str());
     const RefConst<Shape> rawShape = compoundResult.Get();
+    m_bodyBounds = rawShape->GetLocalBounds(); // around the shape's center of mass
+    m_bodyBounds.Translate(rawShape->GetCenterOfMass());
 
     // ---- Center of mass: move the shape COM to the given point in body space
     const Vec3 desiredCom(0.0f, c.comHeight, c.comForward);

@@ -129,7 +129,7 @@ const char* actionLabel(Action a) {
     case Action::ToggleDirection: return "FWD / REV";
     case Action::ToggleLowRange: return "LOW RANGE";
     case Action::Reset: return "RESET";
-    case Action::ToggleCamera: return "CAMERA: FOLLOW / HOOD / FREE";
+    case Action::ToggleCamera: return "CAMERA: FOLLOW / CLOSE / HOOD / FREE";
     case Action::ToggleDebugUI: return "DIAGNOSTICS";
     case Action::ToggleGraphicsUI: return "GRAPHICS";
     case Action::ToggleAudioUI: return "AUDIO";

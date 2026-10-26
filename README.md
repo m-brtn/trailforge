@@ -233,7 +233,7 @@ One command per line, `#` starts a comment:
 | `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`, `minimap` / `compass` (0/1, session only); tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1`; post effects (see "Post effects"): `taa`, `ao` (0/1/2), `motion_blur`, `shafts`, `flare`, `auto_exposure`, `dof`, `dof_driving`, `tonemap` (0 ACES, 1 AgX), `grade`, `ao_strength`, `vignette`, `grain`, `chromatic`, `sharpen`, `water_refraction`, `water_ssr`; sky: `atmosphere` (0..1), `valley_fog` |
 | `post_bench PASS N` | repeat one post pass N times per frame for cost measurements (`lindepth`, `gtao`, `ao_blur`, `velocity`, `taa`, `motion_blur`, `dof`, `lum`, `shafts`, `bloom`, `tonemap`; `none` ends it) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
-| `camera X Y Z TX TY TZ` / `camera follow` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the hood camera |
+| `camera X Y Z TX TY TZ` / `camera follow` / `camera close` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the close follow camera / the hood camera (query `cam_mode`: 0 follow, 1 close follow, 2 hood, 3 free; `cam_behind` / `cam_height`: camera behind the rear bumper along the vehicle heading / above the body origin, m) |
 | `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` / `gamepad button south\|east\|west\|north\|lb\|rb\|back\|start 1\|0` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
@@ -396,8 +396,8 @@ marks 0.77 → 0, 0-30 km/h 1.90 → 1.73 s; a 0.25 s S tap at 50 km/h 7.57 → 
 1.83 s / 14.5 m instead of 1.75 s / 13.5 m and still locks the rear wheels (equal front / rear brake torque); a
 0.4 s tap (pedal 0.66) still locks them. These numbers predate v0.24.0 (front-biased brakes, faster foot-brake rise). Gamepad triggers are analog and not ramped; scenarios that set pedal values
 directly bypass the ramp.
-| Camera: follow → hood → free | C | RB |
-| Camera orbit (follow; swings back behind a moving vehicle 1.75 s after release) / look around (hood; springs back) | — | right stick |
+| Camera: follow → close follow → hood → free | C | RB |
+| Camera orbit (follow and close follow; swings back behind a moving vehicle 1.75 s after release) / look around (hood; springs back) | — | right stick |
 | ABS on / off | B | D-pad up |
 | Traction control: off → on → off-road | T | D-pad right |
 | Diff locks: open → rear → rear + center → all | X | D-pad down |
@@ -410,6 +410,16 @@ directly bypass the ramp.
 | Camera orbit / zoom | RMB + mouse / wheel | — |
 | Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
 | Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
+
+**Close follow camera.** A lower, nearer chase view (the second step of the C / RB cycle; the follow view is
+unchanged). It is sized from the vehicle's collision bounds in body space (`Vehicle::bodyBounds`): 0.8 body lengths
+behind the rear bumper, 0.12 m above the roof, looking 5.5° down over the roof at a point half a body length ahead of
+the front bumper. The shipped SUV and EV share the kit collision boxes (4.6 m long, roof 1.30 m above the body
+origin), so both get the same pose: measured in `tools/scenarios/camera.txt` on the start pad, 3.68 m behind the
+bumper and 2.1 m above the ground (follow view: 3.2 m above the ground, 7.3 m behind the body origin). Smoothing,
+terrain collision, the 0.5 m ground clearance and the mouse / right-stick orbit are the follow camera's; the mouse
+wheel zooms only the follow view. Captures `/tmp/trailforge_cam_1*_close_*.png` (flat, driving, orbit, both
+vehicles on the 12° climb).
 
 **Hood camera.** A rigid view from the roof line in front of the windshield, mounted in body space from
 `camera.hood` in vehicle.json (SUV and EV [0, 1.24, 0.62] m, the roof line of the kit bodies; [0, 0.92, 0.38] /

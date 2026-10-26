@@ -341,10 +341,13 @@ down S
 until speed_kmh < 0.5 6
 up S
 
-# ---------------------------------------------------------------- C camera (follow -> hood -> free -> follow), F1 UI
+# ---------------------------------------------------------------- C camera (follow -> close -> hood -> free -> follow), F1 UI
 tap C
 wait 0.1
 expect cam_mode == 1
+tap C
+wait 0.1
+expect cam_mode == 2
 capture /tmp/trailforge_05_hood_camera.png
 tap C
 wait 0.1

@@ -26,6 +26,17 @@ struct HoodMount {
     float nearPlane = 0.05f; // m
 };
 
+// Close chase view, sized from the vehicle's collision bounds in body space (+Z forward, +Y up): the camera sits
+// gapPerLength body lengths behind the rear bumper and roofClearance above the roof and looks over the roof at a
+// point lookAhead body lengths ahead of the front bumper, lookHeight of the roof height above the body origin.
+struct CloseChaseTuning {
+    float gapPerLength = 0.8f;
+    float roofClearance = 0.12f; // m
+    float lookAhead = 0.5f;
+    float lookHeight = 0.3f;
+    float pivotHeight = 0.5f;    // orbit pivot above the body origin, fraction of the roof height
+};
+
 // Right-stick behaviour (gamepad orbit / hood look-around).
 struct StickCameraTuning {
     float yawRate = 2.6f;        // rad/s at full deflection (follow orbit)
@@ -38,13 +49,13 @@ struct StickCameraTuning {
     float hoodFollow = 12.0f;    // 1/s, how fast the hood look follows the stick and springs back
 };
 
-// Perspective camera: follow (vehicle), hood (rigid on the body) and free. The camera only reads the physics world
+// Perspective camera: follow (vehicle), close follow (lower and nearer chase), hood (rigid on the body) and free. The camera only reads the physics world
 // (rays) and does not affect the simulation.
 class Camera {
 public:
-    enum class Mode { Follow, Hood, Free };
+    enum class Mode { Follow, CloseFollow, Hood, Free };
 
-    // C / gamepad camera button: follow -> hood -> free -> follow.
+    // C / gamepad camera button: follow -> close follow -> hood -> free -> follow.
     void cycleMode();
     void setMode(Mode m);
     Mode mode() const { return m_mode; }
@@ -52,6 +63,12 @@ public:
     void setFreePose(const glm::vec3& position, const glm::vec3& target);
     void setHoodMount(const HoodMount& m) { m_hood = m; }
     const HoodMount& hoodMount() const { return m_hood; }
+    // Vehicle collision bounds in body space (m), for the close follow view.
+    void setVehicleBounds(const glm::vec3& min, const glm::vec3& max) {
+        m_boundsMin = min;
+        m_boundsMax = max;
+    }
+    bool chaseMode() const { return m_mode == Mode::Follow || m_mode == Mode::CloseFollow; }
 
     // body: interpolated vehicle body transform (world from body space).
     void update(float dt, const CameraInput& input, const glm::mat4& body, const CameraRayCast& rayCast);
@@ -74,10 +91,10 @@ public:
     float followHeight = 1.9f;   // m above the body
     float followStiffness = 6.0f; // 1/s, catch-up rate (exponential smoothing)
     StickCameraTuning stickTuning;
+    CloseChaseTuning closeChase;
 
 private:
-    void updateFollow(float dt, const CameraInput& in, const glm::vec3& target, const glm::vec3& forward,
-                      const CameraRayCast& rayCast);
+    void updateFollow(float dt, const CameraInput& in, const glm::mat4& body, const CameraRayCast& rayCast);
     void updateHood(float dt, const CameraInput& in, const glm::mat4& body);
 
     Mode m_mode = Mode::Follow;
@@ -93,6 +110,7 @@ private:
     bool m_initialized = false;
     float m_freeYaw = 0.0f, m_freePitch = -0.3f;
     HoodMount m_hood;
+    glm::vec3 m_boundsMin{-0.95f, -0.30f, -2.30f}, m_boundsMax{0.95f, 1.30f, 2.30f}; // kit boxes of VehicleShape.h
 };
 
 } // namespace tf

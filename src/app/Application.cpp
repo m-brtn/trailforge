@@ -1075,6 +1075,8 @@ void Application::renderFrame(float frameTime) {
         hm.pitchDeg = vc.hoodCameraPitch;
         hm.nearPlane = vc.hoodCameraNear;
         m_camera.setHoodMount(hm);
+        const JPH::AABox& bb = m_sim.vehicle().bodyBounds();
+        m_camera.setVehicleBounds(toGlm(bb.mMin), toGlm(bb.mMax));
     }
     const bool vehiclePage = m_flow.screen() == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle;
     if (vehiclePage && !m_vehiclePageCamera) m_garageCamTime = 0.0;
@@ -1091,7 +1093,7 @@ void Application::renderFrame(float frameTime) {
         const JPH::Vec3 above(cp.x, cp.y + 30.0f, cp.z), below(cp.x, cp.y - 5.0f, cp.z);
         if (auto hit = m_sim.castRayIgnoringVehicle(above, below)) {
             m_camClearance = cp.y - (above.GetY() + (below.GetY() - above.GetY()) * *hit);
-            if (m_camera.mode() == Camera::Mode::Follow) m_minCamClearance = std::min(m_minCamClearance, m_camClearance);
+            if (m_camera.chaseMode()) m_minCamClearance = std::min(m_minCamClearance, m_camClearance);
         }
         int air = 0;
         for (const auto& w : m_sim.vehicle().telemetry().wheels) air += w.contact ? 0 : 1;
@@ -1120,7 +1122,7 @@ void Application::renderFrame(float frameTime) {
     stats.overloaded = m_clock.overloaded();
     stats.paused = m_paused;
     m_ui.menuOpen = m_flow.menuActive();
-    stats.cameraMode = m_camera.mode() == Camera::Mode::Follow ? 0 : m_camera.mode() == Camera::Mode::Hood ? 1 : 2;
+    stats.cameraMode = int(m_camera.mode());
     stats.gpuDriver = m_renderer->driverName();
     stats.shaderFormat = m_renderer->shaderFormatName();
     stats.gamepad = m_input.gamepadConnected() ? m_input.gamepadName() : "";
@@ -2263,8 +2265,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         return Exec::Done;
     }
     if (c.op == "camera") {
-        if (arg == "follow" || arg == "hood") {
-            m_camera.setMode(arg == "hood" ? Camera::Mode::Hood : Camera::Mode::Follow);
+        if (arg == "follow" || arg == "close" || arg == "hood") {
+            m_camera.setMode(arg == "hood" ? Camera::Mode::Hood : arg == "close" ? Camera::Mode::CloseFollow : Camera::Mode::Follow);
             m_camera.fovYDeg = 60.0f;
             return Exec::Done;
         }
@@ -2471,7 +2473,16 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "controls_callouts") return m_menu.controlsCallouts();
     if (n == "controls_overlaps") return m_menu.controlsOverlaps();
     if (n == "cam_free") return m_camera.mode() == Camera::Mode::Free ? 1.0 : 0.0;
-    if (n == "cam_mode") return m_camera.mode() == Camera::Mode::Follow ? 0.0 : m_camera.mode() == Camera::Mode::Hood ? 1.0 : 2.0;
+    if (n == "cam_mode") return double(int(m_camera.mode())); // 0 follow, 1 close follow, 2 hood, 3 free
+    if (n == "cam_behind" || n == "cam_height") {
+        // Camera behind the rear bumper (along the vehicle's level heading) / above the body origin, m.
+        const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+        const glm::vec3 fwd = toGlm(m_sim.currentSnapshot().body.rotation) * glm::vec3(0.0f, 0.0f, 1.0f);
+        const glm::vec3 d = m_camera.position() - car;
+        if (n == "cam_height") return d.y;
+        const glm::vec2 flat = glm::normalize(glm::vec2(fwd.x, fwd.z));
+        return -glm::dot(glm::vec2(d.x, d.z), flat) + m_sim.vehicle().bodyBounds().mMin.GetZ();
+    }
     if (n == "cam_orbit_yaw") return glm::degrees(m_camera.orbitYaw());
     if (n == "cam_orbit_pitch") return glm::degrees(m_camera.orbitPitch());
     if (n == "cam_look_yaw") return glm::degrees(m_camera.hoodLookYaw());

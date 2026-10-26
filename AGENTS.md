@@ -44,7 +44,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 93 tests, 84 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 94 tests, 84 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -78,7 +78,7 @@ check failed:
 ```sh
 ./build/release/trailforge --script tools/scenarios/full_check.txt     # full regression, expect 0 failed
 ./build/release/trailforge --script tools/scenarios/menus.txt         # intro, start/pause/settings menus, BACK buttons, draw distances, /tmp/trailforge_menu_*.png
-./build/release/trailforge --script tools/scenarios/camera.txt        # hood camera both vehicles (flat + slope), virtual-pad right stick, /tmp/trailforge_cam_*.png
+./build/release/trailforge --script tools/scenarios/camera.txt        # close follow + hood camera both vehicles (flat + slope), virtual-pad right stick, /tmp/trailforge_cam_*.png
 ./build/release/trailforge --script tools/scenarios/controls.txt      # Controls page diagrams and callouts, arrow-key drive, /tmp/trailforge_controls_*.png
 ./build/release/trailforge --script tools/scenarios/garage.txt        # garage setups, live / rebuild values, /tmp/trailforge_garage_*.png
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png

@@ -1,4 +1,5 @@
-// Headless tests of the camera math: the hood mount follows the body rigidly, the right stick orbits the follow
+// Headless tests of the camera math: the hood mount follows the body rigidly, the close follow view is sized from the
+// vehicle bounds, the right stick orbits the follow
 // camera (frame-rate independent, pitch limits, recentering behind a moving vehicle) and looks around in the hood
 // view with a spring back. No window, no gamepad: the stick values are what Input passes after the dead zone.
 
@@ -59,7 +60,9 @@ void hoodMount() {
     cam.setHoodMount(m);
     CHECK(cam.mode() == Camera::Mode::Follow, "starts in follow");
     cam.cycleMode();
-    CHECK(cam.mode() == Camera::Mode::Hood, "C: follow -> hood");
+    CHECK(cam.mode() == Camera::Mode::CloseFollow, "C: follow -> close follow");
+    cam.cycleMode();
+    CHECK(cam.mode() == Camera::Mode::Hood, "C: close follow -> hood");
     float worstPos = 0.0f, worstDir = 1.0f, worstUp = 1.0f;
     for (const auto& [yaw, pitch, roll] : {std::tuple{0.0f, 0.0f, 0.0f}, std::tuple{35.0f, 12.0f, -8.0f},
                                            std::tuple{-120.0f, -20.0f, 25.0f}, std::tuple{179.0f, 5.0f, 40.0f}}) {
@@ -182,6 +185,58 @@ void hoodLook() {
           cam.hoodLookPitch(), cam.hoodLookYaw());
 }
 
+// Close follow: behind the rear bumper and above the roof by the tuned amounts for any vehicle size, lower and
+// nearer than the follow view, looking slightly down at a point ahead of the car, and kept above the ground.
+void closeFollow() {
+    struct Size {
+        const char* name;
+        glm::vec3 min, max;
+    };
+    const Size sizes[] = {{"small", {-0.85f, -0.3f, -1.9f}, {0.85f, 1.05f, 1.9f}},
+                          {"suv", {-1.0f, -0.35f, -2.4f}, {1.0f, 1.35f, 2.4f}},
+                          {"large", {-1.1f, -0.4f, -3.0f}, {1.1f, 1.7f, 3.0f}}};
+    const glm::mat4 body = bodyPose({5.0f, 0.8f, -10.0f}, 40.0f, 0.0f, 0.0f);
+    const glm::vec3 fwd = glm::vec3(body[2]);
+    for (const Size& sz : sizes) {
+        Camera follow, close;
+        follow.setVehicleBounds(sz.min, sz.max);
+        close.setVehicleBounds(sz.min, sz.max);
+        close.setMode(Camera::Mode::CloseFollow);
+        run(follow, CameraInput{}, body, 2.0, 60.0f);
+        run(close, CameraInput{}, body, 2.0, 60.0f);
+        const glm::vec3 d = close.position() - glm::vec3(body[3]);
+        const float behind = -glm::dot(d, fwd) + sz.min.z;
+        const float length = sz.max.z - sz.min.z;
+        const CloseChaseTuning& t = close.closeChase;
+        CHECK(std::abs(behind - t.gapPerLength * length) < 0.01f, "%s: %.3f m behind the bumper (want %.3f)", sz.name,
+              behind, t.gapPerLength * length);
+        CHECK(std::abs(d.y - (sz.max.y + t.roofClearance)) < 0.01f, "%s: %.3f m above the origin", sz.name, d.y);
+        const float followDist = glm::length(follow.position() - glm::vec3(body[3]));
+        // The follow view does not scale with the vehicle: nearer than it up to SUV size, lower for all sizes.
+        CHECK((length > 5.0f || glm::length(d) < followDist - 0.8f) && d.y < follow.position().y - body[3].y - 0.8f,
+              "%s: close %.2f m / %.2f m up, follow %.2f m / %.2f m up", sz.name, glm::length(d), d.y, followDist,
+              follow.position().y - body[3].y);
+        const glm::vec3 f = viewForward(close.view());
+        const float down = glm::degrees(-std::asin(f.y));
+        CHECK(down > 2.0f && down < 10.0f && glm::dot(f, fwd) > 0.99f, "%s: view %.2f deg down, heading dot %.4f",
+              sz.name, down, glm::dot(f, fwd));
+        std::printf("  %s (%.1f m long, roof %.2f m): %.2f m behind the bumper, %.2f m above the origin, %.1f deg down; "
+                    "follow %.2f m up\n",
+                    sz.name, length, sz.max.y, behind, d.y, down, follow.position().y - body[3].y);
+    }
+    // A wall of ground 1 m behind the rear bumper: the camera stays on the car's side of it.
+    Camera cam;
+    cam.setMode(Camera::Mode::CloseFollow);
+    const glm::mat4 flat = bodyPose({0.0f, 0.8f, 0.0f}, 0.0f, 0.0f, 0.0f);
+    const CameraRayCast wall = [](const glm::vec3& from, const glm::vec3& to) -> std::optional<float> {
+        const float zWall = -3.4f;
+        if ((from.z - zWall) * (to.z - zWall) >= 0.0f) return std::nullopt;
+        return (from.z - zWall) / (from.z - to.z);
+    };
+    for (int i = 0; i < 120; ++i) cam.update(1.0f / 60.0f, CameraInput{}, flat, wall);
+    CHECK(cam.position().z > -3.4f, "close follow behind the wall at z %.3f", cam.position().z);
+}
+
 // The lens flare ghosts and the sun shafts start only from the sun: no source at night (lamps must not ghost),
 // behind the camera or far off screen; the sun in view projects where it is.
 void sunFlareSource() {
@@ -221,6 +276,7 @@ int main(int argc, char** argv) {
         {"camera_stick_dead_zone", stickDeadZone},
         {"camera_stick_orbit", stickOrbit},
         {"camera_hood_look", hoodLook},
+        {"camera_close_follow", closeFollow},
         {"sun_flare_source", sunFlareSource},
     };
     int ran = 0;

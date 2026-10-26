@@ -7,6 +7,7 @@
 #include "vehicle/WheelContact.h"
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Geometry/AABox.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
@@ -158,6 +159,8 @@ public:
     // Per-wheel ground contact of the last tick (see WheelContact.h).
     const std::array<WheelContactSample, kWheelCount>& contacts() const { return m_contacts; }
     JPH::BodyID bodyId() const { return m_bodyId; }
+    // Bounds of the collision shape in body space (m), convex radius included.
+    const JPH::AABox& bodyBounds() const { return m_bodyBounds; }
 
     // Body pose (body origin position, not the center of mass).
     JPH::RMat44 bodyTransform() const;
@@ -182,6 +185,7 @@ private:
     const SurfaceTable& m_surfaces;
     VehicleConfig m_config;
     JPH::BodyID m_bodyId;
+    JPH::AABox m_bodyBounds;
     JPH::Body* m_body = nullptr;
     JPH::Ref<JPH::VehicleConstraint> m_constraint;
     JPH::WheeledVehicleController* m_controller = nullptr;

@@ -1,5 +1,6 @@
-# Camera check: the C cycle (follow -> hood -> free -> follow), hood views of both vehicles parked and driving, and
-# the gamepad right stick (follow orbit, pitch, recentering while driving, hood look-around with spring back):
+# Camera check: the C cycle (follow -> close follow -> hood -> free -> follow), close follow and hood views of both
+# vehicles parked, driving and on a slope, and the gamepad right stick (follow and close follow orbit, pitch,
+# recentering while driving, hood look-around with spring back):
 #   ./build/release/trailforge --script tools/scenarios/camera.txt --no-audio
 # Captures /tmp/trailforge_cam_*.png. Exit code 1 on FAIL. No real gamepad is needed: `gamepad attach` connects an
 # SDL virtual gamepad and `gamepad axis` moves its sticks; the input reads it through SDL_GetGamepadAxis like a pad.
@@ -8,11 +9,37 @@ set hud 0
 set auto_reverse 0
 wait 1.0
 
-# ---------------------------------------------------------------- C cycle, hood view of the SUV
+# ---------------------------------------------------------------- C cycle: close follow, then the hood view of the SUV
 expect cam_mode == 0
+capture /tmp/trailforge_cam_00_follow_suv.png
+log follow_suv
+tap C
+wait 1.5
+expect cam_mode == 1
+expect cam_behind > 3.0          # SUV: 0.8 body lengths (4.8 m) behind the rear bumper
+expect cam_behind < 4.6
+expect cam_height > 1.2          # above the body origin: roof + 0.12 m
+expect cam_height < 1.7
+expect cam_clearance > 1.7
+expect cam_clearance < 2.6
+log close_suv
+capture /tmp/trailforge_cam_10_close_suv.png
+wait 0.2
+pedal throttle 0.4
+wait 2.5
+expect cam_behind > 2.5
+expect cam_behind < 5.0
+capture /tmp/trailforge_cam_11_close_suv_driving.png
+wait 0.2
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+teleport 0                       # back on the start pad: the hood and orbit checks start where they did
+wait 1.0
 tap C
 wait 0.3
-expect cam_mode == 1
+expect cam_mode == 2
 capture /tmp/trailforge_cam_01_hood_suv.png
 wait 0.2
 pedal throttle 0.4
@@ -25,7 +52,7 @@ until speed_kmh < 0.5 8
 pedal brake 0
 tap C
 wait 0.2
-expect cam_mode == 2
+expect cam_mode == 3
 tap C
 wait 0.2
 expect cam_mode == 0
@@ -73,6 +100,28 @@ pedal brake 1
 until speed_kmh < 0.5 8
 pedal brake 0
 
+# ---------------------------------------------------------------- right stick: close follow orbit (same rates and limits)
+camera close
+wait 1.0
+mark cam_orbit_yaw
+gamepad axis rightx 1
+wait 0.5
+gamepad axis rightx 0
+wait 0.1
+expect d_cam_orbit_yaw < -45
+capture /tmp/trailforge_cam_12_close_stick_orbit.png
+wait 0.2
+mark cam_orbit_yaw
+wait 2.0
+expect d_cam_orbit_yaw == 0      # parked: the offset stays
+expect min_cam_clearance > 0.3
+gamepad axis rightx -1           # swing back behind the car
+wait 0.5
+gamepad axis rightx 0
+wait 0.5
+expect cam_orbit_yaw > -3
+expect cam_orbit_yaw < 3
+
 # ---------------------------------------------------------------- right stick: hood look-around
 camera hood
 wait 0.2
@@ -94,7 +143,7 @@ vehicle trailforge_ev
 wait 2.0
 camera hood
 wait 0.3
-expect cam_mode == 1
+expect cam_mode == 2
 capture /tmp/trailforge_cam_06_hood_ev.png
 wait 0.2
 pedal throttle 0.4
@@ -105,6 +154,20 @@ pedal throttle 0
 pedal brake 1
 until speed_kmh < 0.5 8
 pedal brake 0
+# ---------------------------------------------------------------- EV close follow on the start pad
+teleport 0
+wait 1.0
+camera close
+wait 1.5
+expect cam_mode == 1
+expect cam_behind > 3.0
+expect cam_behind < 4.6
+expect cam_clearance > 1.7
+expect cam_clearance < 2.6
+log close_ev
+capture /tmp/trailforge_cam_13_close_ev.png
+wait 0.2
+camera hood
 # ---------------------------------------------------------------- hood view on a slope (lane B, 12 deg climb), both vehicles
 teleport 4
 wait 1.5
@@ -135,6 +198,49 @@ pedal throttle 0
 pedal brake 1
 until speed_kmh < 0.5 8
 pedal brake 0
+# ---------------------------------------------------------------- close follow on the slope, both vehicles
+camera close
+teleport 4
+wait 1.5
+tap L
+wait 0.1
+pedal throttle 0.5
+reset_stats
+until z > -37 10
+capture /tmp/trailforge_cam_14_close_suv_slope.png
+wait 0.2
+expect tilt > 5
+expect cam_clearance > 0.5
+expect cam_behind > 2.0
+expect min_cam_clearance > 0.3
+log close_suv_slope
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+vehicle trailforge_ev
+wait 2.0
+camera close
+teleport 4
+wait 1.5
+tap L
+wait 0.1
+pedal throttle 0.5
+reset_stats
+until z > -37 10
+capture /tmp/trailforge_cam_15_close_ev_slope.png
+wait 0.2
+expect tilt > 5
+expect cam_clearance > 0.5
+expect cam_behind > 2.0
+expect min_cam_clearance > 0.3
+log close_ev_slope
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+vehicle trailforge_suv
+wait 1.0
 camera follow
 wait 1.0
 log camera_done

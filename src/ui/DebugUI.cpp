@@ -96,7 +96,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
             ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
         else
             ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
-        ImGui::TextDisabled("M map  C camera (follow / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("M map  C camera (follow / close / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
                             stats.renderH, TRAILFORGE_VERSION);
@@ -550,7 +550,8 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
     if (sim.hadPhysicsError()) ImGui::TextColored(ImVec4(1, 0.2f, 0.2f, 1), "Jolt reported an update error (buffers full)");
     ImGui::Text("Gamepad: %s   Camera: %s", stats.gamepad[0] ? stats.gamepad : "not connected",
                 stats.cameraMode == 0 ? "follow (RMB / right stick orbit)"
-                : stats.cameraMode == 1 ? "hood (RMB / right stick look)"
+                : stats.cameraMode == 1 ? "close follow (RMB / right stick orbit)"
+                : stats.cameraMode == 2 ? "hood (RMB / right stick look)"
                                         : "free (arrows, PgUp/PgDn, RMB look)");
     if (ImGui::Button(stats.paused ? "Resume (P)" : "Freeze (P)")) req.togglePause = true;
     ImGui::SameLine();
