@@ -1,0 +1,93 @@
+# Tire sets and tire temperature (src/vehicle/TireModel, README "Tire sets and temperature"):
+#   ./build/release/trailforge --script tools/scenarios/tires.txt --no-audio
+# Off-road -> slick (cold, then warm) -> road through the garage parameter, the air temperature, the compact HUD
+# widget and the telemetry grid. Captures /tmp/trailforge_tires_*.png (time 11:00). Exit code 1 on FAIL.
+set ui 0
+set hud 1
+set auto_reverse 0
+set vsync 1
+controls pad_type none
+time 11
+wait 1.5
+
+# ---------------------------------------------------------------- default off-road set at the air temperature
+expect tire_set == 0
+expect ambient > 19.9
+expect ambient < 20.1
+expect tire_surface_fl > 19.5
+expect tire_surface_fl < 20.5
+expect tire_core_rr > 19.5
+expect tire_core_rr < 20.5
+expect tire_grip_fl > 0.999
+expect tire_hud == 1
+capture /tmp/trailforge_tires_01_offroad_hud.png
+wait 0.3
+
+# ---------------------------------------------------------------- slicks fitted: new tires at 20 C are far below the window
+tires slick
+wait 1.0
+expect tire_set == 2
+expect tire_surface_max < 20.5
+expect tire_grip_fl < 0.65
+expect tire_grip_rr < 0.65
+expect tire_kpa_fl > 230
+expect tire_kpa_fl < 250
+capture /tmp/trailforge_tires_02_slick_cold_hud.png
+wait 0.3
+
+# ---------------------------------------------------------------- driving heats the treads (asphalt mini track)
+teleport mini
+wait 1.5
+down W
+wait 4
+up W
+down S
+until speed_kmh < 0.5 10
+up S
+wait 0.3
+expect tire_surface_max > 20.3
+expect tire_core_rr > 20.0
+
+# ---------------------------------------------------------------- off the warmers: in the window, full grip, pressure up
+tires warm
+wait 0.5
+expect tire_surface_fl > 90
+expect tire_surface_fl < 100
+expect tire_grip_fl > 0.999
+expect tire_grip_rl > 0.999
+expect tire_kpa_fl > 280
+capture /tmp/trailforge_tires_03_slick_warm_hud.png
+wait 0.3
+# Standing in 20 C air the treads lose heat into the road and the air.
+wait 5
+expect tire_surface_fl < 94
+
+# ---------------------------------------------------------------- telemetry grid, hot day
+tires ambient 35
+expect ambient > 34.9
+set ui 1
+wait 1.0
+expect tire_temps == 1
+capture /tmp/trailforge_tires_04_slick_telemetry.png
+wait 0.3
+
+# ---------------------------------------------------------------- road set: rebuilt with new tires at the 35 C air
+tires road
+wait 1.0
+expect tire_set == 1
+expect tire_surface_fl > 34.5
+expect tire_surface_fl < 35.5
+expect tire_grip_fl < 0.999
+expect tire_grip_fl > 0.98
+expect tire_temps == 1
+capture /tmp/trailforge_tires_05_road_telemetry.png
+wait 0.3
+
+# ---------------------------------------------------------------- back to the defaults
+tires ambient 20
+tires offroad
+wait 1.0
+expect tire_set == 0
+expect tire_grip_fl > 0.999
+set ui 0
+quit

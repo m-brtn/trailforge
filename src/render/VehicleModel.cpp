@@ -1672,15 +1672,18 @@ VehicleVisual buildVehicleVisual(const VehicleConfig& config) {
     return v;
 }
 
-style::WheelStyle axleWheelStyle(const VehicleVisual& visual, const AxleConfig& axle) {
+style::WheelStyle axleWheelStyle(const VehicleVisual& visual, const AxleConfig& axle, TireSet set) {
     style::WheelStyle w = visual.wheel;
     w.rimFraction = axle.rimRatio;
-    w.tread = axle.tread == "all_terrain" ? style::Tread::AllTerrain : style::Tread::MudTerrain;
+    w.tread = set == TireSet::Road            ? style::Tread::Road
+              : set == TireSet::Slick         ? style::Tread::Slick
+              : axle.tread == "all_terrain" ? style::Tread::AllTerrain
+                                            : style::Tread::MudTerrain;
     return w;
 }
 
-MeshData buildAxleWheelMesh(const VehicleVisual& visual, const AxleConfig& axle) {
-    return style::buildWheel(axle.wheelRadius, axle.wheelWidth, axleWheelStyle(visual, axle));
+MeshData buildAxleWheelMesh(const VehicleVisual& visual, const AxleConfig& axle, TireSet set) {
+    return style::buildWheel(axle.wheelRadius, axle.wheelWidth, axleWheelStyle(visual, axle, set));
 }
 
 glm::vec2 wheelMeshSize(const MeshData& wheel) {
@@ -1695,7 +1698,7 @@ glm::vec2 wheelMeshSize(const MeshData& wheel) {
 }
 
 bool sameWheelFit(const VehicleConfig& a, const VehicleConfig& b) {
-    if (a.visualModel != b.visualModel || a.bodyShape != b.bodyShape || a.bodyModel != b.bodyModel || a.bodyPaint != b.bodyPaint || a.wheelBase != b.wheelBase || a.attachHeight != b.attachHeight) return false;
+    if (a.visualModel != b.visualModel || a.bodyShape != b.bodyShape || a.bodyModel != b.bodyModel || a.bodyPaint != b.bodyPaint || a.wheelBase != b.wheelBase || a.attachHeight != b.attachHeight || a.tireSet != b.tireSet) return false;
     for (std::size_t i = 0; i < a.axles.size(); ++i) {
         const AxleConfig &x = a.axles[i], &y = b.axles[i];
         if (x.track != y.track || x.wheelRadius != y.wheelRadius || x.wheelWidth != y.wheelWidth ||

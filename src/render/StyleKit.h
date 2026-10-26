@@ -144,7 +144,8 @@ void mirror(MeshData& m, float sx, const glm::vec3& base, const Material& housin
 void spareCarrier(MeshData& m, const glm::vec3& center, const glm::vec3& outward, float radius, const Material& steel);
 
 // ---- Wheels
-enum class Tread { AllTerrain, MudTerrain };
+// Road: shallow ribbed street tread; Slick: no tread (tire sets, vehicle/TireModel.h).
+enum class Tread { AllTerrain, MudTerrain, Road, Slick };
 struct WheelStyle {
     int spokes = 8;
     float rimFraction = 0.58f;  // rim radius / wheel radius (vehicle.json `rimRatio`)

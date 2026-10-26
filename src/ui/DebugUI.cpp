@@ -28,6 +28,42 @@ std::string gpuText(double ms) {
     return buf;
 }
 
+// Tire temperature colour: blue below the compound's window, green inside, red above.
+ImVec4 tireColor(float state) {
+    const ImVec4 cold(0.20f, 0.45f, 0.95f, 1.0f), ok(0.25f, 0.70f, 0.30f, 1.0f), hot(0.95f, 0.30f, 0.15f, 1.0f);
+    const ImVec4& end = state < 0.0f ? cold : hot;
+    const float k = std::clamp(std::abs(state), 0.0f, 1.0f);
+    return ImVec4(ok.x + (end.x - ok.x) * k, ok.y + (end.y - ok.y) * k, ok.z + (end.z - ok.z) * k, 1.0f);
+}
+
+// Four tires as seen from above (front row first): tread surface temperature on a cold / optimal / hot colour, with
+// the core temperature and the grip multiplier when not compact.
+void tireTemperatureGrid(const VehicleTelemetry& t, bool compact) {
+    const TireCompound& c = tireCompound(t.tireSet);
+    const ImVec2 cell = compact ? ImVec2(44.0f, 18.0f) : ImVec2(118.0f, 38.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::BeginGroup();
+    for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 2; ++col) {
+            const WheelTelemetry& w = t.wheels[std::size_t(row * 2 + col)];
+            if (col > 0) ImGui::SameLine(0.0f, 3.0f);
+            const ImVec2 a = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(cell);
+            const ImVec2 b(a.x + cell.x, a.y + cell.y);
+            const ImVec4 color = tireColor(compoundTemperatureState(c, w.tireSurfaceC));
+            dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, 0.85f)), 3.0f);
+            char text[64];
+            if (compact) std::snprintf(text, sizeof(text), "%.0f", w.tireSurfaceC);
+            else
+                std::snprintf(text, sizeof(text), "%s %.0f C  x%.2f\ncore %.0f C %.0f kPa", kWheelNames[row * 2 + col],
+                              w.tireSurfaceC, w.tireGrip, w.tireCoreC, w.tirePressureKPa);
+            const ImVec2 size = ImGui::CalcTextSize(text);
+            dl->AddText(ImVec2(a.x + 0.5f * (cell.x - size.x), a.y + 0.5f * (cell.y - size.y)), IM_COL32(255, 255, 255, 255), text);
+        }
+    }
+    ImGui::EndGroup();
+}
+
 void bar(const char* label, float v, float lo, float hi, const char* fmt) {
     char text[64];
     std::snprintf(text, sizeof(text), fmt, v);
@@ -208,6 +244,12 @@ void DebugUI::drawDriveHud(const Simulation& sim) {
     ImGui::EndGroup();
     ImGui::SameLine();
     drawAidIndicators(sim);
+    ImGui::SameLine(0.0f, 14.0f);
+    ImGui::BeginGroup();
+    ImGui::TextDisabled("%s tires", tireSetName(t.tireSet));
+    tireTemperatureGrid(t, true);
+    ImGui::EndGroup();
+    remember("tire_hud");
     ImGui::End();
 
     if (!hintVisible(sim)) return;
@@ -653,6 +695,16 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
                 t.absActive ? " (acting)" : "", tcModes[int(t.controls.traction)], t.tcActive ? " (acting)" : "",
                 t.throttleFactor, t.engineThrottle, diffName(t.frontDiff), diffName(t.centerDiff), diffName(t.rearDiff));
 
+    ImGui::SeparatorText("Tires");
+    {
+        const TireCompound& c = tireCompound(t.tireSet);
+        ImGui::Text("Set %s   window %.0f..%.0f C   air %.0f C", tireSetName(t.tireSet), c.optimumLowC, c.optimumHighC,
+                    t.ambientC);
+        tireTemperatureGrid(t, false);
+        remember("tire_temps");
+        ImGui::TextDisabled("Surface = 2 mm tread layer, core = carcass (2-node model, README \"Tire sets and temperature\").");
+    }
+
     ImGui::SeparatorText("Wheels");
     if (ImGui::BeginTable("wheels", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthStretch);
@@ -692,6 +744,9 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
         row("Brake [N*m]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.brakeTorque); });
         row("ABS pressure [-]", [](const WheelTelemetry& w) { ImGui::Text("%.2f", w.absPressure); });
         row("TC brake [N*m]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.tcBrake); });
+        row("Tire surface / core [C]", [](const WheelTelemetry& w) { ImGui::Text("%.1f / %.1f", w.tireSurfaceC, w.tireCoreC); });
+        row("Tire grip [x]", [](const WheelTelemetry& w) { ImGui::Text("%.3f", w.tireGrip); });
+        row("Tire heat in / out [W]", [](const WheelTelemetry& w) { ImGui::Text("%.0f / %.0f", w.tireHeatW, w.tireCoolW); });
         ImGui::EndTable();
     }
     ImGui::TextDisabled("Load/forces = Jolt constraint impulse [N*s] / collision substep [s] (fixed step / collision steps). Slip ratio: |(w*r - v)/v| (Jolt), '-' below 0.5 m/s.");
@@ -748,6 +803,16 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Beyond the peak the longitudinal and lateral limits share one budget (ellipse).\n"
                               "Off: Jolt's independent limits, a locked wheel still steers.");
+        float ambient = sim.ambientTemperature();
+        if (ImGui::SliderFloat("Air temperature [C]", &ambient, -20.0f, 45.0f, "%.0f")) sim.setAmbientTemperature(ambient);
+        if (ImGui::Button("Tires to air temperature")) sim.setTireTemperatures(ambient, ambient);
+        ImGui::SameLine();
+        if (ImGui::Button("Tires warm (window)")) {
+            const TireCompound& c = tireCompound(sim.vehicleConfig().tireSet);
+            const float warm = 0.5f * (std::max(c.optimumLowC, ambient) + c.optimumHighC);
+            sim.setTireTemperatures(warm, warm);
+        }
+        ImGui::TextDisabled("Tire set: garage (rebuild). %s fitted.", tireSetName(sim.vehicleConfig().tireSet));
     }
     if (ImGui::CollapsingHeader("Surfaces (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("Multiplier on tire curve. Ground is rigid in this MVP.");

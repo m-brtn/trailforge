@@ -54,9 +54,10 @@ struct VehicleVisual {
 // flares are fitted to the physics wheels (radius, width, track, travel, steering), so rebuild on a wheel change.
 VehicleVisual buildVehicleVisual(const VehicleConfig& config);
 // Wheel style of an axle: the model's materials with the axle's visual rim ratio and tread.
-style::WheelStyle axleWheelStyle(const VehicleVisual& visual, const AxleConfig& axle);
+// The tread follows the fitted tire set; the off-road set shows the axle's own tread (vehicle.json).
+style::WheelStyle axleWheelStyle(const VehicleVisual& visual, const AxleConfig& axle, TireSet set = TireSet::Offroad);
 // Wheel mesh of an axle: outer radius == wheelRadius, width == wheelWidth (the physics wheel).
-MeshData buildAxleWheelMesh(const VehicleVisual& visual, const AxleConfig& axle);
+MeshData buildAxleWheelMesh(const VehicleVisual& visual, const AxleConfig& axle, TireSet set = TireSet::Offroad);
 // Measured size of a wheel mesh (axle along local X): (max distance from the axle, axial extent).
 glm::vec2 wheelMeshSize(const MeshData& wheel);
 // True when two configs give the same body fit and wheel meshes (no rebuild needed).

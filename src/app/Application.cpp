@@ -1377,7 +1377,7 @@ void Application::rebuildVehicleVisual() {
     m_bodyMesh = m_renderer->upload(m_vehicleVisual.mesh);
     m_springMesh = m_renderer->upload(buildUnitSpringMesh(m_vehicleVisual.coil));
     for (int a = 0; a < 2; ++a) {
-        const MeshData wheel = buildAxleWheelMesh(m_vehicleVisual, vc.axles[std::size_t(a)]);
+        const MeshData wheel = buildAxleWheelMesh(m_vehicleVisual, vc.axles[std::size_t(a)], vc.tireSet);
         m_wheelVisualSize[std::size_t(a)] = wheelMeshSize(wheel);
         (a == 0 ? m_wheelMesh : m_rearWheelMesh) = m_renderer->upload(wheel);
     }
@@ -1766,6 +1766,27 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         if (m_garage->messageSerial() != serial) std::printf("SCENARIO garage: %s\n", m_garage->message().c_str());
         applyGarageConfig();
         return ok ? Exec::Done : Exec::Failed;
+    }
+    if (c.op == "tires") {
+        // tires offroad|road|slick: fit a tire set through the garage (the vehicle is recreated in place, new tires at
+        // the air temperature). tires ambient C: air temperature. tires warm|cold: all tires to the middle of the set's
+        // window (taken off warmers) / to the air temperature.
+        if (arg == "ambient" && c.args.size() > 1) {
+            m_sim.setAmbientTemperature(std::strtof(c.args[1].c_str(), nullptr));
+            return Exec::Done;
+        }
+        if (arg == "warm" || arg == "cold") {
+            const TireCompound& tc = tireCompound(m_sim.vehicleConfig().tireSet);
+            const float air = m_sim.ambientTemperature();
+            const float warm = 0.5f * (std::max(tc.optimumLowC, air) + tc.optimumHighC);
+            m_sim.setTireTemperatures(arg == "warm" ? warm : air, arg == "warm" ? warm : air);
+            return Exec::Done;
+        }
+        const TireSet set = tireSetFromKey(arg);
+        if (set == TireSet::Count || !m_garage) return Exec::Failed;
+        m_garage->setValue("tires.set", float(int(set)));
+        applyGarageConfig();
+        return Exec::Done;
     }
     if (c.op == "transfer") {
         if (arg == "2h") m_sim.requestTransfer(TransferMode::TwoHigh);
@@ -2655,6 +2676,32 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "ev_front_share") return t.ev.frontShare;
     if (n == "energy_out_kwh") return t.ev.energyOutKWh;
     if (n == "energy_in_kwh") return t.ev.energyInKWh;
+    if (n == "tire_set") return double(int(m_sim.vehicleConfig().tireSet)); // 0 offroad, 1 road, 2 slick
+    if (n == "ambient") return m_sim.ambientTemperature();
+    if (n == "tire_hud" || n == "tire_temps") {
+        // 1 while the compact HUD widget / the telemetry grid is drawn this frame.
+        const UiItemRect* r = m_ui.item(n);
+        return r && r->visible ? 1.0 : 0.0;
+    }
+    if (n.rfind("tire_", 0) == 0) {
+        // tire_surface_fl, tire_core_rr, tire_grip_fr, tire_kpa_rl: per-wheel tire thermal state; tire_surface_max /
+        // tire_surface_min over the four.
+        static const char* kWheelKeys[] = {"fl", "fr", "rl", "rr"};
+        const std::string rest = n.substr(5);
+        if (rest == "surface_max" || rest == "surface_min") {
+            double v = rest == "surface_max" ? -1e9 : 1e9;
+            for (const WheelTelemetry& w : t.wheels) v = rest == "surface_max" ? std::max(v, double(w.tireSurfaceC)) : std::min(v, double(w.tireSurfaceC));
+            return v;
+        }
+        for (int i = 0; i < kWheelCount; ++i) {
+            const WheelTelemetry& w = t.wheels[std::size_t(i)];
+            const std::string k = kWheelKeys[i];
+            if (rest == "surface_" + k) return w.tireSurfaceC;
+            if (rest == "core_" + k) return w.tireCoreC;
+            if (rest == "grip_" + k) return w.tireGrip;
+            if (rest == "kpa_" + k) return w.tirePressureKPa;
+        }
+    }
     if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;
     if (n == "friction_ellipse") return m_sim.vehicleConfig().tuning.tireFrictionEllipse ? 1.0 : 0.0;
     if (n == "clutch_limit") return m_sim.vehicleConfig().tuning.launchClutchLimit ? 1.0 : 0.0;

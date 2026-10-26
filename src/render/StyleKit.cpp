@@ -503,7 +503,9 @@ MeshData buildWheel(float radius, float width, const WheelStyle& st) {
     const float hw = 0.5f * width;
     const float rr = st.rimFraction * radius; // rim radius
     const bool mud = st.tread == Tread::MudTerrain;
-    const float lug = mud ? 0.026f : 0.018f;  // tread depth
+    const bool road = st.tread == Tread::Road;
+    const bool slick = st.tread == Tread::Slick;
+    const float lug = slick ? 0.0f : road ? 0.008f : mud ? 0.026f : 0.018f; // tread depth
     const float rt = radius - lug;            // tread base (lugs reach `radius`)
     const Material& tire = st.tire;
     const Material dark{MatId::Generic, {0.05f, 0.05f, 0.05f}, 0.6f, 0.6f, 0.6f};
@@ -526,9 +528,11 @@ MeshData buildWheel(float radius, float width, const WheelStyle& st) {
 
     // ---- Tread: staggered chevron blocks; mud terrain adds shoulder lugs that wrap onto the sidewall.
     // About 9.5 cm (mud) / 7.5 cm (all-terrain) per pitch, so bigger tires get more, not bigger, blocks.
-    const int pitches = std::max(mud ? 24 : 32, int(std::round(2.0f * kPi * radius / (mud ? 0.095f : 0.075f))));
-    const float pitchLen = 2.0f * kPi * radius / float(pitches);
-    const float yaw = mud ? 0.24f : 0.12f, bx = hw * (mud ? 0.36f : 0.27f), bz = pitchLen * (mud ? 0.31f : 0.34f);
+    // Road: two rows of long shallow ribs with narrow sipes; slick: the bare crown of the carcass.
+    const int pitches = slick ? 0 : std::max(mud ? 24 : 32, int(std::round(2.0f * kPi * radius / (mud ? 0.095f : 0.075f))));
+    const float pitchLen = 2.0f * kPi * radius / float(std::max(pitches, 1));
+    const float yaw = road ? 0.03f : mud ? 0.24f : 0.12f, bx = hw * (road ? 0.30f : mud ? 0.36f : 0.27f),
+                bz = pitchLen * (road ? 0.44f : mud ? 0.31f : 0.34f);
     // Flat block tops: the corners (tangential reach tz) touch `radius`.
     const float tz = bx * std::sin(yaw) + bz * std::cos(yaw);
     const float top = std::sqrt(radius * radius - tz * tz);
