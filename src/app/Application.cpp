@@ -1779,6 +1779,21 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             std::printf("SCENARIO: no vehicle '%s'\n", arg.c_str());
             return Exec::Failed;
         }
+        m_sim.requestVehicleConfig(m_garage->config()); // also replaces a vehicle_file vehicle
+        return Exec::Done;
+    }
+    if (c.op == "vehicle_file") {
+        // vehicle_file PATH: a vehicle.json outside the catalog (test definitions) replaces the running vehicle in
+        // place until the next `vehicle`; the garage keeps its own vehicle.
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        if (!loadVehicleDefinition(arg, def, errors)) {
+            for (const std::string& e : errors) std::printf("SCENARIO: %s\n", e.c_str());
+            return Exec::Failed;
+        }
+        std::printf("SCENARIO: vehicle '%s' from %s%s\n", def.id.c_str(), arg.c_str(),
+                    def.config.bodyModel.empty() ? "" : " (body.glb)");
+        m_sim.requestVehicleConfig(def.config);
         return Exec::Done;
     }
     if (c.op == "click" && arg.rfind("vehicle_card:", 0) == 0) {
@@ -2342,6 +2357,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     }
     // The settings file format keeps every value of the current settings (parse(serialize(s)) == s).
     if (n == "settings_roundtrip") return parseSettings(serializeSettings(m_settings)) == m_settings ? 1.0 : 0.0;
+    if (n == "body_glb") return m_sim.vehicleConfig().bodyModel.empty() ? 0.0 : 1.0; // running vehicle has a body.glb
+    if (n == "body_parts") return double(m_vehicleVisual.parts.size());
+    if (n == "body_triangles") return double(m_vehicleVisual.mesh.vertices.size() / 3);
+    if (n == "body_hulls") return double(m_sim.vehicleConfig().bodyHulls.size());
     if (n == "drive_keys") return double(int(m_input.driveKeys()));
     if (n == "kb_style") return double(int(keyboardStyle())); // 0 Mac, 1 PC
     if (n == "pad_glyphs") return double(int(resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), padType())));

@@ -1,10 +1,14 @@
-// Headless checks of the procedural vehicle model (render data only, no GPU): the part list and its flags, and
-// that no body vertex enters the space the physics wheels sweep (suspension travel, steering).
+// Headless checks of the vehicle models (render data only, no GPU): the part list and its flags, that no body vertex
+// enters the space the physics wheels sweep (suspension travel, steering), and the Blender body (body.glb) path.
 // Usage: trailforge_model_tests <test_name>
 
 #include "render/VehicleModel.h"
+#include "vehicle/VehicleBody.h"
 #include "vehicle/VehicleConfig.h"
 #include "vehicle/VehicleDefinition.h"
+#include "vehicle/WheelSweep.h"
+
+#include <algorithm>
 
 #include <cmath>
 #include <cstdio>
@@ -160,48 +164,101 @@ void modelWheelSize() {
 void modelWheelClearance() {
     for (const VehicleConfig& c : wheelVariants()) {
         const VehicleVisual v = buildVehicleVisual(c);
-        const float margin = 0.01f;
+        const auto sweeps = wheelSweeps(c);
         int hits = 0;
-        for (int w = 0; w < 4; ++w) {
-            const AxleConfig& ax = c.axles[std::size_t(w / 2)];
-            const float xw = (w % 2 == 0 ? 0.5f : -0.5f) * ax.track;
-            const float zw = (w < 2 ? 0.5f : -0.5f) * c.wheelBase;
-            const float hw = 0.5f * ax.wheelWidth + margin, r = ax.wheelRadius + margin;
-            const float yHigh = c.attachHeight - ax.suspensionMinLength, yLow = c.attachHeight - ax.suspensionMaxLength;
-            const float steer = glm::radians(ax.maxSteerAngleDeg);
-            // Vertices plus edge midpoints and centroids, so large triangles cannot span the sweep unseen.
-            for (std::size_t si = 0; si < 7 * v.mesh.vertices.size() / 3; ++si) {
-                const std::size_t vi = 3 * (si / 7);
-                const glm::vec3 &t0 = v.mesh.vertices[vi].position, &t1 = v.mesh.vertices[vi + 1].position,
-                                &t2 = v.mesh.vertices[vi + 2].position;
-                const glm::vec3 samples[7] = {t0, t1, t2, 0.5f * (t0 + t1), 0.5f * (t1 + t2), 0.5f * (t2 + t0),
-                                              (t0 + t1 + t2) / 3.0f};
-                const glm::vec3 p = samples[si % 7];
-                const float hub = std::fmin(std::fmax(p.y, yLow), yHigh);
-                const float dy = p.y - hub;
-                if (std::abs(dy) >= r) continue;
-                const float reach = std::sqrt(r * r - dy * dy);
-                bool inside = false;
-                const int steps = steer > 0.0f ? 15 : 1;
-                for (int s = 0; s < steps && !inside; ++s) {
-                    const float a = steps > 1 ? -steer + 2.0f * steer * float(s) / float(steps - 1) : 0.0f;
-                    const float dx = p.x - xw, dz = p.z - zw;
-                    const float axial = dx * std::cos(a) - dz * std::sin(a);
-                    const float along = dx * std::sin(a) + dz * std::cos(a);
-                    inside = std::abs(axial) < hw && std::abs(along) < reach;
-                }
-                if (inside && hits++ < 5) {
-                    const char* part = "?";
-                    for (const VehiclePart& vp : v.parts)
-                        if (vi >= vp.firstVertex && vi < vp.firstVertex + vp.vertexCount) part = vp.name.c_str();
-                    std::printf("  %s r %.2f w %.2f: point (%.3f, %.3f, %.3f) of '%s' inside the sweep of wheel %d\n",
-                                c.visualModel.c_str(), ax.wheelRadius, ax.wheelWidth, p.x, p.y, p.z, part, w);
-                }
+        // Vertices plus edge midpoints and centroids, so large triangles cannot span the sweep unseen.
+        for (std::size_t si = 0; si < 7 * v.mesh.vertices.size() / 3; ++si) {
+            const std::size_t vi = 3 * (si / 7);
+            const glm::vec3 &t0 = v.mesh.vertices[vi].position, &t1 = v.mesh.vertices[vi + 1].position,
+                            &t2 = v.mesh.vertices[vi + 2].position;
+            const glm::vec3 samples[7] = {t0, t1, t2, 0.5f * (t0 + t1), 0.5f * (t1 + t2), 0.5f * (t2 + t0),
+                                          (t0 + t1 + t2) / 3.0f};
+            const glm::vec3 p = samples[si % 7];
+            int w = 0;
+            if (wheelSweepClearance(sweeps, p.x, p.y, p.z, &w) >= kBodyClearance) continue;
+            if (hits++ < 5) {
+                const char* part = "?";
+                for (const VehiclePart& vp : v.parts)
+                    if (vi >= vp.firstVertex && vi < vp.firstVertex + vp.vertexCount) part = vp.name.c_str();
+                std::printf("  %s r %.2f w %.2f: point (%.3f, %.3f, %.3f) of '%s' inside the sweep of wheel %d\n",
+                            c.visualModel.c_str(), c.axles[0].wheelRadius, c.axles[0].wheelWidth, p.x, p.y, p.z, part, w);
             }
         }
         CHECK(hits == 0, "%s r %.2f w %.2f: %d body points inside the wheel sweep", c.visualModel.c_str(),
               c.axles[0].wheelRadius, c.axles[0].wheelWidth, hits);
     }
+}
+
+// The test vehicle with a Blender body (tests/data/vehicles/suv_glb_test): the visual is the body.glb (parts,
+// light roles on the shader's light ids, paint from vehicle.json), clear of every wheel sweep it can be driven with;
+// wheels and suspension stay procedural; a missing file falls back to the procedural body.
+void modelBodyGlb() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    const bool ok = loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/tests/data/vehicles/suv_glb_test/vehicle.json", def, errors);
+    CHECK(ok && errors.empty(), "suv_glb_test: %s", errors.empty() ? "load failed" : errors[0].c_str());
+    if (!ok) return;
+    const VehicleConfig& c = def.config;
+    BodyModel body;
+    CHECK(loadBodyModel(c.bodyModel, body, true), "body.glb");
+    const VehicleVisual v = buildVehicleVisual(c);
+    CHECK(v.parts.size() == body.parts.size(), "%zu parts drawn, %zu in body.glb", v.parts.size(), body.parts.size());
+    CHECK(!v.find("chassis") && v.find("hood") && v.find("door_front_left"), "parts come from body.glb");
+    std::size_t next = 0;
+    for (const VehiclePart& p : v.parts) {
+        const BodyPart* bp = body.find(p.name);
+        CHECK(bp && bp->parent == p.parent && bp->deformable == p.deformable && bp->detachable == p.detachable,
+              "part '%s' flags / parent differ from body.glb", p.name.c_str());
+        CHECK(p.firstVertex == next && p.vertexCount > 0, "part '%s' range", p.name.c_str());
+        next = p.firstVertex + p.vertexCount;
+    }
+    CHECK(next == v.mesh.vertices.size(), "part ranges cover %zu of %zu vertices", next, v.mesh.vertices.size());
+    CHECK(v.spares.size() == body.spares.size() && v.spares.size() == 1, "%zu spare mounts", v.spares.size());
+    std::set<int> ids;
+    const glm::vec3 paint = style::srgb(0.58f, 0.22f, 0.15f);
+    int paintVerts = 0, wrongPaint = 0;
+    for (const LitVertex& lv : v.mesh.vertices) {
+        const int id = int(lv.material.x + 0.5f);
+        ids.insert(id);
+        if (id == int(MatId::Paint)) {
+            ++paintVerts;
+            // paint_primary takes vehicle.json body.paint; secondary / accent keep the body.glb colours.
+            if (glm::length(lv.color - paint) > 1e-4f) ++wrongPaint;
+        }
+    }
+    for (MatId m : {MatId::Paint, MatId::Glass, MatId::Headlight, MatId::BrakeLight, MatId::ReverseLight, MatId::Amber,
+                    MatId::Cladding})
+        CHECK(ids.count(int(m)), "no vertex with material id %d", int(m));
+    CHECK(paintVerts > 0 && wrongPaint < paintVerts, "paint: %d vertices, %d not primary", paintVerts, wrongPaint);
+    int primary = 0;
+    for (const BodyMaterial& m : body.materials) primary += m.role == BodyRole::PaintPrimary;
+    CHECK(primary > 0, "body.glb has no paint_primary material");
+    CHECK(v.headlightLens.x > 0.3f && v.headlightLens.z > 1.8f, "headlight lens (%.2f, %.2f, %.2f)", v.headlightLens.x,
+          v.headlightLens.y, v.headlightLens.z);
+    float worst = 1e9f;
+    for (const VehicleConfig& k : bodyCheckConfigs(def)) {
+        const VehicleVisual kv = buildVehicleVisual(k);
+        const auto sweeps = wheelSweeps(k);
+        for (const LitVertex& lv : kv.mesh.vertices)
+            worst = std::min(worst, wheelSweepClearance(sweeps, lv.position.x, lv.position.y, lv.position.z));
+    }
+    CHECK(worst >= kBodyClearance, "body.glb vertex %.1f mm from a wheel sweep", 1000.0f * worst);
+    // Same procedural wheels as the SUV it is based on.
+    const AxleConfig& ax = c.axles[1];
+    const glm::vec2 size = wheelMeshSize(buildAxleWheelMesh(v, ax));
+    CHECK(std::abs(size.x - ax.wheelRadius) < 0.003f && std::abs(size.y - ax.wheelWidth) < 1e-4f, "wheel mesh size");
+    VehicleConfig repaint = c;
+    repaint.bodyPaint["paint_primary"] = {0.2f, 0.3f, 0.4f};
+    VehicleConfig procedural = c;
+    procedural.bodyModel.clear();
+    procedural.bodyPaint.clear();
+    CHECK(!sameWheelFit(c, repaint) && !sameWheelFit(c, procedural), "a body or paint change must rebuild the visual");
+    VehicleConfig missing = c;
+    missing.bodyModel += ".missing";
+    const VehicleVisual fallback = buildVehicleVisual(missing);
+    CHECK(fallback.find("chassis") && fallback.find("winch"), "missing body.glb: procedural body expected");
+    std::printf("  suv_glb_test: %zu parts, %zu triangles, closest wheel sweep %.1f mm over %zu configurations\n",
+                v.parts.size(), v.mesh.vertices.size() / 3, 1000.0f * worst, bodyCheckConfigs(def).size());
 }
 
 } // namespace
@@ -211,6 +268,7 @@ int main(int argc, char** argv) {
         {"model_parts", modelParts},
         {"model_wheel_size", modelWheelSize},
         {"model_wheel_clearance", modelWheelClearance},
+        {"model_body_glb", modelBodyGlb},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
