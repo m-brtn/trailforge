@@ -22,7 +22,19 @@ FetchContent_Declare(bc7enc
     URL_HASH SHA256=bbb33d1dbb6178a3a2c044956c3cc0b8ea9fc2f2903824379dd86f87d53b64c6
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR no-cmake)
-FetchContent_MakeAvailable(stb bc7enc)
+# cgltf 1.15 (MIT): glTF parsing for trailforge_modelc.
+FetchContent_Declare(cgltf
+    URL https://github.com/jkuhlmann/cgltf/archive/360db1a95480fe102ae9c69b27c5d101167ff5ba.tar.gz
+    URL_HASH SHA256=445d135cf793232ae6a585ca1404e4ff28d4f4dbca070689034fe780370ac84a
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake)
+# meshoptimizer 1.3 (MIT): simplification and vertex cache optimization for trailforge_modelc.
+FetchContent_Declare(meshoptimizer
+    URL https://github.com/zeux/meshoptimizer/archive/9e1f07b159d3cb777f1c67ed31fc11fd117986f4.tar.gz
+    URL_HASH SHA256=e753b45fbc410031bd69cb278180ae31fa0d5430d0c3e662e3a3b100467ce0b3
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake)
+FetchContent_MakeAvailable(stb bc7enc cgltf meshoptimizer)
 
 add_executable(trailforge_texc
     main.cpp
@@ -33,3 +45,18 @@ target_include_directories(trailforge_texc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.
 target_include_directories(trailforge_texc SYSTEM PRIVATE ${stb_SOURCE_DIR} ${bc7enc_SOURCE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(trailforge_texc PRIVATE Threads::Threads)
+
+# trailforge_modelc: offline glTF model converter (LODs, collision mesh, impostor atlas, BC7 KTX2 material maps),
+# built only by tools/models/fetch_models.py.
+file(GLOB TF_MESHOPT_SOURCES ${meshoptimizer_SOURCE_DIR}/src/*.cpp)
+add_executable(trailforge_modelc
+    modelc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/Ktx2.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/Json.cpp
+    ${TF_MESHOPT_SOURCES}
+    ${bc7enc_SOURCE_DIR}/bc7enc.cpp
+    ${bc7enc_SOURCE_DIR}/bc7decomp.cpp)
+target_include_directories(trailforge_modelc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+target_include_directories(trailforge_modelc SYSTEM PRIVATE ${stb_SOURCE_DIR} ${bc7enc_SOURCE_DIR} ${cgltf_SOURCE_DIR}
+    ${meshoptimizer_SOURCE_DIR}/src)
+target_link_libraries(trailforge_modelc PRIVATE Threads::Threads)

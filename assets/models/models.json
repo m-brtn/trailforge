@@ -1,0 +1,105 @@
+{
+  "comment": "Source list of tools/models/fetch_models.py (Poly Haven CC0 models). Each variant becomes <out>/<id>.glb; material maps are <stem>_albedo.ktx2 / <stem>_nra.ktx2 in the same folder (stem = source image name); lods = triangle budgets, collisionLod = LOD used as the collision mesh (-1: none), impostor = atlas tile size (8 azimuths).",
+  "models": [
+    {
+      "asset": "fir_tree_01", "kind": "tree", "out": "fir_tree_01", "lods": [24000, 6000, 1500],
+      "impostor": [128, 256], "textureSize": 1024, "normalSize": 512,
+      "variants": [
+        { "id": "fir_tree_01_a", "nodes": ["fir_tree_01_a_LOD0"] },
+        { "id": "fir_tree_01_b", "nodes": ["fir_tree_01_b_LOD0"] },
+        { "id": "fir_tree_01_c", "nodes": ["fir_tree_01_c_LOD0"] }
+      ]
+    },
+    {
+      "asset": "fir_sapling_medium", "kind": "tree", "out": "fir_sapling_medium", "lods": [12000, 3000, 800],
+      "impostor": [96, 192], "textureSize": 1024, "normalSize": 512,
+      "variants": [
+        { "id": "fir_sapling_medium_a", "nodes": ["fir_sapling_medium_a_LOD0"] },
+        { "id": "fir_sapling_medium_b", "nodes": ["fir_sapling_medium_b_LOD0"] },
+        { "id": "fir_sapling_medium_c", "nodes": ["fir_sapling_medium_c_LOD0"] }
+      ]
+    },
+    {
+      "asset": "island_tree_01", "kind": "tree", "out": "island_tree_01", "lods": [20000, 5000, 1200],
+      "impostor": [128, 256], "textureSize": 1024, "normalSize": 512,
+      "variants": [{ "id": "island_tree_01", "nodes": [] }]
+    },
+    {
+      "asset": "tree_small_02", "kind": "tree", "out": "tree_small_02", "lods": [20000, 5000, 1200],
+      "impostor": [128, 256], "textureSize": 1024, "normalSize": 512,
+      "variants": [{ "id": "tree_small_02", "nodes": [] }]
+    },
+    {
+      "asset": "shrub_02", "kind": "bush", "out": "shrub_02", "lods": [3000, 800], "textureSize": 1024,
+      "normalSize": 512,
+      "variants": [
+        { "id": "shrub_02_a", "nodes": ["shrub_02_a"] }, { "id": "shrub_02_b", "nodes": ["shrub_02_b"] },
+        { "id": "shrub_02_c", "nodes": ["shrub_02_c"] }, { "id": "shrub_02_d", "nodes": ["shrub_02_d"] }
+      ]
+    },
+    {
+      "asset": "fern_02", "kind": "bush", "out": "fern_02", "lods": [1600, 500], "textureSize": 1024,
+      "normalSize": 512,
+      "variants": [
+        { "id": "fern_02_a", "nodes": ["fern_02_a"] }, { "id": "fern_02_b", "nodes": ["fern_02_b"] },
+        { "id": "fern_02_c", "nodes": ["fern_02_c"] }, { "id": "fern_02_d", "nodes": ["fern_02_d"] }
+      ]
+    },
+    {
+      "asset": "boulder_01", "kind": "rock", "out": "rocks", "lods": [3000, 1000, 250], "collisionLod": 1,
+      "textureSize": 1024, "normalSize": 1024,
+      "variants": [{ "id": "boulder_01", "nodes": [] }]
+    },
+    {
+      "asset": "namaqualand_boulder_02", "kind": "rock", "out": "rocks", "lods": [3000, 1000, 250],
+      "collisionLod": 1, "textureSize": 1024, "normalSize": 1024,
+      "variants": [{ "id": "boulder_02", "nodes": [] }]
+    },
+    {
+      "asset": "namaqualand_boulder_05", "kind": "rock", "out": "rocks", "lods": [3000, 1000, 250],
+      "collisionLod": 1, "textureSize": 1024, "normalSize": 1024,
+      "variants": [{ "id": "boulder_05", "nodes": [] }]
+    },
+    {
+      "asset": "rock_moss_set_01", "kind": "rock", "out": "rocks", "lods": [2000, 800, 200], "collisionLod": 1,
+      "textureSize": 1024, "normalSize": 1024,
+      "variants": [
+        { "id": "rock_moss_01", "nodes": ["rock_moss_set_01_rock01"] },
+        { "id": "rock_moss_02", "nodes": ["rock_moss_set_01_rock02"] },
+        { "id": "rock_moss_03", "nodes": ["rock_moss_set_01_rock03"] },
+        { "id": "rock_moss_04", "nodes": ["rock_moss_set_01_rock04"] },
+        { "id": "rock_moss_05", "nodes": ["rock_moss_set_01_rock05"] },
+        { "id": "rock_moss_06", "nodes": ["rock_moss_set_01_rock06"] }
+      ]
+    },
+    {
+      "asset": "rock_face_01", "kind": "cliff", "out": "cliffs", "lods": [8000, 2400, 600], "collisionLod": 1,
+      "res": "2k", "textureSize": 2048, "normalSize": 1024,
+      "variants": [{ "id": "rock_face_01", "nodes": [] }]
+    },
+    {
+      "asset": "rock_face_02", "kind": "cliff", "out": "cliffs", "lods": [8000, 2400, 600], "collisionLod": 1,
+      "res": "2k", "textureSize": 2048, "normalSize": 1024,
+      "variants": [{ "id": "rock_face_02", "nodes": [] }]
+    },
+    {
+      "asset": "dead_tree_trunk", "kind": "log", "out": "logs", "lods": [3000, 1000, 250], "collisionLod": 1,
+      "textureSize": 1024, "normalSize": 512,
+      "variants": [{ "id": "dead_tree_trunk", "nodes": [] }]
+    },
+    {
+      "asset": "tree_stump_01", "kind": "log", "out": "logs", "lods": [2000, 800, 200], "collisionLod": 1,
+      "textureSize": 1024, "normalSize": 512,
+      "variants": [{ "id": "tree_stump_01", "nodes": [] }]
+    },
+    {
+      "asset": "dry_branches_medium_01", "kind": "debris", "out": "logs", "lods": [1500, 400],
+      "textureSize": 1024, "normalSize": 512,
+      "variants": [
+        { "id": "dry_branches_a", "nodes": ["dry_branches_medium_01_a"] },
+        { "id": "dry_branches_b", "nodes": ["dry_branches_medium_01_b"] },
+        { "id": "dry_branches_c", "nodes": ["dry_branches_medium_01_c"] }
+      ]
+    }
+  ]
+}

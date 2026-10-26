@@ -73,8 +73,17 @@ FetchContent_Declare(miniaudio
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR no-cmake)
 
-# Physics is always needed (including for headless tests).
-FetchContent_MakeAvailable(JoltPhysics)
+# ---------------------------------------------------------------- cgltf
+# v1.15 (single-header glTF 2.0 parser; reads the converted models in assets/models, including in headless builds:
+# the level bake takes tree trunks and rock collision from them). Its CMakeLists.txt is not used.
+FetchContent_Declare(cgltf
+    URL https://github.com/jkuhlmann/cgltf/archive/360db1a95480fe102ae9c69b27c5d101167ff5ba.tar.gz
+    URL_HASH SHA256=445d135cf793232ae6a585ca1404e4ff28d4f4dbca070689034fe780370ac84a
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake)
+
+# Physics and the glTF parser are always needed (including for headless tests).
+FetchContent_MakeAvailable(JoltPhysics cgltf)
 
 if(TRAILFORGE_BUILD_APP)
     # imgui has no CMakeLists.txt, and glm's SOURCE_SUBDIR points to
