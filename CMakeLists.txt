@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TrailForge VERSION 0.25.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.25.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -267,7 +267,7 @@ if(TRAILFORGE_BUILD_TESTS)
     if(TRAILFORGE_BLENDER)
         add_test(NAME level_blender_roundtrip
                  COMMAND ${CMAKE_COMMAND} -D BLENDER=${TRAILFORGE_BLENDER} -D SOURCE_DIR=${CMAKE_SOURCE_DIR}
-                         -D LEVEL=achna_speedway -D WORK=${CMAKE_BINARY_DIR}/level_roundtrip
+                         -D LEVEL=suncoast_raceway -D WORK=${CMAKE_BINARY_DIR}/level_roundtrip
                          -D TESTS=$<TARGET_FILE:trailforge_level_tests> -P ${CMAKE_SOURCE_DIR}/cmake/LevelRoundtrip.cmake)
         set_tests_properties(level_blender_roundtrip PROPERTIES TIMEOUT 300)
     endif()
