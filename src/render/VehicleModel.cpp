@@ -237,6 +237,7 @@ std::pair<const Material*, std::string> classify(const BlueprintBody& B, const V
     const bool onFender = fen < std::max(hull, -wh);
     if (onFender && std::abs(wh) < 0.5f * kFenderShell) return {&L.liner, flare}; // under the fender
     if (!onFender && -wh > hull) return {&L.liner, "body_shell"};                 // wheelhouse wall
+    if (onFender) return {&L.trim, flare}; // the fender lips are unpainted plastic on both sheets
 
     std::string part = "body_shell";
     if (onFender) part = flare;
@@ -354,6 +355,9 @@ void body(Parts& P, const BlueprintBody& B, const Landmarks& K, const BodyMateri
     D.front.init(lo.x, hi.x, lo.y, hi.y, kCell);
     D.rear.init(lo.x, hi.x, lo.y, hi.y, kCell);
     for (const glm::vec3& p : fm.positions) {
+        // The fender lips stand out of the body side: they must not hide the panel around the arch from the side
+        // view (they are plain trim anyway).
+        if (B.fender(p.x, p.y, p.z) < std::max(B.hull(p.x, p.y, p.z), -B.wheelhouse(p.x, p.y, p.z))) continue;
         D.side.add(p.z, p.y, std::abs(p.x));
         D.top.add(p.x, p.z, p.y);
         D.front.add(p.x, p.y, p.z);
