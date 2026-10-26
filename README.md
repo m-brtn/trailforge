@@ -801,7 +801,9 @@ A vehicle body can be modelled in Blender instead of traced from the concept she
 `assets/vehicles/<id>/body.glb` (Git LFS, `.gitattributes`) when vehicle.json has `"body": {"model": "body.glb"}`;
 without it, or when the file fails to load (logged), the procedural blueprint body is used. The shipped SUV and EV
 still use their procedural bodies; the only glb body is the test vehicle `tests/data/vehicles/suv_glb_test` (the SUV
-definition with a scripted body, red `paint_primary`).
+definition with a scripted body, `paint_primary` = the SUV olive [0.45, 0.50, 0.32]). Test vehicles under
+`tests/data/vehicles` are not in the game's vehicle list or the packaged app (the catalog is `assets/vehicles` only);
+load one with the scenario op `vehicle_file`.
 
 **Contract of the Blender export** (the source glTF that `trailforge_vehiclec` reads):
 

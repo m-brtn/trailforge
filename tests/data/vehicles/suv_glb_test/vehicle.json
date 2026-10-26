@@ -7,7 +7,7 @@
   "audioProfile": "trailforge_suv",
   "body": {
     "model": "body.glb",
-    "paint": {"paint_primary": [0.58, 0.22, 0.15]},
+    "paint": {"paint_primary": [0.45, 0.50, 0.32]},
     "mass": 2000,
     "inertiaScale": 1.0,
     "inertia": [3121, 3184, 796],

@@ -215,7 +215,10 @@ void modelBodyGlb() {
     CHECK(next == v.mesh.vertices.size(), "part ranges cover %zu of %zu vertices", next, v.mesh.vertices.size());
     CHECK(v.spares.size() == body.spares.size() && v.spares.size() == 1, "%zu spare mounts", v.spares.size());
     std::set<int> ids;
-    const glm::vec3 paint = style::srgb(0.58f, 0.22f, 0.15f);
+    // Same olive as the procedural SUV (Cars.png car #1).
+    const glm::vec3 paint = style::oliveExpedition().body.color;
+    const auto& own = c.bodyPaint.at("paint_primary");
+    CHECK(glm::length(style::srgb(own[0], own[1], own[2]) - paint) < 1e-4f, "paint_primary is not the SUV olive");
     int paintVerts = 0, wrongPaint = 0;
     for (const LitVertex& lv : v.mesh.vertices) {
         const int id = int(lv.material.x + 0.5f);
@@ -249,6 +252,10 @@ void modelBodyGlb() {
     CHECK(std::abs(size.x - ax.wheelRadius) < 0.003f && std::abs(size.y - ax.wheelWidth) < 1e-4f, "wheel mesh size");
     VehicleConfig repaint = c;
     repaint.bodyPaint["paint_primary"] = {0.2f, 0.3f, 0.4f};
+    int repainted = 0;
+    for (const LitVertex& lv : buildVehicleVisual(repaint).mesh.vertices)
+        repainted += int(lv.material.x + 0.5f) == int(MatId::Paint) && glm::length(lv.color - style::srgb(0.2f, 0.3f, 0.4f)) < 1e-4f;
+    CHECK(repainted > 0, "body.paint override not applied");
     VehicleConfig procedural = c;
     procedural.bodyModel.clear();
     procedural.bodyPaint.clear();

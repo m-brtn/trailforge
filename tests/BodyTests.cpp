@@ -292,7 +292,7 @@ void bodyDefinition() {
     CHECK(std::filesystem::equivalent(c.bodyModel, kTestDir + "/body.glb", ec), "body.model resolved to '%s'",
           c.bodyModel.c_str());
     CHECK(c.bodyHulls.size() == 7, "%zu collision pieces", c.bodyHulls.size());
-    CHECK(c.bodyPaint.count("paint_primary") && c.bodyPaint.at("paint_primary")[0] == 0.58f, "body.paint");
+    CHECK(c.bodyPaint.count("paint_primary") && c.bodyPaint.at("paint_primary")[0] == 0.45f, "body.paint");
     const VehicleDefinition suv = load(kSuv);
     CHECK(suv.config.bodyModel.empty() && suv.config.bodyHulls.empty() && suv.config.bodyPaint.empty(),
           "the shipped SUV keeps its procedural body");
@@ -325,7 +325,7 @@ void bodyDefinition() {
     variant("\"model\": \"body.glb\"", "\"model\": \"missing.glb\"", "missing.glb");
     variant("\"model\": \"body.glb\",", "", "body.paint");
     variant("\"paint_primary\"", "\"paint_tertiary\"", "paint_tertiary");
-    variant("[0.58, 0.22, 0.15]", "[1.58, 0.22, 0.15]", "body.paint");
+    variant("[0.45, 0.50, 0.32]", "[1.45, 0.50, 0.32]", "body.paint");
     std::filesystem::remove_all(dir);
 }
 
