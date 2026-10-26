@@ -1,0 +1,69 @@
+# Level polish views on Exploration Peaks: the bake edge against the horizon ring from high cameras and the map,
+# the Falls Pool rim, the castle ruins and the Alpine Lake boathouse from fixed cameras.
+#   ./build/release/trailforge --script tools/scenarios/polish_views.txt --no-audio
+# Captures /tmp/trailforge_pol_*.png (time 10:00, High). Exit code 1 on FAIL.
+set ui 0
+set hud 0
+set auto_reverse 0
+quality High
+level exploration_peaks
+until level == 1 10
+time 10
+wait 1.5
+
+# ---------------------------------------------------------------- bake edge / horizon
+camera -2300.0 1100.0 2100.0 0.0 0.0 -200.0
+wait 2.0
+capture /tmp/trailforge_pol_01_edge_sw.png
+wait 0.3
+camera 2600.0 1500.0 -600.0 0.0 60.0 0.0
+wait 2.0
+capture /tmp/trailforge_pol_02_edge_east.png
+wait 0.3
+camera 0.0 3800.0 2400.0 0.0 0.0 -300.0
+wait 2.0
+capture /tmp/trailforge_pol_03_edge_high.png
+wait 0.3
+camera -600.0 420.0 -500.0 -1300.0 150.0 -1500.0
+wait 2.0
+capture /tmp/trailforge_pol_04_edge_nw_low.png
+wait 0.3
+
+# ---------------------------------------------------------------- Falls Pool
+camera 545.0 112.0 -445.0 500.0 80.0 -515.0
+wait 1.5
+capture /tmp/trailforge_pol_05_falls_pool.png
+wait 0.3
+camera 505.0 165.0 -470.0 502.0 80.0 -520.0
+wait 1.5
+capture /tmp/trailforge_pol_06_falls_above.png
+wait 0.3
+
+# ---------------------------------------------------------------- castle ruins
+camera 625.0 110.0 175.0 690.0 42.0 268.0
+wait 1.5
+capture /tmp/trailforge_pol_07_ruins.png
+wait 0.3
+camera 690.0 230.0 335.0 690.0 40.0 266.0
+wait 1.5
+capture /tmp/trailforge_pol_08_ruins_above.png
+wait 0.3
+
+# ---------------------------------------------------------------- Alpine Lake boathouse
+camera -110.0 82.0 40.0 -137.0 71.0 4.0
+wait 1.5
+capture /tmp/trailforge_pol_09_boathouse.png
+wait 0.3
+camera -175.0 78.0 -20.0 -137.0 70.0 4.0
+wait 1.5
+capture /tmp/trailforge_pol_10_boathouse_lake.png
+wait 0.3
+
+# ---------------------------------------------------------------- map
+camera follow
+map on
+map fit
+wait 1.0
+capture /tmp/trailforge_pol_11_map.png
+wait 0.3
+map off
