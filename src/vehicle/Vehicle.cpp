@@ -318,10 +318,21 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
             const SurfaceId id = m_surfaces.lookup(body.GetShape()->GetMaterial(subShape));
             const SurfaceProperties& s = m_surfaces.get(id);
             if (wheel < kWheelCount) {
-                const float slip = curveSlip(wheel);
-                ioLong = staticGripFriction(m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip);
+                // Loose surfaces stretch the slip axis of both curves (slip / scale is the slip on the tire's curve).
+                const float scale = std::max(s.peakSlipScale, 0.1f);
+                const float slip = curveSlip(wheel) / scale;
+                const VehicleTuning& t = m_config.tuning;
+                const float lon = looseCurve(m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip,
+                                             t.tirePeakSlipRatio, t.tirePeakLongFriction, s.slideDrop);
+                ioLong = staticGripFriction(lon, slip);
+                if (scale != 1.0f || s.slideDrop != 1.0f) {
+                    const auto* w = static_cast<const WheelWV*>(m_constraint->GetWheel(wheel));
+                    const float angle = w->mLateralSlip * kRadToDeg / scale;
+                    ioLat = looseCurve(m_wheelSettings[wheel]->mLateralFriction.GetValue(angle), angle,
+                                       t.tirePeakSlipAngleDeg, t.tirePeakLatFriction, s.slideDrop);
+                }
                 m_contactSurface[wheel] = id;
-                updateEllipseSlip(wheel, slip);
+                updateEllipseSlip(wheel, slip, scale);
             }
             const float tire = m_config.tuning.tireSurfaceGrip[std::size_t(id)];
             ioLong *= s.longitudinalFriction * tire;
@@ -371,6 +382,12 @@ void Vehicle::buildTireCurves(const VehicleTuning& t) {
     }
 }
 
+// Beyond the tire's peak a loose surface keeps only `slideDrop` of the curve's fall from the peak.
+float Vehicle::looseCurve(float curve, float slip, float peakSlip, float peak, float slideDrop) {
+    if (slideDrop == 1.0f || slip <= peakSlip) return curve;
+    return peak - (peak - curve) * slideDrop;
+}
+
 // Jolt caps the longitudinal tire impulse at mu(slip) x load, with the slip ratio of the step start. The curve is
 // 0 at zero slip, so a wheel the solver has just brought to grip gets a zero cap on the next step, spins up freely
 // under drive torque (a 1st-gear wheel gains ~3 m/s of slip in one 1/120 s step), slides, grips again: a period-2
@@ -399,12 +416,12 @@ float Vehicle::curveSlip(JPH::uint wheel) const {
 // Slips for the friction ellipse, from the same contact state Jolt uses for the step: slip ratio (with the speed
 // floor) over its peak, slip angle over its peak. The blend fades the ellipse in between 1 and 3 m/s of contact
 // patch speed: at a crawl Jolt's slip angle and slip ratio are numerically undefined.
-void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip) {
+void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip, float slipScale) {
     const VehicleTuning& t = m_config.tuning;
     const auto* w = static_cast<const JPH::WheelWV*>(m_constraint->GetWheel(wheel));
     EllipseSlip& e = m_ellipseSlip[wheel];
     e.sx = slip / std::max(t.tirePeakSlipRatio, 1e-3f);
-    e.sy = w->mLateralSlip * kRadToDeg / std::max(t.tirePeakSlipAngleDeg, 0.1f);
+    e.sy = w->mLateralSlip * kRadToDeg / slipScale / std::max(t.tirePeakSlipAngleDeg, 0.1f);
     JPH::Vec3 v = m_body->GetPointVelocity(w->GetContactPosition()) - w->GetContactPointVelocity();
     v -= w->GetContactNormal() * v.Dot(w->GetContactNormal());
     e.blend = std::clamp((v.Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
@@ -502,6 +519,25 @@ void Vehicle::applyDrag() {
     const float force = 0.5f * t.airDensity * t.dragArea * speed * speed;
     bi.AddForce(m_bodyId, -v * (force / speed));
     m_telemetry.dragForce = force;
+}
+
+// Surface rolling resistance (gravel): coefficient x wheel load of the previous tick at each contact patch, against
+// the patch's direction of travel. It needs a rolling wheel (a locked tire slides on its friction instead) and fades
+// in over the first 0.5 m/s, so it never pushes a vehicle at rest.
+void Vehicle::applyRollingResistance() {
+    m_telemetry.rollingResistanceForce = 0.0f;
+    JPH::BodyInterface& bi = m_world.bodies();
+    for (const WheelTelemetry& w : m_telemetry.wheels) {
+        if (!w.contact) continue;
+        const float c = m_surfaces.get(w.surface).extraRollingResistance;
+        if (c <= 0.0f) continue;
+        const float moving = std::min(std::abs(w.groundSpeed), std::abs(w.rollingSpeed));
+        const float force = c * std::max(w.load, 0.0f) * std::min(moving / 0.5f, 1.0f);
+        if (force <= 0.0f) continue;
+        const float dir = w.groundSpeed >= 0.0f ? -1.0f : 1.0f;
+        bi.AddForce(m_bodyId, w.contactLongitudinal * (dir * force), JPH::RVec3(w.contactPosition));
+        m_telemetry.rollingResistanceForce += force;
+    }
 }
 
 DiffMode Vehicle::effectiveDiff(int which) const {
@@ -705,6 +741,7 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
     applySuspensionPerTick();
     applyAckermann(cmd.steer);
     applyDrag();
+    applyRollingResistance();
     m_controller->SetDriverInput(driveSign * cmd.throttle, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);
 }
 
@@ -763,6 +800,7 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     applySuspensionPerTick();
     applyAckermann(cmd.steer);
     applyDrag();
+    applyRollingResistance();
     // Jolt automatic: the sign of the forward input selects forward or reverse.
     const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * m_aidOut.throttle;
     m_controller->SetDriverInput(forward, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);

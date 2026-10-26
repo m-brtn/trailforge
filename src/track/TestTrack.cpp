@@ -361,6 +361,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     case TrackLayout::FlatWithWheelPit: buildFlat(true); break;
     case TrackLayout::SurfaceLanes: buildSurfaceLanes(); break;
     case TrackLayout::SurfaceRamps: buildSurfaceRamps(); break;
+    case TrackLayout::RoadLanes: buildRoadLanes(); break;
     case TrackLayout::SlopeWithWheelPit: buildSlopeWithWheelPit(); break;
     case TrackLayout::Level: throw std::runtime_error("TestTrack: the Level layout needs a Level");
     }
@@ -565,6 +566,19 @@ void TestTrack::buildSurfaceLanes() {
     for (int k = 0; k < 7; ++k) {
         const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
         g.addQuad(Vec3(x0, 0, z1), Vec3(x0, 0, z2), Vec3(x1, 0, z2), Vec3(x1, 0, z1), lanes[k]);
+    }
+}
+
+void TestTrack::buildRoadLanes() {
+    // Same lanes as buildSurfaceLanes (12 m wide, z -100..1000), for the road surfaces: asphalt, concrete, gravel.
+    // A layout of its own: more triangles in the SurfaceLanes mesh would change the contacts measured there.
+    auto& g = m_geometry;
+    const SurfaceId lanes[] = {SurfaceId::Asphalt, SurfaceId::Concrete, SurfaceId::Gravel};
+    const char* names[] = {"Asphalt lane", "Concrete lane", "Gravel lane"};
+    for (int k = 0; k < 3; ++k) {
+        const float x0 = -6.0f + 12.0f * float(k), x1 = x0 + 12.0f;
+        g.addQuad(Vec3(x0, 0, -100.0f), Vec3(x0, 0, 1000.0f), Vec3(x1, 0, 1000.0f), Vec3(x1, 0, -100.0f), lanes[k]);
+        m_features.push_back({names[k], Vec3(x0 + 6.0f, 0, -90.0f), 0.0f});
     }
 }
 

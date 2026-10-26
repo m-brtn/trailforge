@@ -602,6 +602,100 @@ void surfaceLaunchGrip() {
     }
 }
 
+// Asphalt and gravel: table values in their literature ranges, data keys, and on the road lanes (builtin vehicle):
+// 80-0 km/h stops asphalt < concrete < gravel within mu x g, gravel rolling resistance while coasting.
+void asphaltGravelSurfaces() {
+    Simulation sim(settingsFor(TrackLayout::RoadLanes));
+    const SurfaceTable& table = sim.surfaces();
+    for (std::size_t i = 0; i < kSurfaceCount; ++i) {
+        const SurfaceId id = SurfaceId(i);
+        CHECK(surfaceFromKey(surfaceKey(id)) == id, "key '%s' does not map back to surface %zu", surfaceKey(id), i);
+        const SurfaceProperties& p = table.get(id);
+        if (id != SurfaceId::Gravel)
+            CHECK(p.peakSlipScale == 1.0f && p.slideDrop == 1.0f && p.extraRollingResistance == 0.0f,
+                  "%s: loose-surface parameters on a surface that keeps the plain tire curve", p.name);
+    }
+    CHECK(surfaceFromKey("dirt") == SurfaceId::PackedDirt && surfaceFromKey("tarmac") == SurfaceId::Count, "key aliases");
+    const SurfaceProperties& asphalt = table.get(SurfaceId::Asphalt);
+    const SurfaceProperties& gravel = table.get(SurfaceId::Gravel);
+    CHECK(asphalt.longitudinalFriction >= 1.0f && asphalt.longitudinalFriction <= 1.1f &&
+              asphalt.longitudinalFriction > table.get(SurfaceId::Concrete).longitudinalFriction,
+          "asphalt mu %.2f", asphalt.longitudinalFriction);
+    CHECK(gravel.longitudinalFriction >= 0.55f && gravel.longitudinalFriction <= 0.7f && gravel.lateralFriction >= 0.55f &&
+              gravel.lateralFriction <= 0.7f,
+          "gravel mu %.2f / %.2f", gravel.longitudinalFriction, gravel.lateralFriction);
+    CHECK(gravel.peakSlipScale > 1.0f && gravel.slideDrop < 1.0f && gravel.extraRollingResistance >= 0.01f &&
+              gravel.extraRollingResistance <= 0.02f,
+          "gravel curve x%.1f, drop %.2f, rolling resistance %.3f", gravel.peakSlipScale, gravel.slideDrop,
+          gravel.extraRollingResistance);
+
+    const struct {
+        int feature;
+        SurfaceId surface;
+        const char* name;
+    } lanes[] = {{0, SurfaceId::Asphalt, "asphalt"}, {1, SurfaceId::Concrete, "concrete"}, {2, SurfaceId::Gravel, "gravel"}};
+    float prev = 0.0f;
+    for (const auto& lane : lanes) {
+        for (int abs = 0; abs < 2; ++abs) {
+            Simulation s(settingsFor(TrackLayout::RoadLanes));
+            s.requestTeleport(lane.feature);
+            run(s, 1.0);
+            s.requestAidControls({abs != 0, TractionMode::Off, 0});
+            for (int i = 0; i < int(30.0 / s.fixedStep()) && s.vehicle().telemetry().speed * 3.6f < 80.0f; ++i) {
+                s.setIntent({.throttle = 1.0f});
+                s.tick();
+            }
+            int onLane = 0;
+            for (const auto& w : s.vehicle().telemetry().wheels) onLane += w.contact && w.surface == lane.surface;
+            const float v0 = s.vehicle().telemetry().speed;
+            float path = 0.0f;
+            double t = 0.0;
+            while (s.vehicle().telemetry().speed > 0.05f && t < 15.0) {
+                s.setIntent({.brake = 1.0f});
+                s.tick();
+                t += s.fixedStep();
+                path += s.vehicle().telemetry().speed * float(s.fixedStep());
+            }
+            const float mu = s.surfaces().get(lane.surface).longitudinalFriction * s.vehicleConfig().tuning.tirePeakLongFriction;
+            const float decel = v0 * v0 / (2.0f * path);
+            std::printf("    %-8s ABS %s: from %.1f km/h %.2f m (%.2f g, peak mu %.2f), %d wheels on the lane\n", lane.name,
+                        abs ? "on " : "off", v0 * 3.6f, path, decel / 9.81f, mu, onLane);
+            CHECK(onLane == kWheelCount, "%s: %d wheels on the lane surface", lane.name, onLane);
+            CHECK(decel < mu * 9.81f * 1.03f && decel > 0.75f * mu * 9.81f, "%s: %.2f g against peak mu %.2f", lane.name,
+                  decel / 9.81f, mu);
+            if (abs) {
+                CHECK(path > prev, "%s ABS stop %.2f m not longer than the grippier surface's %.2f m", lane.name, path, prev);
+                prev = path;
+            }
+        }
+    }
+
+    // Coasting from 50 km/h with no pedals: the same engine braking, gravel adds ~0.015 x weight.
+    float loss[2] = {};
+    for (int k = 0; k < 2; ++k) {
+        Simulation s(settingsFor(TrackLayout::RoadLanes));
+        s.requestTeleport(k == 0 ? 0 : 2);
+        run(s, 1.0);
+        for (int i = 0; i < int(30.0 / s.fixedStep()) && s.vehicle().telemetry().speed * 3.6f < 50.0f; ++i) {
+            s.setIntent({.throttle = 0.6f});
+            s.tick();
+        }
+        const float v0 = s.vehicle().telemetry().speed;
+        run(s, 0.5);
+        const float rr = s.vehicle().telemetry().rollingResistanceForce;
+        run(s, 2.5);
+        loss[k] = v0 - s.vehicle().telemetry().speed;
+        const float weight = s.vehicleConfig().mass * 9.81f;
+        std::printf("    coast %s: %.2f m/s lost in 3 s, rolling resistance %.0f N (%.4f x weight)\n", k ? "gravel " : "asphalt",
+                    loss[k], rr, rr / weight);
+        if (k == 0) CHECK(rr == 0.0f, "asphalt rolling resistance %.0f N", rr);
+        else CHECK(std::abs(rr / weight - gravel.extraRollingResistance) < 0.003f, "gravel rolling resistance %.4f x weight",
+                   rr / weight);
+    }
+    CHECK(loss[1] - loss[0] > 0.25f && loss[1] - loss[0] < 0.7f, "gravel coast loses %.2f m/s more than asphalt (0.44 expected)",
+          loss[1] - loss[0]);
+}
+
 // Rubber mark profile of a locked-wheel stop from 100 km/h on concrete, per vehicle side (the rear wheel runs in the
 // front wheel's track, so both ribbons of a side are composited like the shader does: 1 - (1 - a)(1 - b)). Every
 // wheel also feeds its own TireMarks so the ribbons can be told apart.
@@ -1546,9 +1640,19 @@ void miniTrackLap() {
         const auto hit = sim.castRayIgnoringVehicle(JPH::Vec3(x, ground + 5.0f, z), JPH::Vec3(x, ground - 5.0f, z));
         const float y = hit ? ground + 5.0f - 10.0f * *hit : -1e9f;
         if (std::abs(y - (ground + 0.03f)) > 0.02f) ++blocked;
-        if (TestTrack::groundSurfaceAt(x, z) != SurfaceId::Concrete) ++blocked;
+        if (TestTrack::groundSurfaceAt(x, z) != SurfaceId::Asphalt) ++blocked;
     }
     CHECK(blocked == 0, "%d center line samples not on bare asphalt", blocked);
+    // The traps are the Gravel surface (no Sand or Concrete left on the circuit ground).
+    int gravel = 0, sandOrConcrete = 0;
+    for (float x = mt.area.xMin; x <= mt.area.xMax; x += 2.0f)
+        for (float z = mt.area.zMin; z <= mt.area.zMax; z += 2.0f) {
+            const SurfaceId s = miniTrackSurface(x, z);
+            gravel += s == SurfaceId::Gravel;
+            sandOrConcrete += s == SurfaceId::Sand || s == SurfaceId::Concrete;
+        }
+    std::printf("  ground samples every 2 m: %d gravel, %d sand or concrete\n", gravel, sandOrConcrete);
+    CHECK(gravel > 100 && sandOrConcrete == 0, "%d gravel, %d sand / concrete samples", gravel, sandOrConcrete);
 
     sim.requestTeleport(int(features.size()) - 1);
     run(sim, 1.0, {.brake = 1.0f});
@@ -1556,6 +1660,9 @@ void miniTrackLap() {
     CHECK(std::hypot(p0.GetX() - mt.start.position.GetX(), p0.GetZ() - mt.start.position.GetZ()) < 0.5f,
           "spawn at (%.1f, %.1f)", p0.GetX(), p0.GetZ());
     CHECK(sim.lapTimer().hasGates() && !sim.lapTimer().running(), "lap timer before the line");
+    int onAsphalt = 0;
+    for (const auto& w : sim.vehicle().telemetry().wheels) onAsphalt += w.contact && w.surface == SurfaceId::Asphalt;
+    CHECK(onAsphalt == kWheelCount, "%d wheels report the Asphalt contact on the grid", onAsphalt);
 
     AutopilotSettings a;
     a.lateralAccel = 5.0f;
@@ -1631,6 +1738,7 @@ int main(int argc, char** argv) {
         {"body_mud", bodyMud},
         {"lap_timer_logic", lapTimerLogic},
         {"mini_track_lap", miniTrackLap},
+        {"asphalt_gravel_surfaces", asphaltGravelSurfaces},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

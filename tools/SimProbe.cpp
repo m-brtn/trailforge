@@ -6,6 +6,7 @@
 //   trailforge_probe surfaces         - launches, braking, 15/20 degree climbs per surface
 //   trailforge_probe abs [ellipse]    - 50 / 100 km/h stops per surface, straight and steered, ABS off / on
 //   trailforge_probe brakedetail      - 100 km/h concrete stop, ABS off / on: per axle pressure, torque, grip use, slip
+//   trailforge_probe surfacecmp       - asphalt / concrete / gravel: 100-0 stops, max lateral g, 60 km/h coast
 //   trailforge_probe ellipse          - cornering and launches with the friction ellipse off / on
 //   trailforge_probe tc               - hill starts on the ramps with traction control off / on / off-road
 //   trailforge_probe tcmud            - 15 degree mud hill start sweep (60/120/240 Hz x 3 creep points) per TC mode
@@ -819,10 +820,17 @@ void showcase() {
     std::printf("\n");
 }
 
+// Probe lane numbers: 0-6 are the TrackLayout::SurfaceLanes features, 7 (asphalt) and 8 (gravel) the RoadLanes ones.
+void useLane(SimulationSettings& s, int lane, int& feature) {
+    s.layout = lane >= 7 ? TrackLayout::RoadLanes : TrackLayout::SurfaceLanes;
+    feature = lane == 7 ? 0 : lane == 8 ? 2 : lane;
+}
+
 // Effective friction per surface: launches (high and low range) and braking on the flat surface lanes, rolling climbs
 // and hill starts on the 15 / 20 degree ramps. Wheelspin = a wheel in contact with |longitudinal slip| > 1 m/s.
 void surfaces() {
-    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip"};
+    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand", "asphalt", "gravel"};
+    const int flatLanes[] = {0, 1, 2, 3, 4, 5, 7, 8};
     std::printf("effective peak mu (tire curve x surface): long %.2f, lat %.2f x multipliers\n",
                 VehicleTuning{}.tirePeakLongFriction, VehicleTuning{}.tirePeakLatFriction);
     {
@@ -861,12 +869,13 @@ void surfaces() {
         }
         return r;
     };
-    for (int lane = 0; lane < 6; ++lane) {
+    for (int lane : flatLanes) {
         for (int low = 0; low < 2; ++low) {
             SimulationSettings s = probeSettings();
-            s.layout = TrackLayout::SurfaceLanes;
+            int feature = 0;
+            useLane(s, lane, feature);
             Simulation sim(s);
-            sim.requestTeleport(lane);
+            sim.requestTeleport(feature);
             for (int i = 0; i < 120; ++i) sim.tick();
             const float target = low ? 15.0f : 30.0f;
             const Launch r = launch(sim, low != 0, target, low ? 3.0 : 5.0);
@@ -875,11 +884,12 @@ void surfaces() {
                         names[lane], low ? "low " : "high", r.v1, r.v2, r.v1, target, r.tTarget, r.maxSlip, r.spin);
         }
     }
-    for (int lane = 0; lane < 6; ++lane) {
+    for (int lane : flatLanes) {
         SimulationSettings s = probeSettings();
-        s.layout = TrackLayout::SurfaceLanes;
+        int feature = 0;
+        useLane(s, lane, feature);
         Simulation sim(s);
-        sim.requestTeleport(lane);
+        sim.requestTeleport(feature);
         for (int i = 0; i < 120; ++i) sim.tick();
         for (int i = 0; i < int(10.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 50.0f; ++i) {
             sim.setIntent({.throttle = 0.6f});
@@ -1079,16 +1089,17 @@ const char* tcName(TractionMode m) { return m == TractionMode::Off ? "off" : m =
 // Heading after 1 s = steering response under full braking before the vehicle can leave its 12 m lane.
 // ellipse: 0/1 friction ellipse (tireFrictionEllipse), -1 = default tuning.
 void absProbe(int ellipse) {
-    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand"};
+    const char* names[] = {"concrete", "dirt", "mud", "grass", "rock", "lowgrip", "sand", "asphalt", "gravel"};
     for (float kmh : {50.0f, 100.0f})
-    for (int lane : {0, 4, 1, 6, 3, 2}) {
+    for (int lane : {7, 0, 4, 1, 8, 6, 3, 2}) {
         for (int steer = 0; steer < 2; ++steer) {
             for (int abs = 0; abs < 2; ++abs) {
                 SimulationSettings s = probeSettings();
-                s.layout = TrackLayout::SurfaceLanes;
+                int feature = 0;
+                useLane(s, lane, feature);
                 if (ellipse >= 0) s.vehicle.tuning.tireFrictionEllipse = ellipse != 0;
                 Simulation sim(s);
-                sim.requestTeleport(lane);
+                sim.requestTeleport(feature);
                 for (int i = 0; i < 120; ++i) sim.tick();
                 setAids(sim, abs != 0, TractionMode::Off, 0);
                 for (int i = 0; i < int(60.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < kmh; ++i) {
@@ -1200,6 +1211,107 @@ void brakeDetail(int abs) {
                     "mu(curve x surface) %.3f, Fx/(mu load) %.3f, slip %.3f\n",
                     a ? "rear " : "front", p[a] / n, torque[a] / n, load[a] / n, force[a] / n, force[a] / std::max(1.0, load[a]),
                     mu[a] / n, use[a] / n, slip[a] / n);
+}
+
+// Asphalt vs concrete vs gravel for the vehicle of TRAILFORGE_VEHICLE: 100-0 km/h stops ABS off / on on the surface
+// lanes, the maximum lateral acceleration (1 s mean) at a fixed 35 % steer while the speed ramps from 30 to 110 km/h
+// on the flat pad (its surface given the lane surface's properties), and a 5 s coast from 60 km/h without pedals.
+void surfaceCompare() {
+    const struct {
+        int lane;
+        SurfaceId surface;
+        const char* name;
+    } lanes[] = {{0, SurfaceId::Asphalt, "asphalt"}, {1, SurfaceId::Concrete, "concrete"}, {2, SurfaceId::Gravel, "gravel"}};
+    const VehicleConfig cfg = probeSettings().vehicle;
+    std::printf("surfacecmp: peak mu long %.2f lat %.2f, ABS default %s\n", cfg.tuning.tirePeakLongFriction,
+                cfg.tuning.tirePeakLatFriction, cfg.tuning.aids.absEnabled ? "on" : "off");
+    for (const auto& lane : lanes) {
+        float stop[2] = {}, muLong = 0, muLat = 0;
+        for (int abs = 0; abs < 2; ++abs) {
+            SimulationSettings s = probeSettings();
+            s.layout = TrackLayout::RoadLanes;
+            Simulation sim(s);
+            sim.requestTeleport(lane.lane);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            // Traction control on for the run-up (a two-wheel-drive car spins up on gravel otherwise), off for the stop.
+            setAids(sim, abs != 0, TractionMode::On, 0);
+            muLong = sim.surfaces().get(lane.surface).longitudinalFriction;
+            muLat = sim.surfaces().get(lane.surface).lateralFriction;
+            for (int i = 0; i < int(60.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 100.0f; ++i) {
+                sim.setIntent({.throttle = 1.0f});
+                sim.tick();
+            }
+            setAids(sim, abs != 0, TractionMode::Off, 0);
+            const float v0 = sim.vehicle().telemetry().speed;
+            if (v0 * 3.6f < 95.0f) std::printf("surfacecmp %s: run-up reached only %.1f km/h\n", lane.name, v0 * 3.6f);
+            double t = 0;
+            float path = 0;
+            while (sim.vehicle().telemetry().speed > 0.05f && t < 20.0) {
+                sim.setIntent({.brake = 1.0f});
+                sim.tick();
+                t += sim.fixedStep();
+                path += sim.vehicle().telemetry().speed * float(sim.fixedStep());
+            }
+            // Distance scaled to exactly 100 km/h (v^2) so the run-up overshoot does not count.
+            stop[abs] = path * (100.0f / 3.6f) * (100.0f / 3.6f) / (v0 * v0);
+        }
+        float maxLat = 0, atKmh = 0;
+        {
+            SimulationSettings s = probeSettings();
+            s.layout = TrackLayout::Flat;
+            Simulation sim(s);
+            sim.surfaces().get(SurfaceId::Concrete) = sim.surfaces().get(lane.surface);
+            const JPH::BodyID id = sim.vehicle().bodyId();
+            JPH::Vec3 prevV = sim.world().bodies().GetLinearVelocity(id);
+            std::vector<float> window;
+            const int n = int(std::lround(1.0 / sim.fixedStep()));
+            double sum = 0;
+            for (double t = 0; t < 58.0; t += sim.fixedStep()) {
+                const float target = float(30.0 + std::max(0.0, t - 4.0) * 1.5) / 3.6f;
+                const float err = target - sim.vehicle().telemetry().speed;
+                sim.setIntent({.throttle = std::clamp(0.3f + 0.5f * err, 0.0f, 1.0f), .steer = t > 2.0 ? 0.35f : 0.0f});
+                sim.tick();
+                JPH::Vec3 v = sim.world().bodies().GetLinearVelocity(id);
+                JPH::Vec3 acc = (v - prevV) / float(sim.fixedStep());
+                prevV = v;
+                v.SetY(0.0f);
+                acc.SetY(0.0f);
+                const float a = v.Length() > 0.5f ? std::abs(v.Cross(acc).GetY()) / v.Length() : 0.0f;
+                window.push_back(a);
+                sum += a;
+                if (int(window.size()) > n) {
+                    sum -= window[window.size() - std::size_t(n) - 1];
+                }
+                if (t > 4.0 && int(window.size()) > n && sum / n > maxLat) {
+                    maxLat = float(sum / n);
+                    atKmh = sim.vehicle().telemetry().speed * 3.6f;
+                }
+            }
+        }
+        float lost = 0, rr = 0;
+        {
+            SimulationSettings s = probeSettings();
+            s.layout = TrackLayout::RoadLanes;
+            Simulation sim(s);
+            sim.requestTeleport(lane.lane);
+            for (int i = 0; i < 120; ++i) sim.tick();
+            for (int i = 0; i < int(60.0 / sim.fixedStep()) && sim.vehicle().telemetry().speed * 3.6f < 60.0f; ++i) {
+                sim.setIntent({.throttle = 0.7f});
+                sim.tick();
+            }
+            const float v0 = sim.vehicle().telemetry().speed;
+            sim.setIntent({});
+            for (int i = 0; i < int(5.0 / sim.fixedStep()); ++i) {
+                sim.tick();
+                if (i == 60) rr = sim.vehicle().telemetry().rollingResistanceForce;
+            }
+            lost = (v0 - sim.vehicle().telemetry().speed) * 3.6f;
+        }
+        std::printf("surfacecmp %-8s (mu %.2f / %.2f): 100-0 ABS off %6.2f m, ABS on %6.2f m (%.2f g); max lateral %.2f g at "
+                    "%.0f km/h (steer 0.35); coast 60 km/h 5 s: -%.1f km/h, rolling resistance %.0f N\n",
+                    lane.name, muLong, muLat, stop[0], stop[1],
+                    (100.0f / 3.6f) * (100.0f / 3.6f) / (2.0f * stop[1] * 9.81f), maxLat / 9.81f, atKmh, lost, rr);
+    }
 }
 
 // Traction control: hill starts (creep 8 m up, foot brake to a stop, hold 2 s, full throttle) on the ramps, low range.
@@ -2178,6 +2290,7 @@ int main(int argc, char** argv) {
     else if (mode == "surfaces") surfaces();
     else if (mode == "abs") absProbe(argc > 2 ? std::atoi(argv[2]) : -1);
     else if (mode == "brakedetail") { brakeDetail(0); brakeDetail(1); }
+    else if (mode == "surfacecmp") surfaceCompare();
     else if (mode == "ellipse") ellipseProbe();
     else if (mode == "tc") tcProbe();
     else if (mode == "tcmud") tcMudSweep();

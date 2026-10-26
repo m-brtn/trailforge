@@ -49,6 +49,9 @@ struct RoadSample {
 struct LevelRoad {
     std::string name;
     bool trail = false;
+    // Physics surface of the running surface (level.json "surface": "dirt" default, "gravel", "asphalt").
+    // Snow above the snow line and the rock bar of a ford override it; dirt roads also get mud patches.
+    SurfaceId surface = SurfaceId::PackedDirt;
     float width = 6.0f;
     float maxGrade = 0.12f;
     std::vector<RoadSample> samples; // every ~2 m

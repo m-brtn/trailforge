@@ -18,8 +18,8 @@ struct TimingGate {
 
 // Mini handling track: a ~1 km asphalt circuit in its own walled area south of the proving ground (outside the
 // proving ground walls, reached by teleport). Procedural; its triangles are part of the proving ground mesh, so the
-// rendered asphalt, curbs, runoff and tyre walls are the collision. Asphalt and curbs are the Concrete surface, gravel
-// traps the rigid Sand surface, the runoff Grass.
+// rendered asphalt, curbs, runoff and tyre walls are the collision. Asphalt and curbs are the Asphalt surface, gravel
+// traps the rigid Gravel surface, the runoff Grass.
 struct MiniTrackInfo {
     std::vector<RoutePoint> center; // closed center line ~1 m apart in driving order; point 0 is on the start line
     std::vector<float> arc;         // arc length of each point, m
@@ -44,7 +44,7 @@ const MiniTrackInfo& miniTrack();
 bool insideMiniTrackArea(float x, float z);
 // Ground height of the circuit area (gentle slope and edge berms), without the asphalt ribbon and curbs.
 float miniTrackGround(float x, float z);
-// Physics surface of the ground at (x, z): Concrete on the asphalt ribbon, Sand in gravel traps, Grass elsewhere.
+// Physics surface of the ground at (x, z): Asphalt on the ribbon and curbs, Gravel in the traps, Grass elsewhere.
 SurfaceId miniTrackSurface(float x, float z);
 // Appends the circuit (ground grid, asphalt ribbon with curbs and lines, tyre walls, barriers, area walls).
 void buildMiniTrack(TrackGeometry& g);

@@ -306,7 +306,7 @@ bool gravelAt(const Nearest& q, float x, float z) {
 }
 
 SurfaceId groundSurface(const Nearest& q, float x, float z) {
-    return gravelAt(q, x, z) ? SurfaceId::Sand : SurfaceId::Grass;
+    return gravelAt(q, x, z) ? SurfaceId::Gravel : SurfaceId::Grass;
 }
 
 // Octagonal stack of tyres standing on the ground.
@@ -366,7 +366,7 @@ float miniTrackGround(float x, float z) {
 
 SurfaceId miniTrackSurface(float x, float z) {
     const Nearest q = nearestPoint(x, z);
-    if (q.distance < kEdge) return SurfaceId::Concrete;
+    if (q.distance < kEdge) return SurfaceId::Asphalt;
     return groundSurface(q, x, z);
 }
 
@@ -397,7 +397,7 @@ void buildMiniTrack(TrackGeometry& g) {
                 const std::size_t first = g.triangleCount();
                 g.addTriangle(P(i, j), P(i, j + 1), P(i + 1, j), s);
                 g.addTriangle(P(i + 1, j), P(i, j + 1), P(i + 1, j + 1), s);
-                if (s == SurfaceId::Sand) g.paintFrom(first, Paint::Gravel);
+                if (s == SurfaceId::Gravel) g.paintFrom(first, Paint::Gravel);
             }
     }
 
@@ -422,15 +422,15 @@ void buildMiniTrack(TrackGeometry& g) {
                 else if (c == 2 || c == kCols - 4) p = Paint::Line;
                 else if (i == 0 && c >= 3 && c <= kCols - 5) p = (c % 2 == 0) ? Paint::Line : Paint::Asphalt;
                 const std::size_t first = g.triangleCount();
-                g.addQuad(V(i, c), V(i, c + 1), V(i + 1, c + 1), V(i + 1, c), SurfaceId::Concrete);
+                g.addQuad(V(i, c), V(i, c + 1), V(i + 1, c + 1), V(i + 1, c), SurfaceId::Asphalt);
                 g.paintFrom(first, p);
             }
             // Edge skirts down into the ground (no gaps under the raised edge).
             const std::size_t first = g.triangleCount();
             const Vec3 l0 = V(i, 0), l1 = V(i + 1, 0), r0 = V(i, kCols - 1), r1 = V(i + 1, kCols - 1);
             const Vec3 down(0.0f, -0.4f - kCurbHeight, 0.0f);
-            g.addQuad(l0 + down, l0, l1, l1 + down, SurfaceId::Concrete);
-            g.addQuad(r1 + down, r1, r0, r0 + down, SurfaceId::Concrete);
+            g.addQuad(l0 + down, l0, l1, l1 + down, SurfaceId::Asphalt);
+            g.addQuad(r1 + down, r1, r0, r0 + down, SurfaceId::Asphalt);
             g.paintFrom(first, curbRow ? (redStripe ? Paint::CurbRed : Paint::CurbWhite) : Paint::Asphalt);
         }
     }

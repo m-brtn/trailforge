@@ -59,6 +59,7 @@ enum class TrackLayout {
     SurfaceRamps,     // 15 and 20 degree ramps per surface, 10 m lanes, 22 m long (climb measurements)
     SlopeWithWheelPit, // 15 degree concrete slope, hole under the front left wheel (differential tests)
     Level,            // open-world level: props of a baked Level (bridges, blockouts); terrain in TerrainTiles
+    RoadLanes,        // flat pad of 12 m lanes like SurfaceLanes: asphalt, concrete, gravel (features 0, 1, 2)
 };
 
 struct TrackFeature {
@@ -121,6 +122,7 @@ private:
     void buildFlat(bool withPit);
     void buildSurfaceLanes();
     void buildSurfaceRamps();
+    void buildRoadLanes();
     void buildSlopeWithWheelPit();
     void createBody(const SurfaceTable& surfaces);
 

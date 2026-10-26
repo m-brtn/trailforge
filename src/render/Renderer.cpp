@@ -2347,10 +2347,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         mu.params = glm::vec4(kMarkLift, 0, 0, 0);
         mu.gainA = glm::vec4(frame.markGain[0], frame.markGain[1], frame.markGain[2], frame.markGain[3]);
         mu.gainB = glm::vec4(frame.markGain[4], frame.markGain[5], frame.markGain[6], frame.markGain[7]);
-        float width[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+        mu.gainC = glm::vec4(frame.markGain[8], frame.markGain[9], 1.0f, 1.0f);
+        float width[12] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
         for (std::size_t i = 0; i < kSurfaceCount; ++i) width[i] = surfaceMarkResponse(SurfaceId(i)).widthScale;
         mu.widthA = glm::vec4(width[0], width[1], width[2], width[3]);
         mu.widthB = glm::vec4(width[4], width[5], width[6], width[7]);
+        mu.widthC = glm::vec4(width[8], width[9], width[10], width[11]);
     }
 
     // ---- Grass trample mask: re-rendered when segments were added or removed, and every half second while marks

@@ -323,11 +323,11 @@ void levelRoadCarving() {
                 worstCross = std::max(worstCross, std::abs(L.heightAt(px, pz) - expect));
             }
             const SurfaceId sf = L.surfaceAt(s.x, s.z);
-            offRoad += !(sf == SurfaceId::PackedDirt || sf == SurfaceId::Mud || sf == SurfaceId::Snow ||
-                         (s.ford && sf == SurfaceId::Rock));
+            offRoad += !(sf == r.surface || (r.surface == SurfaceId::PackedDirt && sf == SurfaceId::Mud) ||
+                         sf == SurfaceId::Snow || (s.ford && sf == SurfaceId::Rock));
         }
         std::printf("  road %-17s %5.0f m: grade %.1f %% (limit %.1f %%), center %.3f m (at %.0f %.0f), across %.3f m, "
-                    "%d/%d not dirt\n",
+                    "%d/%d off its surface\n",
                     r.name.c_str(), r.samples.back().s, 100.0f * worstGrade, 100.0f * r.maxGrade, worstCenter, wx, wz,
                     worstCross, offRoad, samples);
         CHECK(worstGrade <= r.maxGrade + 0.005f, "%s grade %.3f", r.name.c_str(), worstGrade);
@@ -369,6 +369,24 @@ void levelSurfacesAndWater() {
     for (SurfaceId s : L.cellSurfaces()) ++counts[std::size_t(s)];
     for (SurfaceId s : {SurfaceId::PackedDirt, SurfaceId::Rock, SurfaceId::Mud, SurfaceId::Grass, SurfaceId::Sand, SurfaceId::Snow})
         CHECK(counts[std::size_t(s)] > 20000, "surface %d only %d cells", int(s), counts[std::size_t(s)]);
+    // Road running surfaces follow level.json: the main roads are gravel, the trails packed dirt with mud patches
+    // (snow above the snow line and the rock bars of fords override both).
+    for (const LevelRoad& r : L.roads()) {
+        int own = 0, n = 0;
+        for (const RoadSample& s : r.samples) {
+            const SurfaceId at = L.surfaceAt(s.x, s.z);
+            if (s.bridge || at == SurfaceId::Snow || at == SurfaceId::Rock) continue;
+            ++n;
+            own += r.trail ? at == SurfaceId::PackedDirt || at == SurfaceId::Mud : at == SurfaceId::Gravel;
+        }
+        std::printf("  %-18s %s: %d / %d center samples on its surface\n", r.name.c_str(), surfaceKey(r.surface), own, n);
+        CHECK(r.surface == (r.trail ? SurfaceId::PackedDirt : SurfaceId::Gravel), "%s surface %s", r.name.c_str(),
+              surfaceKey(r.surface));
+        CHECK(own >= n * 9 / 10, "%s: %d of %d center samples on its surface", r.name.c_str(), own, n);
+    }
+    CHECK(counts[std::size_t(SurfaceId::Gravel)] > 5000, "gravel only %d cells", counts[std::size_t(SurfaceId::Gravel)]);
+    CHECK(counts[std::size_t(SurfaceId::Asphalt)] == 0, "asphalt %d cells (no asphalt road in this level)",
+          counts[std::size_t(SurfaceId::Asphalt)]);
     // Snow only high up, sand only low.
     Lcg rng{9u};
     int snowLow = 0, sandHigh = 0;

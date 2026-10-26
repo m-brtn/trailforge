@@ -631,6 +631,12 @@ GroundSurface groundMaterial(int mat, float3 P, float3 N, float4 mask, Texture2D
         g.roughness = 0.62 - 0.12 * smoothstep(0.7, 0.95, fine);
         g.height = drift * 0.5 + streaks * 0.4 + fine * 0.1;
         g.bump = 0.3;
+    } else if (mat == MAT_ASPHALT) {
+        // Dense asphalt: dark binder with fine aggregate (tire mark relief only).
+        g.albedo = float3(0.075, 0.075, 0.08) * (0.8 + 0.3 * fine + 0.2 * (large - 0.5));
+        g.roughness = 0.82;
+        g.height = fine * 0.5 + nC.r * 0.2;
+        g.bump = 0.45;
     } else { // MAT_LOWGRIP: sealed slab, smooth
         g.albedo = float3(0.075, 0.095, 0.12) * (0.9 + 0.2 * large);
         g.roughness = 0.30 + 0.1 * fine;
@@ -2499,7 +2505,7 @@ struct TireMarkSegment {
     float4 p0u0;         // xyz: patch center at the start, w: distance along the ribbon (m)
     float4 p1u1;
     float4 side0Birth;   // xyz: half-width vector at p0, w: birth time (s)
-    float4 side1Surface; // xyz: half-width vector at p1, w: SurfaceId + 8 * packed tread soil (packMarkSurface)
+    float4 side1Surface; // xyz: half-width vector at p1, w: SurfaceId + 16 * packed tread soil (packMarkSurface)
     float4 imprintSlip;  // x/y: imprint at p0/p1, z/w: slip at p0/p1
 };
 
@@ -2507,9 +2513,11 @@ struct MarkUniforms {
     float4 info;   // x: first live segment, y: ring capacity, z: simulation time (s), w: fade time (s)
     float4 params; // x: lift along the contact normal (m)
     float4 gainA;  // per-surface intensity: Concrete, PackedDirt, Rock, LowGrip
-    float4 gainB;  // Mud, Grass, Sand
+    float4 gainB;  // Mud, Grass, Sand, Snow
+    float4 gainC;  // Asphalt, Gravel
     float4 widthA; // mark width / tire width per surface, same order
     float4 widthB;
+    float4 widthC;
 };
 
 // SurfaceId (src/track/SurfaceProperties.h).
@@ -2520,10 +2528,16 @@ static const int SURF_MUD = 4;
 static const int SURF_GRASS = 5;
 static const int SURF_SAND = 6;
 static const int SURF_SNOW = 7;
+static const int SURF_ASPHALT = 8;
+static const int SURF_GRAVEL = 9;
 
-bool softSurface(int s) { return s == SURF_DIRT || s == SURF_MUD || s == SURF_GRASS || s == SURF_SAND || s == SURF_SNOW; }
+bool softSurface(int s) {
+    return s == SURF_DIRT || s == SURF_MUD || s == SURF_GRASS || s == SURF_SAND || s == SURF_SNOW || s == SURF_GRAVEL;
+}
 
-float surfaceParam(float4 a, float4 b, int surface) { return surface < 4 ? a[surface] : b[min(surface - 4, 3)]; }
+float surfaceParam(float4 a, float4 b, float4 c, int surface) {
+    return surface < 4 ? a[surface] : surface < 8 ? b[surface - 4] : c[min(surface - 8, 3)];
+}
 
 struct MarkCorner {
     float3 world;
@@ -2556,11 +2570,11 @@ MarkCorner markCorner(uint vid, uint iid) {
     n *= n.y < 0.0 ? -1.0 : 1.0;
     MarkCorner m;
     const uint word = uint(s.side1Surface.w + 0.5);
-    m.surface = int(word & 7u);
-    const uint code = word >> 3;
+    m.surface = int(word & 15u);
+    const uint code = word >> 4;
     const float3 q = float3(code & 31u, (code >> 5) & 31u, (code >> 10) & 31u) / 31.0;
     m.soil = float4(q * q * 0.5, float((code >> 15) & 7u) / 7.0);
-    const float gain = surfaceParam(mu.gainA, mu.gainB, m.surface);
+    const float gain = surfaceParam(mu.gainA, mu.gainB, mu.gainC, m.surface);
     m.world = (end ? s.p1u1.xyz : s.p0u0.xyz) + side * c.y + n * mu.params.x;
     m.normal = n;
     m.uv = float2(end ? s.p1u1.w : s.p0u0.w, c.y);
@@ -2628,7 +2642,7 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     const float3 V = normalize(f.cameraPos.xyz - P);
     const int surface = vin.surface;
     const float u = vin.uv.x, v = vin.uv.y;
-    const float tv = v * surfaceParam(mu.widthA, mu.widthB, surface); // -1..1 under the tire
+    const float tv = v * surfaceParam(mu.widthA, mu.widthB, mu.widthC, surface); // -1..1 under the tire
     const float atv = abs(tv);
     const float imprint = saturate(vin.imprint), slip = saturate(vin.slip);
     const float rag = noiseTex.Sample(ns, P.xz * 2.3).a;
@@ -2689,6 +2703,22 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
             rough = lerp(0.42, 0.7, churn);
             cover = saturate(max(imprint * 0.9, slip * 1.3));
             cavity = under * 0.08 * lugs;
+        } else if (surface == SURF_GRAVEL) {
+            // Loose gravel: the tread presses the stones into a flatter floor where the darker fines show and shoves
+            // them aside into low ridges along both edges; wheelspin and slides scatter loose stones over the track.
+            const float stones = noiseTex.Sample(ns, P.xz * 9.7).b;
+            const float3 base = float3(0.30, 0.275, 0.23) * (0.8 + 0.35 * rag);
+            const float berm = smoothstep(0.85, 1.05, atv) * (1.0 - smoothstep(1.05, 1.4, atv));
+            const float stone = 1.0 - smoothstep(0.15, 0.35, stones); // round cells: single stones
+            h = -(0.010 * imprint + 0.02 * slip) * under - lugs * 0.003 * under +
+                (0.008 * imprint + 0.02 * slip) * berm * (0.6 + 0.8 * clods) + stone * 0.006 * (berm + churn * under);
+            const float3 pressed = base * 0.72 * (1.0 - 0.08 * lugs);
+            const float3 ridge = base * lerp(0.95, 1.2, clods);
+            const float3 scattered = lerp(base * 0.62, base * 1.3, stone);
+            albedo = lerp(lerp(pressed, ridge, berm), scattered, churn * under);
+            rough = 0.93;
+            cover = saturate(max(imprint * 0.8, slip * 1.3));
+            cavity = under * 0.08 + berm * 0.05;
         } else if (surface == SURF_SAND) {
             // Dry sand: the tread presses crisp lugs into a slightly darker, smoother floor; spinning digs a loose
             // trench with sand heaped at the sides.
@@ -2715,7 +2745,8 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     } else {
         // Hard ground: rubber laid down by the sliding patch, streaky along the travel direction; the
         // circumferential grooves leave lighter lines.
-        const int mat = surface == SURF_CONCRETE ? MAT_CONCRETE : surface == SURF_ROCK ? MAT_ROCK : 4;
+        const int mat = surface == SURF_CONCRETE ? MAT_CONCRETE : surface == SURF_ROCK ? MAT_ROCK
+                      : surface == SURF_ASPHALT ? MAT_ASPHALT : 4;
         const GroundSurface ground = groundMaterial(mat, P, N0, m, noiseTex, ns, grassFar(P));
         const float grooves = 1.0 - 0.6 * (1.0 - smoothstep(0.03, 0.08, abs(atv - 0.38))) -
                               0.6 * (1.0 - smoothstep(0.03, 0.08, atv));

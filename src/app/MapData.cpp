@@ -37,6 +37,8 @@ constexpr Rgb kSnow{0.93f, 0.94f, 0.96f};
 constexpr Rgb kSand{0.84f, 0.77f, 0.58f};
 constexpr Rgb kConcrete{0.67f, 0.67f, 0.65f};
 constexpr Rgb kLowGrip{0.50f, 0.58f, 0.64f};
+constexpr Rgb kAsphalt{0.30f, 0.30f, 0.32f};
+constexpr Rgb kGravel{0.71f, 0.67f, 0.59f};
 constexpr Rgb kWheat{0.78f, 0.71f, 0.43f};
 constexpr Rgb kWaterShallow{0.38f, 0.67f, 0.77f};
 constexpr Rgb kWaterDeep{0.10f, 0.32f, 0.50f};
@@ -54,6 +56,8 @@ Rgb surfaceColor(SurfaceId s) {
     case SurfaceId::Mud: return kMud;
     case SurfaceId::Sand: return kSand;
     case SurfaceId::Snow: return kSnow;
+    case SurfaceId::Asphalt: return kAsphalt;
+    case SurfaceId::Gravel: return kGravel;
     case SurfaceId::Grass:
     case SurfaceId::Count: break;
     }
@@ -63,13 +67,13 @@ Rgb surfaceColor(SurfaceId s) {
 // Mini handling track finishes.
 Rgb paintColor(Paint p) {
     switch (p) {
-    case Paint::Asphalt: return {0.30f, 0.30f, 0.32f};
+    case Paint::Asphalt: return kAsphalt;
     case Paint::Line:
     case Paint::CurbWhite:
     case Paint::BarrierWhite: return {0.92f, 0.92f, 0.90f};
     case Paint::CurbRed:
     case Paint::BarrierRed: return {0.78f, 0.18f, 0.14f};
-    case Paint::Gravel: return kSand;
+    case Paint::Gravel: return kGravel;
     case Paint::Tyre: return {0.12f, 0.12f, 0.13f};
     case Paint::None: break;
     }

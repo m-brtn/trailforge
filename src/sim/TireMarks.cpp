@@ -45,6 +45,9 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id) {
     case SurfaceId::Grass: return {0.9f, 1.0f, 1.1f};
     case SurfaceId::Sand: return {0.9f, 1.0f, 1.2f};
     case SurfaceId::Snow: return {0.9f, 1.0f, 1.1f};
+    case SurfaceId::Asphalt: return {0.0f, 1.0f, 1.0f};
+    // Loose stones pushed aside into low ridges beyond the tread.
+    case SurfaceId::Gravel: return {0.7f, 1.0f, 1.25f};
     default: return {0.5f, 1.0f, 1.0f};
     }
 }
@@ -52,13 +55,13 @@ SurfaceMarkResponse surfaceMarkResponse(SurfaceId id) {
 float packMarkSurface(SurfaceId surface, const float c[3], float wet) {
     auto q = [](float v, float levels) { return std::lround(std::sqrt(saturate(v / 0.5f)) * levels); };
     const long code = q(c[0], 31.0f) | (q(c[1], 31.0f) << 5) | (q(c[2], 31.0f) << 10) | (q(wet * wet * 0.5f, 7.0f) << 15);
-    return float(long(surface) + 8 * code);
+    return float(long(surface) + 16 * code);
 }
 
-SurfaceId markSurface(const TireMarkSegment& s) { return SurfaceId(long(s.surface + 0.5f) & 7); }
+SurfaceId markSurface(const TireMarkSegment& s) { return SurfaceId(long(s.surface + 0.5f) & 15); }
 
 void markSoil(const TireMarkSegment& s, float c[3], float& wet) {
-    const long code = long(s.surface + 0.5f) >> 3;
+    const long code = long(s.surface + 0.5f) >> 4;
     auto d = [](long v, float levels) { const float t = float(v) / levels; return t * t * 0.5f; };
     c[0] = d(code & 31, 31.0f);
     c[1] = d((code >> 5) & 31, 31.0f);
@@ -107,6 +110,8 @@ SoilType soilType(SurfaceId id) {
     case SurfaceId::Sand: return {0.15f, 1.0f, 0.0f, {0.30f, 0.255f, 0.185f}, 0.1f, 0.0f};
     case SurfaceId::Snow: return {0.12f, 1.0f, 0.6f, {0.62f, 0.64f, 0.68f}, 0.2f, 0.0f};
     case SurfaceId::Grass: return {0.3f, 2.5f, 0.3f, {0.12f, 0.085f, 0.050f}, 0.5f, 0.35f};
+    // Gravel: grey-brown fines and grit in the tread, less than dirt and dry; it falls off quickly on hard ground.
+    case SurfaceId::Gravel: return {0.12f, 2.0f, 0.0f, {0.22f, 0.20f, 0.165f}, 0.15f, 0.0f};
     default: return {};
     }
 }

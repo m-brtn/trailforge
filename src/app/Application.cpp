@@ -2673,7 +2673,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         return double(v);
     }
     if (n.size() == 8 && n.rfind("marks_s", 0) == 0) {
-        // marks_s<SurfaceId>: live segments on that surface (0 Concrete .. 6 Sand).
+        // marks_s<SurfaceId>: live segments on that surface (0 Concrete .. 7 Snow, 8 Asphalt, 9 Gravel).
         const TireMarks& tm = m_sim.tireMarks();
         const int id = n[7] - '0';
         double count = 0;

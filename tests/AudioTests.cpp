@@ -155,6 +155,19 @@ void tireLayers() {
     CHECK(g(mudRoll, L::Mud) > 0.5f && g(mudRoll, L::Grass) == 0.0f && g(mudRoll, L::Skid) == 0.0f, "mud selection");
     CHECK(g(grassRoll, L::Grass) > 0.5f && g(grassRoll, L::Mud) == 0.0f && g(grassRoll, L::Dirt) == 0.0f,
           "grass selection");
+    // Asphalt rolls silently like concrete (road hum only); gravel crunches on the gravel layer, more than dirt.
+    const TireLayerMix asphaltRoll = tireLayerMix(all(wheel(SurfaceId::Asphalt, 10, 0.3f, 0.03f)), ref);
+    const TireLayerMix gravelRoll = tireLayerMix(all(wheel(SurfaceId::Gravel, 8, 0.2f, 0.02f)), ref);
+    printMix("asphalt rolling 10 m/s:", asphaltRoll);
+    printMix("gravel rolling 8 m/s:", gravelRoll);
+    for (int l = 0; l < kTireLayerCount; ++l)
+        CHECK(asphaltRoll.gain[std::size_t(l)] == 0.0f, "asphalt rolling layer %d = %.3f", l, asphaltRoll.gain[std::size_t(l)]);
+    CHECK(roadHum(wheel(SurfaceId::Asphalt, 20, 0.3f, 0.02f), ref) > 0.0f &&
+              roadHum(wheel(SurfaceId::Gravel, 20, 0.3f, 0.02f), ref) == 0.0f,
+          "road hum asphalt / gravel");
+    CHECK(g(gravelRoll, L::Gravel) > 2.0f * g(dirtRoll, L::Gravel) && g(gravelRoll, L::Skid) == 0.0f &&
+              g(gravelRoll, L::Mud) == 0.0f && g(gravelRoll, L::Grass) == 0.0f,
+          "gravel roll: gravel %.2f (dirt road %.2f)", g(gravelRoll, L::Gravel), g(dirtRoll, L::Gravel));
     // Load: an unloaded wheel is quieter than a loaded one.
     const float light = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 1000), ref);
     const float heavy = wheelSlipIntensity(wheel(SurfaceId::PackedDirt, 8, 8, 1, 6000), ref);
@@ -165,12 +178,13 @@ void tireLayers() {
 
     // Squeal surface gate: rubber on hard ground only; a full slide on soft ground never squeals.
     std::printf("    squeal drive of a full slide:");
-    const SurfaceId surfaces[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Rock,
-                                  SurfaceId::LowGrip,  SurfaceId::Mud,        SurfaceId::Grass};
+    const SurfaceId surfaces[] = {SurfaceId::Concrete, SurfaceId::PackedDirt, SurfaceId::Rock, SurfaceId::LowGrip,
+                                  SurfaceId::Mud,      SurfaceId::Grass,      SurfaceId::Asphalt, SurfaceId::Gravel};
     for (SurfaceId s : surfaces) {
         const float d = wheelSquealDrive(squealing(wheel(s, 8, 8, 1.0f)), ref);
         std::printf(" %d:%.2f", int(s), d);
-        const bool hard = s == SurfaceId::Concrete || s == SurfaceId::Rock || s == SurfaceId::LowGrip;
+        const bool hard = s == SurfaceId::Concrete || s == SurfaceId::Rock || s == SurfaceId::LowGrip ||
+                          s == SurfaceId::Asphalt;
         CHECK(hard ? d > 0.3f : d == 0.0f, "surface %d squeal drive %.2f", int(s), d);
     }
     std::printf("\n");

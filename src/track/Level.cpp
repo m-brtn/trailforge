@@ -183,15 +183,6 @@ Polygon smoothedPolygon(Polygon poly, int passes) {
     return poly;
 }
 
-SurfaceId surfaceFromName(const std::string& s) {
-    if (s == "rock") return SurfaceId::Rock;
-    if (s == "dirt") return SurfaceId::PackedDirt;
-    if (s == "sand") return SurfaceId::Sand;
-    if (s == "grass") return SurfaceId::Grass;
-    if (s == "mud") return SurfaceId::Mud;
-    if (s == "snow") return SurfaceId::Snow;
-    return SurfaceId::Count;
-}
 
 std::uint32_t packRgba(float r, float g, float b, float a) {
     auto q = [](float v) { return std::uint32_t(std::lround(clamp01(v) * 255.0f)); };
@@ -322,7 +313,7 @@ private:
     struct Lake { std::string name; float level, depth; Polygon poly; float shore = 0.0f; };
     struct RiverDef { std::string name; float width, depth, bank; std::vector<Float3> points; };
     struct BridgeDef { float x0, z0, x1, z1; };
-    struct RoadDef { std::string name; bool trail; float width, grade; std::vector<Float3> points; std::vector<BridgeDef> bridges; };
+    struct RoadDef { std::string name; bool trail; float width, grade; std::vector<Float3> points; std::vector<BridgeDef> bridges; SurfaceId surface; };
     struct Flat { std::string name; float x, z, r, h, fade; SurfaceId surface; };
     struct Forest { Polygon poly; float density; };
     struct Field { Polygon poly; };
@@ -453,6 +444,7 @@ private:
     std::vector<std::uint8_t> m_lakeId; // 1 + lake index where inside a lake polygon
     std::vector<float> m_riverD, m_riverY, m_riverReach;
     std::vector<float> m_roadness, m_roadEdge; // 0..1 road surface, distance to the nearest road edge (shoulder only)
+    std::vector<SurfaceId> m_roadSurface;      // surface of the road with the largest roadness
     std::vector<float> m_roadClear;            // distance to the nearest road edge within 48 m of a road
     std::vector<SurfaceId> m_flatSurface;      // per sample: forced surface of a flat (Count = none)
     std::vector<std::uint8_t> m_nearWater;     // 0..255: water within ~3 m
@@ -633,7 +625,7 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
     }
     for (const json::Value& r : doc["roads"].array) {
         RoadDef d{r["name"].stringOr("road"), r["kind"].stringOr("main") == "trail", float(r["width"].numberOr(6)),
-                  float(r["maxGrade"].numberOr(0.12)), {}, {}};
+                  float(r["maxGrade"].numberOr(0.12)), {}, {}, surfaceFromKey(r["surface"].stringOr("dirt"))};
         for (const json::Value& p : r["points"].array) {
             float x, z;
             if (readPoint(p, x, z)) d.points.push_back(Float3(x, kNaN, z));
@@ -641,6 +633,10 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
         for (const json::Value& b : r["bridges"].array) {
             BridgeDef bd{};
             if (readPoint(b["from"], bd.x0, bd.z0) && readPoint(b["to"], bd.x1, bd.z1)) d.bridges.push_back(bd);
+        }
+        if (d.surface != SurfaceId::PackedDirt && d.surface != SurfaceId::Gravel && d.surface != SurfaceId::Asphalt) {
+            err = "level: road " + d.name + " surface must be dirt, gravel or asphalt";
+            return false;
         }
         if (d.points.size() < 2 || d.width < 2.0f || d.grade <= 0.0f) {
             err = "level: road " + d.name + " needs 2 points, width >= 2 m and maxGrade > 0";
@@ -651,7 +647,7 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
     for (const json::Value& f : doc["flats"].array) {
         Flat fl{f["name"].stringOr("flat"), float(f["x"].numberOr(0)), float(f["z"].numberOr(0)),
                 float(f["radius"].numberOr(10)), float(f["height"].numberOr(kNaN)), float(f["fade"].numberOr(20)),
-                surfaceFromName(f["surface"].stringOr(""))};
+                surfaceFromKey(f["surface"].stringOr(""))};
         if (!f.has("height")) fl.h = kNaN;
         m_flats.push_back(fl);
     }
@@ -1071,6 +1067,7 @@ void LevelBaker::bakeRoads() {
         LevelRoad road;
         road.name = def.name;
         road.trail = def.trail;
+        road.surface = def.surface;
         road.width = def.width;
         road.maxGrade = def.grade;
         const std::vector<Float3> pts = level_math::resampleSpline(def.points, ds);
@@ -1272,7 +1269,11 @@ void LevelBaker::bakeRoads() {
                     sumW[k] += wp + 1e-30f;
                     sumWY[k] += (wp + 1e-30f) * py[k];
                     maxW[k] = std::max(maxW[k], w);
-                    m_roadness[g] = std::max(m_roadness[g], 1.0f - smoothstep(hw - 0.6f, hw + 0.5f, d));
+                    const float roadness = 1.0f - smoothstep(hw - 0.6f, hw + 0.5f, d);
+                    if (roadness > m_roadness[g]) {
+                        m_roadness[g] = roadness;
+                        m_roadSurface[g] = road.surface;
+                    }
                     m_roadEdge[g] = std::min(m_roadEdge[g], d - hw);
                 }
         }
@@ -1437,8 +1438,12 @@ void LevelBaker::bakeSurfaces() {
 
             SurfaceId s = SurfaceId::Grass;
             if (road > 0.5f) {
+                const SurfaceId roadS = m_roadSurface[std::max({a, b, c, d}, [&](std::size_t p, std::size_t q) {
+                    return m_roadness[p] < m_roadness[q];
+                })];
                 if (h > snowAt) s = SurfaceId::Snow;
                 else if (wd > 0.02f) s = SurfaceId::Rock; // gravel ford bar
+                else if (roadS != SurfaceId::PackedDirt) s = roadS;
                 else if (patch > (L.m_roads.empty() ? 1.0f : 0.70f) && grad < 0.12f) s = SurfaceId::Mud;
                 else s = SurfaceId::PackedDirt;
             } else if (wd > 0.05f) {
@@ -1469,7 +1474,11 @@ void LevelBaker::bakeSurfaces() {
             const float clear = std::min({m_roadClear[a], m_roadClear[b], m_roadClear[c], m_roadClear[d]});
             const float k = std::min(smoothstep(1.5f, 2.7f, clear), smoothstep(1.5f, 3.0f, bridgeClearance(x, z)));
             keep[std::size_t(j) * std::size_t(cn) + std::size_t(i)] = k;
-            const float dirt = s == SurfaceId::PackedDirt || s == SurfaceId::Grass ? roadPaint : 0.0f;
+            // Gravel and asphalt roads are painted with the road layer too (the terrain set has no asphalt texture).
+            const float dirt = s == SurfaceId::PackedDirt || s == SurfaceId::Grass || s == SurfaceId::Gravel ||
+                                       s == SurfaceId::Asphalt
+                                   ? roadPaint
+                                   : 0.0f;
             float grass = 0.0f;
             if (s == SurfaceId::Grass) grass = (0.35f + 0.65f * smoothstep(0.3f, 0.7f, meadow)) * (1.0f - 0.85f * dirt);
             else if (s == SurfaceId::PackedDirt && road < 0.2f) grass = 0.12f * smoothstep(0.4f, 0.7f, patch);
@@ -2620,6 +2629,7 @@ void LevelBaker::bake() {
     m_riverY.assign(total, 0.0f);
     m_riverReach.assign(total, 0.0f);
     m_roadness.assign(total, 0.0f);
+    m_roadSurface.assign(total, SurfaceId::PackedDirt);
     m_roadEdge.assign(total, 1e30f);
     m_roadClear.assign(total, 1e30f);
     m_flatSurface.assign(total, SurfaceId::Count);

@@ -196,7 +196,7 @@ if(TRAILFORGE_BUILD_TESTS)
             abs_prevents_lock
             diff_locks_climb
             traction_control_mud driving_aids_logic friction_ellipse
-            tread_soil_surfaces body_mud lap_timer_logic mini_track_lap)
+            tread_soil_surfaces body_mud lap_timer_logic mini_track_lap asphalt_gravel_surfaces)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

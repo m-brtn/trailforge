@@ -96,6 +96,7 @@ struct VehicleTelemetry {
     float frontTorqueShare = 0.5f;                  // base engine torque share of the front axle (before the center LSD)
     bool revLimited = false;                        // rev limiter cut the throttle on the last tick
     float dragForce = 0.0f;                         // N, aerodynamic drag of the last tick
+    float rollingResistanceForce = 0.0f;            // N, surface rolling resistance of the last tick (all wheels)
     DriverCommand command;      // commands applied on the last tick (driver pedals, before the aids)
     AidControls controls;       // ABS / TC / locker switches
     bool absActive = false;     // ABS modulated at least one wheel on the last tick
@@ -171,7 +172,8 @@ private:
     void buildTireCurves(const VehicleTuning& t);
     float staticGripFriction(float curveFriction, float slip) const;
     float curveSlip(JPH::uint wheel) const;
-    void updateEllipseSlip(JPH::uint wheel, float slip);
+    static float looseCurve(float curve, float slip, float peakSlip, float peak, float slideDrop);
+    void updateEllipseSlip(JPH::uint wheel, float slip, float slipScale);
     void frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const;
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
     float clutchStrength(float throttle) const;
@@ -179,6 +181,7 @@ private:
     void applySuspensionPerTick(); // compression / rebound damping, bump stops
     void applyAckermann(float steer);
     void applyDrag();
+    void applyRollingResistance();
     void prePhysicsElectric(const DriverCommand& cmd, float dt);
 
     PhysicsWorld& m_world;

@@ -14,9 +14,6 @@
 namespace tf {
 namespace {
 
-constexpr const char* kSurfaceKeys[kSurfaceCount] = {"concrete", "packed_dirt", "rock", "low_grip",
-                                                     "mud",      "grass",       "sand",     "snow"};
-
 std::string fmt(double v) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%g", v);
@@ -567,7 +564,9 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             ti.num("slipSpeedFloor", t.tireSlipSpeedFloor, 0.0, 5.0, "m/s");
             ti.boolean("frictionEllipse", t.tireFrictionEllipse);
             Obj sg(ti.member("surfaceGrip"), "tires.surfaceGrip", source, errors);
-            for (std::size_t i = 0; i < kSurfaceCount; ++i) sg.num(kSurfaceKeys[i], t.tireSurfaceGrip[i], 0.2, 2.0, "(multiplier)");
+            // Surfaces added after the format was published (asphalt, gravel) are optional and default to 1.
+            for (std::size_t i = 0; i < kSurfaceCount; ++i)
+                sg.num(surfaceKey(SurfaceId(i)), t.tireSurfaceGrip[i], 0.2, 2.0, "(multiplier)", i <= std::size_t(SurfaceId::Snow));
         }
         {
             Obj s(root.member("steering"), "steering", source, errors);

@@ -36,6 +36,8 @@ Recipe recipe(SurfaceId s) {
     case SurfaceId::Sand: return {0.0f, 0.0f, 130.0f, 0.12f, 6.0f, 0.8f, 0.0f, 0.0f, 0.0f, 0.0008f, 0.0040f, 0.7f};
     case SurfaceId::Snow: return {0.3f, 0.0f, 150.0f, 0.10f, 0.0f, 0.0f, 0.0f, 0.008f, 0.02f, 0.0010f, 0.0050f, 0.6f};
     case SurfaceId::Grass: return {0.6f, 0.004f, 35.0f, 0.0f, 0.0f, 0.0f, 24.0f, 0.009f, 0.022f, 0.0012f, 0.008f, 0.45f};
+    // Gravel: stones (4-12 mm radius) flicked from the tread even while rolling, grit, and dry dust behind a fast car.
+    case SurfaceId::Gravel: return {2.5f, 0.03f, 80.0f, 0.12f, 5.0f, 1.0f, 0.0f, 0.004f, 0.012f, 0.0012f, 0.0040f, 0.6f};
     default: return {};
     }
 }
@@ -130,6 +132,7 @@ void WheelSpray::update(std::span<const WheelContactSample> wheels, std::span<co
                 if (ts && ts->amount > 0.05f) col[k] = col[k] * 0.6f + ts->color[k] * 0.4f;
             }
             const bool sand = c.surface == SurfaceId::Sand;
+            const bool gravel = c.surface == SurfaceId::Gravel;
             const bool wet = ground.wetness > 0.5f || inWater;
             // Thin flying droplets of wet mud read lighter than the mud in bulk (light scatters through the film).
             if (wet)
@@ -169,7 +172,8 @@ void WheelSpray::update(std::span<const WheelContactSample> wheels, std::span<co
                 p.size = r.clodMin + (r.clodMax - r.clodMin) * u * u;
                 p.life = range(1.5f, 2.5f);
                 p.wet = wet;
-                tint(p, 0.8f, 1.1f);
+                if (gravel) tint(p, 1.1f, 1.7f); // washed stones are lighter than the fines in the tread
+                else tint(p, 0.8f, 1.1f);
                 emit(p);
             }
             for (; acc[1] >= 1.0f; acc[1] -= 1.0f) {

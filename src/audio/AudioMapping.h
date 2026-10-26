@@ -51,7 +51,7 @@ struct TireSurfaceResponse {
 };
 TireSurfaceResponse tireSurfaceResponse(SurfaceId surface);
 
-// Rubber squeal gain of a surface: concrete 1, rock and the low-grip patch weaker, every loose surface 0.
+// Rubber squeal gain of a surface: concrete and asphalt 1, rock and the low-grip patch weaker, every loose surface 0.
 float squealSurface(SurfaceId surface);
 
 // Rolling and sliding intensity of one wheel, 0..~1.2. Rolling grows with patch speed; sliding with the sliding

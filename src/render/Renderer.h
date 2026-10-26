@@ -2,6 +2,7 @@
 
 #include "render/Mesh.h"
 #include "render/RenderSettings.h"
+#include "track/SurfaceProperties.h"
 
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_video.h>
@@ -152,8 +153,10 @@ struct MarkUniforms {
     glm::vec4 params; // x: lift along the contact normal (m)
     glm::vec4 gainA;  // per-surface intensity multipliers: Concrete, PackedDirt, Rock, LowGrip
     glm::vec4 gainB;  // Mud, Grass, Sand, Snow
+    glm::vec4 gainC;  // Asphalt, Gravel, -, -
     glm::vec4 widthA; // mark width / tire width per surface (SurfaceMarkResponse::widthScale), same order
     glm::vec4 widthB;
+    glm::vec4 widthC;
 };
 
 // GPU vertex buffer with explicit ownership (released in the destructor).
@@ -245,7 +248,7 @@ struct FrameDesc {
     const TireMarks* tireMarks = nullptr;
     const WheelSpray* spray = nullptr;           // wheel spray particles (one instanced draw)
     double simTime = 0.0;                        // simulation time the segment birth times refer to (s)
-    std::array<float, 8> markGain{1, 1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
+    std::array<float, kSurfaceCount> markGain{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}; // per-surface intensity multipliers (SurfaceId order)
 };
 
 struct RenderStats {

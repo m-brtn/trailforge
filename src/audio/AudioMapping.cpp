@@ -88,6 +88,11 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
         roll(L::Dirt, 0.4f); // crunch approximated by the soft dirt layer (no snow recording)
         slip(L::Dirt, 0.6f);
         break;
+    case SurfaceId::Gravel:
+        roll(L::Gravel, 1.0f); // stones crunching under the tread
+        slip(L::Gravel, 1.0f);
+        slip(L::Dirt, 0.3f);   // fines scattered by a sliding tire
+        break;
     default:
         break;
     }
@@ -96,7 +101,8 @@ TireSurfaceResponse tireSurfaceResponse(SurfaceId surface) {
 
 float squealSurface(SurfaceId surface) {
     switch (surface) {
-    case SurfaceId::Concrete: return 1.0f;
+    case SurfaceId::Concrete:
+    case SurfaceId::Asphalt: return 1.0f;
     case SurfaceId::LowGrip: return 0.55f; // hard, only a lower mu: a weaker squeal
     case SurfaceId::Rock: return 0.45f;    // small, rough contact: mostly scrape (gravel layer)
     default: return 0.0f;

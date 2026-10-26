@@ -26,7 +26,7 @@ struct TireMarkSegment {
     float side0[3]; // world: half-width vector at p0, perpendicular to the travel direction in the contact plane
     float birth;    // s: simulation time when the segment was written
     float side1[3];
-    float surface;  // packed: SurfaceId + 8 * soil code (packMarkSurface), an integer stored exactly in the float
+    float surface;  // packed: SurfaceId + 16 * soil code (packMarkSurface), an integer stored exactly in the float
     float imprint0, imprint1; // 0..1: rolling imprint (soft ground) or soil print from the tread (hard ground)
     float slip0, slip1;       // 0..1: rubber (hard surfaces) or churn (soft surfaces) from the patch sliding speed
 };
