@@ -842,8 +842,10 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     } else {
         if (!front) N = -N;
         if (mat == MAT_GLASS) {
+            // Dark tinted, nearly opaque glass with no interior behind it: a full-strength sky reflection would turn
+            // the windows into light blue panels.
             s.roughness = 0.03;
-            s.specOcclusion = 1.0;
+            s.specOcclusion = 0.3;
         } else if (mat == MAT_HEADLIGHT) {
             s.emissive = vin.color * (0.6 + 7.0 * f.vehicleParams.w);
             s.albedo = ((float3)(0.8));

@@ -46,7 +46,7 @@ MATERIALS = {
     "plastic": dict(color=(0.06,) * 3, rough=0.6),
     "chrome": dict(color=(0.92,) * 3, rough=0.05, metal=1.0),
     "metal": dict(color=(0.16 ** 2.2,) * 3, rough=0.48, metal=0.35),
-    "glass": dict(color=(0.012, 0.016, 0.020), rough=0.04, transmission=1.0, ior=1.5),
+    "glass": dict(color=(0.012, 0.016, 0.020), rough=0.04, transmission=0.12, ior=1.5),
     "rubber": dict(color=(0.032, 0.032, 0.034), rough=0.85),
     "lens": dict(color=(0.10 ** 2.2,) * 3, rough=0.12, metal=0.6),
     "light_head": dict(color=(1.0, 0.95, 0.88), rough=0.2, emission=(1.0, 0.95, 0.88)),

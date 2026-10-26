@@ -717,7 +717,8 @@ All vehicle geometry is procedural and visual only, except that the body collisi
 
 - **Style kit** (`src/render/StyleKit`): the shared building blocks for the accessories.
   - Materials: clear-coat paint without metallic flakes (stylized-realistic), grained matte plastic trim, metal, rubber,
-    glass, emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
+    glass (opaque dark tinted glass: no interior is drawn behind it, the shader keeps the sun highlight and 30 % of the
+    sky reflection), emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
     a `Livery` groups base paint, accent paint, roof, trims.
   - Lights: LED rings, strips, round lamps. Accessories: roof rails with crossbars, cargo straps, light bar, winch,
     bow shackles, cargo cases, rock sliders, mirrors, jerry cans, spare carrier.
@@ -824,7 +825,9 @@ definition with a scripted body, red `paint_primary`).
   recolourable from vehicle.json `body.paint`), `cladding` (grained plastic), `plastic`, `chrome`, `metal`, `glass`,
   `rubber`, `lens` (clear lamp housing), `light_head`, `light_tail`, `light_brake`, `light_reverse`,
   `light_indicator`, `liner`, `underbody`. Unknown names are errors. Base colour, roughness, metallic, emission
-  (`emissiveFactor` + strength), clear coat, transmission and IOR are kept; colour only (textures are ignored with a
+  (`emissiveFactor` + strength), clear coat, transmission and IOR are kept (the game draws `glass` opaque like the
+  procedural glass and ignores transmission; `make_body_blend.py` uses 0.12 so Blender shows the same nearly opaque
+  tint); colour only (textures are ignored with a
   warning; vertex colours multiply the base colour). The light roles are driven by the game state: head lamps by
   the headlight switch, tail / brake lamps by the brake pedal (dim running level otherwise), reverse lamps in
   reverse, indicators as markers; their colour is the emission colour, else the base colour. `tf_mud` (0..1)
