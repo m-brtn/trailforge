@@ -1,7 +1,11 @@
 # Model credits
 
-All 3D models in this folder are from [Poly Haven](https://polyhaven.com) and are released under
+All 3D models in this folder except `ironwall_stadium/` are from [Poly Haven](https://polyhaven.com) and are released under
 [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain; attribution is not required).
+
+`ironwall_stadium/` is **not CC0**: third-party scene content without a licence, included at the owner's decision
+while the repository is private, to be removed or replaced before it is made public. Provenance in
+`assets/levels/ironwall_stadium/CREDITS.md`.
 They were converted by `tools/models/fetch_models.py` (`tools/texc`, `trailforge_modelc`): mesh LODs and
 collision meshes simplified with meshoptimizer, foliage cards thinned (trees: clump cards baked from clusters of
 the source foliage), impostor atlases rendered from the full models, textures downscaled and re-encoded to

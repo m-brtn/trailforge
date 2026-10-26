@@ -222,6 +222,7 @@ GroundMaps buildLevelGroundMaps(const Level& level) {
     for (int j = 0; j < cells; ++j)
         for (int i = 0; i < cells; ++i)
             g.heights[std::size_t(j) * cells + i] = level.heightAt(g.x0 + float(i) * g.texel, g.z0 + float(j) * g.texel);
+    g.blades = level.grassBlades();
     buildNoise(g);
     return g;
 }

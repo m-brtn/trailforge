@@ -103,6 +103,7 @@ private:
     std::vector<std::vector<std::uint32_t>> m_tileTrees, m_tileRocks; // per tile: indices into the level lists
     std::size_t m_trunkCount = 0;
     std::vector<JPH::Ref<JPH::Shape>> m_modelShapes; // per level model: unit-scale collision mesh (null: none)
+    JPH::BodyID m_staticScene; // static scene meshes (LevelRock::staticMesh): one body for the level's lifetime
     TerrainStreamingStats m_stats;
 
     std::mutex m_mutex;

@@ -2407,6 +2407,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "max_locked") return m_maxLockedWheels;
     if (n == "lock_time") return m_lockedWheelTime;
     if (n == "tilt") return std::acos(std::fmin(1.0f, t.upDot)) * 57.2958;
+    if (n == "wheels_contact") {
+        int c = 0;
+        for (const auto& w : t.wheels) c += w.contact;
+        return double(c);
+    }
     if (n == "x") return p.GetX();
     if (n == "y") return p.GetY();
     if (n == "z") return p.GetZ();
@@ -2687,6 +2692,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "submersion") return m_sim.vehicleSubmersion();
     if (const Level* level = m_sim.level()) {
         // Water over the ground at the body position (m, 0 when dry) and the distance to the nearest road center.
+        if (n == "above_grid") return double(p.GetY() - level->heightAt(p.GetX(), p.GetZ())); // body over the height grid
         if (n == "water_depth") {
             const std::optional<float> w = level->waterAt(p.GetX(), p.GetZ());
             return w ? std::max(0.0, double(*w - level->heightAt(p.GetX(), p.GetZ()))) : 0.0;

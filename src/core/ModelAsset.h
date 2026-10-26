@@ -39,7 +39,8 @@ struct ModelMaterial {
 };
 
 struct ModelAsset {
-    std::string id, kind; // kind: tree, bush, rock, cliff, log, debris
+    std::string id, kind; // kind: tree, bush, rock, cliff, log, debris, static
+    std::string surface;  // static: physics surface name of the collision (asphalt, grass, gravel, concrete)
     float height = 0.0f, radius = 0.0f;
     std::array<float, 3> boundsMin{}, boundsMax{};
     float trunkRadius = 0.0f;           // trees: trunk radius at 1.0 .. 1.6 m (unit scale)

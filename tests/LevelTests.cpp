@@ -5,6 +5,7 @@
 
 #include "core/Json.h"
 #include "core/Ktx2.h"
+#include "core/ModelAsset.h"
 #include "core/TerrainTextureSet.h"
 #include "physics/PhysicsWorld.h"
 #include "sim/Simulation.h"
@@ -1685,9 +1686,9 @@ void levelBakedTrackSmooth() {
 // The autopilot drives one lap of the circuit: the timer starts at the line, passes every checkpoint and sector
 // line in order and counts the lap with its sector times; R then puts the vehicle 4 m past the last gate, facing
 // along it.
-void levelBakedLap(const char* id) {
+void levelBakedLap(const char* id, const std::shared_ptr<const Level>& level, double minLap) {
     SimulationSettings s;
-    s.level = circuitLevel();
+    s.level = level;
     s.vehicle = vehicle(id);
     s.terrain.async = false;
     Simulation sim(s);
@@ -1730,7 +1731,7 @@ void levelBakedLap(const char* id) {
     }
     CHECK(lt.sectorCount() == 3 && std::abs(sectors - lt.lastLap()) < 1e-6, "%d sectors, sum %.4f lap %.4f",
           lt.sectorCount(), sectors, lt.lastLap());
-    CHECK(lt.laps() == 1 && lt.lastLap() > 60.0 && order == 0, "laps %d, lap %.1f s, %d out of order", lt.laps(), lt.lastLap(), order);
+    CHECK(lt.laps() == 1 && lt.lastLap() > minLap && order == 0, "laps %d, lap %.1f s, %d out of order", lt.laps(), lt.lastLap(), order);
     CHECK(sim.autopilotResets() == 0 && sim.recoveries() == 0 && !sim.hadPhysicsError(), "resets %d (%s), recoveries %d",
           sim.autopilotResets(), sim.autopilotResetReason(), sim.recoveries());
     // Drive on past the next gate, then reset: back to that gate, the lap timer keeps running.
@@ -1751,6 +1752,82 @@ void levelBakedLap(const char* id) {
     // Handing the wheel from the autopilot to the player stops the lap (no lap is driven by both).
     sim.setAutopilot(AutopilotMode::Off);
     CHECK(!lt.running() && lt.laps() == 1, "after autopilot off: running %d, laps %d", int(lt.running()), lt.laps());
+}
+
+const std::shared_ptr<const Level>& stadiumLevel() {
+    static const std::shared_ptr<const Level> l = loadOrExit(TRAILFORGE_SOURCE_DIR "/assets/levels/ironwall_stadium/level.json");
+    return l;
+}
+
+// Ironwall Stadium (tools/levels/blender/convert_stadium.py): static scene meshes carry the vehicle. Their collision
+// is the render LOD triangle for triangle, they are one body for the level's lifetime, and spawns and resets stand on
+// them, not on the height grid under them.
+void levelStaticScene() {
+    const Level& lv = *stadiumLevel();
+    for (const std::string& issue : lv.layoutIssues()) std::printf("    layout: %s\n", issue.c_str());
+    CHECK(lv.layoutIssues().empty() && lv.modelError().empty(), "%zu layout issues, models: %s", lv.layoutIssues().size(),
+          lv.modelError().c_str());
+    CHECK(lv.staticGround() && !lv.grassBlades(), "static ground %d, grass blades %d", int(lv.staticGround()),
+          int(lv.grassBlades()));
+    std::size_t statics = 0, collidable = 0, collisionTris = 0;
+    for (const LevelModel& m : lv.models()) {
+        if (m.kind != "static") continue;
+        ++statics;
+        ModelAsset a;
+        std::string err;
+        CHECK(a.load(m.path, true, &err) && a.lods.size() == 1, "%s: %s, %zu LODs", m.id.c_str(), err.c_str(), a.lods.size());
+        if (a.lods.empty() || m.collision.empty()) continue;
+        ++collidable;
+        // Same triangles: the corner positions of every render triangle, in order, are the collision corners.
+        const ModelLod& lod = a.lods[0];
+        bool same = m.collision.size() == lod.indices.size();
+        for (std::size_t k = 0; same && k < lod.indices.size(); ++k) {
+            const float* p = lod.vertices[lod.indices[k]].pos;
+            same = m.collision[k].x == p[0] && m.collision[k].y == p[1] && m.collision[k].z == p[2];
+        }
+        CHECK(same, "%s: %zu collision corners, %zu render corners", m.id.c_str(), m.collision.size(), lod.indices.size());
+        collisionTris += m.collision.size() / 3;
+        std::printf("  %-36s %-9s %7zu triangles\n", m.id.c_str(), a.surface.c_str(), lod.triangles());
+    }
+    CHECK(statics == 7 && collidable == 4, "%zu static models, %zu with collision", statics, collidable);
+    CHECK(lv.circuit().gates.size() == 6 && lv.circuit().length > 400.0f && lv.circuit().length < 450.0f,
+          "%zu gates, circuit %.0f m", lv.circuit().gates.size(), double(lv.circuit().length));
+
+    JoltRuntime runtime;
+    PhysicsWorld world;
+    SurfaceTable surfaces;
+    TerrainTiles tiles(world, surfaces, stadiumLevel());
+    tiles.ensureLoaded(lv.spawn().position.GetX(), lv.spawn().position.GetZ(), 120.0f);
+    world.system().OptimizeBroadPhase();
+    // The meshes lie over the height grid at the spawn and the POIs (the paddock is 150 m from the oval: no tile
+    // streaming involved).
+    for (const LevelPoi& poi : lv.pois()) {
+        const float x = poi.atX, z = poi.atZ, grid = lv.heightAt(x, z);
+        const JPH::RRayCast ray(JPH::RVec3(x, grid + 8.0f, z), JPH::Vec3(0, -10.0f, 0));
+        JPH::RayCastResult hit;
+        const bool ok = world.system().GetNarrowPhaseQuery().CastRay(ray, hit);
+        const float y = grid + 8.0f - 10.0f * hit.mFraction;
+        std::printf("  POI %-16s grid %.2f m, mesh %.2f m\n", poi.name.c_str(), double(grid), double(y));
+        CHECK(ok && y > grid + 0.3f && y < grid + 0.8f, "%s: grid %.2f, hit %d at %.2f", poi.name.c_str(), double(grid),
+              int(ok), double(y));
+    }
+    std::printf("  %zu collision triangles in the static scene body\n", collisionTris);
+
+    SimulationSettings s;
+    s.level = stadiumLevel();
+    s.vehicle = vehicle("trailforge_suv");
+    s.terrain.async = false;
+    Simulation sim(s);
+    runFor(sim, 2.0);
+    const JPH::Vec3 p = sim.currentSnapshot().body.position;
+    const float grid = lv.heightAt(p.GetX(), p.GetZ());
+    const VehicleTelemetry& tel = sim.vehicle().telemetry();
+    int asphalt = 0;
+    for (const auto& w : tel.wheels) asphalt += w.contact && w.surface == SurfaceId::Asphalt;
+    std::printf("  spawn: body %.2f m over the grid, %d wheels on asphalt, speed %.2f m/s\n", double(p.GetY() - grid),
+                asphalt, double(tel.speed));
+    CHECK(asphalt == 4 && p.GetY() > grid + 0.5f && tel.speed < 0.3f,
+          "spawn: %d wheels on asphalt, %.2f m over the grid", asphalt, double(p.GetY() - grid));
 }
 
 // Round trip (CTest level_blender_roundtrip): the bake of a level.json with the original files and with the files
@@ -1790,8 +1867,11 @@ int main(int argc, char** argv) {
         {"level_baked_layout", levelBakedLayout},
         {"lap_timer_gates", lapTimerGates},
         {"level_baked_track_smooth", levelBakedTrackSmooth},
-        {"level_baked_lap", [] { levelBakedLap("trailforge_suv"); }},
-        {"level_baked_lap_ev", [] { levelBakedLap("trailforge_ev"); }},
+        {"level_baked_lap", [] { levelBakedLap("trailforge_suv", circuitLevel(), 60.0); }},
+        {"level_baked_lap_ev", [] { levelBakedLap("trailforge_ev", circuitLevel(), 60.0); }},
+        {"level_static_scene", levelStaticScene},
+        {"level_static_lap", [] { levelBakedLap("trailforge_suv", stadiumLevel(), 20.0); }},
+        {"level_static_lap_ev", [] { levelBakedLap("trailforge_ev", stadiumLevel(), 20.0); }},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

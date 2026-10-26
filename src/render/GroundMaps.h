@@ -18,6 +18,7 @@ struct GroundMaps {
     int width = 0, height = 0;
     std::vector<float> heights;
     std::vector<std::uint8_t> mask;     // 4 bytes per texel
+    bool blades = true;                 // grass blades where R > 0 (off: R only tints the ground)
 
     int noiseSize = 256;
     std::vector<std::uint8_t> noise;    // 4 bytes per texel

@@ -88,6 +88,9 @@ struct LevelModel {
     std::vector<JPH::Float3> collision;
     int collisionLod = -1;
     float collisionError = 0.0f;    // m at unit scale: simplification error of the collision LOD (modelc)
+    // Static scene meshes (kind "static", level.json vegetation.statics): ground and structures converted from a
+    // scene in world coordinates. One LOD; the collision (if any) is the same triangles, on this surface.
+    SurfaceId surface = SurfaceId::Rock;
 };
 
 enum class TreeKind : std::uint8_t { Conifer = 0, Sapling, Broadleaf };
@@ -108,6 +111,9 @@ struct LevelRock {
     std::int16_t model = -1;            // Level::models() index (rock, log, stump); -1: procedural rock
     float sx = 1.0f, sy = 1.0f, sz = 1.0f; // model scale per axis (model space, before the pitch and yaw)
     float pitch = 0.0f;                    // rad about the model x axis, before the yaw (cliff faces)
+    // A static scene mesh (layout placement "static"): placed where the layout puts it, not on the ground and not
+    // kept off the roads (it is the road and its surroundings).
+    bool staticMesh = false;
 };
 
 // Render-only ground cover: bushes, ferns and dry branches (no collision; the vehicle drives through them).
@@ -267,6 +273,12 @@ public:
     const LevelCircuit& circuit() const { return m_circuit; }
     // Drift scoring of the level (level.json "drift", sim/DriftScore.h; disabled when absent).
     const DriftConfig& drift() const { return m_drift; }
+    // Static scene meshes with collision carry the vehicle (the height grid lies below them): spawns and resets
+    // find the ground with a ray onto the physics instead of heightAt().
+    bool staticGround() const { return m_staticGround; }
+    // Render: grass blades on the grass cover (level.json "grassBlades", default true; off for levels whose ground is
+    // static meshes: the blades would grow on the height grid under them).
+    bool grassBlades() const { return m_grassBlades; }
     // Layout rule violations found by the bake (objects on the road, structures in water, gates off the circuit,
     // anything outside the play area). The shipped levels have none (CTest level_baked_layout).
     const std::vector<std::string>& layoutIssues() const { return m_layoutIssues; }
@@ -298,7 +310,7 @@ private:
     DriveRoute m_attractRoute;
     float m_spawnX = 0.0f, m_spawnZ = 0.0f, m_spawnTowardX = 0.0f, m_spawnTowardZ = 1.0f;
     LevelBakeStats m_stats;
-    bool m_baked = false, m_asphaltLayer = false;
+    bool m_baked = false, m_asphaltLayer = false, m_staticGround = false, m_grassBlades = true;
     std::vector<std::uint8_t> m_surfaceClass;
     LevelCircuit m_circuit;
     DriftConfig m_drift;

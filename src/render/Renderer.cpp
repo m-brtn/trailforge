@@ -874,7 +874,7 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
     const int i0 = int(std::ceil(maps.x0 / kGrassChunk)), i1 = int(std::floor(xMax / kGrassChunk)) - 1;
     const int j0 = int(std::ceil(maps.z0 / kGrassChunk)), j1 = int(std::floor(zMax / kGrassChunk)) - 1;
     const int kS = (i1 - i0) * (j1 - j0) > 200000 ? 4 : 8; // samples per chunk side for the bounds and cover
-    for (int bj = j0; bj <= j1; bj += kGrassBucket) {
+    for (int bj = j0; bj <= j1 && maps.blades; bj += kGrassBucket) {
         for (int bi = i0; bi <= i1; bi += kGrassBucket) {
             GrassBucket bucket{1e9f, 1e9f, -1e9f, -1e9f, std::uint32_t(m_grassChunks.size()), 0};
             for (int j = bj; j <= std::min(j1, bj + kGrassBucket - 1); ++j) {
@@ -1358,6 +1358,10 @@ Renderer::ModelRange Renderer::modelRange(const GpuModel& m) const {
         b = {30.0f * k, 90.0f * k, 320.0f * k};
         maxD = 320.0f * k;
         r.shadowCascades = 2;
+    } else if (m.kind == "static") { // scene ground and structures: one LOD, drawn to the building distance
+        b = {1600.0f * k, 1600.0f * k, 1600.0f * k};
+        maxD = 1600.0f * k;
+        r.shadowCascades = 4;
     } else if (m.kind == "cliff") {
         b = {120.0f * k, 400.0f * k, s.treeDistance};
         maxD = s.treeDistance;
@@ -2203,7 +2207,10 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                     bound = true;
                 }
                 const bool kit = g.kind == "building" || g.kind == "prop";
-                const float hue = g.kind == "tree" || g.kind == "bush" ? (mat.alphaTest ? 0.6f : 0.2f) : kit ? 0.04f : 0.15f;
+                const float hue = g.kind == "tree" || g.kind == "bush" ? (mat.alphaTest ? 0.6f : 0.2f)
+                                  : g.kind == "static"                ? 0.0f
+                                  : kit                               ? 0.04f
+                                                                      : 0.15f;
                 ModelMaterialUniforms mm{glm::vec4(mat.alphaTest ? 1.0f : 0.0f, mat.alphaTest ? 1.0f : 0.0f,
                                                    m_modelA2C ? 1.0f : 0.0f, 1.0f),
                                          glm::vec4(mat.tint, hue)};

@@ -22,9 +22,10 @@ textures must also be CC0 (Poly Haven / ambientCG), go through that script and `
 CREDITS file. 3D models (trees, ground cover, rocks, cliffs, logs) are CC0 Poly Haven glTF only, fetched by
 `tools/models/fetch_models.py` (manifest `assets/models/models.json`, md5 lock `sources.lock.json`) and converted by
 `trailforge_modelc` (`tools/texc`) to `assets/models/<folder>/*.glb` + BC7 KTX2; credits in `assets/models/CREDITS.md`.
+The one exception to these licence rules is the Ironwall Stadium level ("Third-party content in a private repo" below).
 `*.ktx2` under `assets/textures/` and `*.glb` / `*.ktx2` under `assets/models/` are Git LFS objects (`.gitattributes`;
-run `git lfs pull` after cloning). Keep the LFS total small (currently 272.2 MB: terrain textures 167.8 MB, building
-textures 19.2 MB, models 84.3 MB, test vehicle body 0.9 MB;
+run `git lfs pull` after cloning). Keep the LFS total small (currently 326.5 MB: terrain textures 167.8 MB, building
+textures 19.2 MB, models 84.3 MB, Ironwall Stadium scene 54.3 MB (third-party, see below), test vehicle body 0.9 MB;
 GitHub's LFS storage and bandwidth quota is shared with CI, which caches `.git/lfs`), and report size changes in the
 devlog.
 
@@ -85,6 +86,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
+./build/release/trailforge --script tools/scenarios/ironwall_check.txt # Ironwall Stadium: spawn on the static meshes, SUV + EV laps, R, POIs, map, PERF, /tmp/trailforge_ironwall_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/drift_check.txt # drift scoring on the mini track: judged run, drift on/off/level switch, /tmp/trailforge_drift_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
@@ -190,7 +192,8 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
  blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py),
  levels/ (fetch_osm_track.py: OSM + DEM source data with a sha256 lock; blender/: tf_level.py, import_level.py,
- export_level.py, carve_track.py, make_suncoast_raceway.py; README "Editing a level in Blender")
+ export_level.py, carve_track.py, make_suncoast_raceway.py, convert_stadium.py (third-party scene -> static
+ models + baked level files); README "Editing a level in Blender")
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke; manual only)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
@@ -198,7 +201,8 @@ assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle 
  body (Git LFS; README "Blender bodies (body.glb)")
 assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id); suncoast_raceway/ is a
  baked level (heightmap.pgm, surfaces.pgm, layout.json from Blender, plain files, not LFS; raw OSM (ODbL) +
- DEM data, CREDITS.md)
+ DEM data, CREDITS.md); ironwall_stadium/ is baked too, with static scene models (vegetation.statics,
+ assets/models/ironwall_stadium/, collision == render) carrying the vehicle 0.5 m over the height grid
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; buildings/
  buildings.json + the same per layer (kit materials); CREDITS.md
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
@@ -259,6 +263,17 @@ Example stage entry:
 ```markdown
 - **16:00 — MVP ready.** Debug/Release build, CTest 6/6. Physics step ~0.035 ms at 120 Hz.
 ```
+
+### Third-party content in a private repo
+
+The repository is private. At the owner's decision it contains one level that is not CC0 and has no licence:
+**Ironwall Stadium** (`assets/levels/ironwall_stadium/`, `assets/models/ironwall_stadium/`), converted from the
+racing sim community track mod "(name withheld)" (author not stated; an in-texture credit names
+a third party). It is exempt from the CC0-only asset rule only while the repository is private.
+It **must be removed or replaced before the repository or any build is made public.** The real provenance stays in
+the level's `CREDITS.md` and in this note only: in the game, the README and release notes the level is the fictional
+"Ironwall Stadium", and real venue names must not appear in the game (the converter paints them out of the
+textures).
 
 ### Physics honesty
 

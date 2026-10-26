@@ -252,7 +252,8 @@ MapData buildLevelMap(const Level& L, int pixels, int threads) {
         }
     });
     shadeAndContour(r, h, wet, d.contourStep, 1.6f, threads);
-    for (const LevelRock& rock : L.rocks()) stampDisc(r, rock.x, rock.z, std::max(rock.rx, rock.rz), kRock, kSnow, 0.7f);
+    for (const LevelRock& rock : L.rocks())
+        if (!rock.staticMesh) stampDisc(r, rock.x, rock.z, std::max(rock.rx, rock.rz), kRock, kSnow, 0.7f);
     for (const LevelTree& t : L.trees()) stampDisc(r, t.x, t.z, 0.22f * t.height * t.width, kCrownDark, kCrownLit, 0.9f);
     for (const LevelBuilding& b : L.buildings()) {
         const LevelBuildingType& t = L.buildingTypes()[b.type];

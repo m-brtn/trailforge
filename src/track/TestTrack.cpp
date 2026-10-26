@@ -376,6 +376,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, const Le
 }
 
 void TestTrack::createBody(const SurfaceTable& surfaces) {
+    if (m_geometry.triangleCount() == 0) return; // a level without procedural props
     JPH::TriangleList tris;
     tris.reserve(m_geometry.triangleCount());
     for (std::size_t i = 0; i < m_geometry.triangleCount(); ++i) {
@@ -399,6 +400,7 @@ void TestTrack::createBody(const SurfaceTable& surfaces) {
 }
 
 TestTrack::~TestTrack() {
+    if (m_body.IsInvalid()) return;
     m_world.bodies().RemoveBody(m_body);
     m_world.bodies().DestroyBody(m_body);
 }

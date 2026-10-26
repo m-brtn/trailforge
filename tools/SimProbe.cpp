@@ -2382,8 +2382,9 @@ void lapProbe(const char* path, int laps) {
     const LapTimer& lt = sim.lapTimer();
     sim.setAutopilot(AutopilotMode::Drive);
     double t = 0.0, maxKmh = 0.0, maxLat = 0.0;
-    long ticks = 0, onAsphalt = 0;
+    long ticks = 0, onAsphalt = 0, traced = 0;
     int done = 0;
+    const bool trace = std::getenv("TF_LAP_TRACE") != nullptr; // body position once per 0.5 s
     // Lateral acceleration from the body path: velocity and acceleration by differences, smoothed over ~0.2 s.
     JPH::Vec3 prevPos = sim.currentSnapshot().body.position, prevVel = JPH::Vec3::sZero(), acc = JPH::Vec3::sZero();
     std::printf("lap %s: circuit %.0f m, %zu gates, %d sectors\n", level->id().c_str(), double(level->circuit().length),
@@ -2398,6 +2399,11 @@ void lapProbe(const char* path, int laps) {
         acc += ((vel - prevVel) / dt - acc) * std::min(1.0f, dt / 0.2f);
         prevPos = pos;
         prevVel = vel;
+        if (trace && ++traced % 60 == 0)
+            std::printf("  t %6.2f pos %7.2f %6.2f %7.2f  %5.1f km/h  steer %+.2f throttle %.2f brake %.2f\n", t,
+                        double(pos.GetX()), double(pos.GetY()), double(pos.GetZ()), double(tel.forwardSpeed) * 3.6,
+                        double(sim.resolvedIntent().steer), double(sim.resolvedIntent().throttle),
+                        double(sim.resolvedIntent().brake));
         if (lt.running()) {
             maxKmh = std::max(maxKmh, double(tel.forwardSpeed) * 3.6);
             const JPH::Vec3 vh(vel.GetX(), 0.0f, vel.GetZ());

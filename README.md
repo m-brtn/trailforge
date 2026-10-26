@@ -13,6 +13,12 @@ and `assets/audio/CREDITS.md`) and the CC0 photo-scanned ground materials of the
 `assets/models/` (Poly Haven glTF converted to glb LODs + BC7 KTX2 in Git LFS, see [Level models](#level-models) and
 `assets/models/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass) is procedural.
 
+**Third-party content (private repository only):** the level [Ironwall Stadium](#ironwall-stadium-banked-oval)
+(`assets/levels/ironwall_stadium/`, `assets/models/ironwall_stadium/`) is converted from a community track mod
+without a licence and is not CC0. It is in the build at the repository owner's decision while the repository is
+private and **must be removed or replaced before the repository or any build is made public** (provenance in
+`assets/levels/ironwall_stadium/CREDITS.md`).
+
 ![Showcase](docs/showcase.jpg)
 
 Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun/moon shadows, a time of day (0–24 h, presets,
@@ -154,7 +160,7 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
   choice on the vehicle page (not in scenario mode);
-- `--level ID` — start on level ID (`exploration_peaks`, `suncoast_raceway`, `proving_ground`); scenarios and `--demo` start on the
+- `--level ID` — start on level ID (`exploration_peaks`, `suncoast_raceway`, `ironwall_stadium`, `proving_ground`); scenarios and `--demo` start on the
   proving ground unless it is given;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
@@ -183,6 +189,7 @@ Command-line options:
 - `lap [level.json] [laps]` — autopilot laps of a circuit level (default Suncoast Raceway, 2 laps) at its
   `attractRoute` pace: lap and sector times, max speed, max lateral acceleration (from the body path, ~0.2 s
   smoothing), share of ticks with all four wheels on asphalt, resets; exit code 1 without the laps;
+  `TF_LAP_TRACE=1` in the environment prints the position, speed and the autopilot's intent every 0.5 s;
 - `skid` — tire slip, squeal and mark response for launches, brakes and turns on the surface lanes and a flat pad;
   `launch [lane throttle]` — the same per tick for one launch (`PROBE_LOW_RANGE`, `PROBE_HZ`,
   `PROBE_NO_STATIC_GRIP`, `PROBE_NO_CLUTCH_LIMIT` in the environment); `showcase` — where the skid layer is audible
@@ -255,7 +262,7 @@ One command per line, `#` starts a comment:
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
-| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `ironwall_stadium`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
 | `drift on\|off\|level` | force drift scoring on / off for the session, or back to the level's `"drift"` setting (same as F1 → Simulation → Drift scoring) |
 | `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
@@ -277,7 +284,9 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/track_check.txt` (Suncoast Raceway: an autopilot lap through every checkpoint with sector times,
 the stored best lap, R to the last checkpoint, the map, fixed cameras, frame times per preset;
-`/tmp/trailforge_track_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
+`/tmp/trailforge_track_*.png`), `tools/scenarios/ironwall_check.txt` (Ironwall Stadium: spawn on the static meshes,
+SUV and EV autopilot laps, R to the last gate, the three POIs, the map, fixed cameras, frame times per preset;
+`/tmp/trailforge_ironwall_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
 cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`), `tools/scenarios/surfaces.txt` (asphalt rubber
 marks after a locked-wheel stop on the mini track, gravel spray and displaced-gravel tracks in a trap;
 `/tmp/trailforge_surfaces_*.png`),
@@ -360,7 +369,8 @@ wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference 
 `msg:<substring>` (1 if the latest UI message contains the substring),
 levels: `level` (1 on an open-world level, 0 on the proving ground), `level_choice` (index of the remembered
 choice in the level list), `submersion` (m below the water surface), `recoveries`,
-`water_depth` (render-only water over the ground at the vehicle), `road_dist`, `terrain_chunks`, `terrain_tris`,
+`water_depth` (render-only water over the ground at the vehicle), `above_grid` (body height over the level's height
+grid; static scene meshes carry the vehicle above it), `wheels_contact`, `road_dist`, `terrain_chunks`, `terrain_tris`,
 `tiles_loaded`, `tiles_async`, `tiles_sync`, `tiles_unloaded`, `tile_build_ms`, `tile_stall_ms`, `tile_update_ms`,
 `tile_x` / `tile_z`, `grass_dist` / `tree_detail` / `tree_dist` (applied render distances, m); `set` keys `tree_dist` (m) and `terrain_detail` (LOD scale),
 lap timer (proving ground mini track): `lap_running`, `lap_count`, `lap_time` (current lap, s), `lap_last`,
@@ -369,7 +379,7 @@ map: `map_open`, `map_ready`, `map_build_ms`, `map_pois`, `map_scale` (points pe
 `marker_set`, `marker_x` / `marker_z`, `marker_dist` (m, horizontal), `marker_bearing` (deg, relative to the heading, + = right),
 `heading` (deg clockwise from north), attract drive: `autopilot` (0 off, 1 drive, 2 hold), `autopilot_driven` (m),
 `autopilot_progress`, `autopilot_lateral` (m from the route), `autopilot_resets`,
-lap timing (Suncoast Raceway, the mini handling track): `lap_active`, `lap_running`, `lap_count`, `lap_time` (running
+lap timing (Suncoast Raceway, Ironwall Stadium, the mini handling track): `lap_active`, `lap_running`, `lap_count`, `lap_time` (running
 lap, s), `lap_last`, `lap_best` (session), `lap_stored_best` (best_laps.cfg, this level and vehicle), `lap_saved`
 (entries in it), `lap_best_gap` (best − last), `lap_stored_gap` (stored − session best), `lap_next` / `lap_next_gate`,
 `lap_last_gate`, `lap_checkpoints`, `lap_gates`, `lap_gate_dist_N` (m from gate N), `lap_sectors`, `lap_sector_N`
@@ -1450,6 +1460,37 @@ physics tick; it only reads simulation data and never feeds back.
   scored, 0 spins, 3 walls; EV best 462 (40 km/h handbrake, 53.6°), 7 scored, 8 spins, 4 walls. The best runs
   spend 0–0.3 s in the clipping zones: this driver holds a tighter line than the outer band.
 
+## Ironwall Stadium (banked oval)
+
+A fictional name for a converted scene: **third-party content without a licence**, in the build only while the
+repository is private (see the note at the top; it must be removed or replaced before going public; provenance in
+`assets/levels/ironwall_stadium/CREDITS.md`, nowhere else). LEVEL row of the start menu (IRONWALL STADIUM),
+`--level ironwall_stadium`, scenario `level ironwall_stadium`.
+
+- **Conversion** (`tools/levels/blender/convert_stadium.py`, headless Blender 5.3 Beta, ~10 s): the meshes of the
+  source scene grouped by material into seven static models (`trailforge_modelc` kind `static`, one LOD, BC7 KTX2
+  albedo at most 2048² for the track asphalt and 1024² otherwise, no normal maps, constant roughness):
+  asphalt 12,725 triangles, grass 2,723, gravel 128, structures (walls, tyre stacks, stands, buildings, poles)
+  161,915, markers (cones, clipping-point boards) 4,816, decals (lines, tyre marks, banners) 60,830, vegetation
+  cards 5,088. The real venue name is painted out of the textures.
+- **Collision = render:** asphalt, grass, gravel and structures collide with exactly their render triangles (one
+  Jolt `StaticCompoundShape` of `MeshShape`s, 177,491 triangles, a permanent static body; CTest
+  `level_static_scene` checks the triangle order against LOD0). Surfaces per material: `Asphalt` (μ 1.00),
+  `Grass` (rigid, μ 0.50), `Gravel` (rigid, loose μ), structures `Concrete`. Markers, decals and the vegetation
+  cards are render-only (the source's collision naming did not survive the export, and its cones are props).
+- **Height grid:** a 513² heightmap rasterised 0.5 m under the lowest mesh ground (it carries the map, the grass
+  colour and the far terrain; spawns and resets ray-cast onto the meshes), ramped to flat land outside. No grass
+  blades (`"grassBlades": false`): they would grow on the grid under the meshes.
+- **Circuit:** a 424 m oval 10 m inside the outer asphalt edge, driven counter-clockwise, banked 5–14°; gate 0 is
+  the start / finish line, 6 gates with two sector lines; spawn 12 m behind the line. POIs: Start / Finish,
+  Infield (drift area), Paddock. The lap timer is the shared one (see Suncoast Raceway).
+- **Autopilot laps** (`trailforge_probe lap assets/levels/ironwall_stadium/level.json`, 70 km/h cruise, 5 m/s² in
+  curves): SUV 30.605 s (49.8 km/h mean, 67.0 km/h max), EV 30.144 s (50.6 km/h mean, 69.0 km/h max), both 100 % of
+  the ticks on four asphalt wheels, no resets (CTest `level_static_lap` / `level_static_lap_ev`).
+- **Frame times** (2880 × 1800, Metal, VSync off, `ironwall_check.txt`): Low 303.6 FPS, Medium 132.1 (GPU 13.5 ms),
+  High 100.0 (GPU 18.4 ms), Ultra 92.0 (GPU 20.3 ms). Model load 7 models, ~118 ms.
+- **Size:** 54.3 MB in Git LFS (glb + KTX2 in `assets/models/ironwall_stadium/`), 0.8 MB of plain level files.
+
 ## Map, waypoint and compass
 
 **Full-screen map** (M, gamepad LB, or MAP in the pause menu; the simulation pauses while it is open). Drawn from the
@@ -2065,6 +2106,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   `Gravel` surface (no sinkage or deceleration bed), the tyre walls and armco are rigid
   convex pieces (no energy absorption), and the track surface is a smooth fit to a 30 m DEM, not a survey of the
   real asphalt (real bumps and camber are unknown). The lap timer and the best laps only observe the body position.
+- Ironwall Stadium: the walls, tyre stacks and fences are rigid triangle meshes (no energy absorption, nothing
+  moves or breaks); cones, clipping-point boards, painted lines, decals and tree cards are render-only; the meshes
+  have no normal maps and a constant roughness; the height grid lies 0.5 m under the meshes and is never driven on.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
   message (the only teleports besides R (on Suncoast Raceway during a lap: to the last gate passed), the F1 teleport buttons, the attract-drive reset behind the start menu and

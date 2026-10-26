@@ -21,6 +21,13 @@
 // Per-vertex wind weights (_WIND: x trunk bend, y foliage flutter) are written for the render-only wind sway.
 // Impostor: LOD0 rasterized on the CPU (orthographic, alpha-tested, 2 x 2 supersampled) from N azimuths into one
 // atlas row; albedo + coverage and the view-space normal + AO. Output is deterministic for the same inputs.
+//
+// Kind "static" (level ground and structures converted from a scene, tools/levels/blender/convert_stadium.py): the
+// source coordinates are kept ("origin": "none" by default), there is one LOD with the source triangles unchanged
+// (no simplification, card reduction or wind), "collisionLod": 0 stores the same triangles as the collision mesh,
+// and "surface" (asphalt, grass, gravel, ...) names the physics surface. Material maps are used at their own size
+// (non-square allowed; the converter resizes them): "albedo" PNG with the alpha test cut from its alpha channel when
+// "alphaTest" is true, and without a "normal" map a 4 x 4 flat normal map with the constant "roughness".
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
@@ -81,6 +88,8 @@ struct MaterialSpec {
     std::string name, albedo, alpha, normal, arm, rough; // arm: AO / roughness / metal; rough: roughness only
     bool normalGl = false; // OpenGL convention source (+Y up): converted to DirectX like the terrain maps
     bool write = true;
+    bool alphaTest = false;  // static models: alpha test from the albedo's alpha channel
+    float roughness = 0.8f;  // static models without a normal map: constant roughness
 };
 
 struct Lod {
@@ -487,6 +496,59 @@ void writeMaterialTextures(const MaterialSpec& m, bool foliage, int size, int no
         n.px[i + 1] = v.y * 0.5f + 0.5f;
         n.px[i + 2] = hasArm ? arm.px[i + 1] : arm.px[i]; // roughness
         n.px[i + 3] = hasArm ? arm.px[i] : 1.0f;          // AO
+    }
+    writeKtx(n, false, false, dir + "/" + m.name + "_nra.ktx2");
+}
+
+// Image at its own size (static models; the converter already scaled it), linear 0..1 RGBA.
+Plane loadAsIs(const std::string& path) {
+    int w = 0, h = 0, n = 0;
+    stbi_uc* d = stbi_load(path.c_str(), &w, &h, &n, 4);
+    if (!d) die("cannot decode " + path + ": " + stbi_failure_reason());
+    if (w % 4 != 0 || h % 4 != 0) die(path + ": static model maps need sides that are multiples of 4");
+    Plane p;
+    p.w = w;
+    p.h = h;
+    p.px.resize(std::size_t(w) * std::size_t(h) * 4);
+    for (std::size_t i = 0; i < p.px.size(); ++i) p.px[i] = float(d[i]) / 255.0f;
+    stbi_image_free(d);
+    return p;
+}
+
+void writeStaticTextures(const MaterialSpec& m, const std::string& dir) {
+    Plane a = loadAsIs(m.albedo);
+    for (std::size_t i = 0; i < a.px.size(); i += 4) {
+        for (int c = 0; c < 3; ++c) a.px[i + std::size_t(c)] = srgbToLinear(a.px[i + std::size_t(c)]);
+        if (!m.alphaTest) a.px[i + 3] = 1.0f;
+    }
+    if (m.alphaTest) {
+        Plane d = a;
+        for (std::size_t i = 3; i < d.px.size(); i += 4) d.px[i] = d.px[i] >= 0.5f ? 1.0f : 0.0f;
+        dilate(d, 6);
+        for (std::size_t i = 0; i < a.px.size(); i += 4)
+            if (a.px[i + 3] < 0.5f)
+                for (int c = 0; c < 3; ++c) a.px[i + std::size_t(c)] = d.px[i + std::size_t(c)];
+    }
+    writeKtx(a, true, m.alphaTest, dir + "/" + m.name + "_albedo.ktx2");
+    Plane n;
+    if (m.normal.empty()) {
+        n.w = n.h = 4;
+        n.px.resize(16 * 4);
+        for (std::size_t i = 0; i < n.px.size(); i += 4) {
+            n.px[i] = n.px[i + 1] = 0.5f;
+            n.px[i + 2] = m.roughness;
+            n.px[i + 3] = 1.0f;
+        }
+    } else {
+        n = loadAsIs(m.normal);
+        for (std::size_t i = 0; i < n.px.size(); i += 4) {
+            const float g = m.normalGl ? 1.0f - n.px[i + 1] : n.px[i + 1];
+            V3 v = norm({n.px[i] * 2 - 1, g * 2 - 1, n.px[i + 2] * 2 - 1});
+            n.px[i] = v.x * 0.5f + 0.5f;
+            n.px[i + 1] = v.y * 0.5f + 0.5f;
+            n.px[i + 2] = m.roughness;
+            n.px[i + 3] = 1.0f;
+        }
     }
     writeKtx(n, false, false, dir + "/" + m.name + "_nra.ktx2");
 }
@@ -990,7 +1052,10 @@ int main(int argc, char** argv) {
     for (const json::Value& v : spec["lods"].array) budgets.push_back(std::size_t(v.number));
     if (budgets.empty()) budgets = {4000};
     const int collisionLod = int(spec["collisionLod"].numberOr(-1));
-    const bool atBase = spec["origin"].stringOr(kind == "rock" || kind == "cliff" ? "center" : "base") == "base";
+    const bool isStatic = kind == "static";
+    const std::string originMode =
+        spec["origin"].stringOr(kind == "rock" || kind == "cliff" ? "center" : isStatic ? "none" : "base");
+    const bool atBase = originMode == "base";
     const float scale = float(spec["scale"].numberOr(1.0));
     bc7enc_compress_block_init();
 
@@ -1021,12 +1086,14 @@ int main(int argc, char** argv) {
         m.rough = v["rough"].stringOr("");
         m.normalGl = v["normalGl"].boolOr(false);
         m.write = v["write"].boolOr(true);
+        m.alphaTest = v["alphaTest"].boolOr(false);
+        m.roughness = float(v["roughness"].numberOr(0.8));
         mats[src] = m;
     }
     for (Part& p : parts) {
         const auto it = mats.find(p.material);
         if (it == mats.end()) die("spec has no textures for material '" + p.material + "'");
-        p.foliage = !it->second.alpha.empty();
+        p.foliage = isStatic ? it->second.alphaTest : !it->second.alpha.empty();
     }
 
     // Cliff faces are open scanned shells: turn them so the area-weighted mean normal of the face is +Z (a vertical
@@ -1064,7 +1131,9 @@ int main(int argc, char** argv) {
     for (const Part& p : parts)
         for (const Vert& v : p.verts) all.add(v.p);
     V3 origin{0.5f * (all.lo.x + all.hi.x), 0.5f * (all.lo.y + all.hi.y), 0.5f * (all.lo.z + all.hi.z)};
-    if (atBase) {
+    if (originMode == "none") {
+        origin = {0, 0, 0};
+    } else if (atBase) {
         Bounds foot;
         for (const Part& p : parts)
             if (!p.foliage)
@@ -1146,7 +1215,7 @@ int main(int argc, char** argv) {
     const bool clumps = kind == "tree" && double(sourceFoliage) > 4.0 * 0.78 * double(budgets[0]);
     const V3 crown{0, b.lo.y + 0.58f * height, 0};
     for (Part& p : parts) {
-        if (!p.foliage) continue;
+        if (!p.foliage || isStatic) continue;
         for (Vert& v : p.verts) {
             const V3 q{v.p[0] / std::max(radius, 0.1f), (v.p[1] - crown.y) / std::max(0.5f * height, 0.1f), v.p[2] / std::max(radius, 0.1f)};
             const V3 radial = norm(q);
@@ -1164,8 +1233,8 @@ int main(int argc, char** argv) {
         for (Vert& v : p.verts) {
             const float h = std::clamp(v.p[1] / std::max(height, 0.1f), 0.0f, 1.0f);
             const float r = std::clamp(std::hypot(v.p[0], v.p[2]) / std::max(radius, 0.1f), 0.0f, 1.0f);
-            v.wind[0] = kind == "rock" || kind == "cliff" || kind == "log" ? 0.0f : h * h;
-            v.wind[1] = p.foliage ? std::pow(h, 0.7f) * (0.35f + 0.65f * r) : (kind == "bush" ? 0.5f * h : 0.0f);
+            v.wind[0] = kind == "rock" || kind == "cliff" || kind == "log" || isStatic ? 0.0f : h * h;
+            v.wind[1] = isStatic ? 0.0f : p.foliage ? std::pow(h, 0.7f) * (0.35f + 0.65f * r) : (kind == "bush" ? 0.5f * h : 0.0f);
         }
 
     std::map<std::string, bool> foliage;
@@ -1277,7 +1346,17 @@ int main(int argc, char** argv) {
 
     // LODs.
     std::vector<Lod> lods;
-    for (std::size_t li = 0; li < budgets.size(); ++li) {
+    if (isStatic) {
+        Lod lod;
+        for (Part p : parts) {
+            compact(p);
+            if (!p.idx.empty()) lod.parts.push_back(std::move(p));
+        }
+        std::printf("  lod0: %zu triangles (static: the source triangles)\n", lod.tris());
+        lods.push_back(std::move(lod));
+        budgets.assign(1, lods[0].tris());
+    }
+    for (std::size_t li = 0; li < budgets.size() && !isStatic; ++li) {
         Lod lod;
         const std::size_t budget = budgets[li];
         std::size_t foliageTris = 0, opaqueTris = 0;
@@ -1312,7 +1391,10 @@ int main(int argc, char** argv) {
     const int texSize = int(spec["textureSize"].numberOr(1024)), normalSize = int(spec["normalSize"].numberOr(512));
     if (spec["writeTextures"].boolOr(true))
         for (const auto& [src, m] : mats)
-            if (used.count(src) && m.write) writeMaterialTextures(m, foliage[src], texSize, normalSize, outDir);
+            if (used.count(src) && m.write) {
+                if (isStatic) writeStaticTextures(m, outDir);
+                else writeMaterialTextures(m, foliage[src], texSize, normalSize, outDir);
+            }
     if (clumps) {
         Plane mask = clumpAlbedo;
         for (std::size_t i = 3; i < mask.px.size(); i += 4) mask.px[i] = mask.px[i] >= 0.5f ? 1.0f : 0.0f;
@@ -1458,6 +1540,7 @@ int main(int argc, char** argv) {
     extras.object["lodTriangles"] = lodTris;
     extras.object["lodError"] = lodErr;
     if (collisionLod >= 0) extras.object["collisionLod"] = num(collisionLod);
+    if (!spec["surface"].stringOr("").empty()) extras.object["surface"] = str(spec["surface"].string);
     extras.object["sourceTriangles"] = num(double(sourceTris));
     doc.object["extras"] = extras;
     writeGlb(outDir + "/" + id + ".glb", doc, w.bin);

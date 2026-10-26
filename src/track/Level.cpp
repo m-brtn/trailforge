@@ -450,7 +450,8 @@ private:
     std::vector<std::uint8_t> m_nearWater;     // 0..255: water within ~3 m
     std::vector<float> m_forest;               // per cell forest density
     std::string m_baseDir;
-    std::vector<int> m_conifers, m_saplings, m_broadleaf, m_bushes, m_ferns, m_debris, m_rockModels, m_logs, m_cliffModels;
+    std::vector<int> m_conifers, m_saplings, m_broadleaf, m_bushes, m_ferns, m_debris, m_rockModels, m_logs, m_cliffModels,
+        m_staticModels;
     std::vector<float> m_waterDist;            // 8 m grid
     int m_wn = 0;
 
@@ -475,7 +476,7 @@ private:
     struct BakedPlacement {
         std::string kind, model;
         BuildingSpec spec;
-        float x = 0, z = 0, yaw = 0, scale = 1, width = 1, sx = 1, sy = 1, sz = 1, sink = 0.3f;
+        float x = 0, y = 0, z = 0, yaw = 0, scale = 1, width = 1, sx = 1, sy = 1, sz = 1, sink = 0.3f;
     };
     bool parseBaked(const json::Value& doc, std::string& err);
     void bakeBaked(std::chrono::steady_clock::time_point t0);
@@ -709,7 +710,7 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
     const std::pair<const char*, std::vector<int>*> roles[] = {
         {"conifers", &m_conifers}, {"saplings", &m_saplings}, {"broadleaf", &m_broadleaf}, {"bushes", &m_bushes},
         {"ferns", &m_ferns},       {"debris", &m_debris},     {"rocks", &m_rockModels},   {"logs", &m_logs},
-        {"cliffs", &m_cliffModels}};
+        {"cliffs", &m_cliffModels}, {"statics", &m_staticModels}};
     std::string warning;
     for (const auto& [key, list] : roles) {
         for (const json::Value& v : veg[key].array) {
@@ -744,8 +745,22 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
                 m.collisionLod = a.collisionLod;
                 m.collisionError = a.lodError[std::size_t(a.collisionLod)];
             }
+            if (m.kind == "static") {
+                // Optional collision: the model's only LOD (render-only meshes such as decals and tree cards have none).
+                if (!a.collisionIndices.empty())
+                    for (std::uint32_t i : a.collisionIndices)
+                        m.collision.push_back(Float3(a.collisionPositions[3 * i], a.collisionPositions[3 * i + 1],
+                                                     a.collisionPositions[3 * i + 2]));
+                m.collisionLod = a.collisionLod;
+                m.surface = surfaceFromKey(a.surface);
+                if (!m.collision.empty() && m.surface == SurfaceId::Count) {
+                    err = "level: " + m.path + ": static model surface '" + a.surface + "' is unknown";
+                    return false;
+                }
+            }
             if ((m.kind == "tree") != (list == &m_conifers || list == &m_saplings || list == &m_broadleaf) ||
-                ((m.kind == "rock") != (list == &m_rockModels)) || ((m.kind == "cliff") != (list == &m_cliffModels))) {
+                ((m.kind == "rock") != (list == &m_rockModels)) || ((m.kind == "cliff") != (list == &m_cliffModels)) ||
+                ((m.kind == "static") != (list == &m_staticModels))) {
                 err = "level: " + m.path + " is a " + m.kind + ", not one of the " + key;
                 return false;
             }
@@ -755,7 +770,7 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
         }
         if (!warning.empty()) break;
     }
-    if (!warning.empty() || m_conifers.empty()) {
+    if (!warning.empty() || (m_conifers.empty() && m_staticModels.empty())) {
         // Missing library (for example Git LFS objects not pulled): the procedural trees and rocks stand in.
         L.m_modelError = warning.empty() ? "vegetation: no conifers" : warning;
         L.m_models.clear();
@@ -2688,7 +2703,9 @@ bool LevelBaker::parseBaked(const json::Value& doc, std::string& err) {
     m_baked = true;
     L.m_baked = true;
     m_snowLine = 1.0e9f;
+    m_seaLevel = -1.0e9f; // no coast: ground below 0 m is dry land
     L.m_asphaltLayer = doc["asphaltLayer"].boolOr(false);
+    L.m_grassBlades = doc["grassBlades"].boolOr(true);
     m_routeName = doc["attractRoute"]["name"].stringOr("circuit");
     m_routeSpeed = float(doc["attractRoute"]["speedKmh"].numberOr(40.0)) / 3.6f;
     m_routeLateral = float(doc["attractRoute"]["lateralAccel"].numberOr(0.0));
@@ -2800,6 +2817,8 @@ bool LevelBaker::parseBaked(const json::Value& doc, std::string& err) {
                 b.sz = float(sc.array[2].number);
             }
             b.sink = float(p["sink"].numberOr(0.3));
+        } else if (b.kind == "static") {
+            b.y = float(p["y"].numberOr(0));
         } else if (b.kind == "building") {
             const std::string type = p["type"].stringOr("");
             b.spec.kind = BuildingKind::Count;
@@ -2815,7 +2834,7 @@ bool LevelBaker::parseBaked(const json::Value& doc, std::string& err) {
             b.spec.floors = int(p["floors"].numberOr(1));
             b.spec.variant = int(p["variant"].numberOr(0));
         } else {
-            err = "level: layout placement kind '" + b.kind + "' (tree, rock or building)";
+            err = "level: layout placement kind '" + b.kind + "' (tree, rock, static or building)";
             return false;
         }
         m_placements.push_back(std::move(b));
@@ -3084,6 +3103,25 @@ void LevelBaker::placeBaked() {
             }
             r.y = L.heightAt(p.x, p.z) - p.sink * r.ry;
             L.m_rocks.push_back(r);
+        } else if (p.kind == "static") {
+            const int id = model(p.model, "static");
+            if (id < 0) {
+                L.m_layoutIssues.push_back("static model '" + p.model + "' is not in the vegetation library");
+                continue;
+            }
+            const LevelModel& m = L.m_models[std::size_t(id)];
+            LevelRock r;
+            r.x = p.x;
+            r.y = p.y;
+            r.z = p.z;
+            r.yaw = p.yaw;
+            r.model = std::int16_t(id);
+            r.staticMesh = true;
+            r.rx = 0.5f * (m.boundsMax.x - m.boundsMin.x);
+            r.ry = 0.5f * (m.boundsMax.y - m.boundsMin.y);
+            r.rz = 0.5f * (m.boundsMax.z - m.boundsMin.z);
+            L.m_staticGround = L.m_staticGround || !m.collision.empty();
+            L.m_rocks.push_back(r);
         } else {
             building(p.spec, p.x, p.z, p.yaw);
         }
@@ -3223,6 +3261,7 @@ void LevelBaker::checkBakedLayout() {
         }
     }
     for (const LevelRock& r : L.m_rocks) {
+        if (r.staticMesh) continue; // the scene itself: its origin need not be in the play area, it carries the roads
         inPlay(r.x, r.z, "rock");
         const float gap = roadGap({P2{r.x, r.z}}) - std::max(r.rx, r.rz);
         if (gap < 1.0f) {
@@ -3306,7 +3345,10 @@ float LevelBridge::deckY(float s) const {
 }
 
 // ------------------------------------------------------------------------------------------------------------------
-SurfaceId levelModelSurface(const LevelModel& m) { return m.kind == "log" ? SurfaceId::Concrete : SurfaceId::Rock; }
+SurfaceId levelModelSurface(const LevelModel& m) {
+    if (m.kind == "static") return m.surface;
+    return m.kind == "log" ? SurfaceId::Concrete : SurfaceId::Rock;
+}
 
 void addLevelRock(TrackGeometry& g, const LevelRock& r, const std::vector<LevelModel>& models) {
     if (r.model < 0 || std::size_t(r.model) >= models.size()) {

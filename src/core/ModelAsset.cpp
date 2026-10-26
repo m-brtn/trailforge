@@ -61,6 +61,7 @@ bool ModelAsset::load(const std::string& path, bool withMeshes, std::string* err
     lodError.clear();
     for (const json::Value& v : extras["lodError"].array) lodError.push_back(float(v.number));
     collisionLod = int(extras["collisionLod"].numberOr(-1.0));
+    surface = extras["surface"].stringOr("");
     impostorAlbedo = extras["impostor"]["albedo"].stringOr("");
     impostorNra = extras["impostor"]["nra"].stringOr("");
     impostorViews = int(extras["impostor"]["views"].numberOr(0.0));

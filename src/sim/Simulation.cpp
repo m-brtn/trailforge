@@ -115,7 +115,15 @@ void Simulation::checkRecovery(float dt) {
 void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     m_vehicle.reset(); // delete the old body/constraint first
     if (m_terrain) m_terrain->ensureLoaded(at.position.GetX(), at.position.GetZ(), m_settings.terrain.requiredRadius);
-    const float y = at.position.GetY() + spawnHeight(config);
+    float ground = at.position.GetY();
+    if (m_settings.level && m_settings.level->staticGround()) {
+        // The static scene meshes carry the vehicle above the height grid: the highest collision within 8 m above
+        // the grid height (no vehicle exists at this point).
+        const JPH::RRayCast ray(JPH::RVec3(at.position.GetX(), ground + 8.0f, at.position.GetZ()), JPH::Vec3(0.0f, -10.0f, 0.0f));
+        JPH::RayCastResult hit;
+        if (m_world->system().GetNarrowPhaseQuery().CastRay(ray, hit)) ground = ground + 8.0f - 10.0f * hit.mFraction;
+    }
+    const float y = ground + spawnHeight(config);
     const JPH::RVec3 pos(at.position.GetX(), y, at.position.GetZ());
     const JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), at.yaw);
     m_vehicle = std::make_unique<Vehicle>(*m_world, m_surfaces, config, pos, rot);

@@ -51,7 +51,8 @@ TerrainTiles::TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, st
             ++m_trunkCount;
         }
     for (std::size_t i = 0; i < L.rocks().size(); ++i)
-        if (const int b = bucket(L.rocks()[i].x, L.rocks()[i].z); b >= 0) m_tileRocks[std::size_t(b)].push_back(std::uint32_t(i));
+        if (const int b = bucket(L.rocks()[i].x, L.rocks()[i].z); b >= 0 && !L.rocks()[i].staticMesh)
+            m_tileRocks[std::size_t(b)].push_back(std::uint32_t(i));
     // One collision mesh per model (unit scale); instances share it through a ScaledShape in the tile compound.
     JPH::PhysicsMaterialList materials;
     for (std::size_t i = 0; i < kSurfaceCount; ++i) materials.push_back(m_surfaces.material(SurfaceId(i)));
@@ -69,6 +70,21 @@ TerrainTiles::TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, st
         if (mr.HasError()) throw std::runtime_error("MeshShape (model " + m.id + "): " + mr.GetError().c_str());
         m_modelShapes[i] = mr.Get();
     }
+    // Static scene meshes span many tiles (a whole stadium): they are not streamed, so a teleport never arrives
+    // before the ground it stands on.
+    JPH::StaticCompoundShapeSettings scene;
+    for (const LevelRock& r : L.rocks())
+        if (r.staticMesh && r.model >= 0 && std::size_t(r.model) < m_modelShapes.size() && m_modelShapes[std::size_t(r.model)])
+            scene.AddShape(JPH::Vec3(r.x, r.y, r.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), r.yaw),
+                           m_modelShapes[std::size_t(r.model)]);
+    if (!scene.mSubShapes.empty()) {
+        JPH::ShapeSettings::ShapeResult sr = scene.Create();
+        if (sr.HasError()) throw std::runtime_error(std::string("StaticCompoundShape (static scene): ") + sr.GetError().c_str());
+        JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                      Layers::Static);
+        bcs.mFriction = 0.8f;
+        m_staticScene = m_world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    }
     if (m_settings.async) m_worker = std::thread([this] { workerLoop(); });
 }
 
@@ -82,6 +98,10 @@ TerrainTiles::~TerrainTiles() {
     if (m_worker.joinable()) m_worker.join();
     for (int i = 0; i < int(m_tiles.size()); ++i)
         if (m_tiles[std::size_t(i)].state == State::Loaded) removeBodies(i);
+    if (!m_staticScene.IsInvalid()) {
+        m_world.bodies().RemoveBody(m_staticScene);
+        m_world.bodies().DestroyBody(m_staticScene);
+    }
 }
 
 int TerrainTiles::tileIndexOf(float coord) const {
