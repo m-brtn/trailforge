@@ -11,6 +11,7 @@
 #include <deque>
 #include <functional>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace tf {
@@ -143,21 +144,73 @@ const BlueprintLight* lightAt(const VehicleBlueprint& bp, const char* view, floa
     return nullptr;
 }
 
-// Colour class of a body point seen along its normal: the view the surface faces most, then the next ones where
-// the first has no body (silhouette edges). The plan and the side view are preferred over the end views (biased
-// weights), so gently curved panels do not flip between views from one triangle to the next.
-char colourClass(const BlueprintBody& B, const glm::vec3& c, const glm::vec3& n) {
+// Outermost body surface seen by each concept view, from the body mesh: top (max y over x, z), side (max |x| over z,
+// y), front (max z over x, y), rear (max -z over x, y). A view only paints the surface it actually sees, so the
+// plan view's shoulder colour does not land on the greenhouse below the roof edge, and so on.
+struct ViewDepth {
+    float u0 = 0.0f, v0 = 0.0f, cell = 0.02f;
+    int w = 0, h = 0;
+    std::vector<float> d;
+    void init(float uLo, float uHi, float vLo, float vHi, float c) {
+        u0 = uLo, v0 = vLo, cell = c;
+        w = int((uHi - uLo) / c) + 2, h = int((vHi - vLo) / c) + 2;
+        d.assign(std::size_t(w) * std::size_t(h), -1e9f);
+    }
+    int index(float u, float v) const {
+        const int j = int(std::lround((u - u0) / cell)), i = int(std::lround((v - v0) / cell));
+        return i < 0 || j < 0 || i >= h || j >= w ? -1 : i * w + j;
+    }
+    float depth(float u, float v) const {
+        const int k = index(u, v);
+        return k < 0 ? -1e9f : d[std::size_t(k)];
+    }
+    void add(float u, float v, float depth) {
+        if (const int k = index(u, v); k >= 0) d[std::size_t(k)] = std::max(d[std::size_t(k)], depth);
+    }
+    void fillGaps() { // cells the mesh vertices skipped take their neighbours' surface
+        for (int pass = 0; pass < 2; ++pass) {
+            std::vector<float> n = d;
+            for (int i = 0; i < h; ++i)
+                for (int j = 0; j < w; ++j) {
+                    if (d[std::size_t(i * w + j)] > -1e8f) continue;
+                    for (int di = -1; di <= 1; ++di)
+                        for (int dj = -1; dj <= 1; ++dj) {
+                            const int y = i + di, x = j + dj;
+                            if (y >= 0 && x >= 0 && y < h && x < w)
+                                n[std::size_t(i * w + j)] = std::max(n[std::size_t(i * w + j)], d[std::size_t(y * w + x)]);
+                        }
+                }
+            d.swap(n);
+        }
+    }
+};
+struct ViewDepths {
+    ViewDepth side, top, front, rear;
+    static constexpr float kTolerance = 0.04f; // m below the outermost surface that still counts as seen
+    std::array<bool, 4> seen(const glm::vec3& c) const {
+        return {std::abs(c.x) >= side.depth(c.z, c.y) - kTolerance, c.y >= top.depth(c.x, c.z) - kTolerance,
+                c.z >= front.depth(c.x, c.y) - kTolerance, -c.z >= rear.depth(c.x, c.y) - kTolerance};
+    }
+};
+
+// Colour class of a body point seen along its normal: the view the surface faces most among the views that see the
+// point, then the next ones where the first has no body (silhouette edges). The side view is preferred over the
+// plan (biased weights), so the greenhouse and the shoulders take the side colours; the end views come last.
+char colourClass(const BlueprintBody& B, const ViewDepths& D, const glm::vec3& c, const glm::vec3& n) {
     const VehicleBlueprint& bp = B.blueprint();
     const float zc = B.conceptZ(c.z), yc = B.conceptY(c.y);
-    std::array<std::pair<float, int>, 4> w{{{2.0f * std::abs(n.x), 0}, {2.5f * std::max(n.y, 0.0f), 1},
+    const std::array<bool, 4> seen = D.seen(c);
+    std::array<std::pair<float, int>, 4> w{{{2.0f * std::abs(n.x), 0}, {1.0f * std::max(n.y, 0.0f), 1},
                                             {std::max(n.z, 0.0f), 2}, {std::max(-n.z, 0.0f), 3}}};
+    for (auto& [weight, view] : w)
+        if (!seen[std::size_t(view)]) weight *= 0.1f;
     std::sort(w.begin(), w.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
     for (const auto& [weight, view] : w) {
-        if (weight < 0.05f) break;
-        const char cls = view == 0   ? bp.side.classAt(zc, yc)
-                         : view == 1 ? bp.top.classAt(zc, c.x)
-                         : view == 2 ? bp.front.classAt(c.x, yc)
-                                     : bp.rear.classAt(c.x, yc);
+        if (weight < 0.005f) break;
+        const char cls = view == 0   ? bp.side.smoothClassAt(zc, yc)
+                         : view == 1 ? bp.top.smoothClassAt(zc, c.x)
+                         : view == 2 ? bp.front.smoothClassAt(c.x, yc)
+                                     : bp.rear.smoothClassAt(c.x, yc);
         if (cls != '.') return cls;
     }
     return '.';
@@ -172,8 +225,9 @@ std::string doorPart(const VehicleBlueprint& bp, const Landmarks& K, float zc, f
     return "body_shell";
 }
 
-std::pair<const Material*, std::string> classify(const BlueprintBody& B, const Landmarks& K, const BodyMaterials& M,
-                                                 const glm::vec3& c, const glm::vec3& n) {
+std::pair<const Material*, std::string> classify(const BlueprintBody& B, const ViewDepths& D, const Landmarks& K,
+                                                 const BodyMaterials& M, const glm::vec3& c, const glm::vec3& n,
+                                                 const glm::vec3& viewN) {
     const VehicleBlueprint& bp = B.blueprint();
     const style::Livery& L = M.L;
     const float sx = c.x >= 0.0f ? 1.0f : -1.0f;
@@ -183,6 +237,7 @@ std::pair<const Material*, std::string> classify(const BlueprintBody& B, const L
     const bool onFender = fen < std::max(hull, -wh);
     if (onFender && std::abs(wh) < 0.5f * kFenderShell) return {&L.liner, flare}; // under the fender
     if (!onFender && -wh > hull) return {&L.liner, "body_shell"};                 // wheelhouse wall
+    if (onFender) return {&L.trim, flare}; // the fender lips are unpainted plastic on both sheets
 
     std::string part = "body_shell";
     if (onFender) part = flare;
@@ -202,7 +257,7 @@ std::pair<const Material*, std::string> classify(const BlueprintBody& B, const L
             return {&M.brake, l->kind == "brake" ? std::string("tailgate") : sided("taillight", sx)};
     if (n.y < -0.6f) return {&L.underbody, part};
 
-    switch (colourClass(B, c, n)) {
+    switch (colourClass(B, D, c, viewN)) {
     case 'p': return {&L.body, part};
     case 'a': return {&L.accent, part};
     case 'w': return {&L.roof, part};
@@ -288,14 +343,73 @@ void body(Parts& P, const BlueprintBody& B, const Landmarks& K, const BodyMateri
     const FieldMesh fm =
         polygonizeField([&](const glm::vec3& p) { return B.field(p.x, p.y, p.z); }, lo, hi, kCell);
     const float crease = std::cos(glm::radians(40.0f));
-    struct Tri {
-        std::array<std::uint32_t, 3> v;
-        glm::vec3 fn;
-        const Material* mat;
-        std::string part;
+
+    // Paint: every mesh vertex gets its region (material and part) from the view its normal faces; a triangle whose
+    // corners disagree is split where the region changes along its edges (bisection on the edge, the same point for
+    // both triangles sharing it), so region borders are straight cuts through the triangles rather than the
+    // 2 cm staircase of the mesh lattice.
+    using Region = std::pair<const Material*, std::string>;
+    ViewDepths D;
+    D.side.init(lo.z, hi.z, lo.y, hi.y, kCell);
+    D.top.init(lo.x, hi.x, lo.z, hi.z, kCell);
+    D.front.init(lo.x, hi.x, lo.y, hi.y, kCell);
+    D.rear.init(lo.x, hi.x, lo.y, hi.y, kCell);
+    for (const glm::vec3& p : fm.positions) {
+        // The fender lips stand out of the body side: they must not hide the panel around the arch from the side
+        // view (they are plain trim anyway).
+        if (B.fender(p.x, p.y, p.z) < std::max(B.hull(p.x, p.y, p.z), -B.wheelhouse(p.x, p.y, p.z))) continue;
+        D.side.add(p.z, p.y, std::abs(p.x));
+        D.top.add(p.x, p.z, p.y);
+        D.front.add(p.x, p.y, p.z);
+        D.rear.add(p.x, p.y, -p.z);
+    }
+    for (ViewDepth* v : {&D.side, &D.top, &D.front, &D.rear}) v->fillGaps();
+    // Regions are chosen with the body's normal at panel scale (field gradient over 8 cm), not the mesh normal:
+    // the surface-net normals ripple at the lattice size. Which concept view paints the point is decided with the
+    // normal over 30 cm, so the borders between views (roof edges, shoulders) run along the panels instead of
+    // following every ripple of the traced outline.
+    auto gradient = [&](const glm::vec3& p, const glm::vec3& n, float h) {
+        const glm::vec3 g(B.field(p.x + h, p.y, p.z) - B.field(p.x - h, p.y, p.z),
+                          B.field(p.x, p.y + h, p.z) - B.field(p.x, p.y - h, p.z),
+                          B.field(p.x, p.y, p.z + h) - B.field(p.x, p.y, p.z - h));
+        const float len = glm::length(g);
+        return len > 1e-6f && glm::dot(g, n) > 0.0f ? g / len : n;
     };
-    std::vector<Tri> tris;
-    tris.reserve(fm.quads.size() * 2);
+    auto regionAt = [&](const glm::vec3& p, const glm::vec3& n) {
+        const glm::vec3 np = gradient(p, n, 0.08f);
+        return classify(B, D, K, M, p, np, gradient(p, np, 0.30f));
+    };
+    std::vector<Region> vreg(fm.positions.size());
+    std::vector<char> vdone(fm.positions.size(), 0);
+    auto vertexRegion = [&](std::uint32_t v) -> const Region& {
+        if (!vdone[v]) {
+            vreg[v] = regionAt(fm.positions[v], fm.normals[v]);
+            vdone[v] = 1;
+        }
+        return vreg[v];
+    };
+    struct Split {
+        glm::vec3 p, n;
+    };
+    std::unordered_map<std::uint64_t, Split> splits;
+    auto edgeSplit = [&](std::uint32_t a, std::uint32_t b) -> Split {
+        if (a > b) std::swap(a, b);
+        const std::uint64_t key = (std::uint64_t(a) << 32) | b;
+        if (auto it = splits.find(key); it != splits.end()) return it->second;
+        const glm::vec3 pa = fm.positions[a], pb = fm.positions[b], na = fm.normals[a], nb = fm.normals[b];
+        const Region& ra = vertexRegion(a);
+        float lo = 0.0f, hi = 1.0f;
+        for (int it = 0; it < 7; ++it) {
+            const float t = 0.5f * (lo + hi);
+            const glm::vec3 n = na + (nb - na) * t;
+            (regionAt(pa + (pb - pa) * t, glm::dot(n, n) > 1e-8f ? glm::normalize(n) : na) == ra ? lo : hi) = t;
+        }
+        const float t = 0.5f * (lo + hi);
+        glm::vec3 n = na + (nb - na) * t;
+        n = glm::dot(n, n) > 1e-8f ? glm::normalize(n) : na;
+        return splits[key] = Split{pa + (pb - pa) * t, n};
+    };
+
     for (const auto& q : fm.quads)
         for (const auto& tri : {std::array<std::uint32_t, 3>{q[0], q[1], q[2]}, std::array<std::uint32_t, 3>{q[0], q[2], q[3]}}) {
             const glm::vec3 a = fm.positions[tri[0]], b = fm.positions[tri[1]], c = fm.positions[tri[2]];
@@ -306,56 +420,43 @@ void body(Parts& P, const BlueprintBody& B, const Landmarks& K, const BodyMateri
             glm::vec3 fn = fm.normals[tri[0]] + fm.normals[tri[1]] + fm.normals[tri[2]];
             fn = glm::dot(fn, fn) > 1e-8f ? glm::normalize(fn) : cr / len;
             if (glm::dot(fn, cr) < 0.0f) fn = cr / len;
-            auto [mat, part] = classify(B, K, M, (a + b + c) / 3.0f, fn);
-            tris.push_back({tri, fn, mat, std::move(part)});
+            auto emit = [&](const Split& p0, const Split& p1, const Split& p2, const Region& r) {
+                glm::vec3 nv[3] = {p0.n, p1.n, p2.n};
+                for (glm::vec3& n : nv)
+                    if (glm::dot(n, fn) < crease) n = fn; // a vertex normal far from the triangle's mean: crease
+                P[r.second].addTri(p0.p, p1.p, p2.p, nv[0], nv[1], nv[2], *r.first);
+            };
+            Split s[3];
+            const Region* r[3];
+            for (int k = 0; k < 3; ++k) {
+                s[k] = {fm.positions[tri[k]], fm.normals[tri[k]]};
+                r[k] = &vertexRegion(tri[k]);
+            }
+            if (*r[0] == *r[1] && *r[1] == *r[2]) {
+                emit(s[0], s[1], s[2], *r[0]);
+                continue;
+            }
+            // The corner whose region differs from the other two (rotated first, keeping the winding).
+            int lone = -1;
+            for (int k = 0; k < 3; ++k)
+                if (*r[(k + 1) % 3] == *r[(k + 2) % 3]) lone = k;
+            if (lone >= 0) {
+                const int k0 = lone, k1 = (lone + 1) % 3, k2 = (lone + 2) % 3;
+                const Split e01 = edgeSplit(tri[k0], tri[k1]), e02 = edgeSplit(tri[k0], tri[k2]);
+                emit(s[k0], e01, e02, *r[k0]);
+                emit(e01, s[k1], s[k2], *r[k1]);
+                emit(e01, s[k2], e02, *r[k1]);
+                continue;
+            }
+            // Three regions meet: split every edge and join the splits at the centroid.
+            const Split e[3] = {edgeSplit(tri[0], tri[1]), edgeSplit(tri[1], tri[2]), edgeSplit(tri[2], tri[0])};
+            glm::vec3 gn = s[0].n + s[1].n + s[2].n;
+            const Split g{(a + b + c) / 3.0f, glm::dot(gn, gn) > 1e-8f ? glm::normalize(gn) : fn};
+            for (int k = 0; k < 3; ++k) {
+                emit(s[k], e[k], g, *r[k]);
+                emit(s[k], g, e[(k + 2) % 3], *r[k]);
+            }
         }
-
-    // Paint clean-up: the class grids are sampled per triangle, so colour borders are jagged at the lattice size and
-    // line work of the sheet leaves specks. Three majority passes over the triangles sharing a vertex, among the
-    // paint, trim and glass materials only (lamps, liners and the underbody keep their rule-based material).
-    const Material* paintable[] = {&M.L.body, &M.L.accent, &M.L.roof, &M.L.hooks, &M.L.trim, &M.L.glass};
-    auto paintIndex = [&](const Material* m) {
-        for (int i = 0; i < 6; ++i)
-            if (paintable[i] == m) return i;
-        return -1;
-    };
-    std::vector<std::uint32_t> start(fm.positions.size() + 1, 0), adj;
-    for (const Tri& t : tris)
-        for (std::uint32_t v : t.v) ++start[v + 1];
-    for (std::size_t i = 1; i < start.size(); ++i) start[i] += start[i - 1];
-    adj.resize(start.back());
-    {
-        std::vector<std::uint32_t> fill(start.begin(), start.end() - 1);
-        for (std::uint32_t t = 0; t < tris.size(); ++t)
-            for (std::uint32_t v : tris[t].v) adj[fill[v]++] = t;
-    }
-    std::vector<int> cls(tris.size());
-    for (std::size_t t = 0; t < tris.size(); ++t) cls[t] = paintIndex(tris[t].mat);
-    for (int pass = 0; pass < 3; ++pass) {
-        std::vector<int> next = cls;
-        for (std::size_t t = 0; t < tris.size(); ++t) {
-            if (cls[t] < 0) continue;
-            int count[6] = {};
-            for (std::uint32_t v : tris[t].v)
-                for (std::uint32_t k = start[v]; k < start[v + 1]; ++k)
-                    if (cls[adj[k]] >= 0) ++count[cls[adj[k]]];
-            int best = cls[t];
-            for (int i = 0; i < 6; ++i)
-                if (count[i] > count[best]) best = i;
-            next[t] = best;
-        }
-        cls.swap(next);
-    }
-
-    for (std::size_t t = 0; t < tris.size(); ++t) {
-        const Tri& tr = tris[t];
-        glm::vec3 nv[3] = {fm.normals[tr.v[0]], fm.normals[tr.v[1]], fm.normals[tr.v[2]]};
-        for (glm::vec3& n : nv)
-            if (glm::dot(n, tr.fn) < crease) n = tr.fn; // a vertex normal far from the triangle's mean: crease
-        const Material* mat = cls[t] >= 0 ? paintable[cls[t]] : tr.mat;
-        P[tr.part].addTri(fm.positions[tr.v[0]], fm.positions[tr.v[1]], fm.positions[tr.v[2]], nv[0], nv[1], nv[2],
-                          *mat);
-    }
 
     // Door shut lines: thin dark strips on the side skin at the traced cuts, from the sill up to the belt.
     for (float zc : cuts)

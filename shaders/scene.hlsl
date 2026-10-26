@@ -44,6 +44,7 @@ static const int MAT_PAINT = 14;
 static const int MAT_SAND = 15;
 static const int MAT_SNOW = 16;
 static const int MAT_TERRAIN = 17; // level terrain: splat weights rock / sand / snow in the color, the rest is dirt + mask
+static const int MAT_CLADDING = 18; // grained unpainted plastic (body cladding, bumpers, flares)
 
 // BodyMudRegion (src/sim/BodyMud.h).
 static const int kMudArchRearShader = 0;
@@ -781,6 +782,14 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         } else if (mat == MAT_RUBBER) {
             const float n = noiseTex.Sample(noiseSampler, vin.localPos.yz * 6.0).a;
             s.albedo *= 0.85 + 0.3 * n;
+        } else if (mat == MAT_CLADDING) {
+            // Stippled plastic: noise fixed to the vehicle, projected along the dominant local axis.
+            const float3 an = abs(vin.localNormal);
+            const float2 uv = an.x > max(an.y, an.z) ? vin.localPos.zy : (an.y > an.z ? vin.localPos.xz : vin.localPos.xy);
+            const float g = noiseTex.Sample(noiseSampler, uv * 9.0).a;
+            s.albedo *= 0.86 + 0.28 * g;
+            s.roughness = saturate(s.roughness + 0.1 * (g - 0.5));
+            N = perturbNormal(N, P, g, 0.002);
         }
         // Cosmetic mud layer (no effect on physics).
         const float mud = mudCover(f.vehicleParams.x, vin.material.w, vin.mudMode, vin.localPos, vin.localNormal, noiseTex,

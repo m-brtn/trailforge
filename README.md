@@ -637,12 +637,16 @@ Since v0.15.0 both bodies are built from `external_assets/images/Cars.png` (car 
    globally). The script crops the side / top / front / rear cells of the car's column (`tools/cars/sheet.json`),
    separates the car from the grey background, fits the side-view tire circles (axle positions and scale: the concept
    tire is scaled to the physics tire diameter), classifies every pixel into colour classes (paint, accent, white,
-   red, dark trim / glass) and writes `assets/vehicles/<id>/blueprint.json`: per view an RLE class grid in meters,
+   red, dark trim / glass), cleans them into paint regions (accessories and ignored parts filled from the nearest
+   body colour, two 7 × 7 majority passes, regions under 90 px removed, thin accent stripes kept from the sheet, then
+   the hand-drawn `paint` polygons of the view on top: main panels, window band, cladding line) and writes
+   `assets/vehicles/<id>/blueprint.json`: per view an RLE class grid in meters (the cells outside the hull, which
+   shape the body, do not depend on the colours),
    the belt and window lines, door cuts, axle z, lamps and accessory anchors, and a report with the scale checks.
    Everything done by hand is data in `tools/cars/<id>.keypoints.json` (pixel coordinates of the cell): accessories
    and shadows masked out of the silhouette (antennas, roof load, parts drawn on top of the hood, the drawn ground
-   shadow), extra door cuts, lamp boxes, anchor boxes (mirror, winch, cases, spare, slider, fender tops), the palette
-   and `restHubY` (where the concept axle line sits in body space). Debug overlays go to `/tmp/trailforge_blueprint_<id>_<view>.png`.
+   shadow), extra door cuts, lamp boxes, anchor boxes (mirror, winch, cases, spare, slider, fender tops), the paint
+   polygons, the palette and `restHubY` (where the concept axle line sits in body space). Debug overlays go to `/tmp/trailforge_blueprint_<id>_<view>.png` (paint regions: `..._<view>_paint.png`).
 2. **Embed**: `cmake/EmbedBlueprints.cmake` compiles the JSON files of `TRAILFORGE_BLUEPRINT_IDS` into the binary;
    `VehicleBlueprint` parses them and turns every view outline into a smoothed signed distance field.
 3. **Body** (`BlueprintBody`, no SDL): the visual hull of the four views placed on the physics wheels (the concept
@@ -654,15 +658,20 @@ Since v0.15.0 both bodies are built from `external_assets/images/Cars.png` (car 
    both as on the sheet) stay visible through the opening and are placed from the physics suspension length every
    frame. `FieldMesh` meshes the field (surface nets, about 2 cm cells, vertices projected onto the surface, normals
    from the field gradient); a normal more than 40° from its triangle keeps the triangle normal, so creases stay hard.
-4. **Paint and parts** (`render/VehicleModel.cpp`): every triangle takes its colour class from the view it faces most
-   (side and top weighted over the end views), then three majority passes over neighbouring triangles remove single
-   blotches. Dark classes above the belt become glass. Triangles are split into named parts by position (doors from
-   the door cuts, hood, fenders, flares, bumpers, tailgate, grille / front panel). Lamps come from the traced lamp
-   boxes. Accessories are style-kit meshes placed on the anchors: raised fender tops, winch, tow hooks, mirrors, roof
+4. **Paint and parts** (`render/VehicleModel.cpp`): every mesh vertex takes its region (material and part) from
+   the class grid of one view: among the views that see the point (it lies on the outermost surface along that
+   view's axis, from depth maps of the mesh), the one its normal over 30 cm faces most (side weighted over the plan,
+   the end views last). The grids are read with a smooth lookup (bilinear argmax of a [1 2 1] blur), and a triangle
+   whose corners disagree is split where the region changes along its edges (bisection, the same point for both
+   triangles sharing the edge), so borders are straight cuts through the mesh, not the 2 cm lattice staircase.
+   Dark classes above the belt become glass. Parts by position (doors from the door cuts, hood, fenders, flares,
+   bumpers, tailgate, grille / front panel), split the same way. Lamps come from the traced lamp boxes. Accessories are style-kit meshes placed on the anchors: raised fender tops, winch, tow hooks, mirrors, roof
    rails, light bar, roof cases, rock sliders with the belly plate, skid plates, the SUV's rear jerry cans and
-   tailgate spare. The paint is per triangle (about 2 cm), so colour borders are stepped, and where a view of the
-   sheet draws an accessory over the body (the bull bar over the hood front in the plan, the cladding and handles in
-   the side view) its colour lands on the panel: the bodies show dark patches the concept does not have.
+   tailgate spare. Materials per region: clear-coat paint (body, accents, roof), dark glass, and the cladding /
+   bumpers / flares in a grained matte plastic (`MatId::Cladding`, noise fixed to the vehicle). The fender lips are
+   always trim (both sheets draw black flares), and they are left out of the side view's depth map so the panel
+   around the arch still counts as seen. Still rough: where the sheet's views disagree about a corner (hood front
+   corners, the EV's rear quarter) a small patch takes the colour of the view that wins there.
 5. **Collision** (`Vehicle.cpp`): `BlueprintBody::collisionParts` gives convex hulls of the tub between the wheels,
    the full-width band above the wheelhouses up to the belt and the greenhouse (5 cm cross-sections), plus the
    slider / belly box; the centre of mass is moved to the configured point with `OffsetCenterOfMassShape`. A visual
@@ -701,7 +710,7 @@ accessories in `VehicleModel.cpp`, set `visualModel` in the vehicle.json, then c
 All vehicle geometry is procedural and visual only, except that the body collision hulls come from the same blueprint.
 
 - **Style kit** (`src/render/StyleKit`): the shared building blocks for the accessories.
-  - Materials: clear-coat paint without metallic flakes (stylized-realistic), matte plastic trim, metal, rubber,
+  - Materials: clear-coat paint without metallic flakes (stylized-realistic), grained matte plastic trim, metal, rubber,
     glass, emissive LEDs (headlight / brake / reverse / indicator ids, scaled by the vehicle state in the shader);
     a `Livery` groups base paint, accent paint, roof, trims.
   - Lights: LED rings, strips, round lamps. Accessories: roof rails with crossbars, cargo straps, light bar, winch,
@@ -715,10 +724,10 @@ All vehicle geometry is procedural and visual only, except that the body collisi
   and `detachable`, vertex range), merged into one mesh and one draw call. The flags only mark what a later damage
   stage may bend or knock off; there is no damage logic. Spare wheels are mount points (`SpareMount`) drawn with
   the rear wheel mesh, so they follow the rear tire size.
-- **trailforge_suv** (~162k body triangles, 40 parts): olive paint, orange accents and rear quarter panel, white
+- **trailforge_suv** (~205k body triangles, 40 parts): olive paint, orange accents and rear quarter panel, white
   roof, black trim, grille with the traced lamps, winch, roof rails with a light bar, a dark front case with two LED
   lenses and an olive rear case, rear jerry cans, tailgate spare.
-- **trailforge_ev** (~149k body triangles, 38 parts): white / light grey paint, blue accents, black cladding, the
+- **trailforge_ev** (~193k body triangles, 38 parts): white / light grey paint, blue accents, black cladding, the
   closed front panel with the LED bar, the full-width tail light, roof rails with a light bar and one flat case, and
   under the body the floor battery pack and one motor per axle. No winch, no spare.
 - **Wheels follow the physics**: the wheel meshes are built per axle from the active configuration (definition,

@@ -1,5 +1,5 @@
 {
-  "comment": "Hand-placed corrections for tracing Cars.png car #2 (electric SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: antennas and the roof spare (not modelled); accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): roof rack and cargo, mirrors, rock sliders, flare and tire bumps of the plan; shadow: ground shadow and underbody mass between the tires (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "comment": "Hand-placed corrections for tracing Cars.png car #2 (electric SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: antennas and the roof spare (not modelled); accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): roof rack and cargo, mirrors, rock sliders, flare and tire bumps of the plan; shadow: ground shadow and underbody mass between the tires (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. paint: hand-drawn paint regions per view (main panels, window band, cladding line, accents) drawn over the cleaned colour classes, so the panel borders are straight. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
   "id": "trailforge_ev",
   "restHubY": -0.3506,
   "column": 1,
@@ -281,6 +281,130 @@
           172
         ]
       ]
+    ],
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            30,
+            180
+          ],
+          [
+            104,
+            163
+          ],
+          [
+            214,
+            152
+          ],
+          [
+            230,
+            171
+          ],
+          [
+            475,
+            168
+          ],
+          [
+            493,
+            161
+          ],
+          [
+            592,
+            159
+          ],
+          [
+            612,
+            190
+          ],
+          [
+            612,
+            218
+          ],
+          [
+            572,
+            218
+          ],
+          [
+            575,
+            224
+          ],
+          [
+            563,
+            209
+          ],
+          [
+            550,
+            198
+          ],
+          [
+            465,
+            201
+          ],
+          [
+            449,
+            218
+          ],
+          [
+            443,
+            250
+          ],
+          [
+            221,
+            254
+          ],
+          [
+            202,
+            228
+          ],
+          [
+            189,
+            209
+          ],
+          [
+            177,
+            199
+          ],
+          [
+            104,
+            198
+          ],
+          [
+            95,
+            206
+          ],
+          [
+            82,
+            229
+          ],
+          [
+            36,
+            229
+          ]
+        ]
+      },
+      {
+        "class": "accent",
+        "poly": [
+          [
+            221,
+            254
+          ],
+          [
+            440,
+            250
+          ],
+          [
+            440,
+            258
+          ],
+          [
+            221,
+            262
+          ]
+        ]
+      }
     ]
   },
   "top": {
@@ -459,6 +583,29 @@
           170
         ]
       ]
+    ],
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            160,
+            152
+          ],
+          [
+            480,
+            152
+          ],
+          [
+            485,
+            199
+          ],
+          [
+            160,
+            199
+          ]
+        ]
+      }
     ]
   },
   "rear": {

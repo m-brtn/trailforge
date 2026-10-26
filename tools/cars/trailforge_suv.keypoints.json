@@ -1,5 +1,5 @@
 {
-  "comment": "Hand-placed corrections for tracing Cars.png car #1 (gasoline SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: drawn parts the game does not model (antennas, roof spare); masked out of both the concept and the render for the silhouette IoU. accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): bolt-on parts the body loft must not be traced from (roof rack and cargo, mirrors, rear spare, rock sliders); they stay in the IoU silhouette. shadow: ground shadow and underbody mass between the tires that the automatic shadow removal keeps (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "comment": "Hand-placed corrections for tracing Cars.png car #1 (gasoline SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: drawn parts the game does not model (antennas, roof spare); masked out of both the concept and the render for the silhouette IoU. accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): bolt-on parts the body loft must not be traced from (roof rack and cargo, mirrors, rear spare, rock sliders); they stay in the IoU silhouette. shadow: ground shadow and underbody mass between the tires that the automatic shadow removal keeps (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. paint: hand-drawn paint regions per view (main panels, window band, cladding line, accents) drawn over the cleaned colour classes, so the panel borders are straight. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
   "id": "trailforge_suv",
   "restHubY": -0.3645,
   "column": 0,
@@ -281,6 +281,143 @@
     ],
     "extraDoorCutsPx": [
       488
+    ],
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            55,
+            176
+          ],
+          [
+            111,
+            163
+          ],
+          [
+            232,
+            152
+          ],
+          [
+            250,
+            171
+          ],
+          [
+            611,
+            168
+          ],
+          [
+            625,
+            172
+          ],
+          [
+            633,
+            228
+          ],
+          [
+            614,
+            228
+          ],
+          [
+            614,
+            232
+          ],
+          [
+            601,
+            215
+          ],
+          [
+            581,
+            198
+          ],
+          [
+            510,
+            202
+          ],
+          [
+            493,
+            212
+          ],
+          [
+            479,
+            252
+          ],
+          [
+            239,
+            252
+          ],
+          [
+            224,
+            212
+          ],
+          [
+            209,
+            198
+          ],
+          [
+            131,
+            200
+          ],
+          [
+            118,
+            215
+          ],
+          [
+            111,
+            225
+          ],
+          [
+            62,
+            212
+          ]
+        ]
+      },
+      {
+        "class": "dark",
+        "poly": [
+          [
+            232,
+            161
+          ],
+          [
+            292,
+            100
+          ],
+          [
+            612,
+            100
+          ],
+          [
+            633,
+            170
+          ],
+          [
+            250,
+            171
+          ]
+        ]
+      },
+      {
+        "class": "accent",
+        "poly": [
+          [
+            513,
+            119
+          ],
+          [
+            604,
+            119
+          ],
+          [
+            621,
+            161
+          ],
+          [
+            527,
+            161
+          ]
+        ]
+      }
     ]
   },
   "top": {
@@ -381,7 +518,46 @@
         ]
       ]
     ],
-    "comment": "Mirrors; the right-side (image top) flare and tire bumps (the plan is measured on the image-top edge, the drop shadow falls on the other side)."
+    "comment": "Mirrors; the right-side (image top) flare and tire bumps (the plan is measured on the image-top edge, the drop shadow falls on the other side).",
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            88,
+            75
+          ],
+          [
+            143,
+            75
+          ],
+          [
+            143,
+            108
+          ],
+          [
+            243,
+            108
+          ],
+          [
+            243,
+            311
+          ],
+          [
+            143,
+            311
+          ],
+          [
+            143,
+            334
+          ],
+          [
+            88,
+            334
+          ]
+        ]
+      }
+    ]
   },
   "front": {
     "shadow": [
@@ -473,6 +649,45 @@
           172
         ]
       ]
+    ],
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            200,
+            151
+          ],
+          [
+            540,
+            151
+          ],
+          [
+            545,
+            228
+          ],
+          [
+            512,
+            228
+          ],
+          [
+            512,
+            195
+          ],
+          [
+            225,
+            195
+          ],
+          [
+            225,
+            228
+          ],
+          [
+            196,
+            228
+          ]
+        ]
+      }
     ]
   },
   "rear": {
@@ -565,6 +780,53 @@
           156
         ]
       ]
+    ],
+    "paint": [
+      {
+        "class": "paint",
+        "poly": [
+          [
+            228,
+            75
+          ],
+          [
+            287,
+            75
+          ],
+          [
+            287,
+            146
+          ],
+          [
+            440,
+            146
+          ],
+          [
+            440,
+            75
+          ],
+          [
+            496,
+            75
+          ],
+          [
+            526,
+            150
+          ],
+          [
+            526,
+            219
+          ],
+          [
+            197,
+            219
+          ],
+          [
+            205,
+            150
+          ]
+        ]
+      }
     ]
   },
   "anchors": [

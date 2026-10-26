@@ -28,6 +28,7 @@ enum class MatId : int {
     Paint = 14,       // metallic paint with a clear coat
     Sand = 15,
     Snow = 16,
+    Cladding = 18,    // grained unpainted plastic
 };
 
 struct Material {

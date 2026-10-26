@@ -170,6 +170,33 @@ char BlueprintView::classAt(float u, float v) const {
     return cls[std::size_t(i) * std::size_t(width) + std::size_t(j)];
 }
 
+char BlueprintView::smoothClassAt(float u, float v) const {
+    static constexpr char kClasses[] = {'p', 'a', 'w', 'r', 'd', '.'};
+    const float fj = (u - u0) / du, fi = (v - v0) / dv;
+    if (fi < -0.5f || fj < -0.5f || fi > float(height) - 0.5f || fj > float(width) - 0.5f) return '.';
+    const int j0 = int(std::floor(fj)), i0 = int(std::floor(fi));
+    const float tj = fj - float(j0), ti = fi - float(i0);
+    float weight[6] = {};
+    for (int di = -1; di <= 2; ++di)
+        for (int dj = -1; dj <= 2; ++dj) {
+            // Bilinear weights of the four centres around (fi, fj), each spread over its 3 x 3 [1 2 1] window.
+            auto tap = [](int d, float t) {
+                const float k0[4] = {0.25f, 0.5f, 0.25f, 0.0f}, k1[4] = {0.0f, 0.25f, 0.5f, 0.25f};
+                return (1.0f - t) * k0[d + 1] + t * k1[d + 1];
+            };
+            const float wgt = tap(di, ti) * tap(dj, tj);
+            const int i = std::clamp(i0 + di, 0, height - 1), j = std::clamp(j0 + dj, 0, width - 1);
+            const char c = cls[std::size_t(i) * std::size_t(width) + std::size_t(j)];
+            int k = 0;
+            while (k < 5 && kClasses[k] != c) ++k;
+            weight[k] += wgt;
+        }
+    int best = 0;
+    for (int k = 1; k < 6; ++k)
+        if (weight[k] > weight[best]) best = k;
+    return kClasses[best];
+}
+
 float BlueprintView::distance(float u, float v) const {
     const float fj = (u - u0) / du, fi = (v - v0) / dv;
     const float cj = std::clamp(fj, 0.0f, float(width - 1)), ci = std::clamp(fi, 0.0f, float(height - 1));
