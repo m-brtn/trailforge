@@ -124,6 +124,7 @@ PadType Input::gamepadType() const { return m_gamepad ? PadType(SDL_GetGamepadTy
 
 void Input::beginFrame() {
     m_pressed.fill(false);
+    m_padPressed.fill(false);
     m_menu = MenuKeys{};
     m_menu.mouseDown = m_mouseDown;
     m_menu.mouseX = m_mouseX;
@@ -201,7 +202,10 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (e.button.button == SDL_BUTTON_RIGHT) m_rmb = false;
-        if (e.button.button == SDL_BUTTON_LEFT) m_menu.mouseDown = m_mouseDown = false;
+        if (e.button.button == SDL_BUTTON_LEFT) {
+            if (m_mouseDown) m_menu.release = true;
+            m_menu.mouseDown = m_mouseDown = false;
+        }
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (m_rmb && !uiWantsMouse) m_mouseDelta += glm::vec2(e.motion.xrel, e.motion.yrel);
@@ -243,6 +247,8 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         if (!m_gamepad || e.gbutton.which != SDL_GetGamepadID(m_gamepad)) break;
         m_menu.any = true;
+        for (int c = 0; c < int(PadControl::Count); ++c)
+            if (padButton(PadControl(c)) == e.gbutton.button) m_padPressed[std::size_t(c)] = true;
         switch (e.gbutton.button) {
         case SDL_GAMEPAD_BUTTON_SOUTH: m_menu.accept = true; break;
         case SDL_GAMEPAD_BUTTON_EAST: m_menu.back = true; break;
@@ -291,6 +297,8 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
     DriverIntent in;
     m_freeMove = glm::vec3(0.0f);
     m_rightStick = glm::vec2(0.0f);
+    m_leftStick = glm::vec2(0.0f);
+    m_triggers = glm::vec2(0.0f);
     m_fast = false;
     const auto keyHeld = [this](Key k) { return m_held[scancode(k)] ? 1.0f : 0.0f; };
     const DriveKeyMap drive = driveKeyMap(m_driveKeys), cam = freeCameraKeyMap(m_driveKeys);
@@ -321,6 +329,10 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
         const StickValue rs = rightStickValue(float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_RIGHTX)) / 32767.0f,
                                               float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_RIGHTY)) / 32767.0f);
         m_rightStick = glm::vec2(rs.x, rs.y);
+        const StickValue ls = rightStickValue(float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_LEFTX)) / 32767.0f,
+                                              float(SDL_GetGamepadAxis(m_gamepad, SDL_GAMEPAD_AXIS_LEFTY)) / 32767.0f);
+        m_leftStick = glm::vec2(ls.x, ls.y);
+        m_triggers = glm::vec2(lt, rt);
     }
     in.throttle = std::max(in.throttle, m_scriptThrottle);
     in.brake = std::max(in.brake, m_scriptBrake);

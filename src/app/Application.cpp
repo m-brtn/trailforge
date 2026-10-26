@@ -110,7 +110,9 @@ constexpr NamedItem kItemNames[] = {
     {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
     {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
     {"controls", MenuItem::Controls},   {"back", MenuItem::Back},             {"drive_keys", MenuItem::DriveKeys},
-    {"pad_glyphs", MenuItem::PadGlyphs},
+    {"pad_glyphs", MenuItem::PadGlyphs}, {"map", MenuItem::Map},        {"minimap", MenuItem::Minimap},
+    {"minimap_size", MenuItem::MinimapSize}, {"minimap_orientation", MenuItem::MinimapNorthUp},
+    {"compass", MenuItem::Compass},
 };
 
 std::optional<MenuItem> itemByName(const std::string& n) {
@@ -159,6 +161,7 @@ Application::Application(const AppOptions& options)
     m_renderer = std::make_unique<Renderer>(m_window.get(), debugDevice);
     m_imgui = std::make_unique<ImGuiContextGuard>(m_window.get(), *m_renderer);
     m_menu.load(*m_renderer, assetDirs("fonts"), assetDirs("images"));
+    m_mapUI.setFonts(m_menu.bodyFont(), m_menu.headingFont());
     for (const std::string& dir : assetDirs("textures")) {
         std::error_code ec;
         if (!std::filesystem::exists(dir + "/terrain/terrain.json", ec)) continue;
@@ -274,6 +277,8 @@ Application::~Application() {
     // Mesh GPU resources are released before the device is destroyed.
     if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
     m_menu.release();
+    if (m_mapJob.valid()) m_mapJob.wait();
+    m_mapUI.release();
     for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_bodyMesh, &m_wheelMesh, &m_rearWheelMesh, &m_springMesh,
                        &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
         m->release();
@@ -301,10 +306,20 @@ void Application::processEvents() {
     if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
     if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
     if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
+    const bool mapHandled = m_flow.screen() == Screen::Map;
     if (m_flow.screen() == Screen::Garage) handleGarage();
+    else if (mapHandled) handleMap();
     else handleMenu();
-    if (m_flow.menuActive()) {
-        // Menus own the input: no gameplay actions, no pedals.
+    // Behind the intro and the start menu the vehicle drives the attract route on its own pedals and steering; the
+    // garage and the vehicle page hold it still for the preview.
+    const Screen screen = m_flow.screen();
+    AutopilotMode autopilot = AutopilotMode::Off;
+    if (screen == Screen::Intro || screen == Screen::MainMenu) autopilot = AutopilotMode::Drive;
+    if (screen == Screen::Garage || (screen == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle))
+        autopilot = AutopilotMode::Hold;
+    m_sim.setAutopilot(autopilot);
+    if (m_flow.menuActive() || mapHandled) {
+        // Menus and the map own the input (also in the frame that closes the map): no gameplay actions, no pedals.
         m_sim.setIntent(DriverIntent{});
         return;
     }
@@ -312,7 +327,13 @@ void Application::processEvents() {
     if (m_input.pressed(Action::TogglePause)) setPaused(!m_paused);
     if (m_input.pressed(Action::StepOnce) && m_paused) m_stepOnce = true;
     if (m_input.pressed(Action::ToggleCamera)) m_camera.cycleMode();
-    if (m_input.pressed(Action::ToggleMap)) m_mapOpen = !m_mapOpen && m_sim.level();
+    if (m_input.pressed(Action::ToggleMap) && m_mapUI.hasMap()) {
+        m_flow.openMap();
+        openMap();
+        m_audio->playUi(UiSound::MenuOpen);
+        m_sim.setIntent(DriverIntent{});
+        return;
+    }
     if (m_input.pressed(Action::ToggleDirection)) m_sim.requestToggleDirection();
     if (m_input.pressed(Action::ToggleLowRange)) m_sim.requestToggleLowRange();
     if (m_input.pressed(Action::Reset)) m_sim.requestReset();
@@ -390,13 +411,13 @@ void Application::onMenuCommand(MenuCommand c) {
     case MenuCommand::SettingsChanged: applySettings(false); break;
     case MenuCommand::SettingsClosed: saveSettings(); break;
     case MenuCommand::OpenGarage: openGarage(); break;
+    case MenuCommand::OpenMap: openMap(); break;
     case MenuCommand::VehicleChanged:
         selectVehicle(m_settings.vehicle);
         saveSettings();
         break;
     case MenuCommand::LevelChanged:
         if (!selectLevel(m_settings.level)) std::printf("Levels: cannot load '%s'\n", m_settings.level.c_str());
-        m_mapOpen = false;
         saveSettings();
         break;
     default: break;
@@ -495,7 +516,7 @@ void Application::handleGarage() {
 // selection will come before this), the driving aid defaults from the settings, the follow camera, and the gameplay
 // time of day. The music fades out.
 void Application::startGameplay() {
-    m_sim.requestReset();
+    m_sim.requestTeleport(0); // the spawn, wherever the attract drive left the vehicle
     AidControls aids;
     aids.abs = m_settings.abs;
     aids.traction = TractionMode(std::max(m_settings.traction, 0));
@@ -515,7 +536,7 @@ void Application::enterMenuWorld(bool restartMusic) {
     if (restartMusic) {
         ++m_musicRestart;
         m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
-        m_sim.requestReset();
+        m_sim.requestTeleport(0);
     }
     m_gfx.settings.timeOfDay = kMenuTimeOfDay;
     m_gfx.timeLapse = false;
@@ -571,21 +592,38 @@ void Application::saveSettings() {
     else std::printf("Settings: %s\n", error.c_str());
 }
 
-// Slow cinematic camera for the intro and the start menu: a slow arc behind the vehicle into the low sun (the vehicle
-// and the sun right of the menu column). Read-only like the follow camera; a ray keeps it above the ground.
-void Application::updateMenuCamera(float dt) {
+// Slow cinematic camera for the intro and the start menu while the vehicle drives the attract route: a lazy chase
+// that swings between a rear and a front three-quarter view (the vehicle right of the menu column). The heading
+// it follows and its position are smoothed over seconds, so curves and bumps turn into slow drifts. Read-only like
+// the follow camera; a ray keeps it above the ground.
+void Application::updateMenuCamera(float dt, const glm::mat4& body) {
+    const bool fresh = m_menuCamTime == 0.0;
     m_menuCamTime += dt;
     const double t = m_menuCamTime;
-    const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
-    const float yaw = -0.3f + 0.35f * float(std::sin(t * 6.2831853 / 70.0));
-    const float radius = 8.0f + 1.2f * float(std::sin(t * 6.2831853 / 47.0 + 1.0));
-    const float height = 1.25f + 0.35f * float(std::sin(t * 6.2831853 / 39.0));
-    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, height, -std::cos(yaw) * radius);
+    const glm::vec3 car(body[3]);
+    const glm::vec3 fwd3(body[2]);
+    if (std::hypot(fwd3.x, fwd3.z) > 0.2f) {
+        const float heading = std::atan2(fwd3.x, fwd3.z);
+        if (fresh) m_menuCamHeading = heading;
+        float d = heading - m_menuCamHeading;
+        d = std::atan2(std::sin(d), std::cos(d));
+        m_menuCamHeading += d * (1.0f - std::exp(-dt / 3.5f));
+    }
+    // Behind the vehicle, swinging out to its right side and back over about 80 s.
+    const float swing = 0.5f + 0.9f * float(0.5 - 0.5 * std::cos(t * 6.2831853 / 80.0));
+    const float yaw = m_menuCamHeading + 3.14159265f - swing;
+    const float radius = 9.0f + 1.5f * float(std::sin(t * 6.2831853 / 47.0 + 1.0));
+    const float height = 1.8f + 0.5f * float(std::sin(t * 6.2831853 / 39.0));
+    glm::vec3 pos = car + glm::vec3(std::sin(yaw) * radius, height, std::cos(yaw) * radius);
     const JPH::Vec3 above(pos.x, pos.y + 20.0f, pos.z), below(pos.x, pos.y - 20.0f, pos.z);
     if (auto hit = m_sim.castRayIgnoringVehicle(above, below)) {
         const float ground = above.GetY() + (below.GetY() - above.GetY()) * *hit;
-        pos.y = std::max(pos.y, ground + 0.9f);
+        pos.y = std::max(pos.y, ground + 1.0f);
     }
+    // The offset from the vehicle is smoothed, not the world position: the camera keeps up at any speed.
+    const glm::vec3 offset = pos - car;
+    m_menuCamOffset = fresh ? offset : glm::mix(m_menuCamOffset, offset, 1.0f - std::exp(-dt / 0.6f));
+    pos = car + m_menuCamOffset;
     const glm::vec3 fwd = glm::normalize(glm::vec3(car.x - pos.x, 0.0f, car.z - pos.z));
     const glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0, 1, 0)));
     const glm::vec3 target = car + glm::vec3(0.0f, 0.75f, 0.0f) - right * 2.6f;
@@ -655,7 +693,7 @@ void Application::buildWorldContent() {
     const Level* level = m_sim.level();
     m_contentLevel = level;
     m_contentBuilt = true;
-    m_mapColors.clear();
+    startMapBuild();
     std::size_t trees = 0;
     if (level) {
         m_trackMesh = m_renderer->upload(buildLevelPropsMesh(*level));
@@ -690,114 +728,205 @@ void Application::buildWorldContent() {
                 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
 }
 
-// Level map (M): hill-shaded surfaces and water of the play area, roads, rivers, the vehicle and the points of
-// interest; clicking a marker or a list entry teleports there (the same teleports as the F1 panel).
-void Application::drawMap() {
-    const Level& L = *m_sim.level();
-    constexpr int kMapRes = 160;
-    const float half = L.playHalfExtent();
-    const float cellM = 2.0f * half / float(kMapRes);
-    if (m_mapColors.size() != std::size_t(kMapRes * kMapRes)) {
-        m_mapColors.assign(std::size_t(kMapRes * kMapRes), 0u);
-        for (int j = 0; j < kMapRes; ++j)
-            for (int i = 0; i < kMapRes; ++i) {
-                const float x = -half + (float(i) + 0.5f) * cellM, z = -half + (float(j) + 0.5f) * cellM;
-                glm::vec3 c;
-                switch (L.waterKindAt(x, z)) {
-                case WaterKind::Sea: c = {0.13f, 0.29f, 0.40f}; break;
-                case WaterKind::Lake: c = {0.17f, 0.37f, 0.46f}; break;
-                case WaterKind::River: c = {0.22f, 0.42f, 0.52f}; break;
-                case WaterKind::None:
-                    switch (L.surfaceAt(x, z)) {
-                    case SurfaceId::Snow: c = {0.88f, 0.90f, 0.92f}; break;
-                    case SurfaceId::Rock: c = {0.47f, 0.45f, 0.42f}; break;
-                    case SurfaceId::Sand: c = {0.75f, 0.69f, 0.52f}; break;
-                    case SurfaceId::PackedDirt: case SurfaceId::Mud: c = {0.52f, 0.42f, 0.30f}; break;
-                    default: c = glm::mix(glm::vec3(0.27f, 0.41f, 0.21f), glm::vec3(0.40f, 0.44f, 0.30f),
-                                          std::clamp(L.heightAt(x, z) / 220.0f, 0.0f, 1.0f));
-                    }
-                }
-                // Hill shade: light from the north-west.
-                const float d = 6.0f;
-                const float gx = (L.heightAt(x + d, z) - L.heightAt(x - d, z)) / (2.0f * d);
-                const float gz = (L.heightAt(x, z + d) - L.heightAt(x, z - d)) / (2.0f * d);
-                const float shade = std::clamp(1.0f - 0.9f * (gx + gz), 0.55f, 1.25f);
-                c = glm::clamp(c * shade, 0.0f, 1.0f);
-                m_mapColors[std::size_t(j * kMapRes + i)] =
-                    IM_COL32(int(c.r * 255.0f), int(c.g * 255.0f), int(c.b * 255.0f), 255);
-            }
-    }
-    const ImGuiIO& io = ImGui::GetIO();
-    const float side = std::floor(std::min(io.DisplaySize.x * 0.62f, io.DisplaySize.y * 0.80f));
-    const float listW = 0.30f * side;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(side + listW + 3.0f * ImGui::GetStyle().WindowPadding.x, side + ImGui::GetFrameHeightWithSpacing() * 2.0f));
-    if (!ImGui::Begin("Map - Exploration (M closes)", &m_mapOpen,
-                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::End();
+// Map of the current world, made on a worker thread from the level (or the proving ground triangles). The level
+// is kept alive by the cache entry the lambda holds.
+void Application::startMapBuild() {
+    if (m_mapJob.valid()) m_mapJob.wait();
+    m_mapJob = {};
+    m_marker = {};
+    m_mapViewSet = false;
+    if (const Level* level = m_sim.level()) {
+        std::shared_ptr<const Level> keep;
+        for (const auto& [id, l] : m_levelCache)
+            if (l.get() == level) keep = l;
+        if (!keep) return;
+        m_mapJob = std::async(std::launch::async, [keep] { return buildLevelMap(*keep); });
         return;
     }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 o = ImGui::GetCursorScreenPos();
-    const float px = side / float(kMapRes);
-    auto toMap = [&](float x, float z) { return ImVec2(o.x + (x + half) / (2.0f * half) * side, o.y + (z + half) / (2.0f * half) * side); };
-    for (int j = 0; j < kMapRes; ++j)
-        for (int i = 0; i < kMapRes; ++i)
-            dl->AddRectFilled(ImVec2(o.x + float(i) * px, o.y + float(j) * px),
-                              ImVec2(o.x + float(i + 1) * px + 0.5f, o.y + float(j + 1) * px + 0.5f),
-                              m_mapColors[std::size_t(j * kMapRes + i)]);
-    std::vector<ImVec2> line;
-    for (const LevelRiver& r : L.rivers()) {
-        line.clear();
-        for (std::size_t k = 0; k < r.samples.size(); k += 3) line.push_back(toMap(r.samples[k].x, r.samples[k].z));
-        dl->AddPolyline(line.data(), int(line.size()), IM_COL32(70, 130, 170, 255), 0, 2.0f);
-    }
-    for (const LevelRoad& r : L.roads()) {
-        line.clear();
-        for (std::size_t k = 0; k < r.samples.size(); k += 3) line.push_back(toMap(r.samples[k].x, r.samples[k].z));
-        if (!r.samples.empty()) line.push_back(toMap(r.samples.back().x, r.samples.back().z));
-        dl->AddPolyline(line.data(), int(line.size()), r.trail ? IM_COL32(150, 112, 70, 255) : IM_COL32(232, 205, 150, 255),
-                        0, r.trail ? 1.5f : 2.5f);
-    }
-    // Points of interest: features 1.. are the POIs in map order (feature 0 is the spawn).
-    const auto& pois = L.pois();
-    int clicked = -1;
-    const ImVec2 mouse = io.MousePos;
-    for (std::size_t k = 0; k < pois.size(); ++k) {
-        const ImVec2 c = toMap(pois[k].x, pois[k].z);
-        const bool hover = std::hypot(mouse.x - c.x, mouse.y - c.y) < 10.0f && ImGui::IsWindowHovered();
-        dl->AddCircleFilled(c, hover ? 9.0f : 7.0f, hover ? IM_COL32(255, 160, 40, 255) : IM_COL32(240, 110, 20, 255));
-        dl->AddCircle(c, hover ? 9.0f : 7.0f, IM_COL32(20, 20, 20, 255), 0, 1.5f);
-        const std::string id = std::to_string(pois[k].id);
-        const ImVec2 ts = ImGui::CalcTextSize(id.c_str());
-        dl->AddText(ImVec2(c.x - 0.5f * ts.x, c.y - 0.5f * ts.y), IM_COL32(255, 255, 255, 255), id.c_str());
-        dl->AddText(ImVec2(c.x + 11.0f, c.y - 0.5f * ts.y), IM_COL32(15, 15, 15, 255), pois[k].name.c_str());
-        if (hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) clicked = int(k) + 1;
-    }
-    {
-        const JPH::RMat44 xf = m_sim.vehicle().bodyTransform();
-        const JPH::Vec3 p(xf.GetTranslation()), f = xf.GetAxisZ();
-        glm::vec2 fw(f.GetX(), f.GetZ());
-        fw = glm::length(fw) > 1e-3f ? glm::normalize(fw) : glm::vec2(0, 1);
-        const ImVec2 c = toMap(p.GetX(), p.GetZ());
-        const glm::vec2 s(-fw.y, fw.x);
-        auto pt = [&](float a, float b) { return ImVec2(c.x + fw.x * a + s.x * b, c.y + fw.y * a + s.y * b); };
-        dl->AddTriangleFilled(pt(11, 0), pt(-7, 6), pt(-7, -6), IM_COL32(255, 255, 255, 255));
-        dl->AddTriangle(pt(11, 0), pt(-7, 6), pt(-7, -6), IM_COL32(0, 0, 0, 255), 1.5f);
-    }
-    ImGui::Dummy(ImVec2(side, side));
-    ImGui::SameLine();
-    ImGui::BeginChild("teleports", ImVec2(listW, side));
-    ImGui::TextUnformatted("Teleport");
-    ImGui::Separator();
+    if (m_sim.track().layout() != TrackLayout::ProvingGround) return;
+    ProvingGroundMapInput in;
+    const TrackBounds b = TestTrack::bounds();
+    in.x0 = b.xMin - 4.0f;
+    in.x1 = b.xMax + 4.0f;
+    in.z0 = b.zMin - 4.0f;
+    in.z1 = b.zMax + 4.0f;
+    const WaterInfo w = TestTrack::water();
+    in.waterLevel = w.level;
+    in.waterX0 = w.x0;
+    in.waterZ0 = w.z0;
+    in.waterX1 = w.x1;
+    in.waterZ1 = w.z1;
     const std::vector<TrackFeature>& features = m_sim.track().features();
     for (std::size_t k = 0; k < features.size(); ++k)
-        if (ImGui::Selectable(features[k].name.c_str())) clicked = int(k);
-    ImGui::EndChild();
-    ImGui::End();
-    if (clicked >= 0) {
-        m_sim.requestTeleport(clicked);
-        m_mapOpen = false;
+        in.pois.push_back({int(k) + 1, features[k].name, {}, features[k].position.GetX(), features[k].position.GetZ()});
+    m_mapJob = std::async(std::launch::async, [in, geometry = m_sim.track().geometry()]() mutable {
+        in.geometry = &geometry;
+        return buildProvingGroundMap(in);
+    });
+}
+
+void Application::pollMapBuild() {
+    if (!m_mapJob.valid() || m_mapJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    MapData d = m_mapJob.get();
+    m_mapBuildMs = d.buildMs;
+    std::printf("Map: %s raster %d^2 (%.2f m/px), %zu lines, %zu points of interest, built in %.0f ms on a worker thread\n",
+                d.title.c_str(), d.raster.size, double(d.raster.metersPerPixel), d.lines.size(), d.pois.size(), d.buildMs);
+    m_mapUI.setMap(*m_renderer, std::move(d));
+}
+
+MapPlayer Application::mapPlayer() const {
+    const RenderSnapshot& s = m_sim.currentSnapshot();
+    const glm::vec3 p = toGlm(s.body.position);
+    const glm::vec3 f = toGlm(s.body.rotation) * glm::vec3(0, 0, 1);
+    return {p.x, p.z, bearingDeg(f.x, f.z)};
+}
+
+MapHints Application::mapHints() const {
+    MapHints h;
+    h.gamepad = m_input.gamepadConnected();
+    if (h.gamepad) {
+        const PadGlyphs g = resolvePadGlyphs(PadGlyphSetting(m_settings.padGlyphs), padType());
+        h.zoom = std::string(padControlName(PadControl::LeftTrigger, g)) + " / " + padControlName(PadControl::RightTrigger, g);
+        h.pan = padControlName(PadControl::LeftStick, g);
+        h.marker = padControlName(PadControl::South, g);
+        h.center = padControlName(PadControl::North, g);
+        h.close = std::string(padControlName(PadControl::East, g)) + " / " + padControlName(PadControl::LeftShoulder, g);
+    } else {
+        h.zoom = "WHEEL  Q / E";
+        h.pan = "DRAG  W A S D";
+        h.marker = "CLICK  SPACE";
+        h.center = "C";
+        h.close = "M  ESC";
+    }
+    return h;
+}
+
+void Application::openMap() {
+    if (m_flow.screen() != Screen::Map) return;
+    const ImVec2 d = ImGui::GetIO().DisplaySize;
+    const MapUI::Layout l = MapUI::layout(d.x, d.y);
+    if (!m_mapViewSet) {
+        m_mapView = m_mapUI.fitView(l);
+        m_mapViewSet = true;
+    }
+    m_mapDragging = false;
+    m_mapCrosshair = m_input.gamepadConnected();
+    m_mapHoverPoi = -1;
+}
+
+void Application::closeMap() {
+    m_flow.closeMap();
+    m_mapDragging = false;
+    m_audio->playUi(UiSound::MenuClose);
+}
+
+// Full-screen map input: zoom (wheel around the pointer, Q / E, triggers), pan (drag, W A S D / arrows, left stick),
+// waypoint (click, Space / Enter / pad A at the crosshair; on a point of interest it snaps to it; again on the
+// marker clears it), C / pad Y centers on the vehicle, M / Esc / Backspace / pad B / LB close. No teleports.
+void Application::handleMap() {
+    const MenuKeys& k = m_input.menuKeys();
+    if (k.back || k.pause || m_input.pressed(Action::ToggleMap)) {
+        closeMap();
+        return;
+    }
+    const ImVec2 D = ImGui::GetIO().DisplaySize;
+    const MapUI::Layout l = MapUI::layout(D.x, D.y);
+    // The view keeps its world center in the middle of the panel when the window changes size.
+    m_mapView.sx = 0.5f * (l.mapX0 + l.mapX1);
+    m_mapView.sy = 0.5f * (l.mapY0 + l.mapY1);
+    const float dt = float(std::min(m_frameDt, 0.1));
+    const float minS = m_mapUI.minScale(l), maxS = m_mapUI.maxScale();
+    auto inPanel = [&](float x, float y) { return x >= l.mapX0 && x <= l.mapX1 && y >= l.mapY0 && y <= l.mapY1; };
+    auto held = [&](SDL_Scancode a, SDL_Scancode b) { return m_input.scancodeHeld(a) || m_input.scancodeHeld(b) ? 1.0f : 0.0f; };
+
+    if (k.wheel != 0.0f && inPanel(k.mouseX, k.mouseY))
+        m_mapView.zoomAround(std::pow(1.2f, k.wheel), k.mouseX, k.mouseY, minS, maxS);
+    const glm::vec2 trig = m_input.triggers();
+    const float zoomKeys = held(SDL_SCANCODE_E, SDL_SCANCODE_PAGEUP) - held(SDL_SCANCODE_Q, SDL_SCANCODE_PAGEDOWN) + trig.y - trig.x;
+    if (zoomKeys != 0.0f) m_mapView.zoomAround(std::exp(1.8f * zoomKeys * dt), m_mapView.sx, m_mapView.sy, minS, maxS);
+
+    glm::vec2 pan(held(SDL_SCANCODE_D, SDL_SCANCODE_RIGHT) - held(SDL_SCANCODE_A, SDL_SCANCODE_LEFT),
+                  held(SDL_SCANCODE_S, SDL_SCANCODE_DOWN) - held(SDL_SCANCODE_W, SDL_SCANCODE_UP));
+    pan += m_input.leftStick();
+    if (glm::length(pan) > 0.0f) {
+        const float speed = 0.7f * (l.mapY1 - l.mapY0); // points per second
+        m_mapView.pan(-pan.x * speed * dt, -pan.y * speed * dt);
+        m_mapCrosshair = true;
+    }
+    if (k.mouseMoved && !m_mapDragging) m_mapCrosshair = m_input.gamepadConnected() && m_mapCrosshair;
+
+    // Mouse: press on the panel starts a drag; a release that moved less than 5 points is a click.
+    if (k.click && inPanel(k.mouseX, k.mouseY)) {
+        m_mapDragging = true;
+        m_mapDragMoved = 0.0f;
+        m_mapLastX = k.mouseX;
+        m_mapLastY = k.mouseY;
+        m_mapCrosshair = false;
+    } else if (k.click) {
+        const int row = m_mapUI.listRowAt(k.mouseX, k.mouseY);
+        if (row >= 0) {
+            const MapPoi& p = m_mapUI.data().pois[std::size_t(row)];
+            m_mapView.cx = p.x;
+            m_mapView.cz = p.z;
+            m_audio->playUi(UiSound::Click);
+        }
+    }
+    if (m_mapDragging && k.mouseDown) {
+        const float dx = k.mouseX - m_mapLastX, dy = k.mouseY - m_mapLastY;
+        m_mapDragMoved += std::hypot(dx, dy);
+        if (m_mapDragMoved >= 5.0f && (dx != 0.0f || dy != 0.0f)) m_mapView.pan(dx, dy);
+        m_mapLastX = k.mouseX;
+        m_mapLastY = k.mouseY;
+    }
+    auto toggleAt = [&](float sx, float sy) {
+        const int poi = m_mapUI.poiAt(m_mapView, sx, sy, 16.0f);
+        MapPoint w = m_mapView.toWorld(sx, sy);
+        if (poi >= 0) w = {m_mapUI.data().pois[std::size_t(poi)].x, m_mapUI.data().pois[std::size_t(poi)].z};
+        const bool set = toggleMarker(m_marker, w.x, w.y, 16.0f / m_mapView.scale);
+        m_audio->playUi(set ? UiSound::Confirm : UiSound::Back);
+    };
+    if (m_mapDragging && k.release) {
+        if (m_mapDragMoved < 5.0f && inPanel(k.mouseX, k.mouseY)) toggleAt(k.mouseX, k.mouseY);
+        m_mapDragging = false;
+    }
+    if (k.accept) toggleAt(m_mapView.sx, m_mapView.sy);
+    if (m_input.pressed(Action::ToggleCamera) || m_input.padPressed(PadControl::North)) {
+        const MapPlayer p = mapPlayer();
+        m_mapView.cx = p.x;
+        m_mapView.cz = p.z;
+    }
+    // Keep the view over the map.
+    const MapData& d = m_mapUI.data();
+    m_mapView.cx = std::clamp(m_mapView.cx, d.playX0 - 0.1f * (d.playX1 - d.playX0), d.playX1 + 0.1f * (d.playX1 - d.playX0));
+    m_mapView.cz = std::clamp(m_mapView.cz, d.playZ0 - 0.1f * (d.playZ1 - d.playZ0), d.playZ1 + 0.1f * (d.playZ1 - d.playZ0));
+    m_mapHoverPoi = -1;
+    if (!m_mapCrosshair) {
+        m_mapHoverPoi = inPanel(k.mouseX, k.mouseY) ? m_mapUI.poiAt(m_mapView, k.mouseX, k.mouseY, 16.0f)
+                                                    : m_mapUI.listRowAt(k.mouseX, k.mouseY);
+    } else {
+        m_mapHoverPoi = m_mapUI.poiAt(m_mapView, m_mapView.sx, m_mapView.sy, 16.0f);
+    }
+}
+
+// Gameplay HUD: compass bar on top (clear of the HUD box), minimap in the bottom-right corner.
+void Application::drawMapHud() {
+    if (!m_mapUI.hasMap() || !m_ui.hud) return;
+    const ImVec2 D = ImGui::GetIO().DisplaySize;
+    const MapPlayer p = mapPlayer();
+    const bool open = m_sim.level() != nullptr;
+    if (m_settings.compass) {
+        const float w = std::clamp(0.36f * D.x, 360.0f, 640.0f);
+        float cx = 0.5f * D.x;
+        if (const UiItemRect* hud = m_ui.item("hud")) cx = std::max(cx, hud->x1 + 14.0f + 0.5f * w);
+        cx = std::min(cx, D.x - 10.0f - 0.5f * w);
+        m_mapUI.drawCompass(cx, 10.0f, w, open ? 900.0f : 120.0f, m_marker, p);
+    }
+    if (m_settings.minimap) {
+        static constexpr float kSize[] = {0.085f, 0.11f, 0.145f};
+        const float r = std::clamp(kSize[std::clamp(m_settings.minimapSize, 0, 2)] * D.y, 60.0f, 220.0f);
+        const float margin = 22.0f;
+        m_mapUI.drawMinimap(D.x - margin - r, D.y - margin - r - 22.0f, r, open ? 180.0f : 45.0f, m_settings.minimapNorthUp,
+                            m_marker, p);
     }
 }
 
@@ -885,7 +1014,7 @@ void Application::renderFrame(float frameTime) {
     const bool vehiclePage = m_flow.screen() == Screen::MainMenu && m_flow.page() == MenuPage::Vehicle;
     if (vehiclePage && !m_vehiclePageCamera) m_garageCamTime = 0.0;
     m_vehiclePageCamera = vehiclePage;
-    if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime);
+    if ((m_flow.screen() == Screen::Intro || m_flow.screen() == Screen::MainMenu) && !vehiclePage) updateMenuCamera(frameTime, bodyM);
     if (m_flow.screen() == Screen::Garage || vehiclePage) updateGarageCamera(frameTime); // the preview: the live vehicle
     m_camera.update(frameTime, ci, bodyM,
                     [this](const glm::vec3& from, const glm::vec3& to) {
@@ -952,7 +1081,9 @@ void Application::renderFrame(float frameTime) {
     m_audioPanel.status = m_audio->status().c_str();
     m_audioPanel.active = m_audio->active();
     if (!m_flow.menuActive()) m_ui.drawAudio(m_audioPanel);
-    if (m_mapOpen && !m_flow.menuActive() && m_sim.level()) drawMap();
+    pollMapBuild();
+    if (m_flow.screen() == Screen::Playing) drawMapHud();
+    if (m_flow.screen() == Screen::Map) m_mapUI.drawFullMap(m_mapView, m_marker, mapPlayer(), mapHints(), m_mapHoverPoi, m_mapCrosshair);
     MenuView view;
     view.gamepad = m_input.gamepadConnected();
     view.version = TRAILFORGE_VERSION;
@@ -1474,6 +1605,18 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             const float raw = trigger ? -32768.0f + 65535.0f * std::max(v, 0.0f) : 32767.0f * v;
             return SDL_SetJoystickVirtualAxis(m_virtualPad, axis, Sint16(std::lround(raw))) ? Exec::Done : Exec::Failed;
         }
+        if (arg == "button" && c.args.size() > 2 && m_virtualPad) {
+            // gamepad button south|east|west|north|lb|rb|back|start 1|0
+            static const std::pair<const char*, SDL_GamepadButton> kButtons[] = {
+                {"south", SDL_GAMEPAD_BUTTON_SOUTH}, {"east", SDL_GAMEPAD_BUTTON_EAST},
+                {"west", SDL_GAMEPAD_BUTTON_WEST},   {"north", SDL_GAMEPAD_BUTTON_NORTH},
+                {"lb", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {"rb", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
+                {"back", SDL_GAMEPAD_BUTTON_BACK},   {"start", SDL_GAMEPAD_BUTTON_START}};
+            for (const auto& [name, button] : kButtons)
+                if (c.args[1] == name)
+                    return SDL_SetJoystickVirtualButton(m_virtualPad, button, std::atoi(c.args[2].c_str()) != 0) ? Exec::Done
+                                                                                                                 : Exec::Failed;
+        }
         return Exec::Failed;
     }
     if (c.op == "garage") {
@@ -1751,7 +1894,88 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         return Exec::Done;
     }
     if (c.op == "map") {
-        m_mapOpen = (arg == "on" || arg == "1") && m_sim.level();
+        // map on | off: open the full-screen map from gameplay or the pause menu / close it (M, LB and the pause
+        // menu row take the real input path). map fit | center: whole map / view on the vehicle.
+        if (arg == "on" || arg == "1") {
+            if (!m_mapUI.hasMap()) return Exec::Busy; // still building
+            m_flow.openMap();
+            openMap();
+            return m_flow.screen() == Screen::Map ? Exec::Done : Exec::Failed;
+        }
+        if (arg == "off" || arg == "0") {
+            if (m_flow.screen() == Screen::Map) closeMap();
+            return Exec::Done;
+        }
+        if (arg == "fit" || arg == "center") {
+            const ImVec2 d = ImGui::GetIO().DisplaySize;
+            if (arg == "fit") {
+                m_mapView = m_mapUI.fitView(MapUI::layout(d.x, d.y));
+            } else {
+                const MapPlayer p = mapPlayer();
+                m_mapView.cx = p.x;
+                m_mapView.cz = p.z;
+            }
+            return Exec::Done;
+        }
+        return Exec::Failed;
+    }
+    if (c.op == "mapclick" || c.op == "mapaim") {
+        // mapclick X Z: a left click (real mouse path) on the world point (X, Z) of the open full-screen map.
+        // mapaim X Z: centers the view on (X, Z) (the crosshair point of Space / pad A).
+        if (m_flow.screen() != Screen::Map || c.args.size() < 2) return Exec::Failed;
+        const float x = float(std::atof(c.args[0].c_str())), z = float(std::atof(c.args[1].c_str()));
+        if (c.op == "mapaim") {
+            m_mapView.cx = x;
+            m_mapView.cz = z;
+            return Exec::Done;
+        }
+        const MapPoint s = m_mapView.toScreen(x, z);
+        queueClick(s.x, s.y, false);
+        return Exec::Done;
+    }
+    if (c.op == "mapdrag") {
+        // mapdrag DX DY: left-button drag over the map panel by (DX, DY) points, in four motion steps.
+        if (m_flow.screen() != Screen::Map || c.args.size() < 2) return Exec::Failed;
+        const float dx = float(std::atof(c.args[0].c_str())), dy = float(std::atof(c.args[1].c_str()));
+        const float x = m_mapView.sx, y = m_mapView.sy;
+        SDL_Event e{};
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.windowID = win;
+        e.motion.x = x;
+        e.motion.y = y;
+        queueEvent(e, 0);
+        SDL_Event down{};
+        down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        down.button.windowID = win;
+        down.button.button = SDL_BUTTON_LEFT;
+        down.button.down = true;
+        down.button.clicks = 1;
+        down.button.x = x;
+        down.button.y = y;
+        queueEvent(down, 1);
+        for (int i = 1; i <= 4; ++i) {
+            e.motion.x = x + dx * float(i) / 4.0f;
+            e.motion.y = y + dy * float(i) / 4.0f;
+            e.motion.xrel = dx / 4.0f;
+            e.motion.yrel = dy / 4.0f;
+            queueEvent(e, 1 + i);
+        }
+        SDL_Event up = down;
+        up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        up.button.down = false;
+        up.button.x = x + dx;
+        up.button.y = y + dy;
+        queueEvent(up, 6);
+        return Exec::Done;
+    }
+    if (c.op == "marker") {
+        // marker X Z | clear: sets the waypoint directly (the map's click path is mapclick).
+        if (arg == "clear") {
+            m_marker = {};
+            return Exec::Done;
+        }
+        if (c.args.size() < 2) return Exec::Failed;
+        m_marker = {true, float(std::atof(c.args[0].c_str())), float(std::atof(c.args[1].c_str()))};
         return Exec::Done;
     }
     if (c.op == "resize") {
@@ -1821,6 +2045,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
             else if (k == "ui") m_ui.visible = v != 0.0f;
             else if (k == "hud") m_ui.hud = v != 0.0f;
+            else if (k == "minimap") m_settings.minimap = v != 0.0f;
+            else if (k == "compass") m_settings.compass = v != 0.0f;
             else if (k == "auto_reverse") m_ui.autoReverse = v != 0.0f;
             else if (k == "abs" || k == "tc" || k == "diff_locks") {
                 AidControls a = m_sim.aidControls();
@@ -2005,6 +2231,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "frozen") return m_paused ? 1.0 : 0.0;
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
     if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls, 4 vehicle
+    if (n == "autopilot") return double(int(m_sim.autopilotMode())); // 0 off, 1 drive, 2 hold
+    if (n == "autopilot_driven") return m_sim.autopilot().distanceDriven(); // m along the route since it took over
+    if (n == "autopilot_progress") return m_sim.autopilot().progress();     // m from the route start
+    if (n == "autopilot_lateral") return m_sim.autopilot().lateralError();
+    if (n == "autopilot_resets") return m_sim.autopilotResets();
     if (n == "vehicle_index") return m_garage ? m_garage->vehicleIndex() : 0.0; // catalog order, 0 = default vehicle
     if (n == "vehicle_choice") return m_flow.vehicleIndex(m_settings);         // the vehicle page's choice
     if (n == "vehicle_cards") return double(m_menu.vehicleCardCount());
@@ -2049,6 +2280,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (k == "auto_reverse") return g.autoReverse ? 1.0 : 0.0;
         if (k == "drive_keys") return g.driveKeys;
         if (k == "pad_glyphs") return g.padGlyphs;
+        if (k == "minimap") return g.minimap ? 1.0 : 0.0;
+        if (k == "minimap_size") return g.minimapSize;
+        if (k == "minimap_north_up") return g.minimapNorthUp ? 1.0 : 0.0;
+        if (k == "compass") return g.compass ? 1.0 : 0.0;
         if (k == "vehicle") return m_flow.vehicleIndex(g);
         return std::nullopt;
     }
@@ -2079,6 +2314,24 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "min_cam_clearance") return m_minCamClearance;
     if (n == "max_air") return m_maxAirWheels;
     if (n == "garage_open") return m_flow.screen() == Screen::Garage ? 1.0 : 0.0;
+    if (n == "map_open") return m_flow.screen() == Screen::Map ? 1.0 : 0.0;
+    if (n == "map_ready") return m_mapUI.hasMap() ? 1.0 : 0.0;
+    if (n == "map_build_ms") return m_mapBuildMs;
+    if (n == "map_pois") return double(m_mapUI.data().pois.size());
+    if (n == "map_scale") return m_mapView.scale; // points per meter
+    if (n == "map_cx") return m_mapView.cx;
+    if (n == "map_cz") return m_mapView.cz;
+    if (n == "marker_set") return m_marker.set ? 1.0 : 0.0;
+    if (n == "marker_x") return m_marker.x;
+    if (n == "marker_z") return m_marker.z;
+    if (n == "marker_dist" || n == "marker_bearing") {
+        // Horizontal distance (m) and bearing relative to the vehicle heading (deg, + = right) as the compass shows.
+        if (!m_marker.set) return -1.0;
+        const MapPlayer p = mapPlayer();
+        if (n == "marker_dist") return std::hypot(m_marker.x - p.x, m_marker.z - p.z);
+        return relativeBearingDeg(bearingDeg(p.x, p.z, m_marker.x, m_marker.z), p.headingDeg);
+    }
+    if (n == "heading") return mapPlayer().headingDeg;
     if (m_garage) {
         if (n == "garage_cursor") return m_garage->cursor();
         if (n == "garage_modal") return double(int(m_garage->modal())); // 0 none, 1 rename, 2 delete, 3 reset

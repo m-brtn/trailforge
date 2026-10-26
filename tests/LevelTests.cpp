@@ -942,6 +942,85 @@ void levelGrassClear() {
                 worstRoad, deckPts, L.bridges().size(), worstDeck);
 }
 
+// ------------------------------------------------------------------------------------------- menu attract autopilot
+// One full loop of the attract route from the spawn, per world and vehicle (the SUV in 2H and in 4H), without an
+// autopilot reset or a recovery, close to the center line and at a gentle speed.
+void autopilotLoops() {
+    struct Case {
+        const char* vehicle;
+        std::optional<TransferMode> transfer;
+    };
+    const Case cases[] = {{"trailforge_suv", TransferMode::TwoHigh}, {"trailforge_suv", TransferMode::FourHigh},
+                          {"trailforge_ev", std::nullopt}};
+    for (const bool open : {true, false}) {
+        for (const Case& c : cases) {
+            SimulationSettings s;
+            if (open) s.level = level();
+            s.vehicle = vehicle(c.vehicle);
+            s.terrain.async = false;
+            Simulation sim(s);
+            if (c.transfer) sim.requestTransfer(*c.transfer);
+            sim.setAutopilot(AutopilotMode::Drive);
+            const Autopilot& ap = sim.autopilot();
+            CHECK(ap.hasRoute(), "%s: no attract route", open ? "level" : "proving ground");
+            if (!ap.hasRoute()) return;
+            const float length = ap.routeLength();
+            const auto t0 = std::chrono::steady_clock::now();
+            double t = 0.0, speedSum = 0.0, maxKmh = 0.0;
+            float minSoc = 1.0f, minUp = 1.0f;
+            long ticks = 0;
+            bool regen = false;
+            float driven = 0.0f;
+            JPH::Vec3 last = sim.currentSnapshot().body.position;
+            std::vector<std::string> trace;
+            while (ap.distanceDriven() < length && t < length / 2.5 + 30.0 && sim.autopilotResets() == 0) {
+                driven = ap.distanceDriven();
+                last = sim.currentSnapshot().body.position;
+                if (ticks % 60 == 0) {
+                    const VehicleTelemetry& tel = sim.vehicle().telemetry();
+                    char buf[256];
+                    std::snprintf(buf, sizeof(buf), "    t %.1f s %.0f (%.1f %.1f %.1f) v %.1f tgt %.1f lat %.2f thr %.2f brk %.2f steer %+.2f up %.2f wheels %d",
+                                  t, double(ap.progress()), double(last.GetX()), double(last.GetY()), double(last.GetZ()),
+                                  double(tel.forwardSpeed), double(ap.targetSpeed()), double(ap.lateralError()),
+                                  double(tel.command.throttle), double(tel.command.brake), double(tel.command.steer),
+                                  double(tel.upDot), wheelsInContact(sim));
+                    trace.push_back(buf);
+                }
+                sim.tick();
+                t += sim.fixedStep();
+                ++ticks;
+                const VehicleTelemetry& tel = sim.vehicle().telemetry();
+                speedSum += tel.forwardSpeed;
+                maxKmh = std::max(maxKmh, double(tel.forwardSpeed) * 3.6);
+                minUp = std::min(minUp, tel.upDot);
+                if (tel.ev.electric) {
+                    minSoc = std::min(minSoc, tel.ev.soc);
+                    regen = regen || tel.ev.regenActive;
+                }
+            }
+            if (std::getenv("TF_AP_DEBUG") && sim.autopilotResets() > 0)
+                for (std::size_t k = trace.size() > 40 ? trace.size() - 40 : 0; k < trace.size(); ++k)
+                    std::printf("%s\n", trace[k].c_str());
+            const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            const char* name = c.transfer ? (*c.transfer == TransferMode::TwoHigh ? "SUV 2H" : "SUV 4H") : "EV";
+            std::printf("  %s %s: route '%s' %.0f m, driven %.0f m in %.1f s (avg %.1f km/h, max %.1f km/h), max lateral "
+                        "%.2f m, min up %.2f, resets %d (%s), recoveries %d%s, %.2f s wall\n",
+                        open ? "Exploration Peaks" : "proving ground", name, ap.route().name.c_str(), double(length),
+                        double(ap.distanceDriven()), t, speedSum / double(std::max(ticks, 1L)) * 3.6, maxKmh,
+                        double(ap.maxLateralError()), double(minUp), sim.autopilotResets(), ap.resetReason(),
+                        sim.recoveries(), regen ? ", regen used" : "", wall);
+            CHECK(ap.distanceDriven() >= length, "%s: only %.0f of %.0f m in %.0f s", name, double(ap.distanceDriven()),
+                  double(length), t);
+            CHECK(sim.autopilotResets() == 0 && sim.recoveries() == 0 && !sim.hadPhysicsError(),
+                  "%s: resets %d (%s after %.0f m at %.0f, %.0f), recoveries %d", name, sim.autopilotResets(),
+                  sim.autopilotResetReason(), double(driven), double(last.GetX()), double(last.GetZ()), sim.recoveries());
+            CHECK(ap.maxLateralError() < 2.5f, "%s: %.2f m off the center line", name, double(ap.maxLateralError()));
+            CHECK(maxKmh < 45.0, "%s: %.1f km/h", name, maxKmh);
+            if (open) CHECK(length > 1000.0f, "level route only %.0f m", double(length));
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -955,6 +1034,7 @@ int main(int argc, char** argv) {
         {"level_bridges", levelBridges},
         {"level_placement", levelPlacement},
         {"level_grass_clear", levelGrassClear},
+        {"autopilot_loops", autopilotLoops},
         {"terrain_textures_ktx2", terrainTexturesKtx2},
         {"terrain_textures_assets", terrainTexturesAssets},
     };

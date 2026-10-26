@@ -96,10 +96,11 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
             ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
         else
             ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
-        ImGui::TextDisabled("C camera (follow / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
+        ImGui::TextDisabled("M map  C camera (follow / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
                             stats.renderH, TRAILFORGE_VERSION);
+        remember("hud", true);
         ImGui::End();
         drawDriveHud(sim);
     }

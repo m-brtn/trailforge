@@ -14,7 +14,8 @@ const std::set<std::string> kKnown = {"wait", "until", "expect", "down", "up", "
                                       "scrollto", "teleport", "resize", "capture", "reset_stats", "log", "quit",
                                       "mark", "orbit", "wheel", "wheels", "quality", "set", "camera", "perf_begin",
                                       "perf_end", "time", "menu", "garage", "transfer", "controls", "pedal", "vehicle",
-                                      "soc", "level", "place", "map", "gamepad"};
+                                      "soc", "level", "place", "map", "gamepad", "mapclick", "mapaim", "mapdrag",
+                                      "marker"};
 
 } // namespace
 

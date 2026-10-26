@@ -1,0 +1,218 @@
+# Full-screen map, waypoint marker, compass bar and minimap (Exploration Peaks, then the proving ground):
+#   ./build/release/trailforge --script tools/scenarios/map_check.txt --no-audio
+# Keys, clicks, drags and the virtual pad go through the real input path. Captures: /tmp/trailforge_map_*.png.
+
+controls pad_type none
+set ui 0                             # F1 panels off: they would cover the minimap
+level exploration_peaks
+until level == 1 30
+until map_ready == 1 10
+wait 1.0
+log spawn
+expect map_pois == 13
+expect map_build_ms < 1500           # worker thread, 2048^2 raster
+expect marker_set == 0
+capture /tmp/trailforge_map_01_hud.png    # compass bar on top, minimap bottom right
+wait 0.1
+
+# ---------------------------------------------------------------- M opens the map, the simulation freezes
+tap M
+wait 0.2
+expect map_open == 1
+expect menu_screen == 5
+expect paused == 1
+mark ticks
+wait 0.5
+expect d_ticks == 0
+capture /tmp/trailforge_map_02_full.png
+wait 0.1
+
+# zoom with the wheel (around the pointer), pan with a drag, C centers on the vehicle
+mark map_scale
+wheel 4
+wait 0.2
+expect d_map_scale > 0.2              # 4 notches: x2.07 (fit is ~0.4 pt/m)
+mark map_cx
+mapdrag 240 0
+wait 0.4
+expect d_map_cx < -40                # content dragged right: the view moved west
+tap C
+wait 0.2
+expect map_cx > -492                 # back over the vehicle at the spawn (-488, 236)
+expect map_cx < -484
+expect map_cz > 232
+expect map_cz < 240
+capture /tmp/trailforge_map_03_zoomed.png
+wait 0.1
+
+# a click sets the waypoint on Valley Road 110 m ahead; a click on it clears it; a third click sets it again
+mapclick -442 130
+wait 0.2
+expect marker_set == 1
+expect marker_x > -445
+expect marker_x < -439
+expect marker_z > 127
+expect marker_z < 133
+mapclick -442 130
+wait 0.2
+expect marker_set == 0
+mapclick -442 130
+wait 0.2
+expect marker_set == 1
+log marker
+expect marker_dist > 100
+expect marker_dist < 125
+expect marker_bearing > -20          # nearly straight ahead of the spawn heading
+expect marker_bearing < 20
+capture /tmp/trailforge_map_04_marker.png
+wait 0.1
+
+# ---------------------------------------------------------------- M closes; drive at the marker: the distance drops
+tap M
+wait 0.2
+expect map_open == 0
+expect menu_screen == 2
+mark marker_dist
+down W
+wait 3.0                             # keyboard pedal ramp, uphill, no steering
+expect d_marker_dist < -1             # it was rolling back at 4 km/h when the map opened
+mark marker_dist
+wait 3.0
+log driving
+expect d_marker_dist < -12           # still closing, faster
+expect marker_bearing > -30
+expect marker_bearing < 30
+capture /tmp/trailforge_map_05_drive_compass.png
+wait 0.1
+up W
+down S
+wait 2.5
+up S
+
+# ---------------------------------------------------------------- map from the pause menu; Esc returns to MAP
+tap Escape
+wait 0.2
+expect menu_screen == 3
+menu select map
+tap Return
+wait 0.2
+expect map_open == 1
+tap Escape
+wait 0.2
+expect menu_screen == 3
+expect menu_cursor == 1              # back on MAP
+tap Escape
+wait 0.2
+expect menu_screen == 2
+
+# ---------------------------------------------------------------- gamepad: LB opens, triggers zoom, stick pans, A sets, B closes
+gamepad attach
+wait 0.3
+gamepad button lb 1
+wait 0.1
+gamepad button lb 0
+wait 0.2
+expect map_open == 1
+mark map_scale
+gamepad axis rt 1
+wait 0.5
+gamepad axis rt 0
+wait 0.1
+expect d_map_scale > 0
+mark map_cx
+gamepad axis leftx 1
+wait 0.5
+gamepad axis leftx 0
+wait 0.1
+expect d_map_cx > 5                  # stick right: the view moves east
+mapaim -300 -100
+gamepad button south 1
+wait 0.1
+gamepad button south 0
+wait 0.2
+expect marker_x > -303
+expect marker_x < -297
+capture /tmp/trailforge_map_06_gamepad.png
+wait 0.1
+gamepad button east 1
+wait 0.1
+gamepad button east 0
+wait 0.2
+expect map_open == 0
+gamepad detach
+wait 0.2
+
+# ---------------------------------------------------------------- minimap options: north up and large, compass off
+menu pause
+menu select settings
+tap Return
+wait 0.2
+menu select minimap_orientation
+tap Right
+menu select minimap_size
+tap Right
+menu select compass
+tap Right
+wait 0.1
+expect setting_minimap_north_up == 1
+expect setting_minimap_size == 2
+expect setting_compass == 0
+tap Escape
+wait 0.1
+tap Escape
+wait 0.3
+expect menu_screen == 2
+capture /tmp/trailforge_map_07_minimap_north_large.png
+wait 0.1
+
+# ---------------------------------------------------------------- cost: large minimap + compass on vs off (same view, VSync off)
+set vsync 0
+set compass 1
+wait 1.0
+perf_begin map_hud_on_1
+wait 3.0
+perf_end
+set minimap 0
+set compass 0
+perf_begin map_hud_off_1
+wait 3.0
+perf_end
+set minimap 1
+set compass 1
+perf_begin map_hud_on_2
+wait 3.0
+perf_end
+set minimap 0
+set compass 0
+perf_begin map_hud_off_2
+wait 3.0
+perf_end
+set minimap 1
+set compass 1
+perf_begin map_hud_on_3
+wait 3.0
+perf_end
+set minimap 0
+set compass 0
+perf_begin map_hud_off_3
+wait 3.0
+perf_end
+set minimap 1
+set vsync 1
+wait 0.5
+
+# ---------------------------------------------------------------- proving ground map
+level proving_ground
+until level == 0 30
+until map_ready == 1 10
+wait 0.5
+expect marker_set == 0               # the waypoint belongs to the world it was set in
+tap M
+wait 0.3
+expect map_open == 1
+expect map_pois > 10
+capture /tmp/trailforge_map_08_proving_ground.png
+wait 0.1
+tap M
+wait 0.2
+expect map_open == 0
