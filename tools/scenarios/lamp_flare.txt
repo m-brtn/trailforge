@@ -1,0 +1,69 @@
+# Lamps at night and the lens flare (README "Post effects"): the lens flare ghosts start only from the sun, so the
+# head, tail and brake lamps of every body (Blender body.glb test vehicle, procedural SUV and EV) keep their glow
+# on the lamps and leave no enlarged ghost copies on the ground or in the air. At sunset with the sun in view the
+# flare is still there.
+#   ./build/release/trailforge --script tools/scenarios/lamp_flare.txt --no-audio
+# Run from the repository root (the vehicle file path is relative). Captures /tmp/trailforge_flare_*.png.
+set ui 0
+set hud 0
+set auto_reverse 0
+set grass 0
+quality High
+time Night
+vehicle_file tests/data/vehicles/suv_glb_test/vehicle.json
+wait 1.0
+teleport 0
+wait 2.5
+expect body_glb == 1
+set headlights 1
+down S
+wait 0.5
+camera vehicle front 9 40
+wait 0.6
+expect post_flare == 0
+capture /tmp/trailforge_flare_glb_front.png
+wait 0.3
+camera vehicle three_quarter_rear 8 45
+wait 0.6
+expect post_flare == 0
+capture /tmp/trailforge_flare_glb_rear.png
+wait 0.3
+camera vehicle three_quarter 8 45
+wait 0.6
+capture /tmp/trailforge_flare_glb_34.png
+wait 0.3
+up S
+vehicle trailforge_suv
+wait 2.5
+expect body_glb == 0
+down S
+camera vehicle front 9 40
+wait 0.6
+expect post_flare == 0
+capture /tmp/trailforge_flare_suv_front.png
+wait 0.3
+camera vehicle three_quarter_rear 8 45
+wait 0.6
+capture /tmp/trailforge_flare_suv_rear.png
+wait 0.3
+up S
+vehicle trailforge_ev
+wait 2.5
+down S
+camera vehicle front 9 40
+wait 0.6
+expect post_flare == 0
+capture /tmp/trailforge_flare_ev_front.png
+wait 0.3
+camera vehicle three_quarter_rear 8 45
+wait 0.6
+capture /tmp/trailforge_flare_ev_rear.png
+wait 0.3
+up S
+# Sunset, looking toward the sun (time_of_day.txt banner view): the sun still feeds the flare.
+time Sunset
+camera 1.0 3.4 39.5 0.0 4.4 70.0
+wait 0.6
+expect post_flare > 0.3
+capture /tmp/trailforge_flare_sunset.png
+wait 0.3

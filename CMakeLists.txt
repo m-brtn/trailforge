@@ -293,10 +293,10 @@ if(TRAILFORGE_BUILD_TESTS)
         endforeach()
 
         # Camera math: hood mount, right-stick orbit and look-around (no window, no gamepad).
-        add_executable(trailforge_camera_tests tests/CameraTests.cpp src/render/Camera.cpp)
+        add_executable(trailforge_camera_tests tests/CameraTests.cpp src/render/Camera.cpp src/render/TimeOfDay.cpp)
         target_include_directories(trailforge_camera_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(trailforge_camera_tests PRIVATE trailforge_flow glm_headers)
-        foreach(test_name camera_hood_mount camera_stick_dead_zone camera_stick_orbit camera_hood_look)
+        foreach(test_name camera_hood_mount camera_stick_dead_zone camera_stick_orbit camera_hood_look sun_flare_source)
             add_test(NAME ${test_name} COMMAND trailforge_camera_tests ${test_name})
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 60)
         endforeach()

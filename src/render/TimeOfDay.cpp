@@ -142,4 +142,15 @@ SkyState computeSky(float hours, float headingDeg) {
     return s;
 }
 
+SunScreen sunOnScreen(const glm::mat4& viewProj, const glm::vec3& cameraPos, const glm::vec3& sunDir, float night) {
+    SunScreen r;
+    const glm::vec4 c = viewProj * glm::vec4(cameraPos + sunDir * 1000.0f, 1.0f);
+    if (c.w <= 0.0f) return r;
+    r.uv = glm::vec2(c.x / c.w * 0.5f + 0.5f, 0.5f - c.y / c.w * 0.5f);
+    const float edge = std::max(std::abs(r.uv.x - 0.5f), std::abs(r.uv.y - 0.5f));
+    const float day = smooth(-0.03f, 0.06f, sunDir.y) * (1.0f - night);
+    r.weight = day * (1.0f - smooth(0.45f, 1.1f, edge));
+    return r;
+}
+
 } // namespace tf

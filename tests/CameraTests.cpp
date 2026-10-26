@@ -4,6 +4,7 @@
 
 #include "input/ControlLayout.h"
 #include "render/Camera.h"
+#include "render/TimeOfDay.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -181,6 +182,37 @@ void hoodLook() {
           cam.hoodLookPitch(), cam.hoodLookYaw());
 }
 
+// The lens flare ghosts and the sun shafts start only from the sun: no source at night (lamps must not ghost),
+// behind the camera or far off screen; the sun in view projects where it is.
+void sunFlareSource() {
+    const glm::vec3 eye(0.0f, 2.0f, 0.0f);
+    const glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 5000.0f);
+    auto viewProj = [&](const glm::vec3& dir) { return proj * glm::lookAt(eye, eye + dir, glm::vec3(0, 1, 0)); };
+    const SkyState sunset = computeSky(kTimePresets[2].hours, 0.0f);
+    const SkyState night = computeSky(kTimePresets[3].hours, 0.0f);
+    CHECK(sunset.sunDir.y > 0.0f && night.sunDir.y < 0.0f, "sun elevation sunset %.3f night %.3f", sunset.sunDir.y,
+          night.sunDir.y);
+    const SunScreen inView = sunOnScreen(viewProj(sunset.sunDir), eye, sunset.sunDir, sunset.night);
+    CHECK(inView.weight > 0.5f && glm::length(inView.uv - glm::vec2(0.5f)) < 0.01f, "sunset in view: weight %.3f uv %.3f %.3f",
+          inView.weight, inView.uv.x, inView.uv.y);
+    const SunScreen behind = sunOnScreen(viewProj(-sunset.sunDir), eye, sunset.sunDir, sunset.night);
+    CHECK(behind.weight == 0.0f, "sun behind the camera: weight %.3f", behind.weight);
+    const glm::vec3 side = glm::normalize(glm::cross(sunset.sunDir, glm::vec3(0, 1, 0)));
+    const SunScreen offScreen = sunOnScreen(viewProj(side), eye, sunset.sunDir, sunset.night);
+    CHECK(offScreen.weight == 0.0f, "sun 90 deg off the view: weight %.3f", offScreen.weight);
+    // At night, looking along the (below-horizon) sun direction or anywhere else: no source.
+    float nightMax = 0.0f;
+    for (int a = 0; a < 8; ++a) {
+        const float yaw = glm::radians(45.0f * float(a));
+        const glm::vec3 dir(std::sin(yaw), -0.1f, std::cos(yaw));
+        nightMax = std::max(nightMax, sunOnScreen(viewProj(glm::normalize(dir)), eye, night.sunDir, night.night).weight);
+    }
+    nightMax = std::max(nightMax, sunOnScreen(viewProj(night.sunDir), eye, night.sunDir, night.night).weight);
+    CHECK(nightMax == 0.0f, "night: weight %.3f", nightMax);
+    std::printf("  sunset in view weight %.3f, behind %.3f, off screen %.3f, night max %.3f\n", inView.weight,
+                behind.weight, offScreen.weight, nightMax);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -189,6 +221,7 @@ int main(int argc, char** argv) {
         {"camera_stick_dead_zone", stickDeadZone},
         {"camera_stick_orbit", stickOrbit},
         {"camera_hood_look", hoodLook},
+        {"sun_flare_source", sunFlareSource},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

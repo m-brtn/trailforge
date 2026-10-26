@@ -284,6 +284,7 @@ struct RenderStats {
     bool depthEffects = false;                  // single-sample scene: TAA, AO, motion blur, shafts, DOF available
     bool taa = false, ao = false, motionBlur = false, shafts = false, dof = false, autoExposure = false;
     int velocityObjects = 0;                    // moving meshes drawn into the velocity buffer
+    float flareSun = 0.0f;                      // sun weight feeding the lens flare ghosts (0: no ghosts)
     float sceneLogLum = 0.0f;                   // adapted log2 mean scene luminance (after the base exposure)
     float autoExposureEv = 0.0f;                // correction applied on top of the time-of-day exposure
 };

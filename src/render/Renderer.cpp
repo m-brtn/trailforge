@@ -2734,6 +2734,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     }
 
     // ---- 3b. Velocity, TAA, motion blur, depth of field, sun shafts (single-sample scene only)
+    const SunScreen sunScreen = sunOnScreen(viewProjNJ, frame.cameraPos, glm::vec3(fu.skySun), fu.moonDir.w);
     const Texture* scene = &m_hdr;
     m_stats.taa = m_stats.motionBlur = m_stats.dof = m_stats.shafts = false;
     m_stats.velocityObjects = 0;
@@ -2815,13 +2816,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             m_stats.dof = true;
         }
         // Sun shafts: where the true sun projects (fading out beyond the screen edges, below the horizon and at night).
-        const glm::vec3 sunDir(fu.skySun);
-        const glm::vec4 sc = viewProjNJ * glm::vec4(frame.cameraPos + sunDir * 1000.0f, 1.0f);
-        if (s.sunShafts > 0.0f && m_shafts.tex && sc.w > 0.0f) {
-            const glm::vec2 suv(sc.x / sc.w * 0.5f + 0.5f, 0.5f - sc.y / sc.w * 0.5f);
-            const float edge = std::max(std::abs(suv.x - 0.5f), std::abs(suv.y - 0.5f));
-            const float day = glm::smoothstep(-0.03f, 0.06f, sunDir.y) * (1.0f - fu.moonDir.w);
-            const float weight = day * (1.0f - glm::smoothstep(0.45f, 1.1f, edge));
+        if (s.sunShafts > 0.0f && m_shafts.tex) {
+            const glm::vec2 suv = sunScreen.uv;
+            const float weight = sunScreen.weight;
             if (weight > 1e-3f) {
                 u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_shafts.w), 1.0f / float(m_shafts.h));
                 // Threshold: twice the adapted mean scene luminance (only the bright sky around the sun streams).
@@ -2907,9 +2904,10 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                               m_stats.autoExposure ? kAutoExposureStrength : 0.0f);
         pu.extra = glm::vec4(s.vignette, s.fxaa ? 1.0f : 0.0f, 1.0f, 1.0f);
         pu.look = glm::vec4(float(s.tonemapper), s.grade, s.grain, s.chromaticAberration);
-        pu.look2 = glm::vec4(bloom ? s.lensFlare * 0.035f : 0.0f, m_stats.shafts ? s.sunShafts : 0.0f,
-                             kAutoExposureKey, kAutoExposureRange);
-        pu.look3 = glm::vec4(float(m_frameIndex % 997) * 7.31f, 0, 0, 0);
+        m_stats.flareSun = bloom && s.lensFlare > 0.0f ? sunScreen.weight : 0.0f;
+        pu.look2 = glm::vec4(m_stats.flareSun > 1e-3f ? s.lensFlare * 0.035f : 0.0f,
+                             m_stats.shafts ? s.sunShafts : 0.0f, kAutoExposureKey, kAutoExposureRange);
+        pu.look3 = glm::vec4(float(m_frameIndex % 997) * 7.31f, sunScreen.uv, m_stats.flareSun);
         const SDL_GPUTextureSamplerBinding tex[5] = {
             {scene->tex, m_clampSampler},
             {bloom ? m_bloom[0].tex : scene->tex, m_clampSampler},

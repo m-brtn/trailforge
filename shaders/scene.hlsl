@@ -3050,18 +3050,22 @@ SamplerState shs : SMP(3);
 Texture3D<float4> lutTex : TEX(4);
 SamplerState lts : SMP(4);
 
-// Ghosts of the bright (bloom) image mirrored through the screen centre, tinted like lens coatings.
+// Ghosts of the bloom image mirrored through the screen centre, tinted like lens coatings. Only the bloom around the
+// sun feeds them (look3.yz: sun uv, w: sun weight): lamps and other small bright spots would ghost as enlarged
+// copies of themselves far away from where they are.
 float3 lensFlare(float2 suv) {
     const float k[4] = {-0.55, 0.42, -1.25, 0.82};
     const float3 tint[4] = {float3(1.0, 0.62, 0.30), float3(0.35, 0.65, 1.0), float3(0.55, 1.0, 0.55),
                             float3(1.0, 0.45, 0.75)};
+    const float aspect = p.texel.y / p.texel.x;
     float3 acc = ((float3)(0.0));
     for (int i = 0; i < 4; ++i) {
         const float2 g = 0.5 + (suv - 0.5) * k[i];
         const float w = saturate(1.0 - length(g - 0.5) * 1.7);
-        acc += bloom.SampleLevel(bs, g * p.extra.zw, 0).rgb * tint[i] * (w * w);
+        const float sun = 1.0 - smoothstep(0.04, 0.20, length((g - p.look3.yz) * float2(aspect, 1.0)));
+        acc += bloom.SampleLevel(bs, g * p.extra.zw, 0).rgb * tint[i] * (w * w * sun);
     }
-    return acc;
+    return acc * p.look3.w;
 }
 
 float4 tonemap_fs(FullscreenOut vin) : SV_Target0 {

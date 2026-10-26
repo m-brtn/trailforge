@@ -2548,6 +2548,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "post_motion_blur") return m_renderer->stats().motionBlur ? 1.0 : 0.0;
     if (n == "post_dof") return m_renderer->stats().dof ? 1.0 : 0.0;
     if (n == "post_shafts") return m_renderer->stats().shafts ? 1.0 : 0.0;
+    if (n == "post_flare") return m_renderer->stats().flareSun;
     if (n == "post_velocity_objects") return m_renderer->stats().velocityObjects;
     if (n == "auto_exposure_ev") return m_renderer->stats().autoExposureEv;
     if (n == "scene_log_lum") return m_renderer->stats().sceneLogLum;

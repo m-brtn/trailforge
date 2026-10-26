@@ -1259,7 +1259,7 @@ view, measured by repeating the pass with `post_bench`, M-series Mac).
 | Motion blur (camera + vehicle body / wheels velocity) | off | 0.4 | 0.5 | 0.5 | `motion_blur` | 0.22 + 0.16 velocity |
 | Depth of field (menus, garage; optional far blur while driving) | on | on | on | on | `dof`, `dof_driving` | 3.3 (24 taps, now 16) |
 | Sun shafts (radial blur of the sky around the sun, half res) | off | 0.5 | 0.6 | 0.6 | `shafts` | 0.06 |
-| Lens flare (ghosts of the bloom image) | off | 0.3 | 0.4 | 0.4 | `flare` | in tonemap |
+| Lens flare (ghosts of the bloom around the sun; lamps never ghost) | off | 0.3 | 0.4 | 0.4 | `flare` | in tonemap |
 | Eye adaptation (64×64 log luminance, 1×1 adapted) | on | on | on | on | `auto_exposure` | 0.07 |
 | Bloom | off | on | on | on | `bloom` | 0.41 |
 | Tonemap AgX / ACES + grade LUT (32³) + vignette, grain, chromatic aberration | all | all | all | all | `tonemap`, `grade`, `vignette`, `grain`, `chromatic` | 0.64 |
@@ -1267,6 +1267,13 @@ view, measured by repeating the pass with `post_bench`, M-series Mac).
 
 The grade LUT is built on the CPU (cool shadows, warm highlights, a gentle S-curve and vibrance toward the
 `Banner.png` key-art mood). Chromatic aberration is off by default.
+
+The lens flare ghosts mirror the bloom image through the screen centre (four tinted copies, scaled -0.55, 0.42,
+-1.25, 0.82), but only the bloom within about 0.2 screen heights of the projected sun feeds them, weighted like the
+sun shafts (0 behind the camera, below the horizon, at night and well off screen; scenario value `post_flare`).
+Without that gate every lamp ghosted at night as an enlarged copy of itself, far off the vehicle (coloured discs in
+the air, red tail-lamp streaks on the ground). `tools/scenarios/lamp_flare.txt` checks it on the Blender-body test
+vehicle, the procedural SUV and the EV, and that the flare is still there at sunset.
 
 ### Shader pipeline
 

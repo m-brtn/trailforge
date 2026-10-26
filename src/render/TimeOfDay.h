@@ -32,6 +32,14 @@ struct SkyState {
 // hours: 0..24 local solar time; headingDeg: world azimuth offset of the compass.
 SkyState computeSky(float hours, float headingDeg);
 
+// Where the sun projects for the post effects that start from it (sun shafts, lens flare ghosts): uv in 0..1 with y
+// down, and a 0..1 weight that is 0 behind the camera, below the horizon, at night and well beyond the screen edges.
+struct SunScreen {
+    glm::vec2 uv{0.5f};
+    float weight = 0.0f;
+};
+SunScreen sunOnScreen(const glm::mat4& viewProj, const glm::vec3& cameraPos, const glm::vec3& sunDir, float night);
+
 struct TimePreset {
     const char* name;
     float hours;
