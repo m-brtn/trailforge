@@ -8,7 +8,8 @@ TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 
 SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
-procedural, and so are all textures except the level ground. External assets: the sounds in `assets/audio/`
+procedural (the car bodies are generated from blueprints traced from `external_assets/images/Cars.png` by
+`tools/cars/trace_blueprint.py`, venv only), and so are all textures except the level ground. External assets: the sounds in `assets/audio/`
 (licenses in `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY`
 from the environment — never write the key into any file) and the CC0 PBR ground materials in
 `assets/textures/terrain/` (Poly Haven, BC7 KTX2 up to 4096², rebuilt reproducibly by
@@ -133,7 +134,8 @@ src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving
 src/core/     Json (reader, writer, merge), Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
- in Vehicle.cpp), DrivingAids (ABS / traction control logic, brake torque and throttle
+ in Vehicle.cpp), VehicleBlueprint (traced body: distance fields, wheelhouses, collision hulls; no SDL), DrivingAids
+ (ABS / traction control logic, brake torque and throttle
               factor only), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
               parameters, setup files)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
@@ -156,10 +158,13 @@ tests/        CTest physics, vehicle, app and audio tests (no window, no audio d
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
               packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
-              texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain texture rebuild)
+              texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain texture rebuild),
+ cars/ (trace_blueprint.py + <id>.keypoints.json hand corrections, compare_silhouettes.py IoU / half-half images,
+ ModelExport -> trailforge_model_export OBJ)
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
-assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id)
+assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
+ <id>/blueprint.json traced body (generated; README "Vehicle blueprints")
 assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id)
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; CREDITS.md
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);

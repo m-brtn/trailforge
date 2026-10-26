@@ -175,7 +175,6 @@ Application::Application(const AppOptions& options)
     rebuildVehicleVisual();
     const MeshData& bodyMesh = m_vehicleVisual.mesh;
     buildWorldContent();
-    m_springMesh = m_renderer->upload(buildUnitSpringMesh());
     m_armMesh = m_renderer->upload(buildUnitTubeMesh(0.021f));
     m_halfShaftMesh = m_renderer->upload(buildUnitTubeMesh(0.028f));
     m_shockBodyMesh = m_renderer->upload(buildShockBodyMesh());
@@ -1165,6 +1164,8 @@ void Application::renderFrame(float frameTime) {
     frame.vehicleModel = bodyM;
     frame.vehicleMud = m_gfx.mud;
     frame.bodyMud = &m_bodyMud;
+    frame.bodyMudArch = m_vehicleVisual.mudArch;
+    frame.bodyMudBody = m_vehicleVisual.mudBody;
     {
         const VehicleTelemetry& t = m_sim.vehicle().telemetry();
         frame.brakeLight = std::max(t.command.brake, t.command.handBrake) > 0.05f ? 1.0f : 0.0f;
@@ -1263,6 +1264,7 @@ void Application::rebuildVehicleVisual() {
     const VehicleConfig& vc = m_sim.vehicleConfig();
     m_vehicleVisual = buildVehicleVisual(vc);
     m_bodyMesh = m_renderer->upload(m_vehicleVisual.mesh);
+    m_springMesh = m_renderer->upload(buildUnitSpringMesh(m_vehicleVisual.coil));
     for (int a = 0; a < 2; ++a) {
         const MeshData wheel = buildAxleWheelMesh(m_vehicleVisual, vc.axles[std::size_t(a)]);
         m_wheelVisualSize[std::size_t(a)] = wheelMeshSize(wheel);
@@ -2532,6 +2534,11 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(m_window.get(), &w, &h);
         return n == "px_w" ? w : h;
+    }
+    if (n == "susp_spread") { // longest minus shortest suspension length of the four wheels, m
+        float lo = 1e9f, hi = -1e9f;
+        for (const auto& w : t.wheels) lo = std::min(lo, w.suspensionLength), hi = std::max(hi, w.suspensionLength);
+        return double(hi - lo);
     }
     if (n == "air" || n == "lowgrip_wheels" || n == "max_slip" || n == "load_sum") {
         double air = 0, low = 0, slip = 0, load = 0;

@@ -251,7 +251,7 @@ void roundLamp(MeshData& m, const glm::vec3& center, const glm::vec3& axis, floa
 float roofRails(MeshData& m, float halfW, float z0, float z1, float yBase, const std::vector<float>& crossZ,
                 const Material& rail, const Material& feet) {
     const glm::vec3 up(0, 1, 0);
-    const float yRail = yBase + 0.050f, railH = 0.013f, railW = 0.017f;
+    const float yRail = yBase + 0.050f, railH = 0.028f, railW = 0.020f;
     for (float sx : {1.0f, -1.0f}) {
         const float x = sx * halfW;
         // Rail with chamfered edges; both ends slope down onto the roof.

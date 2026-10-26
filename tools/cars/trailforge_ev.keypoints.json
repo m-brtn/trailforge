@@ -1,0 +1,750 @@
+{
+  "comment": "Hand-placed corrections for tracing Cars.png car #2 (electric SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: antennas and the roof spare (not modelled); accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): roof rack and cargo, mirrors, rock sliders, flare and tire bumps of the plan; shadow: ground shadow and underbody mass between the tires (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "id": "trailforge_ev",
+  "restHubY": -0.3506,
+  "column": 1,
+  "vehicle": "assets/vehicles/trailforge_ev/vehicle.json",
+  "lights": [
+    {
+      "view": "front",
+      "kind": "head",
+      "box": [
+        [
+          174,
+          199
+        ],
+        [
+          226,
+          209
+        ]
+      ]
+    },
+    {
+      "view": "front",
+      "kind": "head",
+      "box": [
+        [
+          408,
+          199
+        ],
+        [
+          460,
+          209
+        ]
+      ]
+    },
+    {
+      "view": "front",
+      "kind": "bar",
+      "box": [
+        [
+          240,
+          200
+        ],
+        [
+          394,
+          208
+        ]
+      ]
+    },
+    {
+      "view": "rear",
+      "kind": "tail",
+      "box": [
+        [
+          160,
+          148
+        ],
+        [
+          240,
+          178
+        ]
+      ]
+    },
+    {
+      "view": "rear",
+      "kind": "tail",
+      "box": [
+        [
+          388,
+          148
+        ],
+        [
+          472,
+          178
+        ]
+      ]
+    },
+    {
+      "view": "rear",
+      "kind": "brake",
+      "box": [
+        [
+          288,
+          73
+        ],
+        [
+          348,
+          79
+        ]
+      ]
+    }
+  ],
+  "palette": {
+    "paint": [
+      [
+        156,
+        157,
+        159
+      ],
+      [
+        129,
+        129,
+        131
+      ],
+      [
+        192,
+        197,
+        200
+      ],
+      [
+        236,
+        236,
+        236
+      ],
+      [
+        170,
+        172,
+        176
+      ],
+      [
+        110,
+        112,
+        115
+      ]
+    ],
+    "accent": [
+      [
+        86,
+        136,
+        187
+      ],
+      [
+        40,
+        110,
+        210
+      ],
+      [
+        60,
+        120,
+        200
+      ]
+    ],
+    "red": [
+      [
+        200,
+        40,
+        30
+      ],
+      [
+        230,
+        70,
+        60
+      ]
+    ],
+    "dark": [
+      [
+        5,
+        6,
+        8
+      ],
+      [
+        19,
+        21,
+        23
+      ],
+      [
+        31,
+        33,
+        36
+      ],
+      [
+        43,
+        45,
+        49
+      ],
+      [
+        61,
+        62,
+        64
+      ],
+      [
+        85,
+        90,
+        98
+      ]
+    ]
+  },
+  "side": {
+    "rimRadiusPx": [
+      26,
+      42
+    ],
+    "archVoidGray": 24,
+    "extraDoorCutsPx": [
+      497
+    ],
+    "ignore": [
+      [
+        [
+          181,
+          48
+        ],
+        [
+          195,
+          160
+        ]
+      ],
+      [
+        [
+          570,
+          44
+        ],
+        [
+          584,
+          112
+        ]
+      ],
+      [
+        [
+          364,
+          58
+        ],
+        [
+          478,
+          94
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          296,
+          40
+        ],
+        [
+          584,
+          40
+        ],
+        [
+          584,
+          103
+        ],
+        [
+          296,
+          103
+        ]
+      ],
+      [
+        [
+          230,
+          279
+        ],
+        [
+          432,
+          279
+        ],
+        [
+          432,
+          298
+        ],
+        [
+          230,
+          298
+        ]
+      ],
+      [
+        [
+          100,
+          140
+        ],
+        [
+          212,
+          140
+        ],
+        [
+          212,
+          161
+        ],
+        [
+          100,
+          172
+        ]
+      ]
+    ]
+  },
+  "top": {
+    "accessories": [
+      [
+        [
+          236,
+          25
+        ],
+        [
+          270,
+          25
+        ],
+        [
+          270,
+          76
+        ],
+        [
+          236,
+          76
+        ]
+      ],
+      [
+        [
+          236,
+          335
+        ],
+        [
+          270,
+          335
+        ],
+        [
+          270,
+          385
+        ],
+        [
+          236,
+          385
+        ]
+      ],
+      [
+        [
+          55,
+          20
+        ],
+        [
+          205,
+          20
+        ],
+        [
+          205,
+          64
+        ],
+        [
+          55,
+          64
+        ]
+      ],
+      [
+        [
+          440,
+          20
+        ],
+        [
+          575,
+          20
+        ],
+        [
+          575,
+          64
+        ],
+        [
+          440,
+          64
+        ]
+      ]
+    ]
+  },
+  "front": {
+    "shadow": [
+      [
+        [
+          196,
+          298
+        ],
+        [
+          410,
+          376
+        ]
+      ]
+    ],
+    "ignore": [
+      [
+        [
+          191,
+          0
+        ],
+        [
+          204,
+          92
+        ]
+      ],
+      [
+        [
+          421,
+          0
+        ],
+        [
+          436,
+          96
+        ]
+      ],
+      [
+        [
+          250,
+          36
+        ],
+        [
+          384,
+          72
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          180,
+          30
+        ],
+        [
+          450,
+          30
+        ],
+        [
+          450,
+          86
+        ],
+        [
+          180,
+          86
+        ]
+      ],
+      [
+        [
+          134,
+          130
+        ],
+        [
+          178,
+          130
+        ],
+        [
+          178,
+          170
+        ],
+        [
+          134,
+          170
+        ]
+      ],
+      [
+        [
+          460,
+          130
+        ],
+        [
+          504,
+          130
+        ],
+        [
+          504,
+          170
+        ],
+        [
+          460,
+          170
+        ]
+      ]
+    ]
+  },
+  "rear": {
+    "shadow": [
+      [
+        [
+          208,
+          306
+        ],
+        [
+          410,
+          376
+        ]
+      ]
+    ],
+    "ignore": [
+      [
+        [
+          191,
+          0
+        ],
+        [
+          204,
+          66
+        ]
+      ],
+      [
+        [
+          428,
+          0
+        ],
+        [
+          442,
+          66
+        ]
+      ],
+      [
+        [
+          244,
+          14
+        ],
+        [
+          386,
+          54
+        ]
+      ]
+    ],
+    "accessories": [
+      [
+        [
+          180,
+          10
+        ],
+        [
+          450,
+          10
+        ],
+        [
+          450,
+          64
+        ],
+        [
+          180,
+          64
+        ]
+      ],
+      [
+        [
+          122,
+          116
+        ],
+        [
+          166,
+          116
+        ],
+        [
+          166,
+          156
+        ],
+        [
+          122,
+          156
+        ]
+      ],
+      [
+        [
+          462,
+          116
+        ],
+        [
+          506,
+          116
+        ],
+        [
+          506,
+          156
+        ],
+        [
+          462,
+          156
+        ]
+      ]
+    ]
+  },
+  "anchors": [
+    {
+      "name": "mirror",
+      "view": "front",
+      "box": [
+        [
+          150,
+          137
+        ],
+        [
+          172,
+          162
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "front",
+      "box": [
+        [
+          462,
+          137
+        ],
+        [
+          496,
+          162
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "side",
+      "box": [
+        [
+          238,
+          150
+        ],
+        [
+          263,
+          177
+        ]
+      ]
+    },
+    {
+      "name": "tow_hook",
+      "view": "rear",
+      "box": [
+        [
+          222,
+          251
+        ],
+        [
+          241,
+          279
+        ]
+      ]
+    },
+    {
+      "name": "tow_hook",
+      "view": "rear",
+      "box": [
+        [
+          390,
+          251
+        ],
+        [
+          409,
+          279
+        ]
+      ]
+    },
+    {
+      "name": "slider",
+      "view": "side",
+      "box": [
+        [
+          230,
+          279
+        ],
+        [
+          432,
+          298
+        ]
+      ]
+    },
+    {
+      "name": "rack",
+      "view": "side",
+      "box": [
+        [
+          296,
+          40
+        ],
+        [
+          584,
+          103
+        ]
+      ]
+    },
+    {
+      "name": "skid",
+      "view": "front",
+      "box": [
+        [
+          253,
+          284
+        ],
+        [
+          400,
+          300
+        ]
+      ]
+    },
+    {
+      "name": "skid",
+      "view": "rear",
+      "box": [
+        [
+          200,
+          282
+        ],
+        [
+          430,
+          305
+        ]
+      ]
+    },
+    {
+      "name": "mirror",
+      "view": "rear",
+      "box": [
+        [
+          465,
+          123
+        ],
+        [
+          500,
+          154
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "side",
+      "box": [
+        [
+          117,
+          159
+        ],
+        [
+          212,
+          170
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          117,
+          82
+        ],
+        [
+          212,
+          112
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          117,
+          306
+        ],
+        [
+          212,
+          336
+        ]
+      ]
+    }
+  ]
+}

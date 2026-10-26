@@ -60,6 +60,8 @@ struct FrameUniforms {
     glm::vec4 grassParams;      // x: grass distance (m, 0 = grass off), y: canopy colour on the ground near the camera
     glm::vec4 trampleRect;      // xMin, zMin, 1/sizeX, 1/sizeZ of the grass trample mask
     glm::vec4 worldParams;      // x: sky-pass mountains (0/1), y: water outside the ground maps is deep (0/1)
+    glm::vec4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
+    glm::vec4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
 };
 
 struct DrawUniforms {
@@ -177,6 +179,8 @@ struct FrameDesc {
     glm::mat4 vehicleModel{1.0f};
     float vehicleMud = 0.0f;
     const BodyMud* bodyMud = nullptr;            // per-region spray mud on the body (cosmetic)
+    glm::vec4 bodyMudArch{1.40f, -1.40f, -0.20f, 0.545f}; // where its regions are (VehicleVisual::mudArch / mudBody)
+    glm::vec4 bodyMudBody{0.88f, 2.15f, -2.10f, 0.0f};
     float brakeLight = 0.0f;
     float reverseLight = 0.0f;
     float headlights = 1.0f;

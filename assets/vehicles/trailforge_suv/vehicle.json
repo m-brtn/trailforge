@@ -8,16 +8,16 @@
   "body": {
     "mass": 2000,
     "inertiaScale": 1.0,
-    "inertia": null,
+    "inertia": [3121, 3184, 796],
     "centerOfMass": {"frontWeightFraction": 0.5178571428571429, "height": -0.10},
     "friction": 0.5,
     "angularDamping": 0.02
   },
-  "camera": {"hood": {"position": [0.0, 1.24, 0.62], "pitch": -1, "nearPlane": 0.05}},
-  "geometry": {"wheelBase": 2.80, "attachHeight": 0.05},
+  "camera": {"hood": {"position": [0.0, 0.92, 0.38], "pitch": -1, "nearPlane": 0.05}},
+  "geometry": {"wheelBase": 2.56, "attachHeight": 0.05},
   "axles": {
     "front": {
-      "track": 1.80,
+      "track": 1.75,
       "wheel": {"radius": 0.436, "width": 0.315, "mass": 43, "inertia": 4.7, "angularDamping": 0.2, "rimRatio": 0.495, "tread": "mud_terrain"},
       "suspension": {
         "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,
@@ -28,7 +28,7 @@
       "handBrakeTorque": 0
     },
     "rear": {
-      "track": 1.80,
+      "track": 1.75,
       "wheel": {"radius": 0.436, "width": 0.315, "mass": 43, "inertia": 4.7, "angularDamping": 0.2, "rimRatio": 0.495, "tread": "mud_terrain"},
       "suspension": {
         "frequency": 1.35, "compressionDamping": 0.45, "reboundDamping": 0.45,

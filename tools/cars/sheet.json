@@ -1,0 +1,12 @@
+{
+  "image": "external_assets/images/Cars.png",
+  "comment": "Cell layout of the concept sheet (pixels of the 2688 x 1796 PNG): one column per car, one row per view. Cars face left in the side and top views; the front and rear views look along the body axis.",
+  "columns": [[8, 698], [710, 1356], [1370, 2026], [2040, 2682]],
+  "rows": {
+    "side": [140, 520],
+    "top": [530, 960],
+    "front": [960, 1336],
+    "rear": [1336, 1710]
+  },
+  "background": {"maxChroma": 14, "darker": 22, "brighter": 14}
+}

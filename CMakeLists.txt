@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TrailForge VERSION 0.14.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.15.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +43,23 @@ add_library(trailforge_sim STATIC
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
     src/sim/WheelSpray.cpp
-    src/sim/BodyMud.cpp)
+    src/sim/BodyMud.cpp
+    src/vehicle/VehicleBlueprint.cpp)
+# Traced body blueprints, embedded so the default configuration and the headless tests need no asset path.
+set(TRAILFORGE_BLUEPRINT_IDS trailforge_suv trailforge_ev)
+set(_bp_files "")
+foreach(id IN LISTS TRAILFORGE_BLUEPRINT_IDS)
+    list(APPEND _bp_files ${CMAKE_SOURCE_DIR}/assets/vehicles/${id}/blueprint.json)
+endforeach()
+string(REPLACE ";" "," _bp_ids "${TRAILFORGE_BLUEPRINT_IDS}")
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/generated/vehicle_blueprints.cpp
+    COMMAND ${CMAKE_COMMAND} -DIDS=${_bp_ids} -DSRC_DIR=${CMAKE_SOURCE_DIR}
+            -DOUTPUT=${CMAKE_BINARY_DIR}/generated/vehicle_blueprints.cpp -P ${CMAKE_SOURCE_DIR}/cmake/EmbedBlueprints.cmake
+    DEPENDS ${_bp_files} ${CMAKE_SOURCE_DIR}/cmake/EmbedBlueprints.cmake
+    COMMENT "Embedding vehicle blueprints"
+    VERBATIM)
+target_sources(trailforge_sim PRIVATE ${CMAKE_BINARY_DIR}/generated/vehicle_blueprints.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
 target_link_libraries(trailforge_sim PUBLIC Jolt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -99,6 +115,7 @@ if(TRAILFORGE_BUILD_APP)
         src/render/Mesh.cpp
         src/render/GroundMaps.cpp
         src/render/VehicleModel.cpp
+        src/render/FieldMesh.cpp
         src/render/StyleKit.cpp
         src/render/Scenery.cpp
         src/render/LevelScene.cpp
@@ -131,6 +148,11 @@ if(TRAILFORGE_BUILD_APP)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)
     endif()
+
+    # Vehicle model at rest as OBJ (CPU mesh only) for the silhouette comparison in tools/cars.
+    add_executable(trailforge_model_export tools/cars/ModelExport.cpp src/render/Mesh.cpp src/render/StyleKit.cpp
+                                           src/render/VehicleModel.cpp src/render/FieldMesh.cpp)
+    target_link_libraries(trailforge_model_export PRIVATE trailforge_sim glm_headers)
 endif()
 
 # ------------------------------------------------------------------ tests
@@ -233,7 +255,7 @@ if(TRAILFORGE_BUILD_TESTS)
     # Procedural vehicle model: parts and wheel clearance (CPU mesh only; GLM comes with the app build).
     if(TRAILFORGE_BUILD_APP)
         add_executable(trailforge_model_tests tests/ModelTests.cpp src/render/Mesh.cpp src/render/StyleKit.cpp
-                                              src/render/VehicleModel.cpp)
+                                              src/render/VehicleModel.cpp src/render/FieldMesh.cpp)
         target_include_directories(trailforge_model_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
         target_link_libraries(trailforge_model_tests PRIVATE trailforge_sim glm_headers)
         target_compile_definitions(trailforge_model_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
