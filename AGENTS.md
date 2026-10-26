@@ -20,7 +20,7 @@ CREDITS file. 3D models (trees, ground cover, rocks, cliffs, logs) are CC0 Poly 
 `tools/models/fetch_models.py` (manifest `assets/models/models.json`, md5 lock `sources.lock.json`) and converted by
 `trailforge_modelc` (`tools/texc`) to `assets/models/<folder>/*.glb` + BC7 KTX2; credits in `assets/models/CREDITS.md`.
 `*.ktx2` under `assets/textures/` and `*.glb` / `*.ktx2` under `assets/models/` are Git LFS objects (`.gitattributes`;
-run `git lfs pull` after cloning). Keep the LFS total small (currently 252.1 MB: textures 167.8 MB, models 84.3 MB;
+run `git lfs pull` after cloning). Keep the LFS total small (currently 253.0 MB: textures 167.8 MB, models 84.3 MB, test vehicle body 0.9 MB;
 GitHub's LFS storage and bandwidth quota is shared with CI, which caches `.git/lfs`), and report size changes in the
 devlog.
 
@@ -40,7 +40,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 72 tests, 65 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 78 tests, 70 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -62,7 +62,8 @@ prints them). Visual changes to Metal output can be measured with `tools/render/
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
-`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_probe`
+`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
+`trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `climb`, `abs`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
@@ -88,6 +89,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, PERF tex vs off, /tmp/trailforge_tex_*.png
 ./build/release/trailforge --script tools/scenarios/map_check.txt # full-screen map, waypoint, compass distance, pad map controls, minimap options, /tmp/trailforge_map_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
+./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
@@ -142,7 +144,8 @@ src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, contr
  in Vehicle.cpp), VehicleBlueprint (traced body: distance fields, wheelhouses, collision hulls; no SDL), DrivingAids
  (ABS / traction control logic, brake torque and throttle
               factor only), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
-              parameters, setup files)
+              parameters, setup files), WheelSweep (space a tire sweeps over travel + steering), VehicleBody (body.glb
+              reader / writer, roles, validation against every config; no SDL)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
               BodyImpacts (chassis contact listener for impact sounds)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
@@ -159,17 +162,20 @@ src/app/      Application (lifecycle, main loop), GameFlow (menu state machine),
               dir via SDL_GetPrefPath), main
 shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only
-              definitions (rwd_test), swept by vehicle_catalog_sweep together with assets/vehicles
+              definitions (rwd_test; suv_glb_test = SUV with a Blender body.glb + its source export), swept by
+              vehicle_catalog_sweep together with assets/vehicles
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
               packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
               texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain texture rebuild),
  cars/ (trace_blueprint.py + <id>.keypoints.json hand corrections, compare_silhouettes.py IoU / half-half images,
- ModelExport -> trailforge_model_export OBJ)
+ ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
+ blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py)
 docs/releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
- <id>/blueprint.json traced body (generated; README "Vehicle blueprints")
+ <id>/blueprint.json traced body (generated; README "Vehicle blueprints"), optional <id>/body.glb Blender
+ body (Git LFS; README "Blender bodies (body.glb)")
 assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id)
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; CREDITS.md
 assets/audio/ WAV sounds, manifest.json, CREDITS.md; assets/music/ intro.mp3; assets/fonts/ Rajdhani (OFL);
