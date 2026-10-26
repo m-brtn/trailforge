@@ -1705,8 +1705,8 @@ float4 waterfall_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
         const float n1 = noiseTex.Sample(ns, float2(a * 0.6 + seed, r * R * 0.08 - t * 0.12)).g;
         const float n2 = noiseTex.Sample(ns, P.xz * 0.21 + float2(t * 0.03, -t * 0.02)).g;
         const float foam = saturate(n1 * 0.8 + n2 * 0.6 - 0.25);
-        alpha = saturate(foam * 1.6 + 0.6 * (1.0 - r)) * smoothstep(1.0, 0.45, r) * 0.9;
-        white = 0.85 + 0.15 * foam;
+        alpha = saturate(foam * 1.3 + 0.25 * (1.0 - r) - 0.1) * smoothstep(1.0, 0.3, r) * 0.75;
+        white = 0.7 + 0.25 * foam;
         translucency = 0.2;
         N = float3(0, 1, 0);
     } else {

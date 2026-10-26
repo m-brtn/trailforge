@@ -343,6 +343,7 @@ private:
     void bakeProps();
     void bakeLogs();
     void bakeCliffs();
+    void bakeBankSmoothing(const std::vector<float>& uncarved);
     void bakeScatter();
     // Model library: "vegetation" lists model paths (relative to "dir", relative to the level file) per role.
     bool loadModels(const json::Value& veg, std::string& err);
@@ -819,7 +820,6 @@ void LevelBaker::bakeLakes() {
 }
 
 void LevelBaker::bakeRivers() {
-    const std::vector<float> uncarved = m_riverDefs.empty() ? std::vector<float>{} : m_h;
     for (const RiverDef& def : m_riverDefs) {
         LevelRiver river;
         river.name = def.name;
@@ -906,14 +906,19 @@ void LevelBaker::bakeRivers() {
         });
         L.m_rivers.push_back(std::move(river));
     }
-    if (m_riverDefs.empty()) return;
-    // Smooth the carved banks: the per-segment cones meet in a crease at every sample on the inside of a bend
-    // and the bank meets the terrain in a hard rim. The water channel keeps its exact profile.
+}
+
+void LevelBaker::bakeBankSmoothing(const std::vector<float>& uncarved) {
+    if (m_lakes.empty() && m_riverDefs.empty()) return;
+    // Smooth the carved banks: the per-segment river cones meet in a crease at every sample on the inside of a
+    // bend, lakes end in a cut at their outline, and banks meet the terrain in a hard rim. River channels and
+    // lake water deeper than 0.5 m keep their exact profile.
     std::vector<std::uint8_t> region(m_h.size(), 0);
     parallelFor(m_n, m_threads, [&](int j) {
         for (int i = 0; i < m_n; ++i) {
             const std::size_t k = idx(i, j);
             if (m_riverD[k] < m_riverReach[k] + 1.0f) continue;
+            if (m_lakeId[k] && m_h[k] < m_lakes[std::size_t(m_lakeId[k] - 1)].level - 0.5f) continue;
             bool near = false;
             for (int dj = -2; dj <= 2 && !near; ++dj)
                 for (int di = -2; di <= 2 && !near; ++di) {
@@ -2242,8 +2247,10 @@ void LevelBaker::bake() {
     bakeBase();
     bakeCoast();
     bakeFlats();
+    const std::vector<float> uncarved = m_h;
     bakeLakes();
     bakeRivers();
+    bakeBankSmoothing(uncarved);
     bakeRoads();
     L.m_height = m_h;
     buildRoadPoints();
