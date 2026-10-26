@@ -2350,6 +2350,19 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             m_camera.fovYDeg = fov;
             return Exec::Done;
         }
+        if (arg == "local") {
+            // Free camera with position and target in the vehicle frame (close-ups of body details).
+            if (c.args.size() < 7) return Exec::Failed;
+            float v[6];
+            for (int i = 0; i < 6; ++i) v[i] = float(std::atof(c.args[std::size_t(i + 1)].c_str()));
+            const float fov = c.args.size() > 7 ? float(std::atof(c.args[7].c_str())) : 60.0f;
+            if (fov < 1.0f || fov > 120.0f) return Exec::Failed;
+            const glm::vec3 car = toGlm(m_sim.currentSnapshot().body.position);
+            const glm::quat rot = toGlm(m_sim.currentSnapshot().body.rotation);
+            m_camera.setFreePose(car + rot * glm::vec3(v[0], v[1], v[2]), car + rot * glm::vec3(v[3], v[4], v[5]));
+            m_camera.fovYDeg = fov;
+            return Exec::Done;
+        }
         if (c.args.size() < 6) return Exec::Failed;
         float v[6];
         for (int i = 0; i < 6; ++i) v[i] = float(std::atof(c.args[std::size_t(i)].c_str()));

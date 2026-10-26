@@ -110,6 +110,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
 ./build/release/trailforge --script tools/scenarios/thirdparty_views.txt # IRONCLAD G + KESTREL M bodies: views, steering lock, night, hood, twister, coupe slicks, /tmp/trailforge_tp_*.png
+./build/release/trailforge --script tools/scenarios/badge_views.txt # IRONCLAD G + KESTREL M badge locations close up (blank discs, no lettering), /tmp/trailforge_badge_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav

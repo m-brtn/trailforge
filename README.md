@@ -250,6 +250,7 @@ One command per line, `#` starts a comment:
 | `tires offroad\|road\|slick` / `tires warm\|cold` / `tires ambient C` | fit a tire set through the garage parameter `tires.set` (rebuild in place, new tires at the air temperature) / put all four tires (surface and core) in the middle of the set's window or at the air temperature / set the air temperature live (`tools/scenarios/tires.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
+| `camera local X Y Z TX TY TZ [FOV]` | free camera with position and target in the vehicle frame (+X left, +Y up, +Z forward, m; FOV default 60 deg) for close-ups of body details (`tools/scenarios/badge_views.txt`) |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
 | `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
@@ -777,6 +778,12 @@ positions were measured from the models.
   every body vertex keeps 10 mm from the wheel sweep over the full travel, the steering lock and the garage ride
   heights (`trailforge_vehiclec --check` without `--clearance`; closest 12.3 mm on the IRONCLAD). The arches leave
   no room to lower either car: the garage ride height only raises it (IRONCLAD 0..+80 mm, KESTREL 0..+30 mm).
+- No manufacturer marks: the body prep replaces every emblem (grille, hood, spare cover, trunk, steering wheel) with
+  a blank dark disc of the same size, deletes the model lettering and stickers, and paints the logo and lettering
+  areas of the texture atlases (interior plates, number plates, engine bay, grille mesh stripes) with their
+  background colour before the colour bake; the grille shapes are unchanged. Wheels are the game's own, so there are
+  no wheel-centre logos. Close-ups: `tools/scenarios/badge_views.txt` (the steering wheels are not visible through
+  the tinted glass).
 - Coil-overs under a Blender body: the body has no shock towers, so the procedural layout moves with each axle's hub
   (the shock 0.06 m longer than its body at full bump, the lower arm level at rest) and the coil sits inboard of the
   steered tire; `model_suspension_mounts` checks the shock length, a 5 mm coil-to-tire gap and that the top eye is
