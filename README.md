@@ -11,7 +11,8 @@ and `assets/audio/CREDITS.md`) and the CC0 photo-scanned ground materials of the
 `assets/textures/terrain/` (Poly Haven, BC7 KTX2 in Git LFS, see [Terrain textures](#terrain-textures) and
 `assets/textures/CREDITS.md`), and the CC0 trees, ground cover, rocks, cliffs and logs of that level in
 `assets/models/` (Poly Haven glTF converted to glb LODs + BC7 KTX2 in Git LFS, see [Level models](#level-models) and
-`assets/models/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass) is procedural.
+`assets/models/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass) is procedural; the buggy's proportions were referenced
+from a purchased model that is not redistributed.
 
 **Third-party content (private repository only):** the level [Ironwall Stadium](#ironwall-stadium-banked-oval)
 (`assets/levels/ironwall_stadium/`, `assets/models/ironwall_stadium/`) is converted from a community track mod
@@ -330,7 +331,8 @@ brake tap, audible for lock-up and handbrake slides, never while the mud layer i
 `tools/scenarios/ev_check.txt` (electric vehicle: vehicle page with keys, mouse wheel and card clicks, launch, lift-off
 regen, blended braking, SoC and energy counters, drive modes, the low range message, reverse, an empty battery, the
 mud bath in OFF-ROAD; `/tmp/trailforge_ev_*.png`), `tools/scenarios/ev_audio.txt` (EV launch, regen and stop for an
-`--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/car2_views.txt` (EV model views
+`--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/patrol_views.txt` (buggy views, full droop and full bump coil-over close-ups,
+`/tmp/trailforge_patrol_*.png`), `tools/scenarios/car2_views.txt` (EV model views
 for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`), `tools/scenarios/tires.txt` (tire sets and
 temperature: cold slicks, warming on the mini track, slicks taken off warmers, the telemetry grid, the road set fitted
 on a 35 C day; `/tmp/trailforge_tires_*.png`).
@@ -354,7 +356,7 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 `soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `susp_min` / `susp_max` (shortest / longest of the four), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
@@ -713,6 +715,48 @@ touches the terrain in 34 (SUV) and 30 (EV) of 1200 ticks, the traced body did i
 The full-pedal launch with TC off spins the front wheels: the front axle's 4800 N·m exceeds its grip once the weight
 moves back (slip speed up to 18 m/s, about 2.5 s). Traction control (T) limits it per axle.
 
+### Desert patrol buggy (`trailforge_patrol`)
+
+`assets/vehicles/trailforge_patrol/vehicle.json` ("Desert Patrol Buggy"): a two-seat tube-frame buggy with a
+mid-mounted engine under the cargo bed. The body is procedural StyleKit geometry like the other kit bodies (`kit::patrol` in
+`src/render/VehicleModel.cpp`); its proportions (wheelbase, track, ride height, tire size, cage and roof line, seat
+position, coil-over mounts) were measured from a purchased model that is not part of the repository and not
+redistributed. The reference is a two-seat 4x4 utility side-by-side with the engine behind the seats, so the drive is
+on-demand AWD rather than RWD.
+
+- 750 kg, front weight 0.42, wheelbase 2.07 m, track 1.35 m, tires 0.33 m radius / 0.229 m wide (beadlock rims),
+  32 cm of suspension travel (front 0.186–0.503 m, rear 0.193–0.510 m), springs 1.35 / 1.55 Hz, front anti-roll
+  300 N/m, brakes 900 / 550 N·m per wheel, no ABS or traction control by default (B / T turn them on), drag area 1.9 m².
+- Engine with the character of a 1.0 L high-revving inline-four: 112 N·m peak at 8400 rpm, about 119 kW (160 hp) at
+  11000 rpm, limiter 11800 rpm (12000 rpm curve end), 0.06 kg·m² flywheel; six speeds 3.30–1.15 with an 8.0 final
+  drive and 0.05 s shifts (up at 11500, down at 7000 rpm), no low range (L reports "No low range on this vehicle").
+  On-demand AWD: 10 % front by default, front LSD, rear locked, center LSD.
+- Body: open sand-coloured tube cage with a roof X brace and a light bar, satin black hood, nose and skid plate,
+  tube bumpers with orange tow hooks, two seats, dash and steering wheel, cargo bed with two strapped cases and the
+  spare lying flat. No fenders, arches or flares: wheels, lower arms and coil-overs are exposed. The coil-overs
+  (orange springs) run from shock towers welded to the front and rear frame to the lower arms; their mount points are
+  part of the visual (`SuspensionMounts`) and the arms and shocks are placed from the Jolt hub every frame.
+  `model_suspension_mounts` checks at full droop, rest and full bump over the steering range that the shock body and
+  shaft overlap (0.335–0.597 m between the eyes, attached up to 0.75 m), the top eye sits on the frame and the coil
+  clears the tire (20 mm with the shipped wheels).
+- Collision: five boxes of its own (floor tub, cage, nose, engine bay, cargo bed; `kPatrolBoxes` in
+  `src/vehicle/VehicleShape.h`), 1.36 × 1.12 × 2.95 m.
+
+`trailforge_probe compare` (120 Hz, TC and ABS off unless stated):
+
+| | SUV (2000 kg) | Buggy (750 kg) |
+|---|---|---|
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.63 / 2.90 / 5.48 s |
+| 50–0 km/h ABS off / on | 14.06 / 11.97 m | 14.12 / 12.66 m |
+| 100–0 km/h ABS off / on | 51.43 / 42.85 m | 46.43 / 41.75 m |
+| lift-off at 80 km/h | 0.63 m/s² | 1.00 m/s² (drag, engine braking) |
+| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.12 / 6.55 m/s², roll 4.17 / 3.72° |
+| climb dirt 20° / mud 15°, full pedal | 4.33 / 6.12 s (4H) | 4.03 / 5.83 s |
+| diagonal twister, travel used FL / FR / RL / RR | 0.309 / 0.244 / 0.402 / 0.404 m | 0.321 / 0.295 / 0.327 / 0.325 m, 6.02 wheel-s in the air |
+
+The engine sound uses the `sporty` profile (car recordings pitched to the engine rpm); nobody has listened to it at
+11000 rpm.
+
 ### Vehicle blueprints (bodies traced from the concept sheet)
 
 A vehicle.json with `"bodyShape": "traced"` gets its body from `external_assets/images/Cars.png` (car #1
@@ -841,6 +885,8 @@ v0.14.0 back, with the later changes kept (below).
   quarter window with a slanted blue graphic, low rails with a light bar (blue end pods, blue LED strips) and one
   flat case; under the body the floor battery pack and one motor per axle. No winch, no spare (the concept has
   none), no snorkel.
+- **trailforge_patrol** (~12.4k body triangles, 28 parts): the tube-frame buggy, no fenders (see "Desert patrol
+  buggy"); the traced body shape also builds the kit.
 - **Suspension stays visible**: the coil-overs (orange springs on the SUV, blue on the EV, as on the sheet) are
   seen through the arch openings in front of the dark wheel-house walls and are placed from the physics suspension
   length every frame.
@@ -933,7 +979,7 @@ folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks th
 
 | Section | Keys |
 |---|---|
-| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, optional `bodyShape` (`kit` default, `traced`), `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev` |
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, optional `bodyShape` (`kit` default, `traced`), `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev`, `trailforge_patrol` (kit body only: `traced` builds the kit) |
 | `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
@@ -2162,6 +2208,8 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 
 - The suspension is virtual: in Jolt it is a raycast or cylinder cast along the spring axis, with no arms or axles.
   Solid axles and articulation are not modeled; every wheel is independent.
+  The drawn arms and coil-overs (including the buggy's frame-mounted shock towers) only follow the Jolt hub; their
+  geometry does not change camber, motion ratio or travel.
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
   No Pacejka model or sidewall deformation.
 - Tire sets and temperature ("Tire sets and temperature"): a set only scales the off-road curves (peak slip, sliding

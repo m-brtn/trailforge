@@ -9,7 +9,8 @@ SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, 
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
 procedural except the level's CC0 models (trees, plants, rocks, cliffs, logs; the shipped car bodies are StyleKit
-panels around the collision boxes, `bodyShape` `"kit"`; the optional `"traced"` bodies are generated from blueprints
+panels around the collision boxes, `bodyShape` `"kit"`, including the tube-frame buggy `trailforge_patrol` whose
+proportions were referenced from a purchased model that is not in the repository; the optional `"traced"` bodies are generated from blueprints
 traced from `external_assets/images/Cars.png` by `tools/cars/trace_blueprint.py`, venv only), and so are
 all textures except the level ground, the building kit materials and those models. External assets: the sounds in `assets/audio/`
 (licenses in `assets/audio/CREDITS.md`, rebuilt by `tools/audio/fetch_freesound.py`, which reads `FREESOUND_API_KEY`
@@ -45,7 +46,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 103 tests, 93 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 104 tests, 93 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -103,6 +104,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/buildings_views.txt # village + every POI with buildings from fixed cameras, PERF per preset + Ultra stress, /tmp/trailforge_bld_*.png
 ./build/release/trailforge --script tools/scenarios/map_check.txt # full-screen map, waypoint, compass distance, pad map controls, minimap options, /tmp/trailforge_map_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
+./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)

@@ -1,0 +1,134 @@
+# Desert patrol buggy (trailforge_patrol) model views:
+#   ./build/release/trailforge --script tools/scenarios/patrol_views.txt --no-audio
+# Near-orthographic side / top / front / rear views, 3/4 views at noon and sunset, then two stops on the diagonal
+# twister with one wheel at full droop, then a wheel at the bump stop climbing the steps (close-ups of the coil-overs on
+# the frame towers and the lower arms). Captures /tmp/trailforge_patrol_*.png.
+set ui 0
+vehicle trailforge_patrol
+wait 0.2
+set hud 0
+set auto_reverse 0
+quality High
+time Noon
+teleport 0
+wait 2.5
+expect speed_kmh < 0.5
+set grass 0
+camera vehicle side 24 9
+wait 0.4
+capture /tmp/trailforge_patrol_side.png
+wait 0.3
+camera vehicle top 24 9
+wait 0.4
+capture /tmp/trailforge_patrol_top.png
+wait 0.3
+camera vehicle front 24 6.5
+wait 0.4
+capture /tmp/trailforge_patrol_front.png
+wait 0.3
+camera vehicle rear 24 6.5
+wait 0.4
+capture /tmp/trailforge_patrol_rear.png
+wait 0.3
+camera vehicle three_quarter 7 45
+wait 0.4
+capture /tmp/trailforge_patrol_34_noon.png
+wait 0.3
+camera vehicle three_quarter_rear 7 45
+wait 0.4
+capture /tmp/trailforge_patrol_34rear_noon.png
+wait 0.3
+camera vehicle roof 4 45
+wait 0.4
+capture /tmp/trailforge_patrol_roof.png
+wait 0.3
+camera vehicle front 3.2 55
+wait 0.4
+capture /tmp/trailforge_patrol_front_rest_closeup.png
+wait 0.3
+camera vehicle side 7 60
+wait 0.4
+capture /tmp/trailforge_patrol_game_side.png
+wait 0.3
+time Sunset
+camera vehicle three_quarter 7 45
+wait 0.6
+capture /tmp/trailforge_patrol_34_sunset.png
+wait 0.3
+camera hood
+wait 0.4
+capture /tmp/trailforge_patrol_hood.png
+wait 0.3
+time Noon
+camera follow
+# Twister: crawl on, stop with the brake held (wheels at full droop and near the bump stop).
+teleport 2
+wait 2.0
+pedal throttle 0.18
+until z > -2.6 20
+pedal throttle 0
+down S
+wait 2.5
+log twister stop 1
+expect speed_kmh < 0.5
+expect susp_max > 0.49
+camera vehicle front 3.4 55
+wait 0.4
+capture /tmp/trailforge_patrol_twist1_front.png
+wait 0.3
+camera vehicle side 3.8 55
+wait 0.4
+capture /tmp/trailforge_patrol_twist1_left.png
+wait 0.3
+camera vehicle three_quarter_rear 4.2 50
+wait 0.4
+capture /tmp/trailforge_patrol_twist1_34rear.png
+wait 0.3
+camera vehicle rear 3.4 55
+wait 0.4
+capture /tmp/trailforge_patrol_twist1_rear.png
+wait 0.3
+camera follow
+up S
+pedal throttle 0.18
+until z > 0.4 20
+pedal throttle 0
+down S
+wait 2.5
+log twister stop 2
+expect speed_kmh < 0.5
+expect susp_max > 0.49
+camera vehicle front 3.4 55
+wait 0.4
+capture /tmp/trailforge_patrol_twist2_front.png
+wait 0.3
+camera vehicle three_quarter 4.2 50
+wait 0.4
+capture /tmp/trailforge_patrol_twist2_34.png
+wait 0.3
+camera vehicle rear 3.4 55
+wait 0.4
+capture /tmp/trailforge_patrol_twist2_rear.png
+wait 0.3
+# Full bump: captured while climbing the steps, the frames a wheel is within 1.5 cm of the bump stop.
+camera follow
+up S
+teleport Steps
+wait 2.0
+pedal throttle 0.35
+until susp_min < 0.20 25
+camera vehicle three_quarter 4.4 50
+wait 0.02
+capture /tmp/trailforge_patrol_bump_34.png
+log bump 1
+until susp_min > 0.25 10
+until susp_min < 0.20 25
+camera vehicle front 4.0 55
+wait 0.02
+capture /tmp/trailforge_patrol_bump_front.png
+log bump 2
+pedal throttle 0
+down S
+wait 1.5
+up S
+quit
