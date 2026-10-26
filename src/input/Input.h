@@ -58,9 +58,12 @@ public:
     glm::vec2 mouseDelta() const { return m_mouseDelta; }
     float wheel() const { return m_wheel; }
     glm::vec3 freeCameraMove() const { return m_freeMove; }
+    // Gamepad right stick after the dead zone (camera orbit / hood look-around), -1..1, x right, y down.
+    glm::vec2 rightStick() const { return m_rightStick; }
     bool fastModifier() const { return m_fast; }
 
     bool gamepadConnected() const { return m_gamepad != nullptr; }
+    SDL_JoystickID gamepadId() const; // 0 without a pad
     // Scenario `pedal throttle|brake V`: an analog pedal held like a gamepad trigger (max with keyboard / gamepad).
     void setScriptPedals(float throttle, float brake) {
         m_scriptThrottle = throttle;
@@ -89,6 +92,7 @@ private:
     glm::vec2 m_mouseDelta{0.0f};
     float m_wheel = 0.0f;
     glm::vec3 m_freeMove{0.0f};
+    glm::vec2 m_rightStick{0.0f};
     bool m_fast = false;
     bool m_rmb = false;
     bool m_modal = false, m_modalText = false;

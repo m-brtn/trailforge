@@ -1,0 +1,140 @@
+# Camera check: the C cycle (follow -> hood -> free -> follow), hood views of both vehicles parked and driving, and
+# the gamepad right stick (follow orbit, pitch, recentering while driving, hood look-around with spring back):
+#   ./build/release/trailforge --script tools/scenarios/camera.txt --no-audio
+# Captures /tmp/trailforge_cam_*.png. Exit code 1 on FAIL. No real gamepad is needed: `gamepad attach` connects an
+# SDL virtual gamepad and `gamepad axis` moves its sticks; the input reads it through SDL_GetGamepadAxis like a pad.
+set ui 0
+set hud 0
+set auto_reverse 0
+wait 1.0
+
+# ---------------------------------------------------------------- C cycle, hood view of the SUV
+expect cam_mode == 0
+tap C
+wait 0.3
+expect cam_mode == 1
+capture /tmp/trailforge_cam_01_hood_suv.png
+wait 0.2
+pedal throttle 0.4
+wait 2.5
+capture /tmp/trailforge_cam_02_hood_suv_driving.png
+wait 0.2
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+tap C
+wait 0.2
+expect cam_mode == 2
+tap C
+wait 0.2
+expect cam_mode == 0
+
+# ---------------------------------------------------------------- right stick: follow orbit
+gamepad attach
+wait 0.5
+expect pad_virtual == 1          # the virtual pad drives (a real pad may also be connected)
+expect cam_orbit_yaw > -1
+expect cam_orbit_yaw < 1
+gamepad axis rightx 1
+wait 0.5
+expect pad_right_x > 0.99
+expect cam_orbit_yaw < -45             # 2.6 rad/s: about -75 deg after 0.5 s
+capture /tmp/trailforge_cam_03_stick_orbit.png
+wait 0.2
+gamepad axis rightx 0
+gamepad axis righty 1                  # stick down = camera up, like dragging the mouse down
+wait 1.0
+expect cam_orbit_pitch > 50
+gamepad axis righty -1
+wait 1.5
+expect cam_orbit_pitch < -10
+gamepad axis righty 0
+wait 0.1
+expect pad_right_x == 0                # released: inside the dead zone
+mark cam_orbit_yaw
+wait 3.0                               # parked: the offset stays
+expect d_cam_orbit_yaw == 0
+
+# recentering: driving, the camera swings back behind the car ~1.75 s after the stick was released
+pedal throttle 0.35
+until speed_kmh > 8 10
+gamepad axis rightx -1
+wait 0.6
+gamepad axis rightx 0
+wait 0.5
+expect cam_orbit_yaw > 45              # still held for the delay
+wait 3.5
+expect cam_orbit_yaw < 10
+capture /tmp/trailforge_cam_04_recentered.png
+wait 0.2
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+
+# ---------------------------------------------------------------- right stick: hood look-around
+camera hood
+wait 0.2
+gamepad axis rightx 1
+wait 0.6
+expect cam_look_yaw < -60              # look right, limited to 69 deg
+capture /tmp/trailforge_cam_05_hood_look_right.png
+wait 0.2
+gamepad axis rightx 0
+wait 0.8
+expect cam_look_yaw > -3               # springs back
+expect cam_look_yaw < 3
+gamepad detach
+wait 0.5
+expect pad_virtual == 0
+
+# ---------------------------------------------------------------- EV hood view
+vehicle trailforge_ev
+wait 2.0
+camera hood
+wait 0.3
+expect cam_mode == 1
+capture /tmp/trailforge_cam_06_hood_ev.png
+wait 0.2
+pedal throttle 0.4
+wait 2.5
+capture /tmp/trailforge_cam_07_hood_ev_driving.png
+wait 0.2
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+# ---------------------------------------------------------------- hood view on a slope (lane B, 12 deg climb), both vehicles
+teleport 4
+wait 1.5
+tap L
+wait 0.1
+pedal throttle 0.5
+until z > -37 10
+capture /tmp/trailforge_cam_08_hood_ev_slope.png
+wait 0.2
+expect tilt > 5
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+vehicle trailforge_suv
+wait 1.0
+camera hood
+teleport 4
+wait 1.5
+tap L
+wait 0.1
+pedal throttle 0.5
+until z > -37 10
+capture /tmp/trailforge_cam_09_hood_suv_slope.png
+wait 0.2
+expect tilt > 5
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 0.5 8
+pedal brake 0
+camera follow
+wait 1.0
+log camera_done

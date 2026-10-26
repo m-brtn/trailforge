@@ -64,6 +64,53 @@ pedal brake 0
 expect d_recoveries == 0
 expect road_dist < 5
 
+# ---------------------------------------------------------------- bridges: straight across each deck on all four wheels
+# Coast Road bridge (-92, 433) -> (-24, 436), started 20 m before the deck on its axis.
+place -112 432.1 87.5
+wait 1.5
+wait 1.5
+capture /tmp/trailforge_expl_08a_bridge_coast_approach.png # no grass on the deck, its ramps or the road edge
+wait 0.3
+pedal throttle 0.45
+until x > -92 15
+reset_stats
+mark y
+until x > -58 10
+capture /tmp/trailforge_expl_08_bridge_coast.png
+until x > -24 10
+log bridge_coast
+expect max_air == 0                     # no wheel left the deck (it is not a hole for the wheel casts)
+expect speed_kmh > 25
+expect d_y > -0.5                       # the deck is level with the road: the body did not drop into it
+expect road_dist < 3
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+# Canyon Road bridge (688, -125) -> (807, -118), 119 m over the canyon.
+place 668 -126.2 86.6
+wait 1.5
+wait 1.5
+capture /tmp/trailforge_expl_09a_bridge_canyon_approach.png
+wait 0.3
+pedal throttle 0.45
+until x > 688 15
+reset_stats
+mark y
+until x > 748 12
+capture /tmp/trailforge_expl_09_bridge_canyon.png
+until x > 807 12
+log bridge_canyon
+expect max_air == 0
+expect speed_kmh > 25
+expect d_y > -0.5
+expect road_dist < 3
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect d_recoveries == 0
+
 # ---------------------------------------------------------------- deep water: Alpine Lake, recovered to the road
 place -115 -135 0
 wait 0.5

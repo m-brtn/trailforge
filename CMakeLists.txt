@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TrailForge VERSION 0.13.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -209,6 +209,10 @@ if(TRAILFORGE_BUILD_TESTS)
             level_road_carving
             level_surfaces_water
             level_vehicles
+            level_prop_winding
+            level_bridges
+            level_placement
+            level_grass_clear
             terrain_textures_ktx2
             terrain_textures_assets)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
@@ -253,6 +257,15 @@ if(TRAILFORGE_BUILD_TESTS)
         foreach(test_name model_parts model_wheel_size model_wheel_clearance)
             add_test(NAME ${test_name} COMMAND trailforge_model_tests ${test_name})
             set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+        endforeach()
+
+        # Camera math: hood mount, right-stick orbit and look-around (no window, no gamepad).
+        add_executable(trailforge_camera_tests tests/CameraTests.cpp src/render/Camera.cpp)
+        target_include_directories(trailforge_camera_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_link_libraries(trailforge_camera_tests PRIVATE trailforge_flow glm_headers)
+        foreach(test_name camera_hood_mount camera_stick_dead_zone camera_stick_orbit camera_hood_look)
+            add_test(NAME ${test_name} COMMAND trailforge_camera_tests ${test_name})
+            set_tests_properties(${test_name} PROPERTIES TIMEOUT 60)
         endforeach()
     endif()
 endif()

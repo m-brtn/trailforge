@@ -10,6 +10,8 @@ struct GameSettings {
     // Graphics
     int quality = 2;           // QualityPreset Low (0) .. Ultra (3)
     float renderScale = 0.0f;  // 0: the preset's own scale, otherwise 0.5..1 of the window pixels
+    float grassDistance = 0.0f; // m; 0: the preset's own, otherwise 20..250
+    float treeDistance = 0.0f;  // m, tree detail (mesh LOD) distance; 0: the preset's own, otherwise 150..2000
     bool vsync = true;
     // Audio (linear gains 0..1)
     float masterVolume = 0.8f;

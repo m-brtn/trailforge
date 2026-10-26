@@ -6,6 +6,7 @@
 # connected pad of the automatic choice. Scenarios never write settings.cfg; `settings_roundtrip` checks that the file
 # format keeps the values.
 
+controls pad_type none                  # independent of a real pad plugged into the test machine
 wait 1.0
 expect setting_drive_keys == 0
 expect setting_pad_glyphs == 0
@@ -21,7 +22,7 @@ wait 0.6
 expect menu_page == 3
 expect menu_cursor == 0
 expect menu_scroll == 0
-expect controls_callouts > 40
+expect controls_callouts == 41              # gameplay callouts only (no menu navigation)
 expect controls_overlaps == 0
 expect pad_glyphs == 0                  # no pad: Xbox names
 capture /tmp/trailforge_controls_01_wasd_keyboard.png

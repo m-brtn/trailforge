@@ -40,6 +40,8 @@ void settingsRoundtrip() {
     GameSettings s;
     s.quality = 0;
     s.renderScale = 0.75f;
+    s.grassDistance = 135.0f;
+    s.treeDistance = 1100.0f;
     s.vsync = false;
     s.masterVolume = 0.35f;
     s.musicVolume = 0.0f;
@@ -90,6 +92,9 @@ void settingsRoundtrip() {
               odd.padGlyphs == 0 && odd.vehicle.empty(),
           "damaged values not clamped as expected");
     CHECK(skipped == 4, "skipped lines %d (expected 4)", skipped);
+    const GameSettings far = parseSettings("grass_distance = 900\ntree_distance = 5\n");
+    CHECK(far.grassDistance == 250.0f && far.treeDistance == 0.0f, "distances clamped: grass %.0f tree %.0f",
+          double(far.grassDistance), double(far.treeDistance));
     CHECK(defaults.traction == -1, "traction control defaults to the vehicle's own mode");
     CHECK(parseSettings("traction = 0\n").traction == -1 && parseSettings("traction = 1\n").traction == 1 &&
               parseSettings("traction_mode = 0\n").traction == 0 && parseSettings("traction_mode = -4\n").traction == -1,
@@ -189,14 +194,25 @@ void menuNavigation() {
     CHECK(settings.traction == -1 && menuValue(MenuItem::Traction, settings) == "VEHICLE DEFAULT", "right wraps back");
     // Mouse: hover moves the cursor, a click on the right arrow steps the value.
     MenuInput mouse;
-    mouse.hover = 2;
+    mouse.hover = 4;
     flow.handle(mouse, settings);
     CHECK(flow.current() == MenuItem::VSync, "hover moves the cursor");
     mouse = {};
-    mouse.click = 2;
+    mouse.click = 4;
     mouse.clickDir = 1;
     flow.handle(mouse, settings);
     CHECK(!settings.vsync, "click toggles vsync");
+    flow.select(MenuItem::GrassDistance);
+    CHECK(menuValue(MenuItem::GrassDistance, settings) == "PRESET (40 M)", "grass row '%s'",
+          menuValue(MenuItem::GrassDistance, settings).c_str());
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.grassDistance == 30.0f && menuValue(MenuItem::GrassDistance, settings) == "30 M",
+          "grass distance steps off the preset (%.0f)", double(settings.grassDistance));
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.grassDistance == 0.0f, "left returns to the preset");
+    flow.select(MenuItem::TreeDistance);
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.treeDistance == 0.0f, "tree distance stays at the preset on the left end");
     flow.select(MenuItem::Controls);
     flow.handle(key(&MenuInput::accept), settings);
     CHECK(flow.page() == MenuPage::Controls && flow.depth() == 3, "controls page");
@@ -593,6 +609,12 @@ void controlsLayout() {
             drive += k.group == BindingGroup::Drive;
         }
         CHECK(drive == 5, "drive keys + Space: %d", drive);
+        // The page shows gameplay keys only: menu navigation is in the footer hints.
+        for (const KeyBinding& k : b) {
+            CHECK(k.label.find("MENU SELECT") == std::string::npos && k.label.find("MENU BACK") == std::string::npos,
+                  "menu navigation callout '%s'", k.label.c_str());
+            CHECK(k.key != Key::Return && k.key != Key::Backspace, "menu-only key %s drawn", keyName(k.key, KeyboardStyle::Pc));
+        }
         std::printf("    %s: %zu keys bound, drive %s / %s / %s / %s\n", driveKeysName(layout), b.size(),
                     keyName(d.forward, KeyboardStyle::Pc), keyName(d.back, KeyboardStyle::Pc),
                     keyName(d.left, KeyboardStyle::Pc), keyName(d.right, KeyboardStyle::Pc));
@@ -641,6 +663,13 @@ void controlsLayout() {
               std::strcmp(padControlName(PadControl::Back, PadGlyphs::Xbox), "VIEW") == 0 &&
               std::strcmp(padControlName(PadControl::Start, PadGlyphs::PlayStation), "OPTIONS") == 0,
           "pad control names");
+    bool rightStick = false;
+    for (const PadBinding& p : pad) {
+        CHECK(p.control != PadControl::East, "B / Circle (menu back only) has a callout");
+        CHECK(std::string(p.label).find("MENU BACK") == std::string::npos, "menu navigation callout '%s'", std::string(p.label).c_str());
+        rightStick |= p.control == PadControl::RightStick && p.group == BindingGroup::Camera;
+    }
+    CHECK(rightStick, "right stick camera callout");
     std::printf("    gamepad: %zu controls bound\n", pad.size());
 }
 

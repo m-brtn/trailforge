@@ -13,6 +13,7 @@
     "friction": 0.5,
     "angularDamping": 0.02
   },
+  "camera": {"hood": {"position": [0.0, 0.86, 0.30], "pitch": -1, "nearPlane": 0.05}},
   "geometry": {"wheelBase": 2.44, "attachHeight": 0.05},
   "axles": {
     "front": {

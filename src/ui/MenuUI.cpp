@@ -305,6 +305,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     float y = controls || vehiclePage ? 0.05f * H : logoBottom + 0.05f * H;
 
     // Page title: thin rule, large spaced uppercase heading.
+    const float titleRuleY = y;
     if (const char* title = menuPageTitle(page); title[0]) {
         const float ts = 0.048f * H;
         dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + 0.34f * W, y + 1.0f), col(kWhite, 0.35f * alpha));
@@ -340,10 +341,15 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
 
     // Everything below the title scrolls when it does not fit above the footer: the rows (section headings take
     // space) and the Controls diagrams. Positions are relative to the top of the list.
+    // BACK (the last item of the sub-pages) sits above the page title, top left, outside the scrolling list: Up from
+    // the first row reaches it, the page opens on the first real option.
+    const bool pinBack = !items.empty() && items.back() == MenuItem::Back;
+    const std::size_t listN = pinBack ? items.size() - 1 : items.size();
+    if (pinBack && (std::size_t(cursor) == listN || m_lastCursor == int(listN))) m_selectAnim = float(cursor);
     const float listTop = y, listBottom = 0.88f * H;
     float cy = 0.0f;
     std::vector<float> rowY(items.size()), blockH(items.size(), 0.0f);
-    for (std::size_t i = 0; i < items.size(); ++i) {
+    for (std::size_t i = 0; i < listN; ++i) {
         if (page == MenuPage::Settings && menuSection(items[i])) cy += 0.020f * H + (i > 0 ? 0.014f * H : 0.0f);
         if (items[i] == MenuItem::Controls) cy += 0.016f * H;
         rowY[i] = cy;
@@ -354,15 +360,17 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         cy += blockH[i];
     }
     const float viewH = listBottom - listTop;
-    const bool follow = (newPage || cursor != m_lastCursor) && !m_pointerCursor;
+    const bool onPinned = pinBack && std::size_t(cursor) == listN;
+    const bool follow = (newPage || cursor != m_lastCursor) && !m_pointerCursor && !onPinned;
     // The first heading of Settings sits above its row: keep it in view with the row. A Controls row brings its
     // diagram into view with it.
-    const float cursorTop = rowY[std::size_t(cursor)] - (cursor == 0 ? rowY[0] : 0.0f);
-    const float cursorH = std::min(rowY[std::size_t(cursor)] + rowH + blockH[std::size_t(cursor)] - cursorTop, viewH);
+    const std::size_t scrollRow = std::min(std::size_t(cursor), listN > 0 ? listN - 1 : 0);
+    const float cursorTop = rowY[scrollRow] - (scrollRow == 0 ? rowY[0] : 0.0f);
+    const float cursorH = std::min(rowY[scrollRow] + rowH + blockH[scrollRow] - cursorTop, viewH);
     updateScroll(m_menuScroll, m_menuScrollTarget, cursorTop, cursorH, rowH, cy, viewH, follow);
     if (newPage) m_menuScroll = m_menuScrollTarget;
     m_lastCursor = cursor;
-    for (float& r : rowY) r += listTop - m_menuScroll;
+    for (std::size_t i = 0; i < listN; ++i) rowY[i] += listTop - m_menuScroll;
     dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
 
     if (controls) {
@@ -387,10 +395,10 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
             if (items[i] == MenuItem::VehicleChoice)
                 drawVehicleBlock(dl, x0 - 0.012f * W, rowY[i] + rowH, barW + 0.012f * W, flow.vehicleIndex(settings), view, alpha);
     // Highlight bar eased between rows: soft fill fading to the right, orange edge on the left.
-    {
-        const float f = std::clamp(m_selectAnim, 0.0f, float(items.size() - 1));
+    const auto highlight = [&] {
+        const float f = std::clamp(m_selectAnim, 0.0f, float(listN - 1));
         const int i0 = int(std::floor(f));
-        const int i1 = std::min(i0 + 1, int(items.size()) - 1);
+        const int i1 = std::min(i0 + 1, int(listN) - 1);
         const float by = rowY[std::size_t(i0)] + (rowY[std::size_t(i1)] - rowY[std::size_t(i0)]) * (f - float(i0));
         const ImVec2 a(x0 - 0.012f * W, by), b(x0 + barW, by + rowH * 0.92f);
         dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f * alpha), col(kWhite, 0.0f), col(kWhite, 0.0f),
@@ -398,12 +406,19 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x * 0.7f + a.x * 0.3f, a.y), col(kWhite, 0.22f * alpha), 1.0f);
         dl->AddLine(ImVec2(a.x, b.y), ImVec2(b.x * 0.7f + a.x * 0.3f, b.y), col(kWhite, 0.22f * alpha), 1.0f);
         dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, alpha));
-    }
+    };
+    if (std::size_t(cursor) < listN) highlight();
 
     for (std::size_t i = 0; i < items.size(); ++i) {
         const MenuItem item = items[i];
         const bool sel = int(i) == cursor;
         const float ry = rowY[i];
+        if (i == listN) {
+            dl->PopClipRect();
+            drawBackButton(dl, x0, titleRuleY, sel, alpha);
+            m_rows.push_back(Row{item, int(i), m_backBox.x0, m_backBox.y0, m_backBox.x1, m_backBox.y1});
+            continue;
+        }
         if (page == MenuPage::Settings) {
             if (const char* section = menuSection(item)) {
                 const float ss = 0.018f * H;
@@ -417,7 +432,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         const float ty = ry + (rowH * 0.92f - textSize) * 0.5f;
         const ImU32 c = col(kWhite, (sel ? 1.0f : 0.62f) * alpha);
         text(dl, m_body, textSize, ImVec2(x0 + 0.006f * W, ty), c, menuLabel(item), 0.08f);
-        Row row{item, x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
+        Row row{item, int(i), x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
         if (menuAdjustable(item)) {
             std::string v = menuValue(item, settings, flow.levels().empty() ? std::string() : flow.levels().front());
             if (item == MenuItem::VehicleChoice && view.vehicles && !view.vehicles->empty()) {
@@ -447,7 +462,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         row.y1 = std::min(row.y1, listBottom);
         if (row.y1 > row.y0) m_rows.push_back(row);
     }
-    dl->PopClipRect();
+    if (listN == items.size()) dl->PopClipRect();
     drawScrollMarks(x0 - 0.012f * W, x0 + barW, listTop, listBottom, m_menuScroll, cy - viewH, alpha);
 
     // Footer: version bottom-left, input hints bottom-right.
@@ -644,8 +659,9 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
                                   ImVec2(t.x - dir.x * s - n.x * s, t.y - dir.y * s - n.y * s), colourOf(c));
         }
     }
-    // Face buttons.
+    // Face buttons; one without a gameplay binding (B / Circle only navigates menus) is left out.
     for (const PadControl c : {PadControl::South, PadControl::East, PadControl::West, PadControl::North}) {
+        if (!bind[std::size_t(c)]) continue;
         const ImVec2 o = faceOffset(c);
         faceGlyph(dl, m_heading, P(L.face.x + o.x, L.face.y + o.y), kFaceR * g, c, glyphs, colourOf(c), strokeOf(c));
     }
@@ -941,6 +957,27 @@ void MenuUI::drawScrollMarks(float x0, float x1, float top, float bottom, float 
                                     col(kOrange, 0.5f * alpha));
 }
 
+// "< BACK" above a page title (top left): menu pages and the garage. Records its hit box in m_backBox.
+void MenuUI::drawBackButton(ImDrawList* dl, float x0, float titleRuleY, bool selected, float alpha) {
+    const float H = ImGui::GetIO().DisplaySize.y;
+    const float ts = 0.024f * H, h = 0.036f * H;
+    const float y1 = titleRuleY - 0.006f * H, y0 = y1 - h;
+    const float ah = ts * 0.30f, tx = x0 + 0.010f * H + 2.0f * ah;
+    const float x1 = tx + textWidth(m_body, ts, "BACK", 0.1f) + 0.014f * H;
+    const ImVec2 a(x0 - 0.008f * H, y0), b(x1, y1);
+    if (selected) {
+        dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f * alpha), col(kWhite, 0.04f * alpha), col(kWhite, 0.04f * alpha),
+                                    col(kWhite, 0.16f * alpha));
+        dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, alpha));
+    }
+    const float cyy = 0.5f * (y0 + y1);
+    const float ax = x0 + 0.006f * H + ah;
+    dl->AddTriangleFilled(ImVec2(ax - ah * 0.6f, cyy), ImVec2(ax + ah * 0.6f, cyy - ah), ImVec2(ax + ah * 0.6f, cyy + ah),
+                          selected ? col(kOrange, alpha) : col(kWhite, 0.5f * alpha));
+    text(dl, m_body, ts, ImVec2(tx, cyy - 0.55f * ts), col(kWhite, (selected ? 1.0f : 0.7f) * alpha), "BACK", 0.1f);
+    m_backBox = {a.x, a.y, b.x, b.y};
+}
+
 int MenuUI::hitTest(float x, float y, int* dir) const {
     if (dir) *dir = 0;
     for (std::size_t i = 0; i < m_rows.size(); ++i) {
@@ -950,9 +987,9 @@ int MenuUI::hitTest(float x, float y, int* dir) const {
         const bool onRight = r.arrowR1 > r.arrowR0 && x >= r.arrowR0 && x < r.arrowR1;
         if (onLeft || onRight) {
             if (dir) *dir = onLeft ? -1 : 1;
-            return int(i);
+            return r.index;
         }
-        if (x >= r.x0 && x < r.x1) return int(i);
+        if (x >= r.x0 && x < r.x1) return r.index;
     }
     return -1;
 }
@@ -982,8 +1019,9 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(x0 + panelW * 1.35f, H), col(kDark, 0.78f), 0, 0, col(kDark, 0.78f));
     dl->AddRectFilledMultiColor(ImVec2(0, H * 0.86f), ImVec2(W, H), 0, 0, col(kDark, 0.55f), col(kDark, 0.55f));
 
-    // Title.
-    float y = 0.045f * H;
+    // Title, with room for BACK above it.
+    float y = 0.065f * H;
+    const float titleTop = y - 0.004f * H;
     const float ts = 0.046f * H;
     text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, 1.0f), "GARAGE", 0.22f);
     const float tw = textWidth(m_heading, ts, "GARAGE", 0.22f);
@@ -993,21 +1031,29 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + panelW, y + 1.0f), col(kWhite, 0.35f));
 
     // List geometry: rows and section headings, then a scroll offset that keeps the cursor in view.
-    const float listTop = y + 0.012f * H, listBottom = 0.80f * H;
+    // BACK (the last row) sits above the title like on the menu pages; Up from the first row reaches it.
     const float textSize = 0.0235f * H, rowH = 0.034f * H, headH = 0.032f * H;
     const auto& rows = g.rows();
+    const bool pinBack = !rows.empty() && rows.back().kind == GarageRowKind::Action && rows.back().action == GarageAction::Back;
+    const std::size_t listN = pinBack ? rows.size() - 1 : rows.size();
+    const float infoTop = 0.80f * H; // description, help and messages below the list
+    const float listTop = y + 0.012f * H, listBottom = infoTop;
     std::vector<float> rowY(rows.size());
     float cy = 0.0f;
-    for (std::size_t i = 0; i < rows.size(); ++i) {
+    for (std::size_t i = 0; i < listN; ++i) {
         if (g.groupTitle(int(i))) cy += headH;
         rowY[i] = cy;
         cy += rowH;
     }
     const float contentH = cy, viewH = listBottom - listTop;
-    const float cursorY = rowY[std::size_t(g.cursor())];
-    const bool follow = g.cursor() != m_garageLastCursor && !m_pointerCursor;
+    const bool onBack = pinBack && std::size_t(g.cursor()) == listN;
+    const bool fromBack = pinBack && m_garageLastCursor == int(listN);
+    const bool follow = g.cursor() != m_garageLastCursor && !m_pointerCursor && !onBack;
     m_garageLastCursor = g.cursor();
-    updateScroll(m_garageScroll, m_garageScrollTarget, cursorY, rowH, rowH, contentH, viewH, follow);
+    const std::size_t listCursor = std::min(std::size_t(g.cursor()), listN - 1);
+    updateScroll(m_garageScroll, m_garageScrollTarget, rowY[listCursor], rowH, rowH, contentH, viewH, follow);
+    const float cursorY = rowY[listCursor];
+    if (fromBack) m_garageSelectAnim = cursorY;
     m_garageSelectAnim += (cursorY - m_garageSelectAnim) * std::min(1.0f, dt * 18.0f);
 
     const float labelX = x0 + 0.006f * W;
@@ -1015,15 +1061,22 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     const float valueX = x0 + panelW * 0.77f;          // number values (left aligned after the bar)
     const float choiceX = x0 + panelW * 0.66f;         // centre of choice values
     const float arrowDx = panelW * 0.20f;
-    dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
-    {
+    const auto highlight = [&] {
         const float by = listTop + m_garageSelectAnim - m_garageScroll;
         const ImVec2 a(x0 - 0.008f * W, by), b(x0 + panelW, by + rowH * 0.92f);
         dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f), col(kWhite, 0.02f), col(kWhite, 0.02f), col(kWhite, 0.16f));
         dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, 1.0f));
-    }
+    };
+    dl->PushClipRect(ImVec2(0, listTop), ImVec2(W, listBottom), true);
+    if (!onBack) highlight();
     for (std::size_t i = 0; i < rows.size(); ++i) {
         const float ry = listTop + rowY[i] - m_garageScroll;
+        if (i == listN) {
+            dl->PopClipRect();
+            drawBackButton(dl, x0, titleTop, onBack, 1.0f);
+            m_garageRows.push_back(GarageHit{int(i), m_backBox.x0, m_backBox.y0, m_backBox.x1, m_backBox.y1});
+            continue;
+        }
         if (ry + rowH < listTop - headH || ry > listBottom) continue;
         const GarageRow& r = rows[i];
         const bool sel = int(i) == g.cursor();
@@ -1104,7 +1157,7 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         hit.y1 = std::min(hit.y1, listBottom);
         if (hit.y1 > hit.y0) m_garageRows.push_back(hit);
     }
-    dl->PopClipRect();
+    if (listN == rows.size()) dl->PopClipRect();
     drawScrollMarks(x0, x0 + panelW, listTop, listBottom, m_garageScroll, contentH - viewH, 1.0f);
 
     // Description of the selected row: range and how it is applied.
@@ -1120,9 +1173,9 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         } else if (r.kind == GarageRowKind::Setup) {
             d = g.dirty() ? "UNSAVED CHANGES (*)" : "SETUPS ARE SAVED PER VEHICLE";
         }
-        if (!d.empty()) text(dl, m_body, 0.018f * H, ImVec2(x0, listBottom + 0.012f * H), col(kWhite, 0.6f), d.c_str(), 0.08f);
+        if (!d.empty()) text(dl, m_body, 0.018f * H, ImVec2(x0, infoTop + 0.012f * H), col(kWhite, 0.6f), d.c_str(), 0.08f);
         if (const std::string help = g.helpText(r); !help.empty())
-            text(dl, m_body, 0.017f * H, ImVec2(x0, listBottom + 0.036f * H), col(kOrange, 0.8f), help.c_str(), 0.06f);
+            text(dl, m_body, 0.017f * H, ImVec2(x0, infoTop + 0.036f * H), col(kOrange, 0.8f), help.c_str(), 0.06f);
     }
     // Last message (save, rename, refusals) for a few seconds.
     if (g.messageSerial() != m_garageMsgSerial) {
@@ -1131,7 +1184,7 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     }
     if (!g.message().empty() && ImGui::GetTime() - m_garageMsgTime < 4.0) {
         const float a = float(std::clamp(4.0 - (ImGui::GetTime() - m_garageMsgTime), 0.0, 1.0));
-        text(dl, m_body, 0.021f * H, ImVec2(x0, listBottom + 0.064f * H), col(kOrange, a), g.message().c_str(), 0.06f);
+        text(dl, m_body, 0.021f * H, ImVec2(x0, infoTop + 0.064f * H), col(kOrange, a), g.message().c_str(), 0.06f);
     }
 
     // Live numbers, bottom right: configuration and what the running vehicle does.

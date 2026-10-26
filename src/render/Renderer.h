@@ -440,6 +440,7 @@ private:
     std::vector<TreeInstance> m_trees;
     std::vector<TreeInstance> m_treeScratch;
     std::array<std::vector<TreeInstance>, 4> m_treeLod;
+    static constexpr float kTreeFadeBand = 0.12f; // share of a LOD boundary distance over which trees cross-fade
     SDL_GPUBuffer* m_treeBuffer = nullptr;
     SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
     std::uint32_t m_treeCapacity = 0; // instances

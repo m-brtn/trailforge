@@ -77,21 +77,34 @@ void addLevelRock(TrackGeometry& g, const LevelRock& r);
 // radius 0.022 h w, from -0.02 h to 0.32 h above the base. Wind sway moves it by < 2 cm and is ignored.
 void addLevelTrunk(TrackGeometry& g, const LevelTree& t);
 
+// What a prop piece belongs to (placement rules: bridges sit on the roads, everything else keeps off them).
+enum class PropRole : std::uint8_t { Bridge, Building, Prop, Rock };
+
 struct LevelProps {
     TrackGeometry geometry;          // static props: bridges, POI blockouts (collision == render)
     std::vector<PropStyle> styles;   // one per triangle
+    // First triangle of every prop piece (a box, slab, prism, roof or rock; each one convex, normals outward).
+    std::vector<std::uint32_t> pieceStarts;
+    std::vector<PropRole> pieceRoles; // one per piece
 };
 
 struct LevelBridge {
     float x0, z0, x1, z1; // deck end points (center line)
     float y0, y1;         // deck surface height at the ends
     float halfWidth;
+    // The deck reaches kRamp m into both banks as a ramp down onto the carved road (ya before x0, ye past x1).
+    float ya = 0.0f, ye = 0.0f;
+    static constexpr float kRamp = 3.0f;
+    // Deck surface height at s m along the center line from (x0, z0) (-kRamp .. length + kRamp).
+    float deckY(float s) const;
+    float length() const;
 };
 
 struct LevelBakeStats {
     double totalMs = 0.0;
     int samples = 0;       // per side
     std::size_t trees = 0, rocks = 0, propTriangles = 0;
+    int propsMoved = 0, propsRemoved = 0; // placed objects shifted / dropped to keep off the roads
     float minHeight = 0.0f, maxHeight = 0.0f;
 };
 

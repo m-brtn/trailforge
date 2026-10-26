@@ -266,6 +266,13 @@ struct VehicleConfig {
 
     VehicleTuning tuning;
 
+    // Hood camera mount (vehicle.json camera.hood; view only, not physics), body space. The default sits at the roof
+    // line in front of the windshield of the shared SUV / EV body (VehicleModel.cpp: belt deck y 0.655, windshield
+    // from z 0.92 at the deck to z 0.40 at the roof y 1.20), the hood fills the bottom ~18% of a 60 deg view.
+    std::array<float, 3> hoodCamera{0.0f, 1.24f, 0.62f}; // m
+    float hoodCameraPitch = -1.0f;                       // deg, negative looks down onto the hood
+    float hoodCameraNear = 0.05f;                        // m, near plane in the hood view
+
     bool operator==(const VehicleConfig&) const = default;
 };
 

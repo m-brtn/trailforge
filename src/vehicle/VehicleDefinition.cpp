@@ -439,6 +439,27 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             if (ts.lowpassMaxHz < ts.lowpassMinHz) s.error(s.child("lowpassMaxHz"), "must not be below lowpassMinHz");
             if (ts.scrubHighHz <= ts.scrubLowHz) s.error(s.child("scrubHighHz"), "must exceed scrubLowHz");
         }
+        if (const json::Value* cam = root.member("camera", false)) {
+            Obj co(cam, "camera", source, errors);
+            if (const json::Value* hv = co.member("hood", false)) {
+                Obj h(hv, "camera.hood", source, errors);
+                if (const json::Value* pos = h.member("position", false)) {
+                    if (!pos->isArray() || pos->array.size() != 3) {
+                        h.error("camera.hood.position", "must be [x, y, z] in m (body space)");
+                    } else {
+                        const double lim[3][2] = {{-1.5, 1.5}, {0.0, 3.0}, {-3.0, 3.0}};
+                        for (int i = 0; i < 3; ++i) {
+                            const double v = pos->array[std::size_t(i)].numberOr(1e9);
+                            if (!(v >= lim[i][0] && v <= lim[i][1]))
+                                h.error("camera.hood.position", "x in [-1.5, 1.5], y in [0, 3], z in [-3, 3] m");
+                            else c.hoodCamera[std::size_t(i)] = float(v);
+                        }
+                    }
+                }
+                h.num("pitch", c.hoodCameraPitch, -30.0, 30.0, "deg", false);
+                h.num("nearPlane", c.hoodCameraNear, 0.01, 0.3, "m", false);
+            }
+        }
         root.member("garage", false); // read by parseVehicleDefinition
         root.member("kits", false);
 
