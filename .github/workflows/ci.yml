@@ -1,4 +1,4 @@
-# Build + headless tests on Linux, Windows and macOS; Linux and Windows packages are uploaded as artifacts.
+# Build + headless tests on Linux and Windows (macOS is built and tested locally); Linux and Windows packages are uploaded as artifacts.
 # The Linux job also starts the packaged app for a few seconds on Mesa lavapipe (software Vulkan) under Xvfb.
 # None of this is a run on real Windows/Linux hardware.
 name: CI
@@ -124,30 +124,3 @@ jobs:
           name: trailforge-windows-x64
           path: dist/TrailForge-*-windows-x64.zip
           if-no-files-found: error
-
-  macos-headless:
-    name: macOS arm64 (headless physics and audio tests)
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      # Terrain textures are Git LFS objects (~170 MB). They come from a cache shared by all jobs (keyed by the
-      # object ids), so the LFS bandwidth quota is only used when the textures change.
-      - name: List LFS objects
-        shell: bash
-        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
-      - name: Restore LFS cache
-        uses: actions/cache@v6
-        with:
-          path: .git/lfs
-          key: lfs-${{ hashFiles('.lfs-assets-id') }}
-          enableCrossOsArchive: true
-      - name: Fetch LFS objects
-        shell: bash
-        run: git lfs pull && git lfs ls-files
-      - name: Configure, build and test (headless preset)
-        run: |
-          brew list ninja >/dev/null 2>&1 || brew install ninja
-          cmake --preset headless
-          cmake --build --preset headless
-          ctest --preset headless

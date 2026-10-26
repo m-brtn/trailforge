@@ -185,7 +185,7 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
  blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py)
 docs/releases/ release notes per version
-.github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke, macOS headless)
+.github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke; manual only)
 assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
  <id>/blueprint.json traced body (generated; README "Vehicle blueprints"), optional <id>/body.glb Blender
  body (Git LFS; README "Blender bodies (body.glb)")
