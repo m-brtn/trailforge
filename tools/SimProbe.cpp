@@ -14,6 +14,8 @@
 //   trailforge_probe keyboard         - keyboard W / S as instant keys vs. the progressive KeyboardPedals
 //   trailforge_probe compare          - launches, stops, lift-off, cornering, climbs, articulation (+ EV energy)
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
+//   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
+//   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
 // Every mode drives the vehicle of TRAILFORGE_VEHICLE (path to a vehicle.json), by default
 // assets/vehicles/trailforge_suv/vehicle.json; TRAILFORGE_VEHICLE=builtin uses the C++ defaults of VehicleConfig.
 
@@ -1706,8 +1708,120 @@ void levelMap(const char* path, const char* out) {
     std::printf("levelmap wrote %s (%d x %d, 2 m per pixel)\n", out, W, W);
 }
 
+void levelSlope(const char* path, const char* out) {
+    std::string err;
+    const auto level = Level::load(path, &err);
+    if (!level) {
+        std::printf("levelslope: %s\n", err.c_str());
+        return;
+    }
+    const int n = level->samples();
+    const float o = level->origin(), cell = level->cell(), play = level->playHalfExtent();
+    const std::vector<float>& h = level->heights();
+    auto H = [&](int i, int j) { return h[std::size_t(std::clamp(j, 0, n - 1)) * n + std::size_t(std::clamp(i, 0, n - 1))]; };
+    std::vector<float> slope(std::size_t(n) * n, 0.0f);
+    long total = 0, c45 = 0, c60 = 0, c70 = 0, c80 = 0;
+    const int tile = int(32.0f / cell), tn = (n + tile - 1) / tile;
+    std::vector<int> tiles(std::size_t(tn) * tn, 0);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const float gx = (H(i + 1, j) - H(i - 1, j)) / (2.0f * cell), gz = (H(i, j + 1) - H(i, j - 1)) / (2.0f * cell);
+            const float deg = std::atan(std::hypot(gx, gz)) * 57.29578f;
+            slope[std::size_t(j) * n + i] = deg;
+            const float x = o + i * cell, z = o + j * cell;
+            if (std::abs(x) > play || std::abs(z) > play) continue;
+            if (level->waterAt(x, z)) continue;
+            ++total;
+            c45 += deg > 45.0f;
+            c60 += deg > 60.0f;
+            c70 += deg > 70.0f;
+            c80 += deg > 80.0f;
+            if (deg > 60.0f) ++tiles[std::size_t(j / tile) * tn + i / tile];
+        }
+    std::printf("levelslope %s: dry cells in the play area %ld: >45 deg %.2f %%, >60 %.2f %%, >70 %.2f %%, >80 %.3f %%\n",
+                level->id().c_str(), total, 100.0 * c45 / total, 100.0 * c60 / total, 100.0 * c70 / total, 100.0 * c80 / total);
+    std::vector<std::pair<int, int>> order;
+    for (int k = 0; k < tn * tn; ++k)
+        if (tiles[std::size_t(k)] > 0) order.push_back({tiles[std::size_t(k)], k});
+    std::sort(order.rbegin(), order.rend());
+    for (std::size_t k = 0; k < std::min<std::size_t>(order.size(), 25); ++k) {
+        const int ti = order[k].second % tn, tj = order[k].second / tn;
+        std::printf("levelslope tile centre (%.0f, %.0f): %d cells > 60 deg\n", o + (ti + 0.5f) * tile * cell,
+                    o + (tj + 0.5f) * tile * cell, order[k].first);
+    }
+    std::vector<int> treeTiles(std::size_t(tn) * tn, 0);
+    for (const LevelTree& t : level->trees()) {
+        const int ti = int((t.x - o) / (tile * cell)), tj = int((t.z - o) / (tile * cell));
+        if (ti >= 0 && tj >= 0 && ti < tn && tj < tn) ++treeTiles[std::size_t(tj) * tn + ti];
+    }
+    const int dense = int(std::max_element(treeTiles.begin(), treeTiles.end()) - treeTiles.begin());
+    std::printf("levelslope densest forest tile centre (%.0f, %.0f): %d trees\n", o + (dense % tn + 0.5f) * tile * cell,
+                o + (dense / tn + 0.5f) * tile * cell, treeTiles[std::size_t(dense)]);
+    {
+        double sum = 0.0;
+        int cnt = 0;
+        const int ti = dense % tn, tj = dense / tn;
+        for (int j = tj * tile; j < (tj + 1) * tile && j < n - 1; ++j)
+            for (int i = ti * tile; i < (ti + 1) * tile && i < n - 1; ++i, ++cnt)
+                sum += double((level->splatTexels()[std::size_t(j) * std::size_t(n - 1) + std::size_t(i)] >> 24) & 0xffu) / 255.0;
+        std::printf("levelslope mean canopy weight there %.2f\n", sum / std::max(cnt, 1));
+    }
+    const int W = (n - 1) / 2;
+    std::vector<unsigned char> img(std::size_t(W) * W * 3);
+    for (int py = 0; py < W; ++py)
+        for (int px = 0; px < W; ++px) {
+            const int i = px * 2, j = py * 2;
+            const float deg = std::max({slope[std::size_t(j) * n + i], slope[std::size_t(j) * n + i + 1],
+                                        slope[std::size_t(j + 1) * n + i], slope[std::size_t(j + 1) * n + i + 1]});
+            float r = 0.2f + deg / 120.0f, g = r, b = r;
+            if (level->waterAt(o + i * cell, o + j * cell)) { r = 0.1f; g = 0.2f; b = 0.5f; }
+            if (deg > 45.0f) { r = 0.9f; g = 0.9f; b = 0.2f; }
+            if (deg > 60.0f) { r = 1.0f; g = 0.55f; b = 0.1f; }
+            if (deg > 70.0f) { r = 1.0f; g = 0.1f; b = 0.1f; }
+            unsigned char* p = &img[(std::size_t(py) * W + px) * 3];
+            p[0] = (unsigned char)std::clamp(r * 255.0f, 0.0f, 255.0f);
+            p[1] = (unsigned char)std::clamp(g * 255.0f, 0.0f, 255.0f);
+            p[2] = (unsigned char)std::clamp(b * 255.0f, 0.0f, 255.0f);
+        }
+    FILE* f = std::fopen(out, "wb");
+    if (!f) return;
+    std::fprintf(f, "P6\n%d %d\n255\n", W, W);
+    std::fwrite(img.data(), 1, img.size(), f);
+    std::fclose(f);
+    std::printf("levelslope wrote %s (%d x %d, 2 m per pixel)\n", out, W, W);
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
+    if (mode == "levelprofile" && argc > 6) {
+        std::string err;
+        const auto level = Level::load(argc > 7 ? argv[7] : "assets/levels/exploration_peaks/level.json", &err);
+        if (!level) return 1;
+        const float x0 = float(std::atof(argv[2])), z0 = float(std::atof(argv[3])), x1 = float(std::atof(argv[4])),
+                    z1 = float(std::atof(argv[5]));
+        const int steps = std::max(1, std::atoi(argv[6]));
+        for (int k = 0; k <= steps; ++k) {
+            const float t = float(k) / float(steps), x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+            const auto w = level->waterAt(x, z);
+            std::printf("levelprofile %8.1f %8.1f  h %7.2f  water %7.2f\n", x, z, level->heightAt(x, z), w ? *w : -1.0f);
+        }
+        return 0;
+    }
+    if (mode == "levelrocks" && argc > 4) {
+        std::string err;
+        const auto level = Level::load("assets/levels/exploration_peaks/level.json", &err);
+        if (!level) return 1;
+        const float x = float(std::atof(argv[2])), z = float(std::atof(argv[3])), r = float(std::atof(argv[4]));
+        for (const LevelRock& k : level->rocks())
+            if (std::hypot(k.x - x, k.z - z) < r)
+                std::printf("levelrocks %7.1f %6.1f %7.1f  ext %.1f %.1f %.1f pitch %5.1f  %s\n", k.x, k.y, k.z, k.rx, k.ry, k.rz,
+                            k.pitch * 57.3f, k.model >= 0 ? level->models()[std::size_t(k.model)].path.c_str() : "procedural");
+        return 0;
+    }
+    if (mode == "levelslope") {
+        levelSlope(argc > 2 ? argv[2] : "assets/levels/exploration_peaks/level.json", argc > 3 ? argv[3] : "/tmp/trailforge_levelslope.ppm");
+        return 0;
+    }
     if (mode == "levelmap") {
         levelMap(argc > 2 ? argv[2] : "assets/levels/exploration_peaks/level.json", argc > 3 ? argv[3] : "/tmp/trailforge_levelmap.ppm");
         return 0;

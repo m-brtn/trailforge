@@ -1088,6 +1088,42 @@ void autopilotLoops() {
     }
 }
 
+// No vertical cuts in the dry ground: lake outlines and the bake's coast cap used to leave straight walls of 6 to 60 m
+// (one-cell steps). Canyon walls are steep on purpose, so the limit is on near-vertical cells and on single steps;
+// the rock steps of the waterfalls are left out.
+void levelSlopes() {
+    const Level& L = *level();
+    const int n = L.samples();
+    const auto& h = L.heights();
+    long dry = 0, over80 = 0;
+    float worstStep = 0.0f, stepX = 0.0f, stepZ = 0.0f;
+    for (int j = 1; j + 1 < n; ++j)
+        for (int i = 1; i + 1 < n; ++i) {
+            const float x = L.origin() + float(i) * L.cell(), z = L.origin() + float(j) * L.cell();
+            if (!L.insidePlayArea(x, z, 0.0f) || L.waterAt(x, z)) continue;
+            bool fall = false; // the rock step behind a waterfall is vertical on purpose
+            for (const LevelWaterfall& w : L.waterfalls())
+                fall = fall || std::hypot(x - w.x0, z - w.z0) < w.width + 6.0f;
+            if (fall) continue;
+            const std::size_t k = std::size_t(j) * std::size_t(n) + std::size_t(i);
+            const float gx = (h[k + 1] - h[k - 1]) / (2.0f * L.cell()), gz = (h[k + std::size_t(n)] - h[k - std::size_t(n)]) / (2.0f * L.cell());
+            ++dry;
+            if (std::hypot(gx, gz) > 5.67f) ++over80; // tan 80 deg
+            const float step = std::max(std::abs(h[k + 1] - h[k]), std::abs(h[k + std::size_t(n)] - h[k]));
+            if (step > worstStep) {
+                worstStep = step;
+                stepX = x;
+                stepZ = z;
+            }
+        }
+    const double share = 100.0 * double(over80) / double(std::max(dry, 1L));
+    std::printf("  dry cells %ld, steeper than 80 deg %.3f %%, largest 1 m step %.2f m at (%.0f, %.0f)\n", dry, share,
+                double(worstStep), double(stepX), double(stepZ));
+    CHECK(share < 0.04, "%.3f %% of the dry cells are steeper than 80 deg", share);
+    CHECK(worstStep < 8.0f, "a %.2f m step between neighbouring samples at (%.0f, %.0f)", double(worstStep), double(stepX),
+          double(stepZ));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1101,6 +1137,7 @@ int main(int argc, char** argv) {
         {"level_bridges", levelBridges},
         {"level_placement", levelPlacement},
         {"level_grass_clear", levelGrassClear},
+        {"level_slopes", levelSlopes},
         {"autopilot_loops", autopilotLoops},
         {"terrain_textures_ktx2", terrainTexturesKtx2},
         {"terrain_textures_assets", terrainTexturesAssets},

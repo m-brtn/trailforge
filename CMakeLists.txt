@@ -219,6 +219,7 @@ if(TRAILFORGE_BUILD_TESTS)
             level_bridges
             level_placement
             level_grass_clear
+            level_slopes
             autopilot_loops
             terrain_textures_ktx2
             terrain_textures_assets)
