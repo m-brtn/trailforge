@@ -129,21 +129,24 @@ void computeDistance(BlueprintView& out) {
     const std::vector<float> toOut = distanceTo(in, 0, out.width, out.height, du, dv);
     std::vector<float> sd(in.size());
     for (std::size_t i = 0; i < in.size(); ++i) sd[i] = in[i] ? half - toOut[i] : toIn[i] - half;
-    // One [1 2 1] pass per axis: removes the pixel staircase of the traced outline.
+    // Eighteen [1 2 1] passes per axis (a 3 px Gaussian, about 2 cm): removes the pixel staircase and the small
+    // waves the drawing's line work leaves in the traced outline; corners round off by about as much.
     const int w = out.width, h = out.height;
     std::vector<float> t(sd.size());
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            const int xl = std::max(x - 1, 0), xr = std::min(x + 1, w - 1);
-            t[std::size_t(y * w + x)] = 0.25f * (sd[std::size_t(y * w + xl)] + 2.0f * sd[std::size_t(y * w + x)] +
-                                                 sd[std::size_t(y * w + xr)]);
-        }
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            const int yu = std::max(y - 1, 0), yd = std::min(y + 1, h - 1);
-            sd[std::size_t(y * w + x)] = 0.25f * (t[std::size_t(yu * w + x)] + 2.0f * t[std::size_t(y * w + x)] +
-                                                  t[std::size_t(yd * w + x)]);
-        }
+    for (int pass = 0; pass < 18; ++pass) {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const int xl = std::max(x - 1, 0), xr = std::min(x + 1, w - 1);
+                t[std::size_t(y * w + x)] = 0.25f * (sd[std::size_t(y * w + xl)] + 2.0f * sd[std::size_t(y * w + x)] +
+                                                     sd[std::size_t(y * w + xr)]);
+            }
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const int yu = std::max(y - 1, 0), yd = std::min(y + 1, h - 1);
+                sd[std::size_t(y * w + x)] = 0.25f * (t[std::size_t(yu * w + x)] + 2.0f * t[std::size_t(y * w + x)] +
+                                                      t[std::size_t(yd * w + x)]);
+            }
+    }
     out.sd = std::move(sd);
 }
 

@@ -100,11 +100,20 @@ Landmarks landmarks(const BlueprintBody& B) {
     if (rTop < 1e8f) k.bumperTopR = rTop - 0.02f;
     if (hx < 1e8f) k.headInnerX = hx;
     if (tx < 1e8f) k.tailInnerX = tx;
-    for (float zc = bp.archZ[0]; zc > 0.0f; zc -= 0.01f) {
-        const float top = B.sideTop(zc);
-        if (!std::isnan(top) && top > B.beltY(zc) + 0.08f) {
-            k.hoodRearZ = zc;
-            break;
+    // Windshield base: going back from the front axle, where the top line first rises 4 cm above the hood (median
+    // top around the axle).
+    std::vector<float> hood;
+    for (float zc = bp.archZ[0] - 0.35f; zc < bp.archZ[0] + 0.1f; zc += 0.01f)
+        if (const float top = B.sideTop(zc); !std::isnan(top)) hood.push_back(top);
+    if (!hood.empty()) {
+        std::nth_element(hood.begin(), hood.begin() + std::ptrdiff_t(hood.size() / 2), hood.end());
+        const float hoodTop = hood[hood.size() / 2];
+        for (float zc = bp.archZ[0]; zc > 0.0f; zc -= 0.01f) {
+            const float top = B.sideTop(zc);
+            if (!std::isnan(top) && top > hoodTop + 0.04f) {
+                k.hoodRearZ = zc;
+                break;
+            }
         }
     }
     const float yTop = B.conceptY(B.bodyTop());
@@ -135,12 +144,13 @@ const BlueprintLight* lightAt(const VehicleBlueprint& bp, const char* view, floa
 }
 
 // Colour class of a body point seen along its normal: the view the surface faces most, then the next ones where
-// the first has no body (silhouette edges).
+// the first has no body (silhouette edges). The plan and the side view are preferred over the end views (biased
+// weights), so gently curved panels do not flip between views from one triangle to the next.
 char colourClass(const BlueprintBody& B, const glm::vec3& c, const glm::vec3& n) {
     const VehicleBlueprint& bp = B.blueprint();
     const float zc = B.conceptZ(c.z), yc = B.conceptY(c.y);
-    std::array<std::pair<float, int>, 4> w{{{std::abs(n.x), 0}, {std::max(n.y, 0.0f), 1}, {std::max(n.z, 0.0f), 2},
-                                            {std::max(-n.z, 0.0f), 3}}};
+    std::array<std::pair<float, int>, 4> w{{{2.0f * std::abs(n.x), 0}, {2.5f * std::max(n.y, 0.0f), 1},
+                                            {std::max(n.z, 0.0f), 2}, {std::max(-n.z, 0.0f), 3}}};
     std::sort(w.begin(), w.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
     for (const auto& [weight, view] : w) {
         if (weight < 0.05f) break;
@@ -278,21 +288,74 @@ void body(Parts& P, const BlueprintBody& B, const Landmarks& K, const BodyMateri
     const FieldMesh fm =
         polygonizeField([&](const glm::vec3& p) { return B.field(p.x, p.y, p.z); }, lo, hi, kCell);
     const float crease = std::cos(glm::radians(40.0f));
+    struct Tri {
+        std::array<std::uint32_t, 3> v;
+        glm::vec3 fn;
+        const Material* mat;
+        std::string part;
+    };
+    std::vector<Tri> tris;
+    tris.reserve(fm.quads.size() * 2);
     for (const auto& q : fm.quads)
         for (const auto& tri : {std::array<std::uint32_t, 3>{q[0], q[1], q[2]}, std::array<std::uint32_t, 3>{q[0], q[2], q[3]}}) {
             const glm::vec3 a = fm.positions[tri[0]], b = fm.positions[tri[1]], c = fm.positions[tri[2]];
             const glm::vec3 cr = glm::cross(b - a, c - a);
             const float len = glm::length(cr);
             if (len < 1e-10f) continue;
-            const glm::vec3 fn = cr / len;
-            const auto [mat, part] = classify(B, K, M, (a + b + c) / 3.0f, fn);
-            glm::vec3 nv[3];
-            for (int i = 0; i < 3; ++i) {
-                nv[i] = fm.normals[tri[std::size_t(i)]];
-                if (glm::dot(nv[i], fn) < crease) nv[i] = fn; // hard crease
-            }
-            P[part].addTri(a, b, c, nv[0], nv[1], nv[2], *mat);
+            // Surface-net faces zig-zag on oblique surfaces, so the face orientation comes from the field normals.
+            glm::vec3 fn = fm.normals[tri[0]] + fm.normals[tri[1]] + fm.normals[tri[2]];
+            fn = glm::dot(fn, fn) > 1e-8f ? glm::normalize(fn) : cr / len;
+            if (glm::dot(fn, cr) < 0.0f) fn = cr / len;
+            auto [mat, part] = classify(B, K, M, (a + b + c) / 3.0f, fn);
+            tris.push_back({tri, fn, mat, std::move(part)});
         }
+
+    // Paint clean-up: the class grids are sampled per triangle, so colour borders are jagged at the lattice size and
+    // line work of the sheet leaves specks. Three majority passes over the triangles sharing a vertex, among the
+    // paint, trim and glass materials only (lamps, liners and the underbody keep their rule-based material).
+    const Material* paintable[] = {&M.L.body, &M.L.accent, &M.L.roof, &M.L.hooks, &M.L.trim, &M.L.glass};
+    auto paintIndex = [&](const Material* m) {
+        for (int i = 0; i < 6; ++i)
+            if (paintable[i] == m) return i;
+        return -1;
+    };
+    std::vector<std::uint32_t> start(fm.positions.size() + 1, 0), adj;
+    for (const Tri& t : tris)
+        for (std::uint32_t v : t.v) ++start[v + 1];
+    for (std::size_t i = 1; i < start.size(); ++i) start[i] += start[i - 1];
+    adj.resize(start.back());
+    {
+        std::vector<std::uint32_t> fill(start.begin(), start.end() - 1);
+        for (std::uint32_t t = 0; t < tris.size(); ++t)
+            for (std::uint32_t v : tris[t].v) adj[fill[v]++] = t;
+    }
+    std::vector<int> cls(tris.size());
+    for (std::size_t t = 0; t < tris.size(); ++t) cls[t] = paintIndex(tris[t].mat);
+    for (int pass = 0; pass < 3; ++pass) {
+        std::vector<int> next = cls;
+        for (std::size_t t = 0; t < tris.size(); ++t) {
+            if (cls[t] < 0) continue;
+            int count[6] = {};
+            for (std::uint32_t v : tris[t].v)
+                for (std::uint32_t k = start[v]; k < start[v + 1]; ++k)
+                    if (cls[adj[k]] >= 0) ++count[cls[adj[k]]];
+            int best = cls[t];
+            for (int i = 0; i < 6; ++i)
+                if (count[i] > count[best]) best = i;
+            next[t] = best;
+        }
+        cls.swap(next);
+    }
+
+    for (std::size_t t = 0; t < tris.size(); ++t) {
+        const Tri& tr = tris[t];
+        glm::vec3 nv[3] = {fm.normals[tr.v[0]], fm.normals[tr.v[1]], fm.normals[tr.v[2]]};
+        for (glm::vec3& n : nv)
+            if (glm::dot(n, tr.fn) < crease) n = tr.fn; // a vertex normal far from the triangle's mean: crease
+        const Material* mat = cls[t] >= 0 ? paintable[cls[t]] : tr.mat;
+        P[tr.part].addTri(fm.positions[tr.v[0]], fm.positions[tr.v[1]], fm.positions[tr.v[2]], nv[0], nv[1], nv[2],
+                          *mat);
+    }
 
     // Door shut lines: thin dark strips on the side skin at the traced cuts, from the sill up to the belt.
     for (float zc : cuts)
@@ -368,6 +431,27 @@ void sliders(Parts& P, const BlueprintBody& B, const Material& tube, const Mater
     }
 }
 
+// Raised fender tops along the hood edges: z and height from the side-view anchor, x from the plan anchors (one per
+// side). The tracer masks them out of the side silhouette, which would extrude them across the whole hood.
+void fenderTops(Parts& P, const BlueprintBody& B, const Material& mat) {
+    const VehicleBlueprint& bp = B.blueprint();
+    const auto side = bp.find("fender_top", "side");
+    if (side.empty()) return;
+    const auto& s = side[0]->box;
+    const float z0 = B.bodyZ(std::min(s[0], s[2])), z1 = B.bodyZ(std::max(s[0], s[2]));
+    const float top = B.bodyY(std::max(s[1], s[3]));
+    for (const BlueprintAnchor* a : bp.find("fender_top", "top")) {
+        const float x0 = std::min(a->box[1], a->box[3]), x1 = std::max(a->box[1], a->box[3]);
+        const float xc = 0.5f * (x0 + x1);
+        const glm::vec3 down(0, -1, 0);
+        const float y0 = cast(B, {xc, top + 0.3f, z0}, down).p.y, y1 = cast(B, {xc, top + 0.3f, z1}, down).p.y;
+        const std::vector<glm::vec2> outline{{z1, y1 - 0.02f}, {z1 - 0.07f, top}, {z0 + 0.02f, top}, {z0, y0 - 0.02f}};
+        MeshData& m = P.add(sided("fender_top", xc >= 0.0f ? 1.0f : -1.0f), "body_shell", {xc, top, 0.5f * (z0 + z1)},
+                            true, false);
+        style::prism(m, outline, glm::vec3(0.0f), {0, 0, 1}, {0, 1, 0}, {1, 0, 0}, x0, x1, mat, mat, mat);
+    }
+}
+
 } // namespace bpm
 
 // ================================================================ trailforge_suv
@@ -400,6 +484,7 @@ void buildSuv(VehicleVisual& v, const VehicleConfig& cfg, const VehicleBlueprint
     chassis.addCylinder({-0.45f, B.bodyBottom() + 0.02f, B.axleZ(1) - 0.15f},
                         {-0.45f, B.bodyBottom() + 0.02f, B.bodyRear() - 0.05f}, 0.032f, 12, L.alu);
     bpm::body(P, B, K, M);
+    bpm::fenderTops(P, B, L.accent); // orange strips on the raised fender tops, as on the plan
 
     // ---- Front: winch and shackles at their anchors on the bumper face, skid plate under it
     const float yWinch = B.bodyY(bpm::mid(*bp.find("winch", "front").at(0)).y);
@@ -530,6 +615,7 @@ void buildEv(VehicleVisual& v, const VehicleConfig& cfg, const VehicleBlueprint&
         motor.addCylinder({-0.08f, motorY, zc - 0.05f}, {-0.08f, motorY, zc - 0.16f}, 0.07f, 16, L.alu);
     }
     bpm::body(P, B, K, M);
+    bpm::fenderTops(P, B, L.body);
 
     // ---- Front: skid plate, tow shackles under the bumper (in line with the rear ones)
     bpm::skidPlates(P, B, L);

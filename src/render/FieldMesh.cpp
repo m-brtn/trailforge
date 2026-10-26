@@ -85,14 +85,15 @@ FieldMesh polygonizeField(const std::function<float(const glm::vec3&)>& field, c
                     quad(cellId(i - 1, j - 1, k), cellId(i, j - 1, k), cellId(i, j, k), cellId(i - 1, j, k), !in);
             }
 
-    // Project onto the surface (two Newton steps along the gradient, at most half a cell) and take the normals.
-    const float e = 0.25f * h;
-    auto grad = [&](const glm::vec3& p) {
+    // Project onto the surface (two Newton steps along the gradient, at most half a cell) and take the normals from
+    // a gradient over most of a cell (smooths detail finer than the lattice can show).
+    auto gradAt = [&](const glm::vec3& p, float e) {
         return glm::vec3(field(p + glm::vec3(e, 0, 0)) - field(p - glm::vec3(e, 0, 0)),
                          field(p + glm::vec3(0, e, 0)) - field(p - glm::vec3(0, e, 0)),
                          field(p + glm::vec3(0, 0, e)) - field(p - glm::vec3(0, 0, e))) /
                (2.0f * e);
     };
+    auto grad = [&](const glm::vec3& p) { return gradAt(p, 0.25f * h); };
     m.normals.resize(m.positions.size());
     for (std::size_t n = 0; n < m.positions.size(); ++n) {
         glm::vec3 p = m.positions[n];
@@ -109,6 +110,7 @@ FieldMesh polygonizeField(const std::function<float(const glm::vec3&)>& field, c
             g = grad(p);
         }
         m.positions[n] = p;
+        g = gradAt(p, 0.75f * h);
         const float gl = glm::length(g);
         m.normals[n] = gl > 1e-6f ? g / gl : glm::vec3(0, 1, 0);
     }

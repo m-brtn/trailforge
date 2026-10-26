@@ -6,13 +6,16 @@ from assets/vehicles/<id>/blueprint.json (concept frame: z from the wheelbase mi
 placed on the exported model's axles: y + the mean rest hub height, z mapped like the body generator (concept axles
 onto the physics axles, overhangs unscaled). Both are rasterised orthographically per view (side from +X, top from
 +Y, front from +Z, rear from -Z); the blueprint's `ignore` regions (antennas, roof spare: drawn but not modelled) are
-masked out of both. Writes concept / model / overlap PNGs per view.
+masked out of both. Writes concept / model / overlap PNGs per view, and with --halves half/half images: the concept
+drawing on the left, the shaded model mesh on the right, in the same frame and scale.
 
-Usage: python3 tools/cars/compare_silhouettes.py model.obj blueprint.json [--out /tmp/prefix] [--no-warp]
+Usage: python3 tools/cars/compare_silhouettes.py model.obj blueprint.json [--out /tmp/prefix] [--halves /tmp/prefix]
+       [--no-warp]
 """
 
 import argparse
 import json
+import os
 import re
 
 import cv2
@@ -29,17 +32,20 @@ BOUNDS = {  # (u range, v range) in meters per view; u to the right, v up in the
 
 
 def load_obj(path):
-    objs, cur, verts, faces = {}, None, [], []
+    objs, cur, verts, cols = {}, None, [], []
     for line in open(path, encoding="utf-8"):
         if line.startswith("o "):
             cur = line[2:].strip()
             objs[cur] = []
         elif line.startswith("v "):
-            verts.append([float(x) for x in line.split()[1:4]])
+            f = [float(x) for x in line.split()[1:]]
+            verts.append(f[:3])
+            cols.append(f[3:6] if len(f) >= 6 else [0.7, 0.7, 0.7])
         elif line.startswith("f "):
             idx = [int(x) - 1 for x in line.split()[1:4]]
             objs[cur].append(idx)
     V = np.array(verts, np.float64)
+    load_obj.colors = np.array(cols, np.float64)
     return V, {k: np.array(v, np.int64).reshape(-1, 3) for k, v in objs.items()}
 
 
@@ -66,6 +72,50 @@ def raster_tris(view, V, F):
     for tri in px:  # one by one: fillPoly over many contours would apply the even-odd rule across triangles
         cv2.fillConvexPoly(m, tri, 1, lineType=cv2.LINE_8, shift=2)
     return m
+
+
+def shade_tris(view, V, F, C):
+    """Lambert render of the mesh with its vertex colours (painter's order, far to near), RGB."""
+    img = np.zeros(canvas(view).shape + (3,), np.uint8)
+    P = V[F]
+    n = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    eye = {"side": np.array([1.0, 0, 0]), "top": np.array([0, 1.0, 0]), "front": np.array([0, 0, 1.0]),
+           "rear": np.array([0, 0, -1.0])}[view]
+    n *= np.where((n * eye).sum(1, keepdims=True) < 0.0, -1.0, 1.0)  # face the viewer
+    light = 0.5 * eye + np.array([0.35, 0.75, 0.45])
+    light /= np.linalg.norm(light)
+    lum = 0.12 + 0.88 * np.clip((n * light).sum(1), 0.0, 1.0)
+    depth = (P.mean(1) * eye).sum(1)
+    u, v = uv_body(view, P)
+    px = np.round(to_px(view, u, v) * 4).astype(np.int32)
+    rgb = np.clip(255.0 * (C[F].mean(1) * lum[:, None]) ** (1 / 2.2), 0, 255).astype(np.uint8)
+    for k in np.argsort(depth):
+        cv2.fillConvexPoly(img, px[k], rgb[k].tolist(), lineType=cv2.LINE_8, shift=2)
+    return img
+
+
+def concept_image(bp, view, y_off, zinv, root):
+    """The concept drawing of one view resampled into the comparison frame (RGB)."""
+    sheet = json.load(open(os.path.join(root, "tools/cars/sheet.json"), encoding="utf-8"))
+    x0, x1 = sheet["columns"][bp["source"]["column"]]
+    y0, y1 = sheet["rows"][view]
+    cell = np.array(Image.open(os.path.join(root, bp["source"]["image"])).convert("RGB"))[y0:y1, x0:x1]
+    g = bp[view]["grid"]
+    h, w = canvas(view).shape
+    (u0, u1), (v0, v1) = BOUNDS[view]
+    uu, vv = np.meshgrid(u0 + (np.arange(w) + 0.5) / PPM, v1 - (np.arange(h) + 0.5) / PPM)
+    if view == "side":
+        a, b = zinv(-uu), vv - y_off
+    elif view == "top":
+        a, b = zinv(-uu), -vv
+    elif view == "front":
+        a, b = uu, vv - y_off
+    else:
+        a, b = -uu, vv - y_off
+    mx = ((a - g["u0"]) / g["du"]).astype(np.float32)
+    my = ((b - g["v0"]) / g["dv"]).astype(np.float32)
+    return cv2.remap(cell, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(60, 60, 60))
 
 
 def raster_polys(view, polys):
@@ -106,6 +156,8 @@ def main():
     ap.add_argument("obj")
     ap.add_argument("blueprint")
     ap.add_argument("--out", default=None, help="PNG prefix (concept red, model cyan, overlap white)")
+    ap.add_argument("--halves", default=None, help="PNG prefix for half/half concept | model images")
+    ap.add_argument("--root", default=".", help="repository root (for the concept sheet)")
     ap.add_argument("--no-warp", action="store_true", help="keep the concept wheelbase (no axle mapping)")
     a = ap.parse_args()
     bp = json.load(open(a.blueprint, encoding="utf-8"))
@@ -127,6 +179,13 @@ def main():
         inner = np.abs(zc) <= zA_c
         return np.where(inner, zc * zA_p / zA_c, np.sign(zc) * (zA_p + np.abs(zc) - zA_c))
 
+    def zinv(z):
+        if a.no_warp:
+            return z
+        z = np.asarray(z)
+        inner = np.abs(z) <= zA_p
+        return np.where(inner, z * zA_c / zA_p, np.sign(z) * (zA_c + np.abs(z) - zA_p))
+
     allF = np.concatenate(list(objs.values()))
     res = {}
     for view in ("side", "front", "rear", "top"):
@@ -145,6 +204,13 @@ def main():
             img[(model > 0) & (concept > 0) & keep] = (235, 235, 235)
             img[~keep & ((model > 0) | (concept > 0))] = (90, 90, 90)
             Image.fromarray(img).save(f"{a.out}_{view}.png")
+        if a.halves:
+            half = concept_image(bp, view, y_off, zinv, a.root)
+            shaded = shade_tris(view, V, allF, load_obj.colors)
+            mid = half.shape[1] // 2
+            half[:, mid:] = shaded[:, mid:]
+            half[:, mid - 1:mid + 1] = (255, 200, 0)
+            Image.fromarray(half).save(f"{a.halves}_{view}.png")
     print(json.dumps({"iou": res, "restHubY": round(y_off, 4), "axleZ": round(float(zA_p), 4),
                       "conceptAxleZ": zA_c, "warp": not a.no_warp}))
 

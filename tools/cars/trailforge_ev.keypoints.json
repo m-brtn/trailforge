@@ -1,5 +1,5 @@
 {
-  "comment": "Hand-placed corrections for tracing Cars.png car #2 (electric SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: antennas and the roof spare (not modelled); accessories: roof rack and cargo, mirrors, rock sliders, flare and tire bumps of the plan; shadow: ground shadow and underbody mass between the tires (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "comment": "Hand-placed corrections for tracing Cars.png car #2 (electric SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: antennas and the roof spare (not modelled); accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): roof rack and cargo, mirrors, rock sliders, flare and tire bumps of the plan; shadow: ground shadow and underbody mass between the tires (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
   "id": "trailforge_ev",
   "restHubY": -0.3506,
   "column": 1,
@@ -261,6 +261,24 @@
         [
           230,
           298
+        ]
+      ],
+      [
+        [
+          100,
+          140
+        ],
+        [
+          212,
+          140
+        ],
+        [
+          212,
+          161
+        ],
+        [
+          100,
+          172
         ]
       ]
     ]
@@ -683,6 +701,48 @@
         [
           500,
           154
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "side",
+      "box": [
+        [
+          117,
+          159
+        ],
+        [
+          212,
+          170
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          117,
+          82
+        ],
+        [
+          212,
+          112
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          117,
+          306
+        ],
+        [
+          212,
+          336
         ]
       ]
     }

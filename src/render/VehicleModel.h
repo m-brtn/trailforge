@@ -33,8 +33,8 @@ struct SpareMount {
     bool detachable = true;
 };
 
-// Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The collision shape stays the
-// three boxes from vehicle/VehicleShape.h; the visual body fits around the wheels (see README "Vehicle rendering").
+// Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The body is meshed from the traced blueprint
+// (BlueprintBody), the same data the collision hulls come from; see README "Vehicle blueprints".
 struct VehicleVisual {
     MeshData mesh;                 // all parts, in `parts` order
     std::vector<VehiclePart> parts;

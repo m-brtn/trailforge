@@ -1,5 +1,5 @@
 {
-  "comment": "Hand-placed corrections for tracing Cars.png car #1 (gasoline SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: drawn parts the game does not model (antennas, roof spare); masked out of both the concept and the render for the silhouette IoU. accessories: bolt-on parts the body loft must not be traced from (roof rack and cargo, mirrors, rear spare, rock sliders); they stay in the IoU silhouette. shadow: ground shadow and underbody mass between the tires that the automatic shadow removal keeps (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
+  "comment": "Hand-placed corrections for tracing Cars.png car #1 (gasoline SUV). Pixel coordinates of the view cell (tools/cars/sheet.json). ignore: drawn parts the game does not model (antennas, roof spare); masked out of both the concept and the render for the silhouette IoU. accessories (including the hood scoop and hood rail above the hood line, which a side-view hull would extrude across the whole width): bolt-on parts the body loft must not be traced from (roof rack and cargo, mirrors, rear spare, rock sliders); they stay in the IoU silhouette. shadow: ground shadow and underbody mass between the tires that the automatic shadow removal keeps (masked out of both silhouettes for the IoU). lights: lamp boxes per view (head, bar, tail, brake). classOverride: colour regions hidden under accessories. anchors: pixel boxes per view where the bolt-on parts go (raised fender tops, winch, tow hooks, mirrors, spare, jerry cans, sliders, roof rack and cases, skid plates); the tracer converts them to meters. extraDoorCutsPx: door shut lines the automatic search misses. restHubY: body-space hub height at rest on flat ground (trailforge_model_export / the rest-hub test), where the concept axle line goes.",
   "id": "trailforge_suv",
   "restHubY": -0.3645,
   "column": 0,
@@ -258,6 +258,24 @@
         [
           250,
           298
+        ]
+      ],
+      [
+        [
+          106,
+          140
+        ],
+        [
+          234,
+          140
+        ],
+        [
+          234,
+          160
+        ],
+        [
+          106,
+          173
         ]
       ]
     ],
@@ -785,6 +803,48 @@
         [
           586,
           92
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "side",
+      "box": [
+        [
+          150,
+          160
+        ],
+        [
+          244,
+          170
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          143,
+          80
+        ],
+        [
+          257,
+          110
+        ]
+      ]
+    },
+    {
+      "name": "fender_top",
+      "view": "top",
+      "box": [
+        [
+          143,
+          295
+        ],
+        [
+          257,
+          325
         ]
       ]
     }
