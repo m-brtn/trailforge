@@ -205,7 +205,10 @@ MapData buildLevelMap(const Level& L, int pixels, int threads) {
     d.title = L.name();
     const float half = L.playHalfExtent();
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.0f x %.0f km", double(2.0f * half / 1000.0f), double(2.0f * half / 1000.0f));
+    if (2.0f * half < 1000.0f)
+        std::snprintf(buf, sizeof(buf), "%.0f x %.0f m", double(2.0f * half), double(2.0f * half));
+    else
+        std::snprintf(buf, sizeof(buf), "%.0f x %.0f km", double(2.0f * half / 1000.0f), double(2.0f * half / 1000.0f));
     d.subtitle = buf;
     d.playX0 = d.playZ0 = -half;
     d.playX1 = d.playZ1 = half;
