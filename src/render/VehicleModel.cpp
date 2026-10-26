@@ -1950,6 +1950,20 @@ bool buildFromBody(VehicleVisual& v, const VehicleConfig& cfg, std::string& erro
         const float len = std::clamp(ax.suspensionMaxLength - 9.81f / (w * w), ax.suspensionMinLength, ax.suspensionMaxLength);
         restHub += 0.5f * (cfg.attachHeight - len);
     }
+    // The body has no shock towers: the procedural coil-over and lower arm layout (made for the SUV frame) moves with
+    // each axle's hub so the drawn shock is 0.06 m longer than its body at full bump (the top eye as low as it can
+    // be, under a low bonnet), and the coil (0.064 m radius) sits inboard of the steered tire's inner edge.
+    for (int a = 0; a < 2; ++a) {
+        const WheelSweep& S = sweeps[std::size_t(2 * a)];
+        SuspensionMounts& m = v.mounts[a];
+        const float inner = std::abs(S.x) - S.halfWidth * std::cos(S.steer) - 0.5f * S.radius * std::sin(S.steer);
+        m.shockTopX = m.shockLowX = std::min(m.shockTopX, inner - 0.064f - 0.02f);
+        m.armPivotY = restHub - m.armOuterDrop; // lower arm level at rest
+        for (int it = 0; it < 3; ++it) {
+            const SuspensionPose p = suspensionPose({S.x, S.hubHigh, S.z}, S.z, m);
+            m.shockTopY += kShockBodyLength + 0.06f - glm::length(p.shockTop - p.shockLow);
+        }
+    }
     float sideX = 0.0f;
     for (const BodyPart& part : body.parts) {
         if (part.lods.empty()) continue;

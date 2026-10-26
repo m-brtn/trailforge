@@ -34,21 +34,49 @@ int g_failures = 0;
         }                                                                       \
     } while (0)
 
+std::vector<VehicleDefinition> catalogDefinitions() {
+    std::vector<std::string> errors;
+    std::vector<VehicleDefinition> defs = loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors);
+    CHECK(errors.empty() && defs.size() >= 3, "catalog: %zu vehicles, %zu errors", defs.size(), errors.size());
+    return defs;
+}
+
 // Base configuration of every catalog vehicle (one per visual model at least), each also with the traced body
 // (bodyShape "traced"; the shipped vehicles use the kit body) when its model has a blueprint (the patrol buggy has
-// none and draws the kit body for both).
+// none and draws the kit body for both). A Blender body (body.glb) replaces either procedural body, so those
+// vehicles are listed once.
 std::vector<VehicleConfig> catalogConfigs() {
-    std::vector<std::string> errors;
     std::vector<VehicleConfig> out;
-    for (const VehicleDefinition& d : loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors)) {
+    for (const VehicleDefinition& d : catalogDefinitions()) {
         CHECK(d.config.bodyShape == "kit", "%s: bodyShape '%s'", d.config.id.c_str(), d.config.bodyShape.c_str());
         out.push_back(d.config);
-        if (!findVehicleBlueprint(d.config.visualModel)) continue;
+        if (!d.config.bodyModel.empty() || !findVehicleBlueprint(d.config.visualModel)) continue;
         out.push_back(d.config);
         out.back().bodyShape = "traced";
     }
-    CHECK(errors.empty() && out.size() >= 5, "catalog: %zu vehicles, %zu errors", out.size(), errors.size());
+    CHECK(out.size() >= 5, "catalog: %zu configurations", out.size());
     return out;
+}
+
+// A catalog vehicle with a Blender body: the parts, their flags and parents come from its body.glb (no procedural
+// part list), the paint and light roles reach the shader's material ids.
+void checkBodyModelParts(const VehicleConfig& c, const VehicleVisual& v) {
+    BodyModel body;
+    CHECK(loadBodyModel(c.bodyModel, body, true), "%s: body.glb", c.id.c_str());
+    CHECK(v.parts.size() == body.parts.size(), "%s: %zu parts drawn, %zu in body.glb", c.id.c_str(), v.parts.size(),
+          body.parts.size());
+    CHECK(!v.find("chassis") && v.find("body_shell"), "%s: parts come from body.glb", c.id.c_str());
+    for (const VehiclePart& p : v.parts) {
+        const BodyPart* bp = body.find(p.name);
+        CHECK(bp && bp->parent == p.parent && bp->deformable == p.deformable && bp->detachable == p.detachable,
+              "%s: part '%s' flags / parent differ from body.glb", c.id.c_str(), p.name.c_str());
+    }
+    CHECK(v.spares.size() == body.spares.size(), "%s: %zu spare mounts, %zu in body.glb", c.id.c_str(), v.spares.size(),
+          body.spares.size());
+    std::set<int> ids;
+    for (const LitVertex& lv : v.mesh.vertices) ids.insert(int(lv.material.x + 0.5f));
+    for (MatId m : {MatId::Paint, MatId::Glass, MatId::Headlight, MatId::BrakeLight, MatId::ReverseLight})
+        CHECK(ids.count(int(m)), "%s: no vertex with material id %d", c.id.c_str(), int(m));
 }
 
 // Front- (zs = 1) or rearmost (zs = -1) reach of a part's outward-facing triangles spanning the center line.
@@ -111,7 +139,9 @@ void checkParts(const VehicleConfig& c) {
     for (const VehiclePart& p : v.parts)
         CHECK(p.parent.empty() || names.count(p.parent), "part '%s' has unknown parent '%s'", p.name.c_str(),
               p.parent.c_str());
-    if (patrol) {
+    if (!c.bodyModel.empty()) {
+        checkBodyModelParts(c, v);
+    } else if (patrol) {
         checkPatrolParts(c, v);
     } else {
         for (const char* n : {"hood", "tailgate", "door_front_left", "door_rear_right", "bumper_front", "fender_front_left",
@@ -144,10 +174,14 @@ void checkParts(const VehicleConfig& c) {
     for (const VehiclePart& p : v.parts)
         CHECK(p.name.find("antenna") == std::string::npos && p.name.find("mud_flap") == std::string::npos,
               "%s: part '%s' is not allowed", c.visualModel.c_str(), p.name.c_str());
-    CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
-    CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (SUV tailgate, patrol cargo bed, none on the EV)",
-          v.spares.size());
-    for (const SpareMount& s : v.spares) CHECK(names.count(s.parent), "spare '%s' parent", s.name.c_str());
+    if (c.bodyModel.empty()) {
+        CHECK(v.find("chassis") && !v.find("chassis")->deformable && !v.find("chassis")->detachable, "chassis flags");
+        CHECK(v.spares.size() == (ev ? 0u : 1u), "%zu spare mounts (SUV tailgate, patrol cargo bed, none on the EV)",
+              v.spares.size());
+    }
+    // A body.glb spare without a parent rides on the body.
+    for (const SpareMount& s : v.spares)
+        CHECK(names.count(s.parent) || (!c.bodyModel.empty() && s.parent.empty()), "spare '%s' parent", s.name.c_str());
     std::printf("  %s (%s): %zu parts, %zu triangles\n", c.visualModel.c_str(), c.bodyShape.c_str(), v.parts.size(),
                 v.mesh.vertices.size() / 3);
 }
@@ -157,11 +191,16 @@ void modelParts() {
     for (const VehicleConfig& c : catalogConfigs()) checkParts(c);
 }
 
-// Every catalog vehicle with its own wheels and with the tire sizes a tire kit could fit (the body is rebuilt
-// around them).
+// Every catalog vehicle with its own wheels and with the tire sizes a tire kit could fit (the procedural body is
+// rebuilt around them). A Blender body is not rebuilt: it is checked with the configurations it can be driven with
+// (its kits and the garage ride height extremes, as trailforge_vehiclec --check).
 std::vector<VehicleConfig> wheelVariants() {
     std::vector<VehicleConfig> out{VehicleConfig{}};
+    for (const VehicleDefinition& d : catalogDefinitions())
+        if (!d.config.bodyModel.empty())
+            for (const VehicleConfig& c : bodyCheckConfigs(d)) out.push_back(c);
     for (const VehicleConfig& base : catalogConfigs()) {
+        if (!base.bodyModel.empty()) continue;
         out.push_back(base);
         for (const auto& [r, w] :
              {std::pair{0.436f, 0.315f}, std::pair{0.43f, 0.33f}, std::pair{0.45f, 0.30f}, std::pair{0.36f, 0.26f}}) {
@@ -251,6 +290,16 @@ void modelSuspensionMounts() {
                 const float len = glm::length(p.shockTop - p.shockLow);
                 minLen = std::fmin(minLen, len);
                 maxLen = std::fmax(maxLen, len);
+                if (!c.bodyModel.empty()) {
+                    // Under a Blender body the top eye stays under the skin (no shock poking through the bonnet).
+                    bool covered = false;
+                    for (const LitVertex& mv : v.mesh.vertices)
+                        covered = covered || (std::abs(mv.position.x - p.shockTop.x) < 0.12f &&
+                                              std::abs(mv.position.z - p.shockTop.z) < 0.15f &&
+                                              mv.position.y > p.shockTop.y + 0.03f);
+                    CHECK(covered, "%s: shock top eye (%.3f, %.3f, %.3f) not under the body", c.id.c_str(),
+                          p.shockTop.x, p.shockTop.y, p.shockTop.z);
+                }
                 if (m.set) {
                     float gap = 1e9f;
                     for (const LitVertex& mv : v.mesh.vertices) gap = std::fmin(gap, glm::length(mv.position - p.shockTop));
@@ -283,7 +332,7 @@ void modelSuspensionMounts() {
               "%s: shock length %.3f..%.3f outside %.2f..%.2f", c.visualModel.c_str(), minLen, maxLen,
               kShockBodyLength + 0.01f, kShockBodyLength + kShockShaftLength - 0.03f);
         CHECK(maxTopGap <= 0.06f, "%s: shock top eye %.3f m from the frame", c.visualModel.c_str(), maxTopGap);
-        if (c.visualModel == "trailforge_patrol" && c.axles[0].wheelRadius == 0.33f)
+        if ((c.visualModel == "trailforge_patrol" && c.axles[0].wheelRadius == 0.33f) || !c.bodyModel.empty())
             CHECK(minCoil >= 0.005f, "%s: coil %.3f m from the tire", c.visualModel.c_str(), minCoil);
     }
 }
