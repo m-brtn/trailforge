@@ -45,7 +45,9 @@ add_library(trailforge_sim STATIC
     src/sim/TireMarks.cpp
     src/sim/WheelSpray.cpp
     src/sim/BodyMud.cpp
-    src/vehicle/VehicleBlueprint.cpp)
+    src/vehicle/VehicleBlueprint.cpp
+    src/vehicle/VehicleBody.cpp
+    src/vehicle/WheelSweep.cpp)
 # Traced body blueprints, embedded so the default configuration and the headless tests need no asset path.
 set(TRAILFORGE_BLUEPRINT_IDS trailforge_suv trailforge_ev)
 set(_bp_files "")
@@ -95,6 +97,16 @@ target_link_libraries(trailforge_flow PUBLIC trailforge_sim)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_flow PRIVATE -Wall -Wextra)
 endif()
+
+# Vehicle body converter (Blender glTF export -> body.glb, validation against the vehicle definition): the source
+# reader and LOD builder as a library for the tests, and the command-line tool.
+file(GLOB TF_MESHOPT_SOURCES ${meshoptimizer_SOURCE_DIR}/src/*.cpp)
+add_library(trailforge_bodyc STATIC tools/cars/BodySource.cpp ${TF_MESHOPT_SOURCES})
+target_include_directories(trailforge_bodyc PUBLIC tools/cars)
+target_include_directories(trailforge_bodyc SYSTEM PRIVATE ${cgltf_SOURCE_DIR} ${meshoptimizer_SOURCE_DIR}/src)
+target_link_libraries(trailforge_bodyc PUBLIC trailforge_sim)
+add_executable(trailforge_vehiclec tools/cars/vehiclec.cpp)
+target_link_libraries(trailforge_vehiclec PRIVATE trailforge_bodyc)
 
 add_executable(trailforge_probe tools/SimProbe.cpp)
 target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
@@ -202,6 +214,15 @@ if(TRAILFORGE_BUILD_TESTS)
             ev_simulation)
         add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
+    endforeach()
+
+    # Blender vehicle bodies (body.glb): converter round trip, validation rules, vehicle.json reference, collision.
+    add_executable(trailforge_body_tests tests/BodyTests.cpp)
+    target_link_libraries(trailforge_body_tests PRIVATE trailforge_bodyc)
+    target_compile_definitions(trailforge_body_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name body_hull_convexity body_convert_source body_validation_rules body_definition body_physics)
+        add_test(NAME ${test_name} COMMAND trailforge_body_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
 
     # Open-world level: bake, physics tiles and streaming, roads, water, both vehicles on Exploration Peaks; terrain

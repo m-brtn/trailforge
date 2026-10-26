@@ -4,6 +4,7 @@
 #include "vehicle/TireSound.h"
 
 #include <array>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -223,6 +224,13 @@ struct VehicleConfig {
     std::string name = "Default off-roader";
     std::string visualModel = "trailforge_suv"; // procedural body model (src/render/VehicleModel)
     std::string audioProfile = "trailforge_suv"; // sound set (assets/audio/manifest.json) and tire sound preset
+    // Blender-authored body (vehicle.json body.model: a converted body.glb, vehicle/VehicleBody.h), resolved to a
+    // path; empty = the procedural body of visualModel. Its convex collision pieces (body space) are read when the
+    // definition loads and replace the blueprint hulls. bodyPaint: colour overrides per paint role
+    // ("paint_primary", "paint_secondary", "paint_accent"; sRGB 0..1) for that body.
+    std::string bodyModel;
+    std::vector<std::vector<std::array<float, 3>>> bodyHulls;
+    std::map<std::string, std::array<float, 3>> bodyPaint;
     TireSoundProfile tireSound = tireSoundPreset("trailforge_suv"); // audioProfile preset + vehicle.json `tireSound`
 
     // Mass and inertia

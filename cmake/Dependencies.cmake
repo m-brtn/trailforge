@@ -82,8 +82,17 @@ FetchContent_Declare(cgltf
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR no-cmake)
 
-# Physics and the glTF parser are always needed (including for headless tests).
-FetchContent_MakeAvailable(JoltPhysics cgltf)
+# ---------------------------------------------------------------- meshoptimizer
+# 1.3 (simplification for the vehicle body LODs in trailforge_vehiclec; the same archive as tools/texc). Its
+# CMakeLists.txt is not used: the sources are compiled into trailforge_bodyc.
+FetchContent_Declare(meshoptimizer
+    URL https://github.com/zeux/meshoptimizer/archive/9e1f07b159d3cb777f1c67ed31fc11fd117986f4.tar.gz
+    URL_HASH SHA256=e753b45fbc410031bd69cb278180ae31fa0d5430d0c3e662e3a3b100467ce0b3
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR no-cmake)
+
+# Physics, the glTF parser and the mesh simplifier are always needed (including for headless tests).
+FetchContent_MakeAvailable(JoltPhysics cgltf meshoptimizer)
 
 if(TRAILFORGE_BUILD_APP)
     # imgui has no CMakeLists.txt, and glm's SOURCE_SUBDIR points to
