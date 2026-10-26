@@ -99,8 +99,8 @@ class Vehicle:
         steer = self.doc["steering"]["maxAngleDeg"]
         # Garage ride height (vs. base, m; src/vehicle/VehicleSetup.cpp): attachHeight = base - value. The body must
         # clear the wheels at both ends of the range, as trailforge_vehiclec checks.
-        ride = self.doc.get("garage", {}).get("ranges", {}).get("suspension.rideHeight", {})
-        self.ride_range = (min(ride.get("min", -0.05), 0.0), max(ride.get("max", 0.08), 0.0))
+        ride = self.doc.get("garage", {}).get("ranges", {}).get("suspension.rideHeight", [-0.05, 0.08])
+        self.ride_range = (min(ride[0], 0.0), max(ride[1], 0.0))
         self.wheels = []
         for i in range(4):
             axle = self.doc["axles"]["front" if i < 2 else "rear"]

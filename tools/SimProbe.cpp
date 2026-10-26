@@ -2619,9 +2619,10 @@ TireStop tireStop(const VehicleConfig& vehicle, int lane, bool abs, bool warm) {
 
 void tiresProbe(int argc, char** argv) {
     const std::string section = argc > 2 ? argv[2] : "all";
-    const std::vector<std::pair<std::string, std::string>> vehicles = {
+    std::vector<std::pair<std::string, std::string>> vehicles = {
         {"trailforge_suv", TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json"},
         {"trailforge_ev", TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_ev/vehicle.json"}};
+    if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) vehicles = {{loadProbeVehicle(env).id, env}};
     const TireSet sets[] = {TireSet::Offroad, TireSet::Road, TireSet::Slick};
     for (TireSet set : sets) {
         const TireCompound& c = tireCompound(set);
