@@ -69,6 +69,7 @@ void Simulation::buildWorld() {
             gates.push_back({g.x, g.z, g.dirX, g.dirZ, g.halfWidth, !gates.empty()});
     }
     m_lapTimer.setGates(std::move(gates));
+    applyDriftConfig();
     m_tireMarks.setWater(m_water);
     m_tireMarks.clear();
     m_spawnFeature = 0;
@@ -125,6 +126,7 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
         m_vehicle->setAidControls(c);
     }
     m_impactListener.setBody(m_vehicle->bodyId());
+    m_drift.abort();
     ++m_spawnCount;
     // The attract route of this world, steered with this vehicle's geometry; the progress starts over.
     DriveRoute route;
@@ -199,6 +201,7 @@ void Simulation::processCommands() {
         spawnVehicle(*m_pendingRebuild, m_track->features()[m_spawnFeature]);
         m_pendingRebuild.reset();
         m_lapTimer.clearAll();
+        m_drift.clearSession();
         m_pendingReset = false;
         setMessage("Vehicle rebuilt");
     }
@@ -242,6 +245,7 @@ void Simulation::processCommands() {
         if (Vehicle::needsRebuild(m_vehicle->config(), *m_pendingConfig)) {
             respawnInPlace(*m_pendingConfig);
             m_lapTimer.reset();
+            m_drift.clearSession();
             setMessage("Vehicle rebuilt in place");
         } else {
             m_vehicle->applyTuning(m_pendingConfig->tuning);
@@ -451,6 +455,7 @@ void Simulation::tick() {
     m_prev = m_curr;
     m_curr = captureSnapshot();
     updateLapTimer(before);
+    updateDrift(before, dt);
     checkRecovery(dt);
 
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -485,6 +490,54 @@ void Simulation::updateLapTimer(const JPH::Vec3& before) {
         break;
     case LapTimer::Event::Invalid: setMessage("Lap not counted: a checkpoint was missed (new lap started)"); break;
     case LapTimer::Event::None: break;
+    }
+}
+
+void Simulation::applyDriftConfig() {
+    DriftConfig c;
+    if (m_settings.level) c = m_settings.level->drift();
+    else if (m_settings.layout == TrackLayout::ProvingGround) c = miniTrackDrift();
+    if (m_driftOverride) c.enabled = *m_driftOverride;
+    m_drift.setConfig(std::move(c));
+}
+
+void Simulation::setDriftOverride(std::optional<bool> enabled) {
+    m_driftOverride = enabled;
+    applyDriftConfig();
+}
+
+void Simulation::updateDrift(const JPH::Vec3& before, float dt) {
+    if (!m_drift.active()) return;
+    const JPH::RMat44 xf = m_vehicle->bodyTransform();
+    const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ();
+    DriftInput in;
+    in.dt = dt;
+    in.x = p.GetX();
+    in.z = p.GetZ();
+    const float h = std::hypot(fwd.GetX(), fwd.GetZ());
+    if (h > 1e-3f) in.fx = fwd.GetX() / h, in.fz = fwd.GetZ() / h;
+    // Rear bumper center: half the wheelbase plus about a metre of overhang behind the body origin.
+    const float rear = 0.5f * m_vehicle->config().wheelBase + 1.0f;
+    in.rearX = in.x - in.fx * rear;
+    in.rearZ = in.z - in.fz * rear;
+    in.vx = (p.GetX() - before.GetX()) / dt;
+    in.vz = (p.GetZ() - before.GetZ()) / dt;
+    in.wheelsOnGround = 0;
+    for (const WheelTelemetry& w : m_vehicle->telemetry().wheels) in.wheelsOnGround += w.contact ? 1 : 0;
+    for (const BodyImpact& b : m_impactListener.impacts()) in.impactSpeed = std::max(in.impactSpeed, b.approachSpeed);
+    switch (m_drift.update(in)) {
+    case DriftScorer::Event::Completed:
+        std::snprintf(m_driftMessage, sizeof(m_driftMessage), "Drift %.0f pts, max %.0f deg (session best %.0f)",
+                      m_drift.lastScore(), double(m_drift.maxAngleDeg()), m_drift.bestScore());
+        setMessage(m_driftMessage);
+        break;
+    case DriftScorer::Event::Failed:
+        std::snprintf(m_driftMessage, sizeof(m_driftMessage), "Drift lost: %s (%.0f pts)",
+                      DriftScorer::endName(m_drift.lastEnd()), m_drift.lastLost());
+        setMessage(m_driftMessage);
+        break;
+    case DriftScorer::Event::Started:
+    case DriftScorer::Event::None: break;
     }
 }
 

@@ -99,6 +99,7 @@ public:
     VehicleDebugOptions debug;
     double storedBestLap = 0.0; // s, best lap of this level and vehicle from best_laps.cfg (0: none)
     float lapHudX = -1.0f, lapHudTop = 12.0f; // lap panel top-center (below the compass bar; x < 0: screen center)
+    double storedBestDrift = 0.0; // points, best drift run of this level and vehicle from best_drift.cfg (0: none)
 
     // The short driving hint (latest Simulation message) is on screen.
     bool hintVisible(const Simulation& sim) const;
@@ -113,6 +114,8 @@ private:
 
     void drawDriveHud(const Simulation& sim);
     void drawLapHud(const Simulation& sim);
+    void drawDriftHud(const Simulation& sim);
+    float m_lapHudBottom = 0.0f; // bottom edge of the lap panel this frame (the drift panel goes below it)
     void drawAidIndicators(const Simulation& sim);
     void drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests& req);
     void drawTuning(Simulation& sim, UiRequests& req, GraphicsState& gfx);

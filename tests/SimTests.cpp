@@ -3,6 +3,7 @@
 
 #include "input/KeyboardPedals.h"
 #include "sim/BodyMud.h"
+#include "sim/DriftScore.h"
 #include "sim/Autopilot.h"
 #include "sim/FixedStepClock.h"
 #include "sim/LapTimer.h"
@@ -11,6 +12,7 @@
 #include "track/MiniTrack.h"
 #include "track/TestTrack.h"
 #include "vehicle/VehicleDefinition.h"
+#include "core/Json.h"
 
 #include <algorithm>
 #include <array>
@@ -1709,6 +1711,165 @@ void miniTrackLap() {
     CHECK(maxLine < 3.0f, "left the line by %.2f m", maxLine);
     CHECK(maxKmh > 85.0f, "max %.0f km/h", maxKmh);
 }
+
+// Drift scoring arithmetic: slip x speed x time, zone multiplier, linking, completion, spin, wall hit, area, abort.
+void driftScoreLogic() {
+    DriftConfig c;
+    c.enabled = true;
+    DriftZone wall;
+    wall.name = "wall";
+    wall.multiplier = 2.0f;
+    wall.a = {0.0f, 10.0f};
+    wall.b = {100.0f, 10.0f};
+    wall.reach = 3.0f;
+    c.zones.push_back(wall);
+    DriftScorer d;
+    d.setConfig(c);
+    const float dt = 0.01f;
+    // Body moving +x at v m/s with the heading turned by deg (slip = deg).
+    auto tick = [&](float x, float z, float v, float deg, int wheels = 4, float impact = 0.0f) {
+        DriftInput in;
+        in.dt = dt;
+        in.x = x, in.z = z;
+        in.rearX = x - 2.0f, in.rearZ = z;
+        in.fx = std::cos(deg / 57.2957795f), in.fz = std::sin(deg / 57.2957795f);
+        in.vx = v;
+        in.wheelsOnGround = wheels;
+        in.impactSpeed = impact;
+        return d.update(in);
+    };
+    CHECK(tick(0, 0, 15.0f, 30.0f) == DriftScorer::Event::Started && d.running(), "run starts");
+    CHECK(std::abs(d.slipAngleDeg() - 30.0f) < 0.01f && std::abs(d.speedKmh() - 54.0f) < 0.01f, "slip %.2f speed %.2f",
+          double(d.slipAngleDeg()), double(d.speedKmh()));
+    for (int k = 1; k < 200; ++k) tick(0, 0, 15.0f, 30.0f);
+    const double plain = 0.1 * 30.0 * 54.0 * 2.0; // 2 s at 30 deg, 54 km/h
+    CHECK(std::abs(d.score() - plain) < 0.5, "plain %.2f expected %.2f", d.score(), plain);
+    for (int k = 0; k < 100; ++k) tick(50, 11.0f, 15.0f, -30.0f); // 1 s in the wall zone, the other way round
+    CHECK(d.zone() == 0 && d.multiplier() == 2.0f, "zone %d", d.zone());
+    CHECK(std::abs(d.score() - 2.0 * plain) < 0.5 && std::abs(d.zoneTime() - 1.0) < 0.02, "zone score %.2f", d.score());
+    for (int k = 0; k < 100; ++k) tick(0, 0, 15.0f, 80.0f); // capped at 70 deg
+    CHECK(std::abs(d.score() - 2.0 * plain - 0.1 * 70.0 * 54.0) < 0.5 && d.maxAngleDeg() > 79.9f, "cap %.2f", d.score());
+    const double run1 = d.score();
+    DriftScorer::Event e = DriftScorer::Event::None;
+    int ticks = 0;
+    while (e == DriftScorer::Event::None && ticks < 1000) e = tick(0, 0, 15.0f, 2.0f), ++ticks;
+    CHECK(e == DriftScorer::Event::Completed && std::abs(ticks * dt - 1.5f) < 0.02f, "completed after %d ticks", ticks);
+    CHECK(d.runs() == 1 && d.lastScore() == run1 && d.bestScore() == run1 && !d.running(), "result");
+    // Straight driving, slow slides and one wheel on the ground do not start a run.
+    for (int k = 0; k < 100; ++k) tick(0, 0, 15.0f, 5.0f), tick(0, 0, 4.0f, 30.0f), tick(0, 0, 15.0f, 30.0f, 1);
+    CHECK(!d.running() && d.score() == run1, "no run");
+    // Spin and wall hit: failed, 0 points, session best kept.
+    for (int k = 0; k < 50; ++k) tick(0, 0, 15.0f, 40.0f);
+    CHECK(tick(0, 0, 15.0f, 120.0f) == DriftScorer::Event::Failed && d.lastEnd() == DriftScorer::End::Spin, "spin");
+    CHECK(d.lastScore() == 0.0 && d.lastLost() > 0.0 && d.bestScore() == run1 && d.failedRuns() == 1, "spin result");
+    for (int k = 0; k < 50; ++k) tick(0, 0, 15.0f, 40.0f);
+    CHECK(tick(0, 0, 15.0f, 40.0f, 4, 2.0f) == DriftScorer::Event::Failed && d.lastEnd() == DriftScorer::End::Wall, "wall");
+    // A light touch (below wallSpeed) does not end it; a reset aborts without a result.
+    for (int k = 0; k < 50; ++k) tick(0, 0, 15.0f, 40.0f, 4, 0.5f);
+    CHECK(d.running(), "light touch");
+    d.abort();
+    CHECK(!d.running() && d.lastEnd() == DriftScorer::End::Aborted && d.runs() == 1 && d.failedRuns() == 2, "abort");
+    // Course area: leaving it completes the run.
+    c.area = {{-10, -10}, {10, -10}, {10, 10}, {-10, 10}};
+    d.setConfig(c);
+    CHECK(d.runs() == 0 && d.bestScore() == 0.0, "new config clears the session");
+    for (int k = 0; k < 50; ++k) tick(0, 0, 15.0f, 40.0f);
+    CHECK(tick(20, 0, 15.0f, 40.0f) == DriftScorer::Event::Completed && d.lastEnd() == DriftScorer::End::LeftArea &&
+              d.runs() == 1 && d.lastScore() > 0.0, "left the area");
+    CHECK(tick(20, 0, 15.0f, 40.0f) == DriftScorer::Event::None && !d.running(), "outside: no run");
+    // Disabled: nothing.
+    c.enabled = false;
+    d.setConfig(c);
+    CHECK(tick(0, 0, 15.0f, 40.0f) == DriftScorer::Event::None && !d.running(), "disabled");
+    // Polygon zone, rear point inside only.
+    DriftZone box;
+    box.polygon = {{-3, -1}, {-1, -1}, {-1, 1}, {-3, 1}};
+    CHECK(box.contains(-2, 0) && !box.contains(0, 0) && wall.contains(50, 12.9f) && !wall.contains(50, 13.1f) &&
+              wall.contains(-2, 10) && !wall.contains(-4, 10), "contains");
+}
+
+void driftConfigParse() {
+    auto parse = [](const char* text, DriftConfig& c, std::string& err) {
+        json::Value v;
+        if (!json::parse(text, v, &err)) return false;
+        return parseDriftConfig(v, c, err);
+    };
+    DriftConfig c;
+    std::string err;
+    CHECK(parseDriftConfig(json::Value{}, c, err) && !c.enabled, "null: disabled");
+    CHECK(parse(R"({"minAngleDeg": 15, "linkSeconds": 2, "area": [[0,0],[10,0],[10,10]],
+                    "zones": [{"name": "Outer wall", "multiplier": 2.5, "line": [[0, 0], [10, 0]], "reach": 3},
+                              {"name": "Clip", "polygon": [[1,1],[2,1],[2,2]]}]})", c, err),
+          "%s", err.c_str());
+    CHECK(c.enabled && c.minAngleDeg == 15.0f && c.linkSeconds == 2.0f && c.area.size() == 3 && c.zones.size() == 2, "values");
+    CHECK(c.zones[0].name == "Outer wall" && c.zones[0].multiplier == 2.5f && c.zones[0].reach == 3.0f &&
+              c.zones[0].polygon.empty() && c.zones[0].b.x == 10.0f, "line zone");
+    CHECK(c.zones[1].polygon.size() == 3 && c.zones[1].multiplier == 2.0f, "polygon zone");
+    CHECK(parse(R"({"enabled": false})", c, err) && !c.enabled, "enabled false");
+    CHECK(!parse(R"({"zones": [{"name": "x", "polygon": [[1,1],[2,1]]}]})", c, err) && err.find("'x'") != std::string::npos,
+          "short polygon: %s", err.c_str());
+    CHECK(!parse(R"({"zones": [{"line": [[0,0],[1,0]], "multiplier": 0.5}]})", c, err), "multiplier < 1");
+    CHECK(!parse(R"({"spinAngleDeg": 5})", c, err), "spin below min angle");
+    CHECK(!parse(R"({"area": [[0,0],[1,1]]})", c, err), "short area");
+    CHECK(!parse(R"([1, 2])", c, err), "not an object");
+}
+
+// The proving ground test bed: scoring on the mini handling track with zones on the constant-radius corner; the
+// override switches it; a respawn aborts the run.
+void miniTrackDrift() {
+    const DriftConfig c = tf::miniTrackDrift();
+    const MiniTrackInfo& info = miniTrack();
+    CHECK(c.enabled && c.zones.size() == 2 && c.area.size() == 4, "config");
+    // Outer zone points lie 2.5 .. 6.2 m outside the center line radius, the apex line on the inner edge. Corners 5
+    // (160, -145) and 6 (160, -209), R 32, share the arc center (128, -177).
+    CHECK(c.zones[0].polygon.size() > 40, "outer zone points %zu", c.zones[0].polygon.size());
+    float rMin = 1e9f, rMax = 0.0f;
+    const float acx = 128.0f, acz = -177.0f;
+    for (const DriftPoint& p : c.zones[0].polygon) {
+        const float r = std::hypot(p.x - acx, p.z - acz);
+        rMin = std::min(rMin, r), rMax = std::max(rMax, r);
+    }
+    std::printf("  outer zone radius %.2f .. %.2f m (center line %.1f m), apex %.2f / %.2f m\n", double(rMin), double(rMax),
+                double(info.steadyRadius), double(std::hypot(c.zones[1].a.x - acx, c.zones[1].a.z - acz)),
+                double(std::hypot(c.zones[1].b.x - acx, c.zones[1].b.z - acz)));
+    CHECK(rMin > info.steadyRadius + 2.0f && rMax < info.steadyRadius + 6.5f, "outer zone radius %.2f..%.2f", double(rMin), double(rMax));
+    CHECK(std::abs(std::hypot(c.zones[1].a.x - acx, c.zones[1].a.z - acz) - (info.steadyRadius - info.halfWidth)) < 0.5f,
+          "apex on the inner edge");
+
+    Simulation sim(settingsFor(TrackLayout::ProvingGround));
+    CHECK(sim.drift().active() && sim.drift().config().zones.size() == 2, "proving ground: active");
+    sim.setDriftOverride(false);
+    CHECK(!sim.drift().active(), "override off");
+    sim.setDriftOverride(std::nullopt);
+    CHECK(sim.drift().active(), "world setting");
+    // Handbrake turn on the straight before the corner: the builtin vehicle slides, a run starts; R aborts it.
+    const std::size_t i0 = [&] {
+        for (std::size_t i = 0; i < info.center.size(); ++i)
+            if (info.arc[i] > info.steadyArc0 - 140.0f) return i;
+        return std::size_t(0);
+    }();
+    const std::size_t i1 = (i0 + 1) % info.center.size();
+    TrackFeature at;
+    at.position = JPH::Vec3(info.center[i0].x, miniTrackGround(info.center[i0].x, info.center[i0].z) + 0.03f, info.center[i0].z);
+    at.yaw = std::atan2(info.center[i1].x - info.center[i0].x, info.center[i1].z - info.center[i0].z);
+    sim.requestPlace(at);
+    run(sim, 1.0);
+    run(sim, 4.0, {.throttle = 1.0f});
+    const float kmh = sim.vehicle().telemetry().speed * 3.6f;
+    float maxSlip = 0.0f;
+    bool started = false;
+    for (int k = 0; k < 120; ++k) {
+        run(sim, 1.0 / 120.0, {.steer = -1.0f, .handBrake = 1.0f});
+        maxSlip = std::max(maxSlip, std::abs(sim.drift().slipAngleDeg()));
+        started = started || sim.drift().running();
+    }
+    std::printf("  handbrake turn from %.0f km/h: max slip %.1f deg, run %s, score %.0f\n", double(kmh), double(maxSlip),
+                started ? "started" : "not started", sim.drift().score());
+    CHECK(kmh > 45.0f && maxSlip > 20.0f && started, "slide %.0f km/h %.1f deg", double(kmh), double(maxSlip));
+    sim.requestReset();
+    run(sim, 0.1);
+    CHECK(!sim.drift().running(), "reset aborts");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1739,6 +1900,9 @@ int main(int argc, char** argv) {
         {"lap_timer_logic", lapTimerLogic},
         {"mini_track_lap", miniTrackLap},
         {"asphalt_gravel_surfaces", asphaltGravelSurfaces},
+        {"drift_score_logic", driftScoreLogic},
+        {"drift_config_parse", driftConfigParse},
+        {"mini_track_drift", miniTrackDrift},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

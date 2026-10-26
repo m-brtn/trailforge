@@ -45,6 +45,7 @@ add_library(trailforge_sim STATIC
     src/sim/Simulation.cpp
     src/sim/Autopilot.cpp
     src/sim/LapTimer.cpp
+    src/sim/DriftScore.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
     src/sim/WheelSpray.cpp
@@ -196,7 +197,8 @@ if(TRAILFORGE_BUILD_TESTS)
             abs_prevents_lock
             diff_locks_climb
             traction_control_mud driving_aids_logic friction_ellipse
-            tread_soil_surfaces body_mud lap_timer_logic mini_track_lap asphalt_gravel_surfaces)
+            tread_soil_surfaces body_mud lap_timer_logic mini_track_lap asphalt_gravel_surfaces
+            drift_score_logic drift_config_parse mini_track_drift)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

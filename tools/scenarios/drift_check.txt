@@ -1,0 +1,73 @@
+# Drift scoring check (sim/DriftScore, the proving ground test bed on the mini handling track's R 32 corner):
+#   ./build/release/trailforge --script tools/scenarios/drift_check.txt --no-audio
+# rwd_test: a hand brake slide into the constant-radius corner (keyboard), the run judged after it, the drift HUD;
+# the scenario switch (drift on / off / level) on the proving ground and on Suncoast Raceway (no "drift" in its
+# level.json). Captures /tmp/trailforge_drift_*.png. Exit code 1 on FAIL.
+set ui 0
+set auto_reverse 0
+set vsync 1
+time 11
+wait 1.0
+vehicle_file tests/data/vehicles/rwd_test/vehicle.json
+wait 1.0
+
+# ---------------------------------------------------------------- test bed: active on the mini track only
+expect drift_active == 1
+expect drift_runs == 0
+place 60 -145 90
+wait 1.5
+expect speed_kmh < 1
+capture /tmp/trailforge_drift_01_entry.png
+wait 0.3
+
+# ---------------------------------------------------------------- hand brake slide into the corner
+down W
+until x > 116 15
+expect speed_kmh > 45
+down A
+down Space
+wait 0.45
+up Space
+until drift_running == 1 3
+wait 0.6
+expect drift_angle > 12
+capture /tmp/trailforge_drift_02_sliding.png
+wait 0.3
+up A
+up W
+until drift_running == 0 10
+log drift_max_angle
+log drift_last
+expect drift_judged == 1
+expect drift_max_angle > 15
+capture /tmp/trailforge_drift_03_result.png
+wait 0.3
+down S
+until speed_kmh < 0.5 10
+up S
+
+# ---------------------------------------------------------------- switch: off, back to the world setting
+drift off
+wait 0.2
+expect drift_active == 0
+drift level
+wait 0.2
+expect drift_active == 1
+expect drift_runs == 0
+
+# ---------------------------------------------------------------- a level without "drift": off unless forced on
+level suncoast_raceway
+wait 3
+expect drift_active == 0
+drift on
+wait 0.2
+expect drift_active == 1
+down W
+wait 2
+up W
+capture /tmp/trailforge_drift_04_forced_on_level.png
+wait 0.3
+drift level
+wait 0.2
+expect drift_active == 0
+quit

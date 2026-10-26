@@ -177,6 +177,11 @@ private:
     int m_lapsSeen = 0;
     bool m_scenarioAutopilot = false;
     void updateBestLaps();
+    // Best drift score per level and vehicle (best_drift.cfg, same rules: player runs or scenario runs).
+    BestLaps m_bestDrift{BestLaps::Order::Higher};
+    std::string m_bestDriftPath;
+    int m_driftRunsSeen = 0;
+    void updateBestDrift();
     std::string currentLevelId() const;
     std::string currentVehicleId() const;
     // Scenario-only overrides for the Controls page captures: key cap wording and the connected pad type.

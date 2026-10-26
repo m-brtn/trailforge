@@ -26,13 +26,14 @@ bool BestLaps::submit(const std::string& level, const std::string& vehicle, doub
     if (!validId(level) || !validId(vehicle) || !(seconds > 0.0) || !std::isfinite(seconds)) return false;
     auto [it, inserted] = m_best.try_emplace({level, vehicle}, seconds);
     if (inserted) return true;
-    if (seconds >= it->second) return false;
+    if (m_order == Order::Lower ? seconds >= it->second : seconds <= it->second) return false;
     it->second = seconds;
     return true;
 }
 
 std::string BestLaps::serialize() const {
-    std::string out = "# TrailForge best laps: level vehicle seconds\n";
+    std::string out = m_order == Order::Lower ? "# TrailForge best laps: level vehicle seconds\n"
+                                              : "# TrailForge best drift scores: level vehicle points\n";
     char line[192];
     for (const auto& [key, t] : m_best) {
         std::snprintf(line, sizeof(line), "%s %s %.3f\n", key.first.c_str(), key.second.c_str(), t);

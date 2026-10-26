@@ -17,6 +17,9 @@
 //   trailforge_probe compare          - launches, stops, lift-off, cornering, climbs, articulation (+ EV energy)
 //   trailforge_probe minitrack [vehicle.json ...] - scripted laps of the mini handling track (path-following driver):
 //                                       lap times, max speed, lateral g; SUV, EV, builtin, rwd_test + the given files
+//   trailforge_probe drift [vehicle.json ...] - scripted drift attempts on the mini track's R 32 corner (traction
+//                                       control off, entry 45 / 55 / 65 km/h, power or hand brake initiation):
+//                                       DriftScorer score, max / mean slip angle; rwd_test, builtin, SUV, EV
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -2176,6 +2179,193 @@ void miniTrackProbe(int argc, char** argv) {
     }
 }
 
+// Scripted drift attempts on the mini handling track's constant-radius corner (R 32, the proving ground drift test
+// bed, miniTrackDrift): traction control off, approach on the center line at an entry speed, initiation (full lock
+// into the corner, optional hand brake pulse, full throttle), then a slip angle hold (countersteer toward the
+// velocity, throttle on the angle error) through the corner, then straighten. The simulation's DriftScorer judges.
+struct DriftAttempt {
+    float entryKmh = 0.0f, targetDeg = 0.0f;
+    bool handBrake = false;
+    double score = 0.0, driftTime = 0.0, zoneTime = 0.0;
+    float maxAngle = 0.0f, meanAngle = 0.0f, meanKmh = 0.0f;
+    const char* end = "";
+    bool failed = false;
+};
+
+DriftAttempt driftAttempt(const VehicleConfig& cfg, float entryKmh, bool handBrake, float targetDeg) {
+    const MiniTrackInfo& mt = miniTrack();
+    SimulationSettings s;
+    s.vehicle = cfg;
+    Simulation sim(s);
+    AidControls aids = sim.aidControls();
+    aids.traction = TractionMode::Off;
+    sim.requestAidControls(aids);
+    const std::size_t n = mt.center.size();
+    const float s0 = mt.steadyArc0 - 0.25f * (mt.steadyArc1 - mt.steadyArc0); // corner entry
+    auto indexAt = [&](float arc) {
+        arc = std::fmod(arc + mt.length, mt.length);
+        return std::size_t(std::upper_bound(mt.arc.begin(), mt.arc.end(), arc) - mt.arc.begin() - 1) % n;
+    };
+    const std::size_t i0 = indexAt(s0 - 70.0f), i1 = (i0 + 2) % n;
+    TrackFeature at;
+    at.position = JPH::Vec3(mt.center[i0].x, miniTrackGround(mt.center[i0].x, mt.center[i0].z), mt.center[i0].z);
+    at.yaw = std::atan2(mt.center[i1].x - mt.center[i0].x, mt.center[i1].z - mt.center[i0].z);
+    sim.requestPlace(at);
+    for (int k = 0; k < 120; ++k) sim.tick();
+    const float sigma = mt.curvature[indexAt(0.5f * (mt.steadyArc0 + mt.steadyArc1))] > 0.0f ? 1.0f : -1.0f; // + left turn
+    const float maxSteer = cfg.axles[kFrontAxle].maxSteerAngleDeg;
+    const float dt = float(sim.fixedStep());
+    enum { Approach, Initiate, Hold, Exit } phase = Approach;
+    float phaseTime = 0.0f, angleSum = 0.0f, kmhSum = 0.0f;
+    int samples = 0;
+    DriftAttempt r;
+    r.entryKmh = entryKmh;
+    r.targetDeg = targetDeg;
+    r.handBrake = handBrake;
+    bool ran = false;
+    for (int tick = 0; tick < 40 * 120; ++tick) {
+        const JPH::RMat44 xf = sim.vehicle().bodyTransform();
+        const JPH::Vec3 p(xf.GetTranslation()), fwd = xf.GetAxisZ();
+        const float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
+        float dist = 0.0f;
+        const float arc = mt.nearestArc(p.GetX(), p.GetZ(), &dist);
+        const float kmh = sim.vehicle().telemetry().speed * 3.6f;
+        // Pure pursuit toward the center line 10 m ahead; steer + is right.
+        auto pursuit = [&](float ahead) {
+            const RoutePoint& q = mt.center[indexAt(arc + ahead)];
+            float a = std::atan2(q.x - p.GetX(), q.z - p.GetZ()) - yaw;
+            a = std::atan2(std::sin(a), std::cos(a)); // + toward +X (left)
+            return std::clamp(-a * 57.3f * 1.4f / maxSteer, -1.0f, 1.0f);
+        };
+        DriverIntent in;
+        in.analog = true;
+        const float drift = -sigma * sim.drift().slipAngleDeg(); // + when sliding the right way
+        phaseTime += dt;
+        if (phase == Approach) {
+            in.steer = pursuit(10.0f);
+            in.throttle = std::clamp(0.3f * (entryKmh - kmh), 0.0f, 1.0f);
+            in.brake = kmh > entryKmh + 3.0f ? 0.4f : 0.0f;
+            const float ahead = std::fmod(s0 - arc + mt.length, mt.length);
+            if (ahead < 2.0f || ahead > mt.length - 20.0f) phase = Initiate, phaseTime = 0.0f;
+        } else if (phase == Initiate) {
+            in.steer = -sigma;
+            in.throttle = handBrake ? 0.5f : 1.0f;
+            in.handBrake = handBrake && phaseTime < 0.4f ? 1.0f : 0.0f;
+            if (drift > 0.6f * targetDeg || phaseTime > 1.0f) phase = Hold, phaseTime = 0.0f;
+        } else if (phase == Hold) {
+            // Front wheels along the velocity plus turn-in that grows when the vehicle runs wide of the center line,
+            // more countersteer over the target angle; throttle on the angle error, less when wide or fast.
+            const std::size_t c = indexAt(arc), c1 = (c + 1) % n;
+            const float tx = mt.center[c1].x - mt.center[c].x, tz = mt.center[c1].z - mt.center[c].z;
+            const float tl = std::max(1e-4f, std::hypot(tx, tz));
+            const float left = ((p.GetX() - mt.center[c].x) * tz - (p.GetZ() - mt.center[c].z) * tx) / tl;
+            const float wide = -sigma * left; // m outside the center line
+            const float beta = sim.drift().slipAngleDeg();
+            const float frontLeft = beta + sigma * (5.0f - 0.8f * (drift - targetDeg) + 1.5f * wide);
+            in.steer = std::clamp(-frontLeft / maxSteer, -1.0f, 1.0f);
+            in.throttle = std::clamp(0.5f + 0.06f * (targetDeg - drift) - 0.08f * wide -
+                                         0.05f * std::max(0.0f, kmh - entryKmh), 0.0f, 1.0f);
+            const bool past = std::fmod(arc - mt.steadyArc1 + mt.length, mt.length) < 0.5f * mt.length;
+            if (past || phaseTime > 12.0f) phase = Exit, phaseTime = 0.0f;
+        } else {
+            in.steer = pursuit(12.0f);
+            in.throttle = 0.15f;
+            if ((!sim.drift().running() && ran) || phaseTime > 5.0f) break;
+        }
+        sim.setIntent(in);
+        sim.tick();
+        if (std::getenv("TF_DRIFT_DEBUG"))
+            for (const BodyImpact& b : sim.bodyImpacts()) {
+                const JPH::Vec3 bp = sim.currentSnapshot().body.position;
+                std::printf("   impact t=%.2f phase %d at (%.1f %.2f %.1f) body (%.1f %.2f %.1f) ground %.2f approach %.2f m/s "
+                            "impulse %.0f, center dist %.1f\n", tick * dt, int(phase), b.position.GetX(), b.position.GetY(),
+                            b.position.GetZ(), bp.GetX(), bp.GetY(), bp.GetZ(),
+                            miniTrackGround(b.position.GetX(), b.position.GetZ()), b.approachSpeed, b.impulse, dist);
+            }
+        const DriftScorer& d = sim.drift();
+        if (d.running()) {
+            ran = true;
+            r.score = d.score();
+            r.driftTime = d.driftTime();
+            r.zoneTime = d.zoneTime();
+            r.maxAngle = d.maxAngleDeg();
+            if (d.drifting()) angleSum += std::abs(d.slipAngleDeg()), kmhSum += d.speedKmh(), ++samples;
+        } else if (ran && phase != Exit) {
+            break; // ended early (spin, wall, link timeout)
+        }
+    }
+    // Straighten and roll on until the run is judged (link timeout).
+    for (int tick = 0; tick < 6 * 120 && sim.drift().running(); ++tick) {
+        DriverIntent in;
+        in.analog = true;
+        in.brake = 0.2f;
+        sim.setIntent(in);
+        sim.tick();
+        if (sim.drift().running()) r.score = sim.drift().score();
+    }
+    const DriftScorer& d = sim.drift();
+    r.failed = d.lastEnd() == DriftScorer::End::Spin || d.lastEnd() == DriftScorer::End::Wall;
+    r.end = !ran ? "no run" : d.running() ? "still running" : DriftScorer::endName(d.lastEnd());
+    if (ran && !d.running() && !r.failed) r.score = d.lastScore();
+    if (r.failed) r.score = 0.0;
+    r.meanAngle = samples ? angleSum / float(samples) : 0.0f;
+    r.meanKmh = samples ? kmhSum / float(samples) : 0.0f;
+    return r;
+}
+
+void driftProbe(int argc, char** argv) {
+    const MiniTrackInfo& mt = miniTrack();
+    std::printf("drift test bed: mini handling track R %.0f corner, steady %.0f..%.0f m\n", mt.steadyRadius, mt.steadyArc0,
+                mt.steadyArc1);
+    std::vector<std::string> paths;
+    if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) paths.push_back(env);
+    else
+        paths = {TRAILFORGE_SOURCE_DIR "/tests/data/vehicles/rwd_test/vehicle.json", "builtin",
+                 TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json",
+                 TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_ev/vehicle.json"};
+    for (int k = 2; k < argc; ++k) paths.push_back(argv[k]);
+    for (const std::string& path : paths) {
+        VehicleConfig cfg;
+        std::string id = "builtin";
+        if (path != "builtin") {
+            VehicleDefinition def;
+            std::vector<std::string> errors;
+            if (!loadVehicleDefinition(path, def, errors)) {
+                for (const auto& e : errors) std::fprintf(stderr, "%s\n", e.c_str());
+                continue;
+            }
+            cfg = def.config;
+            id = def.id;
+        }
+        const bool verbose = std::getenv("TF_DRIFT_VERBOSE") != nullptr;
+        DriftAttempt best;
+        float maxAngle = 0.0f;
+        int attempts = 0, scored = 0, spins = 0, walls = 0;
+        auto line = [&](const char* tag, const DriftAttempt& a) {
+            std::printf("drift %s %-14s entry %2.0f km/h %-9s target %2.0f deg: score %6.0f, max %5.1f deg, mean %5.1f deg "
+                        "at %3.0f km/h, drift %4.1f s (zones %4.1f s), end %s\n",
+                        tag, id.c_str(), a.entryKmh, a.handBrake ? "handbrake" : "power", a.targetDeg, a.score, a.maxAngle,
+                        a.meanAngle, a.meanKmh, a.driftTime, a.zoneTime, a.end);
+        };
+        for (float target : {20.0f, 30.0f})
+            for (float kmh : {40.0f, 45.0f, 50.0f, 55.0f, 60.0f, 65.0f})
+                for (bool hb : {false, true}) {
+                    const DriftAttempt a = driftAttempt(cfg, kmh, hb, target);
+                    ++attempts;
+                    scored += a.score > 0.0 ? 1 : 0;
+                    spins += std::strcmp(a.end, "spin") == 0 ? 1 : 0;
+                    walls += std::strcmp(a.end, "wall hit") == 0 ? 1 : 0;
+                    if (!a.failed) maxAngle = std::max(maxAngle, a.maxAngle);
+                    if (verbose) line("try", a);
+                    if (a.score > best.score) best = a;
+                }
+        if (best.score > 0.0) line("best", best);
+        std::printf("drift RESULT %-14s %s, %.0f kg: best score %.0f, max angle of a scored run %.1f deg; %d attempts: "
+                    "%d scored, %d spins, %d wall hits\n",
+                    id.c_str(), driveLayoutName(cfg.layout), cfg.mass, best.score, maxAngle, attempts, scored, spins, walls);
+    }
+}
+
 // Autopilot laps of a circuit level (its attractRoute pace): lap and sector times, top and mean speed, the
 // largest lateral acceleration and the share of ticks with all four wheels on asphalt.
 void lapProbe(const char* path, int laps) {
@@ -2298,6 +2488,7 @@ int main(int argc, char** argv) {
     else if (mode == "layouts") layoutsProbe();
     else if (mode == "compare") compareProbe();
     else if (mode == "minitrack") miniTrackProbe(argc, argv);
+    else if (mode == "drift") driftProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

@@ -256,6 +256,7 @@ One command per line, `#` starts a comment:
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 | `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `drift on\|off\|level` | force drift scoring on / off for the session, or back to the level's `"drift"` setting (same as F1 → Simulation → Drift scoring) |
 | `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
 
@@ -280,6 +281,9 @@ the stored best lap, R to the last checkpoint, the map, fixed cameras, frame tim
 cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`), `tools/scenarios/surfaces.txt` (asphalt rubber
 marks after a locked-wheel stop on the mini track, gravel spray and displaced-gravel tracks in a trap;
 `/tmp/trailforge_surfaces_*.png`),
+`tools/scenarios/drift_check.txt` (drift
+scoring on the mini track: rwd_test handbrake entry into the 32 m corner, a judged run, the `drift` switch on the
+proving ground and on Suncoast Raceway; `/tmp/trailforge_drift_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
@@ -370,6 +374,11 @@ lap, s), `lap_last`, `lap_best` (session), `lap_stored_best` (best_laps.cfg, thi
 (entries in it), `lap_best_gap` (best − last), `lap_stored_gap` (stored − session best), `lap_next` / `lap_next_gate`,
 `lap_last_gate`, `lap_checkpoints`, `lap_gates`, `lap_gate_dist_N` (m from gate N), `lap_sectors`, `lap_sector_N`
 (last lap, 1-based; a scenario stores its best laps in `<tmp>/trailforge_scenario_best_laps.cfg`, emptied at start),
+drift scoring: `drift_active`, `drift_running`, `drift_drifting`, `drift_angle` (body slip, deg), `drift_score`
+(running run), `drift_max_angle`, `drift_zone` (multiplier of the zone at the vehicle, 0 outside), `drift_zone_time`,
+`drift_runs`, `drift_failed`, `drift_judged` (runs + failed), `drift_last`, `drift_best` (session), `drift_end` (last
+run: 0 none, 1 completed, 2 left the course, 3 spin, 4 wall hit, 5 reset), `drift_stored_best` (best_drift.cfg; a
+scenario uses `<tmp>/trailforge_scenario_best_drift.cfg`, removed at start),
 audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_load`, `audio_skid`, `audio_gravel`,
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
@@ -1396,6 +1405,51 @@ bake (`trailforge_level_tests level_baked_compare`). The raw data is fetched by 
 (venv: `tools/levels/requirements.txt`), which compares it with `tools/levels/data/suncoast_raceway/sources.lock.json` (sha256; `--check`
 verifies the committed files, `--update-lock` accepts new OSM edits).
 
+## Drift scoring
+
+A small judge (`src/sim/DriftScore.h`, `DriftScorer`, in `trailforge_sim`) fed with the body motion of every
+physics tick; it only reads simulation data and never feeds back.
+
+- **Score:** body slip angle = angle between the body heading and its horizontal velocity (body origin). A tick
+  counts as drifting at |slip| ≥ `minAngleDeg` and ≥ `minSpeedKmh` with at least two wheels on the ground inside the
+  course `area`. The first drifting tick starts a run; each drifting tick adds `pointsScale` × min(|slip|,
+  `maxScoredAngleDeg`) × km/h × dt × the multiplier of the clipping zone the vehicle is in (1 outside).
+- **End of a run:** completed after `linkSeconds` without drifting (drifts closer together are linked) or on leaving
+  the area; failed (0 points) on a spin (|slip| > `spinAngleDeg` above 3 m/s) or a body impact approaching at ≥
+  `wallSpeed` m/s (the chassis contact listener of the impact sounds: walls, barriers, props, a rollover); a reset,
+  teleport, placing or rebuild drops the run uncounted.
+- **Clipping zones:** a polygon, or a line (a wall face from a to b) with a `reach` in m on both sides; a zone counts
+  while the body origin or the rear bumper point (origin − forward × (wheel base / 2 + 1 m)) is inside it;
+  overlapping zones: the largest multiplier. No zones: no bonus.
+- **Per level:** `level.json` `"drift"` (every key optional; an object without `"enabled"` is enabled; missing:
+  scoring off):
+
+  ```json
+  "drift": {"enabled": true, "minSpeedKmh": 20, "minAngleDeg": 12, "spinAngleDeg": 100, "maxScoredAngleDeg": 70,
+            "linkSeconds": 1.5, "wallSpeed": 1.5, "pointsScale": 0.1,
+            "area": [[x, z], [x, z], [x, z]],
+            "zones": [{"name": "Outer wall T1", "multiplier": 2, "line": [[x0, z0], [x1, z1]], "reach": 2.5},
+                      {"name": "Clip 1", "multiplier": 1.5, "polygon": [[x, z], [x, z], [x, z]]}]}
+  ```
+
+  Bad values fail the level load with a message (`parseDriftConfig`). The proving ground enables it in code for the
+  mini handling track (`miniTrackDrift()`): area = the walled rectangle of the mini track, zone "Outer zone" ×2 (the
+  outer 3.7 m band of the asphalt and edge over the steady part of the 32 m 180° corner), zone "Apex" ×1.5 (a line
+  on the inner edge over the middle third of that arc, reach 2.5 m).
+- **Switch:** F1 → Simulation → Drift scoring (World setting / On / Off) and the scenario command `drift
+  on|off|level`; the override lasts the session.
+- **HUD:** a panel below the lap panel while scoring is active and the vehicle is on the course: slip angle, speed,
+  the running score, the zone and its multiplier, the last result (or LOST SPIN / WALL) and the best score.
+- **Best scores:** completed runs driven by the player (not the autopilot) are stored per level and vehicle in
+  `best_drift.cfg` in the user data directory (`level vehicle points` lines, highest kept).
+- **Probe** `trailforge_probe drift`: 24 scripted attempts per vehicle on the mini track's 32 m corner (target slip
+  20 / 30°, entry 40–65 km/h, power-over or handbrake entry; a simple counter-steer and throttle controller, TC off).
+  A scripted driver, not the vehicles' limit. Measured on the `Asphalt` surface (2026-10-26): rwd_test best 842
+  points (65 km/h handbrake, max 32.1°, 6.0 s of drift), 17 of 24 attempts scored, 1 spin, 6 wall hits; builtin
+  best 353 (50 km/h handbrake, 86.3°), 15 scored, 2 spins, 5 walls; SUV best 364 (45 km/h handbrake, 24.2°), 15
+  scored, 0 spins, 3 walls; EV best 462 (40 km/h handbrake, 53.6°), 7 scored, 8 spins, 4 walls. The best runs
+  spend 0–0.3 s in the clipping zones: this driver holds a tighter line than the outer band.
+
 ## Map, waypoint and compass
 
 **Full-screen map** (M, gamepad LB, or MAP in the pause menu; the simulation pauses while it is open). Drawn from the
@@ -2021,6 +2075,9 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   reflections are shading only: the water surface the physics sees stays flat, and the waves do not follow wind,
   fetch or the river current. Clouds, their ground shadows and the valley fog are render-only too (cloud shadows dim
   only the rendered sunlight).
+- Drift scoring only observes: the slip angle is the body origin's velocity against the body heading (no per-tire
+  slip), a "wall hit" is any chassis contact approaching at ≥ `wallSpeed` (Jolt's listener has no solved impulse,
+  so it cannot tell a scrape from a crash beyond the approach speed), and the score adds nothing to the physics.
 - The terrain textures are render-only: their height and normal maps shade the ground and pick which layer shows
   where layers meet; they never change the collision (the heightfield samples) or the surface friction (the baked
   per-sample material).

@@ -356,6 +356,39 @@ const MiniTrackInfo& miniTrack() { return layout().info; }
 
 bool insideMiniTrackArea(float x, float z) { return x >= kX0 && x <= kX1 && z >= kZ0 && z <= kZ1; }
 
+DriftConfig miniTrackDrift() {
+    const Layout& L = layout();
+    const MiniTrackInfo& info = L.info;
+    const std::size_t n = info.center.size();
+    DriftConfig c;
+    c.enabled = true;
+    c.area = {{kX0, kZ0}, {kX1, kZ0}, {kX1, kZ1}, {kX0, kZ1}};
+    std::vector<std::size_t> steady;
+    for (std::size_t i = 0; i < n; ++i)
+        if (info.arc[i] >= info.steadyArc0 && info.arc[i] <= info.steadyArc1) steady.push_back(i);
+    if (steady.size() < 2) return c;
+    // The corner turns toward the side of its curvature; the outside is the other one.
+    const float out = info.curvature[steady[steady.size() / 2]] > 0.0f ? -1.0f : 1.0f;
+    auto at = [&](std::size_t i, float u) {
+        return DriftPoint{info.center[i].x + L.leftX[i] * u, info.center[i].z + L.leftZ[i] * u};
+    };
+    DriftZone outer;
+    outer.name = "Outer zone";
+    outer.multiplier = 2.0f;
+    for (std::size_t i : steady) outer.polygon.push_back(at(i, out * (kHalfWidth - 2.5f)));
+    for (auto it = steady.rbegin(); it != steady.rend(); ++it) outer.polygon.push_back(at(*it, out * kEdge));
+    c.zones.push_back(std::move(outer));
+    // Clipping point: the inner edge over the middle third of the corner.
+    DriftZone apex;
+    apex.name = "Apex";
+    apex.multiplier = 1.5f;
+    apex.a = at(steady[steady.size() / 3], -out * kHalfWidth);
+    apex.b = at(steady[2 * steady.size() / 3], -out * kHalfWidth);
+    apex.reach = 2.5f;
+    c.zones.push_back(std::move(apex));
+    return c;
+}
+
 float miniTrackGround(float x, float z) {
     float h = elevation(x, z);
     // Berm along the area walls (buries the wall bottoms), up to 1.5 m at the edge.

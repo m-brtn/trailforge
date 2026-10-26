@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sim/DriftScore.h"
 #include "track/BuildingKit.h"
 #include "track/DriveRoute.h"
 #include "track/SurfaceProperties.h"
@@ -264,6 +265,8 @@ public:
     // Render: the splat's snow weight is drawn as asphalt (level.json "asphaltLayer").
     bool asphaltLayer() const { return m_asphaltLayer; }
     const LevelCircuit& circuit() const { return m_circuit; }
+    // Drift scoring of the level (level.json "drift", sim/DriftScore.h; disabled when absent).
+    const DriftConfig& drift() const { return m_drift; }
     // Layout rule violations found by the bake (objects on the road, structures in water, gates off the circuit,
     // anything outside the play area). The shipped levels have none (CTest level_baked_layout).
     const std::vector<std::string>& layoutIssues() const { return m_layoutIssues; }
@@ -298,6 +301,7 @@ private:
     bool m_baked = false, m_asphaltLayer = false;
     std::vector<std::uint8_t> m_surfaceClass;
     LevelCircuit m_circuit;
+    DriftConfig m_drift;
     std::vector<std::string> m_layoutIssues;
 };
 

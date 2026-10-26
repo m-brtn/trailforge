@@ -63,6 +63,15 @@ void bestLapsFile() {
     CHECK(d.load(path) && d.size() == 2 && d.best("suncoast_raceway", "trailforge_suv") == 165.5, "load: %zu entries", d.size());
     std::filesystem::remove(path);
     CHECK(!d.load(path) && d.size() == 0, "a missing file clears the table");
+
+    // Drift scores (best_drift.cfg): the higher value is kept.
+    BestLaps s(BestLaps::Order::Higher);
+    CHECK(s.submit("proving_ground", "rwd_test", 812.4) && !s.submit("proving_ground", "rwd_test", 500.0), "lower score kept out");
+    CHECK(s.submit("proving_ground", "rwd_test", 1200.0) && s.best("proving_ground", "rwd_test") == 1200.0, "higher score");
+    BestLaps t(BestLaps::Order::Higher);
+    t.parse(s.serialize() + "proving_ground rwd_test 900\n");
+    CHECK(t.size() == 1 && t.best("proving_ground", "rwd_test") == 1200.0 && s.serialize().find("drift") != std::string::npos,
+          "drift round trip");
 }
 
 void settingsRoundtrip() {

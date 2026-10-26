@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sim/DriftScore.h"
 #include "track/DriveRoute.h"
 #include "track/TestTrack.h"
 
@@ -42,6 +43,10 @@ struct MiniTrackInfo {
 const MiniTrackInfo& miniTrack();
 // The circuit area contains (x, z) (its ground grid; the proving ground is outside it).
 bool insideMiniTrackArea(float x, float z);
+// Drift scoring test bed on the circuit: the walled area is the course; clipping zones on the constant-radius
+// corner (the outer 2.5 m of asphalt and the curb over its middle two thirds, x2; the inner edge over its middle
+// third, 2.5 m reach, x1.5).
+DriftConfig miniTrackDrift();
 // Ground height of the circuit area (gentle slope and edge berms), without the asphalt ribbon and curbs.
 float miniTrackGround(float x, float z);
 // Physics surface of the ground at (x, z): Asphalt on the ribbon and curbs, Gravel in the traps, Grass elsewhere.

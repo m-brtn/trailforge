@@ -3,6 +3,7 @@
 #include "physics/PhysicsWorld.h"
 #include "sim/Autopilot.h"
 #include "sim/BodyImpacts.h"
+#include "sim/DriftScore.h"
 #include "sim/LapTimer.h"
 #include "sim/TireMarks.h"
 #include "sim/WaterQuery.h"
@@ -184,6 +185,13 @@ public:
     // level R resets to the last gate passed in the running lap; other resets, teleports, placing, rebuilds, level
     // changes and autopilot recoveries stop the running lap.
     const LapTimer& lapTimer() const { return m_lapTimer; }
+    // Drift scoring (sim/DriftScore.h) with the current world's config: level.json "drift" on a level, the mini
+    // handling track test bed (miniTrackDrift) on the proving ground. Every respawn (reset, teleport, place, rebuild,
+    // level change, recovery) aborts the running run. The override forces it on (with the world's zones and area,
+    // if any) or off; nullopt: the world's setting. It survives level changes; it clears the session.
+    const DriftScorer& drift() const { return m_drift; }
+    void setDriftOverride(std::optional<bool> enabled);
+    std::optional<bool> driftOverride() const { return m_driftOverride; }
     // Visual-only tire marks written from the wheel contact samples after every tick.
     TireMarks& tireMarks() { return m_tireMarks; }
     const TireMarks& tireMarks() const { return m_tireMarks; }
@@ -219,6 +227,8 @@ private:
     void smoothInput(float dt);
     void runAutopilot(float dt);
     void updateLapTimer(const JPH::Vec3& before);
+    void applyDriftConfig();
+    void updateDrift(const JPH::Vec3& before, float dt);
     TrackFeature gateResetPoint(int gate) const;
 
     JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
@@ -275,6 +285,9 @@ private:
     TireMarks m_tireMarks;
     LapTimer m_lapTimer;
     char m_lapMessage[96] = {};
+    DriftScorer m_drift;
+    std::optional<bool> m_driftOverride;
+    char m_driftMessage[96] = {};
 };
 
 } // namespace tf

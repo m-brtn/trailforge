@@ -44,7 +44,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 95 tests, 85 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 98 tests, 88 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -69,7 +69,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 `trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
 `trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
-`showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `lap` (autopilot laps of a circuit level); they drive the vehicle of
+`showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `drift` (scripted drift attempts on the mini track's 32 m corner), `lap` (autopilot laps of a circuit level); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -86,6 +86,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
+./build/release/trailforge --script tools/scenarios/drift_check.txt # drift scoring on the mini track: judged run, drift on/off/level switch, /tmp/trailforge_drift_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
 ./build/release/trailforge --script tools/scenarios/surfaces.txt       # mini track asphalt marks, gravel trap spray and tracks, /tmp/trailforge_surfaces_*.png
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
@@ -163,7 +164,8 @@ src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, contr
               parameters, setup files), WheelSweep (space a tire sweeps over travel + steering), VehicleBody (body.glb
               reader / writer, roles, validation against every config; no SDL)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
-              BodyImpacts (chassis contact listener for impact sounds), LapTimer (gates, checkpoints, sectors; pure logic)
+              BodyImpacts (chassis contact listener for impact sounds), LapTimer (gates, checkpoints, sectors; pure logic),
+              DriftScore (drift judge: slip x speed x time, clipping zones, level.json "drift" parser; pure logic)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle

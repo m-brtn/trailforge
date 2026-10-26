@@ -218,6 +218,15 @@ Application::Application(const AppOptions& options)
     }
     if (!m_bestLapsPath.empty() && m_bestLaps.load(m_bestLapsPath))
         std::printf("Best laps: %zu loaded from %s\n", m_bestLaps.size(), m_bestLapsPath.c_str());
+    if (m_scenario) {
+        m_bestDriftPath = (std::filesystem::temp_directory_path() / "trailforge_scenario_best_drift.cfg").string();
+        std::error_code ec;
+        std::filesystem::remove(m_bestDriftPath, ec);
+    } else if (const std::string dir = userDataDir(); !dir.empty()) {
+        m_bestDriftPath = dir + "best_drift.cfg";
+    }
+    if (!m_bestDriftPath.empty() && m_bestDrift.load(m_bestDriftPath))
+        std::printf("Best drift scores: %zu loaded from %s\n", m_bestDrift.size(), m_bestDriftPath.c_str());
 
     // Garage setups: <user data>/setups/<vehicle id>.json; scenario runs use a scratch directory that starts empty.
     if (!m_vehicles.empty()) {
@@ -484,6 +493,22 @@ void Application::updateBestLaps() {
         }
     }
     m_lapsSeen = lt.laps();
+}
+
+// A completed drift run with the player driving goes into best_drift.cfg if it is the best of this level and vehicle.
+void Application::updateBestDrift() {
+    const DriftScorer& d = m_sim.drift();
+    if (d.runs() < m_driftRunsSeen) m_driftRunsSeen = 0; // the session was cleared (another world or vehicle)
+    if (d.runs() > m_driftRunsSeen && m_sim.autopilotMode() == AutopilotMode::Off &&
+        m_bestDrift.submit(currentLevelId(), currentVehicleId(), d.lastScore())) {
+        std::string error;
+        if (!m_bestDriftPath.empty() && m_bestDrift.save(m_bestDriftPath, &error))
+            std::printf("Best drift: %s / %s %.0f pts saved to %s\n", currentLevelId().c_str(), currentVehicleId().c_str(),
+                        d.lastScore(), m_bestDriftPath.c_str());
+        else if (!m_bestDriftPath.empty())
+            std::printf("Best drift: %s\n", error.c_str());
+    }
+    m_driftRunsSeen = d.runs();
 }
 
 bool Application::selectVehicle(const std::string& id) {
@@ -1142,6 +1167,8 @@ void Application::renderFrame(float frameTime) {
     m_gfx.sprayDrawn = rs.sprayParticles;
     updateBestLaps();
     m_ui.storedBestLap = m_bestLaps.best(currentLevelId(), currentVehicleId());
+    updateBestDrift();
+    m_ui.storedBestDrift = m_bestDrift.best(currentLevelId(), currentVehicleId());
     const UiRequests req = m_ui.draw(m_sim, stats, m_gfx);
     if (m_gfx.fillMarks) {
         fillTireMarks();
@@ -1988,6 +2015,13 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_scenarioAutopilot = arg == "drive";
         return Exec::Done;
     }
+    if (c.op == "drift") {
+        // drift on|off|level: force drift scoring on (with the world's zones, if any) or off, or back to the
+        // world's setting (level.json "drift", the mini handling track on the proving ground).
+        if (arg != "on" && arg != "off" && arg != "level") return Exec::Failed;
+        m_sim.setDriftOverride(arg == "level" ? std::nullopt : std::optional<bool>(arg == "on"));
+        return Exec::Done;
+    }
     if (c.op == "reset") {
         m_sim.requestReset();
         return Exec::Done;
@@ -2382,6 +2416,21 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
     if (n == "menu_page") return double(int(m_flow.page()));     // 0 main, 1 pause, 2 settings, 3 controls, 4 vehicle
     if (n == "autopilot") return double(int(m_sim.autopilotMode())); // 0 off, 1 drive, 2 hold
+    if (n == "drift_active") return m_sim.drift().active() ? 1.0 : 0.0;
+    if (n == "drift_running") return m_sim.drift().running() ? 1.0 : 0.0;
+    if (n == "drift_drifting") return m_sim.drift().drifting() ? 1.0 : 0.0;
+    if (n == "drift_angle") return std::abs(m_sim.drift().slipAngleDeg()); // deg, |body slip|
+    if (n == "drift_score") return m_sim.drift().score();                  // running run
+    if (n == "drift_max_angle") return m_sim.drift().maxAngleDeg();        // of the running / last run
+    if (n == "drift_zone") return m_sim.drift().zone();                    // -1: none
+    if (n == "drift_zone_time") return m_sim.drift().zoneTime();
+    if (n == "drift_runs") return m_sim.drift().runs();
+    if (n == "drift_failed") return m_sim.drift().failedRuns();
+    if (n == "drift_judged") return m_sim.drift().runs() + m_sim.drift().failedRuns();
+    if (n == "drift_last") return m_sim.drift().lastScore();
+    if (n == "drift_best") return m_sim.drift().bestScore();
+    if (n == "drift_end") return double(int(m_sim.drift().lastEnd())); // 0 none, 1 completed, 2 left area, 3 spin, 4 wall, 5 reset
+    if (n == "drift_stored_best") return m_bestDrift.best(currentLevelId(), currentVehicleId());
     if (n == "lap_active") return m_sim.lapTimer().active() ? 1.0 : 0.0;
     if (n == "lap_running") return m_sim.lapTimer().running() ? 1.0 : 0.0;
     if (n == "lap_count") return m_sim.lapTimer().laps();

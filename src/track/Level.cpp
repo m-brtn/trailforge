@@ -556,6 +556,10 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
         err = "level: bakeHalfExtent must be 256..4096 m and larger than playHalfExtent + 16 m";
         return false;
     }
+    if (!parseDriftConfig(doc["drift"], L.m_drift, err)) {
+        err = "level: " + err;
+        return false;
+    }
     if (doc.has("baked")) return parseBaked(doc, err);
     const json::Value& snow = doc["snow"];
     m_snowLine = float(snow["line"].numberOr(1e9));

@@ -104,6 +104,7 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         ImGui::End();
         drawDriveHud(sim);
         drawLapHud(sim);
+        drawDriftHud(sim);
     }
 
     if (gfx.visible) drawGraphics(sim, stats, gfx);
@@ -235,6 +236,7 @@ std::string lapClock(double t) {
 // best (this session or best_laps.cfg, whichever is faster).
 void DebugUI::drawLapHud(const Simulation& sim) {
     const LapTimer& lt = sim.lapTimer();
+    m_lapHudBottom = lapHudTop - 8.0f;
     // On the proving ground (the mini handling track) only once a lap was started there.
     if (!lt.active() || (!sim.level() && !lt.running() && lt.laps() == 0)) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -282,6 +284,57 @@ void DebugUI::drawLapHud(const Simulation& sim) {
             ImGui::EndGroup();
         }
     }
+    m_lapHudBottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
+    ImGui::End();
+}
+
+// Drift scoring panel below the lap panel (or the compass): body slip angle, speed, the running run's score and zone
+// multiplier, the last run (or why it was lost) and the best (this session or best_drift.cfg, whichever is higher).
+void DebugUI::drawDriftHud(const Simulation& sim) {
+    const DriftScorer& d = sim.drift();
+    if (!d.active() || !(d.inArea() || d.running())) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    ImGui::SetNextWindowPos(ImVec2(lapHudX >= 0.0f ? lapHudX : 0.5f * display.x, m_lapHudBottom + 8.0f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.5f);
+    ImGui::Begin("##drifthud", nullptr, flags);
+    remember("drift_hud", true);
+    const ImVec4 hot(1.0f, 0.62f, 0.2f, 1.0f);
+    ImGui::BeginGroup();
+    if (d.drifting()) ImGui::TextColored(hot, "DRIFT");
+    else ImGui::TextDisabled("DRIFT");
+    ImGui::Text("%3.0f deg", double(std::abs(d.slipAngleDeg())));
+    ImGui::EndGroup();
+    ImGui::SameLine(0.0f, 14.0f);
+    ImGui::BeginGroup();
+    ImGui::TextDisabled("SPEED");
+    ImGui::Text("%3.0f km/h", double(d.speedKmh()));
+    ImGui::EndGroup();
+    ImGui::SameLine(0.0f, 18.0f);
+    ImGui::PushFont(nullptr, 2.0f * ImGui::GetStyle().FontSizeBase);
+    if (d.running()) ImGui::TextColored(d.drifting() ? hot : ImVec4(1, 1, 1, 1), "%6.0f", d.score());
+    else ImGui::TextDisabled("%6s", "-");
+    ImGui::PopFont();
+    if (d.running() && d.zone() >= 0) {
+        ImGui::SameLine(0.0f, 10.0f);
+        ImGui::BeginGroup();
+        ImGui::TextColored(hot, "x%.1f", double(d.multiplier()));
+        ImGui::TextDisabled("%s", d.config().zones[std::size_t(d.zone())].name.c_str());
+        ImGui::EndGroup();
+    }
+    ImGui::SameLine(0.0f, 18.0f);
+    ImGui::BeginGroup();
+    const DriftScorer::End end = d.lastEnd();
+    if (end == DriftScorer::End::Spin || end == DriftScorer::End::Wall)
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1), "LOST %s", end == DriftScorer::End::Spin ? "SPIN" : "WALL");
+    else
+        ImGui::TextDisabled("LAST %.0f", d.lastScore());
+    const double best = std::max(d.bestScore(), storedBestDrift);
+    ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1), "BEST %.0f", best);
+    ImGui::EndGroup();
     ImGui::End();
 }
 
@@ -827,6 +880,12 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         AutoReverseSettings& ar = sim.autoReverse();
         ImGui::SliderFloat("Auto reverse speed [m/s]", &ar.stopSpeed, 0.1f, 1.0f, "%.2f");
         ImGui::SliderFloat("Auto reverse hold [s]", &ar.holdTime, 0.0f, 1.0f, "%.2f");
+        // Drift scoring: the world's setting (level.json "drift", the mini handling track) or forced on / off.
+        int drift = !sim.driftOverride() ? 0 : *sim.driftOverride() ? 1 : 2;
+        const char* driftModes[] = {"World setting", "On", "Off"};
+        if (ImGui::Combo("Drift scoring", &drift, driftModes, 3))
+            sim.setDriftOverride(drift == 0 ? std::nullopt : std::optional<bool>(drift == 1));
+        remember("drift_scoring");
     }
     if (ImGui::CollapsingHeader("Debug drawing", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Physics debug lines", &drawPhysicsDebug);
