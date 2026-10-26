@@ -21,6 +21,7 @@
 #include "audio/VehicleAudioFeed.h"
 #include "input/KeyboardPedals.h"
 #include "sim/Simulation.h"
+#include "track/BuildingKit.h"
 #include "track/Level.h"
 #include "vehicle/VehicleDefinition.h"
 
@@ -1690,6 +1691,40 @@ void levelMap(const char* path, const char* out) {
         for (int dy = -5; dy <= 5; ++dy)
             for (int dx = -5; dx <= 5; ++dx)
                 if (dx * dx + dy * dy <= 25) put(px + dx, py + dy, dx * dx + dy * dy > 12 ? 1.0f : 0.55f, 0.1f, 0.1f);
+    }
+    // Kit buildings: footprints on the map, and per type the instance count, render LOD and collision triangles.
+    std::vector<int> uses(level->buildingTypes().size(), 0);
+    for (const LevelBuilding& b : level->buildings()) {
+        ++uses[b.type];
+        const LevelBuildingType& t = level->buildingTypes()[b.type];
+        if (!buildingIsStructure(t.spec.kind)) continue;
+        const float c = std::cos(b.yaw), s = std::sin(b.yaw);
+        for (float u = -t.footprintX; u <= t.footprintX; u += 0.5f)
+            for (float v = -t.footprintZ; v <= t.footprintZ; v += 0.5f)
+                put(int((b.x + c * u + s * v - o) / 2.0f), int((b.z - s * u + c * v - o) / 2.0f), 0.55f, 0.3f, 0.2f);
+    }
+    for (const LevelBuilding& b : level->buildings())
+        std::printf("levelmap place %-12s %8.1f %6.1f %8.1f yaw %6.1f deg\n", buildingKindName(level->buildingTypes()[b.type].spec.kind),
+                    b.x, b.y, b.z, b.yaw * 57.29578f);
+    std::size_t drawn[3] = {}, collision = 0;
+    for (std::size_t k = 0; k < uses.size(); ++k) {
+        const BuildingSpec& sp = level->buildingTypes()[k].spec;
+        const BuildingGeometry g = buildBuilding(sp, true);
+        std::size_t tris[3] = {};
+        for (std::size_t l = 0; l < g.model.lods.size() && l < 3; ++l) tris[l] = g.model.lods[l].triangles();
+        for (int l = 0; l < 3; ++l) drawn[l] += tris[l] * std::size_t(uses[k]);
+        collision += g.collision.size() / 3 * std::size_t(uses[k]);
+        std::printf("levelmap building %-28s x%-3d lod %5zu / %5zu / %4zu tris, collision %4zu tris in %3zu pieces, %zu materials\n",
+                    g.model.id.c_str(), uses[k], tris[0], tris[1], tris[2], g.collision.size() / 3, g.pieceStarts.size(),
+                    g.model.materials.size());
+    }
+    std::printf("levelmap buildings: %zu placed, %zu types; all at lod0 %zu / lod1 %zu / lod2 %zu tris, collision %zu tris\n",
+                level->buildings().size(), uses.size(), drawn[0], drawn[1], drawn[2], collision);
+    for (const LevelPoi& p : level->pois()) {
+        int n = 0;
+        for (const LevelBuilding& b : level->buildings()) n += std::hypot(b.x - p.x, b.z - p.z) < 130.0f;
+        std::printf("levelmap poi %2d %-22s %-12s marker %7.1f %7.1f (ground %6.1f), teleport %7.1f %7.1f, %d buildings within 130 m\n",
+                    p.id, p.name.c_str(), p.kind.c_str(), p.x, p.z, level->heightAt(p.x, p.z), p.atX, p.atZ, n);
     }
     const int pl = int((-level->playHalfExtent() - o) / 2.0f), ph = int((level->playHalfExtent() - o) / 2.0f);
     for (int k = pl; k <= ph; ++k) {

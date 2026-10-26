@@ -1,6 +1,7 @@
 #include "render/LevelScene.h"
 
 #include "render/GroundMaps.h"
+#include "track/BuildingKit.h"
 #include "track/Level.h"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ Material styleMaterial(PropStyle s) {
     case PropStyle::Canvas: return {MatId::Generic, {0.40f, 0.36f, 0.26f}, 0.90f, 0.0f, 0.2f};
     case PropStyle::Marker: return {MatId::Paint, {0.80f, 0.25f, 0.03f}, 0.45f, 0.0f, 0.0f};
     case PropStyle::Beacon: return {MatId::Amber, {1.0f, 0.35f, 0.05f}, 0.5f, 0.0f, 0.0f};
-    case PropStyle::Count: break;
+    case PropStyle::Hidden: case PropStyle::Count: break;
     }
     return {};
 }
@@ -73,7 +74,7 @@ MeshData buildLevelPropsMesh(const Level& level) {
         const PropStyle style = t < props.styles.size() ? props.styles[t] : PropStyle::Wood;
         std::size_t e = t + 1;
         while (e < g.triangleCount() && e < props.styles.size() && props.styles[e] == style) ++e;
-        addFlat(m, g, t, e, styleMaterial(style));
+        if (style != PropStyle::Hidden) addFlat(m, g, t, e, styleMaterial(style));
         t = e;
     }
     TrackGeometry rocks;
@@ -404,6 +405,18 @@ void buildLevelModelPlacements(const Level& level, std::vector<std::string>& pat
     }
     for (const LevelScatter& c : level.scatter())
         out.push_back({c.model, glm::vec3(c.x, c.y, c.z), glm::vec3(c.scale), c.yaw});
+}
+
+std::vector<ModelAsset> buildLevelBuildingModels(const Level& level) {
+    std::vector<ModelAsset> out;
+    out.reserve(level.buildingTypes().size());
+    for (const LevelBuildingType& t : level.buildingTypes()) out.push_back(buildBuilding(t.spec, true).model);
+    return out;
+}
+
+void appendLevelBuildingPlacements(const Level& level, int first, std::vector<ModelPlacement>& out) {
+    for (const LevelBuilding& b : level.buildings())
+        out.push_back({first + int(b.type), glm::vec3(b.x, b.y, b.z), glm::vec3(1.0f), b.yaw});
 }
 
 } // namespace tf

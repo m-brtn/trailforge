@@ -153,6 +153,7 @@ private:
     std::vector<std::string> m_levelIds;     // start menu order: assets/levels ids, then proving_ground
     std::map<std::string, std::shared_ptr<const Level>> m_levelCache;
     const Level* m_contentLevel = nullptr;   // world the render content was built for
+    std::string m_buildingTextureDir;        // assets/textures/buildings (building kit materials)
     bool m_contentBuilt = false;
     MapUI m_mapUI;                           // releases its texture explicitly before the renderer
     std::future<MapData> m_mapJob;

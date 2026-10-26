@@ -169,6 +169,12 @@ Application::Application(const AppOptions& options)
         std::printf("Textures: terrain materials from %s/terrain\n", dir.c_str());
         break;
     }
+    for (const std::string& dir : assetDirs("textures")) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dir + "/buildings/buildings.json", ec)) continue;
+        m_buildingTextureDir = dir + "/buildings";
+        break;
+    }
     m_ui.visible = options.startWithUi;
 
     const Uint64 t0 = SDL_GetPerformanceCounter();
@@ -712,7 +718,11 @@ void Application::buildWorldContent() {
         std::vector<std::string> modelPaths;
         std::vector<ModelPlacement> placements;
         buildLevelModelPlacements(*level, modelPaths, placements);
-        const int models = m_renderer->setModels(modelPaths, placements);
+        const std::vector<ModelAsset> kit = buildLevelBuildingModels(*level);
+        std::vector<const ModelAsset*> kitPtrs;
+        for (const ModelAsset& a : kit) kitPtrs.push_back(&a);
+        appendLevelBuildingPlacements(*level, int(modelPaths.size()), placements);
+        const int models = m_renderer->setModels(modelPaths, placements, kitPtrs, m_buildingTextureDir);
         if (models < int(modelPaths.size()))
             std::printf("Levels: %d of %zu level models loaded (see the log)\n", models, modelPaths.size());
         if (!level->modelError().empty())
@@ -2516,6 +2526,10 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "terrain_tex_mb") return double(m_renderer->stats().terrainTexBytes) / 1e6;
     if (n == "terrain_tex_ms") return m_renderer->stats().terrainTexLoadMs;
     if (n == "terrain_tex_loads") return m_renderer->stats().terrainTexLoads;
+    if (n == "buildings") return m_sim.level() ? double(m_sim.level()->buildings().size()) : 0.0;
+    if (n == "model_instances") return m_renderer->stats().modelInstances;
+    if (n == "model_tris") return double(m_renderer->stats().modelTriangles);
+    if (n == "model_draws") return m_renderer->stats().modelDraws;
     if (const TerrainTiles* tt = m_sim.terrain()) {
         const TerrainStreamingStats& st = tt->stats();
         if (n == "tiles_loaded") return st.loaded;

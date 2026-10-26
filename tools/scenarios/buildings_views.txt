@@ -1,0 +1,123 @@
+# Building kit views on Exploration Peaks (src/track/BuildingKit, materials in assets/textures/buildings, Git LFS):
+#   ./build/release/trailforge --script tools/scenarios/buildings_views.txt --no-audio
+# Fixed cameras on Valley Village and every POI with buildings, captures /tmp/trailforge_bld_*.png (time 10:00,
+# High). Then frame times on the village overview per quality preset (PERF lines, vsync off; the GPU column is the
+# honest measure on a 60 Hz display), and an Ultra stress pass (bigger shadows and grass). Exit code 1 on FAIL.
+set ui 0
+set hud 0
+set auto_reverse 0
+set vsync 0
+quality High
+level exploration_peaks
+until level == 1 10
+time 10
+wait 1.5
+expect buildings > 80
+
+# ---------------------------------------------------------------- village
+camera -420.0 62.0 280.0 -505.0 22.0 380.0
+wait 1.5
+capture /tmp/trailforge_bld_01_village_over.png
+wait 0.3
+expect model_instances > 40
+camera -472.0 23.5 336.0 -505.0 22.0 372.0
+wait 1.2
+capture /tmp/trailforge_bld_02_village_street.png
+wait 0.3
+camera -480.7 24.1 338.4 -485.0 24.1 323.0
+wait 1.2
+capture /tmp/trailforge_bld_03_house_a.png
+wait 0.3
+camera -474.8 23.0 350.9 -460.0 24.0 353.0
+wait 1.2
+capture /tmp/trailforge_bld_04_house_b.png
+wait 0.3
+camera -516.5 25.0 329.9 -530.0 24.0 318.0
+wait 1.2
+capture /tmp/trailforge_bld_05_house_c.png
+wait 0.3
+camera -473.8 26.5 348.4 -484.8 23.0 367.5
+wait 1.2
+capture /tmp/trailforge_bld_06_fuel.png
+wait 0.3
+camera -519.5 24.0 375.8 -535.0 22.5 385.0
+wait 1.2
+capture /tmp/trailforge_bld_07_garage.png
+wait 0.3
+camera 785.0 156.1 -799.8 781.0 150.1 -768.0
+wait 1.2
+capture /tmp/trailforge_bld_08_quarry.png
+wait 0.3
+camera 678.3 60.1 195.2 693.7 45.1 237.5
+wait 1.2
+capture /tmp/trailforge_bld_09_ruins.png
+wait 0.3
+camera 811.8 30.6 768.7 831.1 31.6 791.7
+wait 1.2
+capture /tmp/trailforge_bld_10_lighthouse.png
+wait 0.3
+camera 137.3 128.1 130.3 160.3 134.1 149.6
+wait 1.2
+capture /tmp/trailforge_bld_11_radio.png
+wait 0.3
+camera -168.5 77.8 4.3 -145.3 70.8 -1.7
+wait 1.2
+capture /tmp/trailforge_bld_12_lake_dock.png
+wait 0.3
+camera -803.0 9.0 703.0 -793.0 2.5 673.0
+wait 1.2
+capture /tmp/trailforge_bld_13_beach_camp.png
+wait 0.3
+camera 42.3 8.6 792.0 25.0 4.1 802.0
+wait 1.2
+capture /tmp/trailforge_bld_14_island_camp.png
+wait 0.3
+camera -723.1 104.5 -220.1 -735.7 103.5 -226.1
+wait 1.2
+capture /tmp/trailforge_bld_15_forest_cabin.png
+wait 0.3
+camera 59.9 176.0 -842.3 63.0 175.0 -856.0
+wait 1.2
+capture /tmp/trailforge_bld_16_pass_hut.png
+wait 0.3
+
+# ---------------------------------------------------------------- frame times, village overview
+camera -420.0 62.0 280.0 -505.0 22.0 380.0
+quality Low
+wait 2.0
+perf_begin bld_low
+wait 4
+perf_end
+quality Medium
+wait 2.0
+perf_begin bld_medium
+wait 4
+perf_end
+quality High
+wait 2.0
+perf_begin bld_high
+wait 4
+perf_end
+quality Ultra
+wait 2.0
+perf_begin bld_ultra
+wait 4
+perf_end
+expect model_draws > 0
+# Stress: Ultra with 4096 shadow maps to 300 m and grass to 250 m, meant to drop below the 60 Hz cap so that fps
+# and GPU ms measure the frame cost.
+set shadow_size 4096
+set shadow_dist 300
+set shadow_filter 2
+set grass_dist 250
+wait 2.0
+perf_begin bld_stress_over
+wait 4
+perf_end
+camera -472.0 23.5 336.0 -505.0 22.0 372.0
+wait 2.0
+perf_begin bld_stress_street
+wait 4
+perf_end
+log buildings
+quality High

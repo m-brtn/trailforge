@@ -132,6 +132,40 @@ void stampDisc(MapRaster& r, float x, float z, float radiusM, Rgb dark, Rgb lit,
         }
 }
 
+// Building footprint: rectangle of half extents (hx, hz) turned by yaw (building +X -> world (cos, -sin)) with a
+// darker 1 px rim, blended over the raster.
+void stampRect(MapRaster& r, float x, float z, float yaw, float hx, float hz, Rgb roof, float opacity) {
+    const float c = std::cos(yaw), s = std::sin(yaw), m = r.metersPerPixel;
+    const float reach = std::hypot(hx, hz) / m + 1.0f;
+    const float cx = (x - r.x0) / m, cy = (z - r.z0) / m;
+    const int i0 = std::max(int(std::floor(cx - reach)), 0), i1 = std::min(int(std::ceil(cx + reach)), r.size - 1);
+    const int j0 = std::max(int(std::floor(cy - reach)), 0), j1 = std::min(int(std::ceil(cy + reach)), r.size - 1);
+    const float ex = std::max(hx / m, 0.6f), ez = std::max(hz / m, 0.6f);
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            const float dx = float(i) + 0.5f - cx, dz = float(j) + 0.5f - cy;
+            const float lx = std::abs(c * dx - s * dz), lz = std::abs(s * dx + c * dz);
+            const float inside = std::min(ex - lx, ez - lz); // px to the nearest edge
+            if (inside <= -0.5f) continue;
+            const float cover = std::clamp(inside + 0.5f, 0.0f, 1.0f);
+            const Rgb col = inside < 1.0f ? scaled(roof, 0.55f) : roof;
+            std::uint32_t& p = r.rgba[std::size_t(j) * r.size + i];
+            p = pack(mix(unpack(p), col, opacity * cover));
+        }
+}
+
+Rgb buildingMapColor(const BuildingSpec& b) {
+    switch (b.kind) {
+    case BuildingKind::House:
+        return (b.variant & kHouseShingles) ? Rgb{0.40f, 0.37f, 0.34f} : Rgb{0.72f, 0.33f, 0.21f};
+    case BuildingKind::FuelCanopy:
+    case BuildingKind::FuelShop: return {0.90f, 0.90f, 0.88f};
+    case BuildingKind::Dock: return {0.46f, 0.35f, 0.24f};
+    case BuildingKind::Tent: return {0.92f, 0.52f, 0.16f};
+    default: return {0.56f, 0.56f, 0.54f};
+    }
+}
+
 std::vector<RoutePoint> decimate(const std::vector<RoutePoint>& pts, std::size_t every) {
     std::vector<RoutePoint> out;
     for (std::size_t k = 0; k < pts.size(); k += every) out.push_back(pts[k]);
@@ -200,6 +234,16 @@ MapData buildLevelMap(const Level& L, int pixels, int threads) {
     shadeAndContour(r, h, wet, d.contourStep, 1.6f, threads);
     for (const LevelRock& rock : L.rocks()) stampDisc(r, rock.x, rock.z, std::max(rock.rx, rock.rz), kRock, kSnow, 0.7f);
     for (const LevelTree& t : L.trees()) stampDisc(r, t.x, t.z, 0.22f * t.height * t.width, kCrownDark, kCrownLit, 0.9f);
+    for (const LevelBuilding& b : L.buildings()) {
+        const LevelBuildingType& t = L.buildingTypes()[b.type];
+        const BuildingKind k = t.spec.kind;
+        if (!buildingIsStructure(k) && k != BuildingKind::Dock && k != BuildingKind::Tent) continue;
+        // Footprint around the bounds center (a dock starts at its origin and runs along +Z).
+        const float mx = 0.5f * (t.boundsMin.x + t.boundsMax.x), mz = 0.5f * (t.boundsMin.z + t.boundsMax.z);
+        const float c = std::cos(b.yaw), s = std::sin(b.yaw);
+        stampRect(r, b.x + c * mx + s * mz, b.z - s * mx + c * mz, b.yaw, t.footprintX, t.footprintZ,
+                  buildingMapColor(t.spec), 0.95f);
+    }
 
     for (const LevelRiver& river : L.rivers()) {
         MapLine line{MapLineKind::River, river.width, river.name, {}};

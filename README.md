@@ -266,6 +266,8 @@ on the level, overviews; `/tmp/trailforge_expl_*.png`),
 controls, minimap options, the proving-ground map, minimap + compass cost; `/tmp/trailforge_map_*.png`),
 `tools/scenarios/terrain_textures.txt` (terrain texture size per preset and Off, no reloads while driving, frame
 times textured vs procedural per preset, `/tmp/trailforge_tex_*.png`),
+`tools/scenarios/buildings_views.txt` (the village and every POI with buildings from fixed cameras, frame times on the
+village per preset and in an Ultra stress pass, `/tmp/trailforge_bld_*.png`),
 `tools/scenarios/grass_look.txt` (grass, flowers and wheat at noon and sunset, close-up and wide, flattened lanes in
 the meadow and the wheat, overview per preset; `/tmp/trailforge_grass_*_after.png`),
 `tools/scenarios/tracks.txt` (tire marks on concrete, dirt, mud and grass, `/tmp/trailforge_tracks_*.png`, and the
@@ -320,7 +322,8 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 2 locked), `abs_seen` / `tc_seen` (the aid acted in a sampled frame since `reset_stats`), `max_locked` (most locked
 wheels in one frame) and `lock_time` (locked wheel-seconds; locked = in contact, ground speed > 2 m/s, wheel surface
 speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
-`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `marks` (live segments),
+`grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `buildings` (placed on the
+level), `model_instances` / `model_tris` / `model_draws` (level models drawn, main view), `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:
 0 Concrete, 1 PackedDirt, 2 Rock, 3 LowGrip, 4 Mud, 5 Grass, 6 Sand), `tread_soil_max` (most soil on any tread, 0..1),
 `spray` (live spray particles), `spray_emitted`, `spray_drawn`, `spray_max`, `spray_fine` (share of fine bits),
@@ -467,7 +470,8 @@ on other platforms use Ctrl+click.
 ```
 src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape),
-              Level (level.json bake: heights, surfaces, water, trees, rocks, POIs), TerrainTiles (streamed
+              Level (level.json bake: heights, surfaces, water, trees, rocks, POIs, buildings), BuildingKit
+              (procedural buildings: render LODs + convex collision pieces), TerrainTiles (streamed
               HeightFieldShape tiles + per-tile trunk / rock colliders)
 src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest), Ktx2 (BC7 KTX2
               reader / writer), TerrainTextureSet (terrain.json, level skip per texture size)
@@ -1106,7 +1110,8 @@ the development level and is what scenarios and `--demo` start on.
   (2.56 × 2.56 km, play area ±1000 m), heights −22 … 297 m: base relief, coast (sea cliffs / beaches, seabed),
   flats, lakes (bed, shore band, outline smoothed), river channels, roads (flattened and banked, cut and fill with
   shoulders), then the per-cell surface (packed dirt, rock above 40° over ~4 m, grass, sand, mud on wet banks and in
-  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI blockouts.
+  road ruts, snow above a noisy snow line), render masks, ~27.8k trees, ~370 rocks and the POI buildings
+  ([Buildings](#buildings)).
 - **Physics:** the grid is split into 255 m Jolt `HeightFieldShape` tiles (`TerrainTiles`) with per-sample
   materials; tiles within 420 m are built on a worker thread (removed beyond 620 m), a tile within 110 m that is
   not ready yet is built synchronously. Tree trunks and rocks are per-tile mesh colliders. The rendered terrain, the props and the colliders
@@ -1340,6 +1345,44 @@ elsewhere), places model rocks and logs with collision, and scatters render-only
   with at least 8 m of drop: a 9 m jittered grid, tilted into the slope and turned downhill, kept only where every
   edge point stays within the slab depth of the ground (no fins past a rim). Collision is their collision mesh in the
   tile compound, like the other model rocks.
+
+### Buildings
+
+Valley Village and the POIs are built from a modular procedural kit (`src/track/BuildingKit`): 85 placed buildings
+of 58 distinct specs. Village houses (stone or plaster ground floor, timber or plaster upper floors, 1–3 floors,
+balconies, shutters, framed windows with glass, chimneys, roof overhangs, clay tile or slate roofs, gutters and
+downpipes) in six archetypes facing the square, gardens, a well, benches, a power line along the road; the fuel
+station (canopy, pump islands, shop, price pylon), the workshop, castle ruins (curtain walls with a breach, two broken
+towers, a gate), the lighthouse with its keeper's house, the radio mast (lattice, ladder, antennas) with its hut, the
+quarry crusher, conveyor, silo and shed, docks on the Alpine Lake and at the beach camp (placed from the first water
+along a shore line), a boathouse, beach and island camps (tents, shelter, woodpile, fire pit), a forest cabin, a pass
+hut, cairns and signposts. No interiors: windows are dark glass (constant roughness 0.06, the sky reflection of the
+model shader).
+
+- **Same parts for render and collision:** every solid part (wall block, roof slab, post, beam, deck, plinth) is one
+  convex collision piece, wound outward, and is drawn unchanged in the far LOD. The near LODs cut window and door
+  recesses (at most 0.16 m) into the same wall planes and add trims up to 0.30 m proud (frames, sills, shutters,
+  flower boxes, barge boards, balusters, gutters). Render-only: power line wires, mast antennas above 6 m, thin rungs
+  and rails between collision posts. CTest `building_kit_parts` checks convexity and winding of every piece and that
+  every far-LOD vertex below 6 m lies within 3 cm of the collision (near LODs within 0.33 m), for every kind.
+- **Placement:** structures keep 3 m from road corridors, stay out of water and off spawn points (`level_placement`,
+  the same check as before); a group that has to move is moved as a whole, and only to a place where the plinths of
+  its structures still reach the ground. Floors sit on the highest ground sample under a structure (its plinth reaches
+  down 1–3.5 m), so no corner is buried and no plinth hangs (`level_buildings`). Trees and rocks are cleared from the
+  footprints.
+- **Rendering:** the kit models go through the level model renderer, instanced per material and LOD: LOD 0 to 70 m,
+  LOD 1 to 220 m, LOD 2 to 1600 m at High (scaled with the tree detail distance), shadows in all cascades; small props
+  (fences, benches, gardens) 30 / 90 / 320 m. Triangles with every building at one LOD: 118k / 66k / 16k; collision
+  15.8k triangles.
+- **Materials:** 11 CC0 Poly Haven layers in `assets/textures/buildings/` (plaster `white_stucco`, rubble stone,
+  castle slates, plank siding, planks, clay roof tiles, roof slates, worn corrugated iron, metal plate, rusty metal,
+  concrete; credits in `assets/textures/CREDITS.md`), BC7 KTX2 albedo 1024² and normal / roughness / AO 512², 19.2 MB
+  in Git LFS, rebuilt by `fetch_textures.py --set buildings`. The albedo alpha is 1 (`"heightInAlpha": false`):
+  the model shader cuts alpha below 0.5. Painted metal, glass, nylon and soil are untextured tints with a constant
+  roughness. No glTF props were added (the kit covers them).
+- **Map:** building footprints are drawn on the full-screen map and the minimap (roof colour per kind).
+- **Views:** `tools/scenarios/buildings_views.txt` (village and every POI from fixed cameras,
+  `/tmp/trailforge_bld_*.png`, frame times per preset).
 
 ### Canyon and waterfalls
 
@@ -1707,6 +1750,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   per-sample material).
 - Grass, flowers and the wheat patch are render-only: no rolling resistance, drag or grip change; the ground under
   the wheat is the `Grass` surface. Blades only bend visually under the wheel contacts and the tire marks.
+- Buildings collide with convex pieces made from the same solid parts as their far LOD; window / door recesses
+  (≤ 0.16 m) and trims (≤ 0.30 m: frames, sills, shutters, flower boxes, balusters) exist only in the near render
+  LODs. Power line wires, mast antennas above 6 m and thin ladder rungs and rails are render-only. Buildings have no
+  interiors and do not break.
 - Level models: rocks, cliffs, logs and stumps collide with their model's collision mesh (a simplified LOD; the
   nearer render LODs differ from it by the simplification error modelc reports, a few cm to dm per model). Model trees
   collide only with a hexagonal prism along the trunk axis; branches and foliage have no collision. Bushes, ferns and
@@ -1800,7 +1847,8 @@ Everything below was actually run on macOS 27 / M-series.
   The HLSL shaders are compiled to SPIR-V and metallibs at build time and embedded into the binary.
   At startup the log shows `GPU driver 'metal', shaders: metallib (precompiled)`; with `SDL_GPU_DRIVER=vulkan`
   (MoltenVK) `GPU driver 'vulkan', shaders: SPIR-V`.
-- **CTest.** 69 of 69 tests pass in Debug and Release as of v0.15.0; 56 of 56 in headless (no model tests) as of
+- **CTest.** 75 of 75 tests pass in Debug and Release with the buildings (new: `building_kit_parts`,
+  `building_kit_materials`, `level_buildings`); 69 of 69 as of v0.15.0; 56 of 56 in headless (no model tests) as of
   v0.12.0 (new in
   v0.12.0: `level_heightfield_sampling`, `level_tile_streaming`, `level_road_carving`, `level_surfaces_water`,
   `level_vehicles` in the new `trailforge_level_tests`; new in v0.11.0: `electric_definition_validation`, `ev_motor_curve`, `ev_torque_split`, `ev_regen_blend`, `ev_battery`,

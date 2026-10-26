@@ -34,6 +34,8 @@ struct ModelMaterial {
     std::string name;
     std::string albedo, nra; // file names next to the .glb
     bool alphaTest = false;  // alpha-tested, double-sided (foliage cards)
+    std::array<float, 3> tint{1.0f, 1.0f, 1.0f}; // linear albedo multiplier (building kit materials)
+    float roughness = -1.0f; // >= 0: constant roughness without an nra map (building kit glass, nylon)
 };
 
 struct ModelAsset {

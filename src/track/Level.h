@@ -1,5 +1,6 @@
 #pragma once
 
+#include "track/BuildingKit.h"
 #include "track/DriveRoute.h"
 #include "track/SurfaceProperties.h"
 #include "track/TestTrack.h"
@@ -21,9 +22,10 @@ namespace tf {
 
 enum class WaterKind : std::uint8_t { None = 0, Sea, Lake, River };
 
-// Visual style of a level prop triangle (render colors only; the surface id decides the physics).
+// Visual style of a level prop triangle (render colors only; the surface id decides the physics). Hidden: collision
+// of a kit building (LevelBuilding), drawn by the model renderer from the same kit parts instead.
 enum class PropStyle : std::uint8_t {
-    Wood = 0, DarkWood, Stone, DarkStone, Plaster, RoofRed, RoofDark, Metal, Rust, Canvas, Marker, Beacon, Count
+    Wood = 0, DarkWood, Stone, DarkStone, Plaster, RoofRed, RoofDark, Metal, Rust, Canvas, Marker, Beacon, Hidden, Count
 };
 
 struct LevelPoi {
@@ -130,6 +132,21 @@ struct LevelProps {
     std::vector<PropRole> pieceRoles; // one per piece
 };
 
+// A building kit type used by the level (track/BuildingKit) and its collision bounds in building space.
+struct LevelBuildingType {
+    BuildingSpec spec;
+    JPH::Float3 boundsMin{0, 0, 0}, boundsMax{0, 0, 0};
+    float footprintX = 0.0f, footprintZ = 0.0f; // half extents of the walls
+};
+
+// A placed kit building. Render: the kit's LODs, instanced; collision: the kit's convex pieces, turned and moved the
+// same way, in props() (PropStyle::Hidden, roles Building or Prop).
+struct LevelBuilding {
+    std::uint16_t type = 0;             // Level::buildingTypes() index
+    float x = 0.0f, y = 0.0f, z = 0.0f; // building origin: floor level, footprint center
+    float yaw = 0.0f;                   // rad; the front (+Z) faces (sin yaw, 0, cos yaw)
+};
+
 struct LevelBridge {
     float x0, z0, x1, z1; // deck end points (center line)
     float y0, y1;         // deck surface height at the ends
@@ -145,7 +162,7 @@ struct LevelBridge {
 struct LevelBakeStats {
     double totalMs = 0.0;
     int samples = 0;       // per side
-    std::size_t trees = 0, rocks = 0, propTriangles = 0, scatter = 0;
+    std::size_t trees = 0, rocks = 0, propTriangles = 0, scatter = 0, buildings = 0;
     int propsMoved = 0, propsRemoved = 0; // placed objects shifted / dropped to keep off the roads
     float minHeight = 0.0f, maxHeight = 0.0f;
 };
@@ -204,6 +221,8 @@ public:
     const std::vector<LevelModel>& models() const { return m_models; }
     const std::string& modelError() const { return m_modelError; }
     const LevelProps& props() const { return m_props; }
+    const std::vector<LevelBuildingType>& buildingTypes() const { return m_buildingTypes; }
+    const std::vector<LevelBuilding>& buildings() const { return m_buildings; }
     float snowLine() const { return m_snowLine; }
     // Closed loop along the roads for the menu attract drive ("attractRoute" legs); empty when the level has none.
     const DriveRoute& attractRoute() const { return m_attractRoute; }
@@ -239,6 +258,8 @@ private:
     std::vector<LevelModel> m_models;
     std::string m_modelError;
     LevelProps m_props;
+    std::vector<LevelBuildingType> m_buildingTypes;
+    std::vector<LevelBuilding> m_buildings;
     DriveRoute m_attractRoute;
     float m_spawnX = 0.0f, m_spawnZ = 0.0f, m_spawnTowardX = 0.0f, m_spawnTowardZ = 1.0f;
     LevelBakeStats m_stats;
