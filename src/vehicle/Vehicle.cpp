@@ -232,7 +232,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         w->mSteeringAxis = Vec3(0, 1, 0);
         w->mWheelUp = Vec3(0, 1, 0);
         w->mWheelForward = Vec3(0, 0, 1);
-        w->mSuspensionMinLength = a.suspensionMinLength;
+        w->mSuspensionMinLength = a.suspensionMinLength - a.tireDeflection; // the rim; see AxleConfig::tireDeflection
         w->mSuspensionMaxLength = a.suspensionMaxLength;
         w->mSuspensionPreloadLength = a.suspensionPreload;
         w->mRadius = a.wheelRadius;
@@ -242,14 +242,11 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         w->mMaxSteerAngle = a.maxSteerAngleDeg * kDegToRad;
         m_wheelSettings[i] = w;
         m_prevSuspLength[i] = a.suspensionMaxLength;
+        m_stepSuspLength[i] = a.suspensionMaxLength;
         vs.mWheels.push_back(w.GetPtr());
     }
 
-    vs.mAntiRollBars.resize(2);
-    vs.mAntiRollBars[0].mLeftWheel = 0;
-    vs.mAntiRollBars[0].mRightWheel = 1;
-    vs.mAntiRollBars[1].mLeftWheel = 2;
-    vs.mAntiRollBars[1].mRightWheel = 3;
+    // No Jolt anti-roll bars: updateSuspension applies the bars as suspension forces.
 
     // ---- Engine, gearbox, differentials. Both axle differentials always exist; applyDifferentials disconnects an
     // undriven axle (wheel indices -1) and sets the torque split of the layout.
@@ -311,6 +308,21 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     // Cylinder shape cast for the wheel (available in Jolt 5.6).
     m_tester = new VehicleCollisionTesterCastCylinder(Layers::Moving, 0.1f);
     m_constraint->SetVehicleCollisionTester(m_tester);
+    m_constraint->SetPostCollideCallback(
+        [this](VehicleConstraint&, const PhysicsStepListenerContext& context) { updateSuspension(context.mDeltaTime); });
+    // Effective mass of each wheel's suspension constraint, as Jolt computes it for its FrequencyAndDamping mode
+    // (VehicleConstraint::SetupVelocityConstraint: body mass and inertia at the force point at mid travel), so the
+    // spring frequency and damping ratio keep Jolt's meaning when the rates are passed as N/m and N*s/m.
+    {
+        const MotionProperties* mp = m_body->GetMotionProperties();
+        for (int i = 0; i < kWheelCount; ++i) {
+            const AxleConfig& a = c.axles[i < 2 ? kFrontAxle : kRearAxle];
+            const WheelSettingsWV& w = *m_wheelSettings[i];
+            const Vec3 point = w.mPosition + 0.5f * (a.suspensionMinLength + a.suspensionMaxLength) * w.mSuspensionDirection;
+            const Vec3 arm = point.Cross(-vs.mUp);
+            m_suspensionMass[i] = 1.0f / (mp->GetInverseMass() + arm.Dot(mp->GetLocalSpaceInverseInertia().Multiply3x3(arm)));
+        }
+    }
 
     // Per-wheel grip = tire curve x surface coefficient at the contact point.
     m_constraint->SetCombineFriction(
@@ -452,19 +464,15 @@ void Vehicle::applyTuning(const VehicleTuning& t) {
     for (int i = 0; i < kWheelCount; ++i) {
         auto& w = m_wheelSettings[i];
         const AxleTuning& a = t.axles[i < 2 ? kFrontAxle : kRearAxle];
+        // Replaced inside every step by updateSuspension (rates for the length and speed of that step).
         w->mSuspensionSpring.mMode = JPH::ESpringMode::FrequencyAndDamping;
         w->mSuspensionSpring.mFrequency = a.springFrequency;
-        w->mSuspensionSpring.mDamping = m_suspVelocity[i] > 0.0f ? a.reboundDamping : a.compressionDamping;
+        w->mSuspensionSpring.mDamping = a.compressionDamping;
         w->mMaxBrakeTorque = a.brakeTorque;
         w->mMaxHandBrakeTorque = a.handBrakeTorque;
     }
     m_tireTuning = tireSetTuning(t, m_config.tireSet);
     buildTireCurves(m_tireTuning);
-
-    auto& bars = m_constraint->GetAntiRollBars();
-    bars[0].mStiffness = t.axles[kFrontAxle].antiRoll;
-    bars[1].mStiffness = t.axles[kRearAxle].antiRoll;
-
     m_controller->GetEngine().mMaxTorque = t.engineMaxTorque;
     m_controller->GetTransmission().mClutchStrength = t.clutchStrength;
     applyDifferentials();
@@ -476,23 +484,61 @@ bool Vehicle::needsRebuild(const VehicleConfig& a, const VehicleConfig& b) {
     return !(x == b);
 }
 
-// Jolt's spring has one damping coefficient. The compression or rebound ratio is chosen from the direction the
-// suspension moved during the previous step (a one-step lag), and within bumpStopRange of full compression the
-// spring frequency rises linearly toward springFrequency x bumpStopFrequencyScale.
-void Vehicle::applySuspensionPerTick() {
+float suspensionDampingRatio(const AxleTuning& a, float speed) {
+    const bool rebound = speed > 0.0f;
+    const float ratio = rebound ? a.reboundDamping : a.compressionDamping;
+    const float v = std::abs(speed), knee = a.damperKneeSpeed;
+    if (knee <= 0.0f || v <= knee) return ratio;
+    const float slope = rebound ? a.reboundHighSpeedSlope : a.compressionHighSpeedSlope;
+    return ratio * (knee + slope * (v - knee)) / v;
+}
+
+float bumpStopForceRatio(const AxleTuning& a, float into) {
+    if (a.bumpStopRange <= 0.0f || into <= 0.0f) return 0.0f;
+    const float x = std::min(into, a.bumpStopRange);
+    const float s2 = a.bumpStopFrequencyScale * a.bumpStopFrequencyScale;
+    return (s2 - 1.0f) * x * x / (2.0f * a.bumpStopRange);
+}
+
+// Jolt's suspension is one linear spring-damper along the contact normal: force = k x + c v, with x the compression
+// from maxLength + preload. Inside every step, right after the wheel casts, k and c are set for this step's length and
+// speed (length change / dt): k is the secant rate of spring + bump stop + anti-roll bar + tire at this length, c the
+// damper curve's coefficient for the compression or rebound speed. Spring and damper rates follow Jolt's frequency /
+// ratio convention on the wheel's effective mass (m_suspensionMass). The anti-roll bar is applied here as a force in
+// N/m of hub height difference instead of Jolt's VehicleAntiRollBar, whose impulse enters the suspension constraint
+// as a velocity bias, so its rate depended on the damper coefficient and the time step.
+void Vehicle::updateSuspension(float dt) {
     const VehicleTuning& t = m_config.tuning;
+    std::array<float, kWheelCount> length{}, hub{};
+    for (int i = 0; i < kWheelCount; ++i) {
+        const AxleConfig& ac = m_config.axles[i < 2 ? kFrontAxle : kRearAxle];
+        const JPH::Wheel* w = m_constraint->GetWheel(uint(i));
+        length[i] = w->GetSuspensionLength();
+        hub[i] = w->HasContact() ? std::max(length[i], ac.suspensionMinLength) : ac.suspensionMaxLength;
+    }
     for (int i = 0; i < kWheelCount; ++i) {
         const int axle = i < 2 ? kFrontAxle : kRearAxle;
         const AxleTuning& a = t.axles[axle];
+        const AxleConfig& ac = m_config.axles[axle];
+        const float speed = dt > 0.0f ? (length[i] - m_stepSuspLength[i]) / dt : 0.0f;
+        m_stepSuspLength[i] = length[i];
+        const float mass = m_suspensionMass[i];
+        const float omega = 2.0f * JPH::JPH_PI * a.springFrequency;
+        const float k = mass * omega * omega;
+        const float compression = ac.suspensionMaxLength + ac.suspensionPreload - length[i];
+        const float solid = ac.suspensionMaxLength + ac.suspensionPreload - ac.suspensionMinLength;
+        const float tire = std::max(0.0f, ac.suspensionMinLength - length[i]); // deflection with the suspension solid
+        float bumpStop = k * bumpStopForceRatio(a, ac.suspensionMinLength + a.bumpStopRange - length[i]);
+        if (speed > 0.0f) bumpStop *= 1.0f - a.bumpStopHysteresis; // the elastomer's unloading curve
+        float force = k * std::min(compression, solid) + bumpStop + ac.tireStiffness * tire;
+        force += a.antiRoll * (hub[i ^ 1] - hub[i]); // more compressed than the other side: pushed down harder
+        force = std::max(force, 0.0f);
         auto& spring = m_wheelSettings[i]->mSuspensionSpring;
-        spring.mDamping = m_suspVelocity[i] > 0.0f ? a.reboundDamping : a.compressionDamping;
-        float frequency = a.springFrequency;
-        if (a.bumpStopRange > 0.0f) {
-            const float into = m_config.axles[axle].suspensionMinLength + a.bumpStopRange - m_prevSuspLength[i];
-            const float x = std::clamp(into / a.bumpStopRange, 0.0f, 1.0f);
-            frequency *= 1.0f + (a.bumpStopFrequencyScale - 1.0f) * x;
-        }
-        spring.mFrequency = frequency;
+        spring.mMode = JPH::ESpringMode::StiffnessAndDamping;
+        spring.mStiffness = compression > 1e-3f ? force / compression : k;
+        // A solid suspension has no damper travel left: only the tire's own (small) damping, taken as 5 % of critical.
+        spring.mDamping = tire > 0.0f ? 0.1f * std::sqrt(ac.tireStiffness * mass)
+                                      : 2.0f * mass * suspensionDampingRatio(a, speed) * omega;
     }
 }
 
@@ -747,7 +793,6 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
     for (int i = 0; i < kWheelCount; ++i) m_wheelSettings[i]->mMaxBrakeTorque = m_aidOut.brakeTorque[i];
     m_telemetry.revLimited = false;
 
-    applySuspensionPerTick();
     applyAckermann(cmd.steer);
     applyDrag();
     applyRollingResistance();
@@ -807,7 +852,6 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     m_telemetry.revLimited = m_revCut;
 
     tr.mClutchStrength = clutchStrength(m_aidOut.throttle);
-    applySuspensionPerTick();
     applyAckermann(cmd.steer);
     applyDrag();
     applyRollingResistance();
@@ -889,12 +933,16 @@ void Vehicle::postPhysics(float dt) {
         const WheelSettings* s = w->GetSettings();
         WheelTelemetry& wt = t.wheels[i];
         wt.contact = w->HasContact();
-        wt.bumpStop = w->HasHitHardPoint();
-        wt.suspensionLength = w->GetSuspensionLength();
-        m_suspVelocity[i] = dt > 0.0f ? (wt.suspensionLength - m_prevSuspLength[i]) / dt : 0.0f;
+        // Below the suspension's minimum length (solid) Jolt's length is the tire's deflection; the hub stays there.
+        const float minLength = m_config.axles[i < 2 ? kFrontAxle : kRearAxle].suspensionMinLength;
+        wt.tireDeflection = std::max(0.0f, minLength - w->GetSuspensionLength());
+        wt.bumpStop = w->HasHitHardPoint() || wt.tireDeflection > 0.0f;
+        wt.rimHit = w->HasHitHardPoint();
+        wt.suspensionLength = std::max(w->GetSuspensionLength(), minLength);
+        wt.suspensionSpeed = dt > 0.0f ? (wt.suspensionLength - m_prevSuspLength[i]) / dt : 0.0f;
         m_prevSuspLength[i] = wt.suspensionLength;
         wt.compression = s->mSuspensionMaxLength - wt.suspensionLength;
-        const float travel = s->mSuspensionMaxLength - s->mSuspensionMinLength;
+        const float travel = s->mSuspensionMaxLength - minLength;
         wt.compressionRatio = travel > 0.0f ? wt.compression / travel : 0.0f;
         // Jolt lambdas are impulses (N*s) accumulated over the step; force = impulse / dt.
         wt.load = dt > 0.0f ? w->GetSuspensionLambda() / dt : 0.0f;
@@ -1051,7 +1099,14 @@ JPH::RMat44 Vehicle::bodyTransform() const {
 }
 
 JPH::RMat44 Vehicle::wheelTransform(int wheel) const {
-    return m_constraint->GetWheelWorldTransform(JPH::uint(wheel), JPH::Vec3::sAxisX(), JPH::Vec3::sAxisY());
+    // The hub stops at the suspension's minimum length; below it Jolt's length is tire deflection (the undeformed
+    // tire mesh then dips into the ground by that much).
+    const JPH::Wheel* w = m_constraint->GetWheel(JPH::uint(wheel));
+    const float minLength = m_config.axles[wheel < 2 ? kFrontAxle : kRearAxle].suspensionMinLength;
+    JPH::Mat44 local = m_constraint->GetWheelLocalTransform(JPH::uint(wheel), JPH::Vec3::sAxisX(), JPH::Vec3::sAxisY());
+    const float deflection = std::max(0.0f, minLength - w->GetSuspensionLength());
+    local.SetTranslation(local.GetTranslation() + deflection * w->GetSettings()->mSuspensionDirection);
+    return bodyTransform() * local;
 }
 
 } // namespace tf

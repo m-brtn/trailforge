@@ -115,16 +115,31 @@ struct DrivingAidTuning {
 struct AxleTuning {
     // Suspension (Jolt virtual suspension: spring-damper along the wheel suspension axis)
     float springFrequency = 1.35f; // Hz, spring natural frequency
-    // Dimensionless damping ratio (1 = critical). Jolt has one damping coefficient per wheel; before every step it is
-    // set to the compression or the rebound value from the direction the suspension moved during the previous step.
-    float compressionDamping = 0.45f;
-    float reboundDamping = 0.45f;
-    float antiRoll = 0.0f; // N/m, anti-roll bar stiffness (0 = none; maximum articulation for an off-roader)
-    // Progressive bump stop: within bumpStopRange m of full compression the spring frequency rises linearly up to
-    // springFrequency x bumpStopFrequencyScale (set before every step). Range 0 = only Jolt's rigid hard point at
-    // the minimum suspension length.
-    float bumpStopRange = 0.0f;
-    float bumpStopFrequencyScale = 1.0f;
+    // Dimensionless damping ratio (1 = critical) at low suspension speed. Jolt has one damping coefficient per wheel;
+    // in every step it is set from the suspension speed of that step (Vehicle::updateSuspension). Road cars run
+    // about 0.2-0.4 of critical (Gillespie, Fundamentals of Vehicle Dynamics, 1992, ch. 5), with more damping in
+    // rebound than in compression (Dixon, The Shock Absorber Handbook, 2nd ed., 2007).
+    float compressionDamping = 0.35f;
+    float reboundDamping = 0.55f;
+    // Digressive damper curve (blow-off valving, Dixon): above damperKneeSpeed (m/s of suspension speed at the wheel)
+    // the force grows with the high-speed slope x the low-speed slope. 0 = linear damper at every speed.
+    float damperKneeSpeed = 0.25f;
+    float compressionHighSpeedSlope = 0.5f;
+    float reboundHighSpeedSlope = 0.5f;
+    // Anti-roll bar rate at the wheel: N of extra load on the more compressed wheel (and less on the other) per m of
+    // hub height difference across the axle; a wheel in the air counts at full droop (0 = none; maximum
+    // articulation for an off-roader).
+    float antiRoll = 0.0f;
+    // Bump stop (jounce bumper): an elastic element over the last bumpStopRange m before full compression, its force
+    // added to the spring. Its rate rises linearly from 0 at contact, so the wheel rate at full compression is
+    // bumpStopFrequencyScale^2 x the spring rate (the local natural frequency x bumpStopFrequencyScale). Range 0 =
+    // only Jolt's rigid hard point at the minimum suspension length. bumpStopHysteresis is the fraction of the
+    // force lost while the bumper extends (elastomer damping: its unloading curve lies below the loading curve; 0.5
+    // is an assumption, not a measured value). Road-car polyurethane jounce bumpers are a few cm to some 8 cm long
+    // and strongly progressive (Reimpell, The Automotive Chassis, 2nd ed., 2001).
+    float bumpStopRange = 0.06f;
+    float bumpStopFrequencyScale = 4.0f;
+    float bumpStopHysteresis = 0.5f;
     // Brakes, N*m per wheel of this axle
     float brakeTorque = 3000.0f;
     float handBrakeTorque = 0.0f;
@@ -210,6 +225,13 @@ struct AxleConfig {
     float wheelMass = 35.0f;   // kg, only for wheel rotational inertia
     float wheelInertia = 0.0f; // kg*m^2; 0 = solid disc 0.5 * wheelMass * wheelRadius^2
     float wheelAngularDamping = 0.2f; // Jolt wheel angular damping, 1/s
+    // Tire vertical compliance, acting once the suspension is solid (at suspensionMinLength): the hub stops there and
+    // the tire deflects up to tireDeflection (then the rim: Jolt's rigid hard point) with tireStiffness. Below the
+    // full bump the suspension spring is much softer and the tire is taken as rigid. 0 = rigid tire. Car and light
+    // truck tires are some 150-300 kN/m, roughly ten times the suspension's ride rate (Gillespie, ch. 5); the
+    // deflection to the rim is taken as about 60 % of the sidewall height.
+    float tireStiffness = 250000.0f; // N/m
+    float tireDeflection = 0.10f;    // m
     // Suspension travel: length from the attachment point to the wheel center
     float suspensionMinLength = 0.15f; // m, full compression (Jolt hard point)
     float suspensionMaxLength = 0.55f; // m, full droop (0.40 m travel)

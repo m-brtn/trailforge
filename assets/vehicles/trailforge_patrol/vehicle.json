@@ -19,22 +19,24 @@
   "axles": {
     "front": {
       "track": 1.35,
-      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain"},
+      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain", "vertical": {"stiffness": 120000, "maxDeflection": 0.09}},
       "suspension": {
         "frequency": 1.35, "compressionDamping": 0.35, "reboundDamping": 0.55,
-        "preload": 0.0, "minLength": 0.1855, "maxLength": 0.503, "antiRoll": 300,
-        "bumpStop": {"range": 0.03, "frequencyScale": 3.0}
+        "preload": 0.04, "minLength": 0.1855, "maxLength": 0.503, "antiRoll": 3500,
+        "bumpStop": {"range": 0.05, "frequencyScale": 4.0, "hysteresis": 0.5},
+        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.5, "reboundSlope": 0.5}
       },
       "brakeTorque": 900,
       "handBrakeTorque": 0
     },
     "rear": {
       "track": 1.35,
-      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain"},
+      "wheel": {"radius": 0.33, "width": 0.229, "mass": 22, "inertia": 1.4, "angularDamping": 0.2, "rimRatio": 0.54, "tread": "all_terrain", "vertical": {"stiffness": 120000, "maxDeflection": 0.09}},
       "suspension": {
         "frequency": 1.55, "compressionDamping": 0.35, "reboundDamping": 0.55,
-        "preload": 0.0, "minLength": 0.1925, "maxLength": 0.510, "antiRoll": 0,
-        "bumpStop": {"range": 0.03, "frequencyScale": 3.0}
+        "preload": 0.04, "minLength": 0.1925, "maxLength": 0.510, "antiRoll": 0,
+        "bumpStop": {"range": 0.05, "frequencyScale": 4.0, "hysteresis": 0.5},
+        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.5, "reboundSlope": 0.5}
       },
       "brakeTorque": 550,
       "handBrakeTorque": 600

@@ -30,6 +30,11 @@ enum class Paint : std::uint8_t {
     BarrierWhite,
 };
 
+// Bump profiles along the driving direction. Round: h * (1 - cos(2 pi u)) / 2 over the base (a hump with no edge, the
+// steepest face at mid-height). Step: a block with 60 degree faces and a flat top (base - 2 * h / tan 60 long), like a
+// squared-off rock or a kerb-stone ledge.
+enum class BumpProfile : std::uint8_t { Round, Step };
+
 // Triangles are stored non-indexed (3 vertices per triangle), wound CCW
 // when viewed from outside (Jolt defines the front face the same way).
 struct TrackGeometry {
@@ -49,6 +54,10 @@ struct TrackGeometry {
     void addBox(JPH::Vec3Arg center, JPH::Vec3Arg halfExtents, float yaw, SurfaceId s);
     // Irregular rock: a sphere with deterministic radius noise, scaled per axis.
     void addRock(JPH::Vec3Arg center, JPH::Vec3Arg radii, float yaw, std::uint32_t seed, SurfaceId s);
+    // Bump across the driving direction (+Z) on flat ground at height y0, over x0..x1, closed at both ends; see
+    // BumpProfile for the shapes. length = base length along Z, m.
+    void addBump(float x0, float x1, float zCenter, float length, float height, BumpProfile profile, float y0,
+                 SurfaceId s);
 };
 
 enum class TrackLayout {

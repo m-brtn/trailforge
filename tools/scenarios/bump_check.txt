@@ -1,0 +1,150 @@
+# 0.35 m bumps at 30 km/h on the proving ground's bump strip (screenshots to /tmp/trailforge_bump_*.png):
+#   ./build/release/trailforge --script tools/scenarios/bump_check.txt --no-audio
+# Every shipped vehicle drives over a 0.35 m mound (2.5 m long) across both wheel tracks and then one under the
+# left wheels only, each time accelerated to 30 km/h and then coasting (off throttle) over the mound. Wheels may leave the ground; the vehicle must not roll
+# over (max_tilt: largest tilt from upright during the run). Headless counterpart with more shapes and drivers:
+# trailforge_probe bump.
+set ui 0
+set auto_reverse 0
+# teleport 16: "Bump strip 0.35 m" (a name search for "bump" or "strip" finds earlier features).
+
+vehicle trailforge_suv
+wait 1.0
+teleport 16
+wait 1.5
+reset_stats
+down W
+until fwd_kmh >= 30 10
+up W
+until z > -26.4 5
+log suv_at_mound
+until z > -24.0 2
+capture /tmp/trailforge_bump_01_suv_mound.png
+until z > -21.0 2
+down W
+until fwd_kmh >= 30 3
+up W
+until z > -11.4 5
+log suv_at_left_mound
+until z > -10.0 2
+capture /tmp/trailforge_bump_02_suv_left_mound.png
+until z > -6 5
+down S
+wait 2.0
+up S
+log suv_after
+expect max_tilt < 45
+expect tilt < 10
+expect wheels_contact == 4
+
+vehicle trailforge_ev
+wait 1.0
+teleport 16
+wait 1.5
+reset_stats
+down W
+until fwd_kmh >= 30 10
+up W
+until z > -26.4 5
+log ev_at_mound
+until z > -21.0 2
+down W
+until fwd_kmh >= 30 3
+up W
+until z > -11.4 5
+log ev_at_left_mound
+until z > -6 5
+down S
+wait 2.0
+up S
+log ev_after
+expect max_tilt < 45
+expect tilt < 10
+expect wheels_contact == 4
+
+vehicle trailforge_patrol
+wait 1.0
+teleport 16
+wait 1.5
+reset_stats
+down W
+until fwd_kmh >= 30 10
+up W
+until z > -26.4 5
+log patrol_at_mound
+until z > -24.0 2
+capture /tmp/trailforge_bump_03_patrol_mound.png
+until z > -21.0 2
+down W
+until fwd_kmh >= 30 3
+up W
+until z > -11.4 5
+log patrol_at_left_mound
+until z > -10.0 2
+capture /tmp/trailforge_bump_04_patrol_left_mound.png
+until z > -6 5
+down S
+wait 2.0
+up S
+log patrol_after
+expect max_tilt < 45
+expect tilt < 10
+expect wheels_contact == 4
+
+vehicle ironclad_suv
+wait 1.0
+teleport 16
+wait 1.5
+reset_stats
+down W
+until fwd_kmh >= 30 10
+up W
+until z > -26.4 5
+log ironclad_at_mound
+until z > -24.0 2
+capture /tmp/trailforge_bump_05_ironclad_mound.png
+until z > -21.0 2
+down W
+until fwd_kmh >= 30 3
+up W
+until z > -11.4 5
+log ironclad_at_left_mound
+until z > -6 5
+down S
+wait 2.0
+up S
+log ironclad_after
+expect max_tilt < 45
+expect tilt < 10
+expect wheels_contact == 4
+
+vehicle kestrel_coupe
+wait 1.0
+teleport 16
+wait 1.5
+reset_stats
+down W
+until fwd_kmh >= 30 10
+up W
+until z > -26.4 5
+log kestrel_at_mound
+# The coupe's low nose stops on the face of the one-sided mound, so it only takes the full-width one.
+until z > -20.0 2
+down S
+wait 2.0
+up S
+log kestrel_after
+expect max_tilt < 45
+expect tilt < 10
+expect wheels_contact == 4
+
+# Overview of the strip from the south-east; the SUV waits at the strip start, behind the camera.
+vehicle trailforge_suv
+wait 1.0
+teleport 16
+wait 1.5
+set hud 0
+camera -34.0 3.5 -33.0 -40.5 0.2 -17.0
+wait 0.5
+capture /tmp/trailforge_bump_06_strip_side.png
+quit

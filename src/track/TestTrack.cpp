@@ -73,6 +73,7 @@ constexpr float kSkidX0 = 39.0f, kSkidX1 = 45.0f, kSkidZ0 = -48.0f, kSkidZ1 = 48
 constexpr float kSandX0 = 28.0f, kSandX1 = 45.0f, kSandZ0 = 48.0f, kSandZ1 = 84.0f;
 // West concrete strip with a flat mud bath at its north end: a direct mud -> concrete boundary at z = kMudBathZ0.
 constexpr float kWestX0 = -44.5f, kWestX1 = -38.5f, kWestZ0 = 4.0f, kMudBathZ0 = 34.0f, kMudBathZ1 = 46.0f;
+constexpr float kBumpStripX = -40.5f; // west of lane B's climbs (and their 2.5 m blend), south of the west strip
 
 // ---- Showcase (z > 46): a winding mud path with puddles through a grass meadow.
 constexpr float kShowZ0 = 46.0f;    // blend from the proving ground starts here
@@ -241,6 +242,35 @@ void TrackGeometry::addBox(Vec3Arg center, Vec3Arg he, float yaw, SurfaceId s) {
     addQuad(p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1), p(-1, -1, 1), s);
     // -Z
     addQuad(p(-1, -1, -1), p(-1, 1, -1), p(1, 1, -1), p(1, -1, -1), s);
+}
+
+void TrackGeometry::addBump(float x0, float x1, float zCenter, float length, float height, BumpProfile profile,
+                            float y0, SurfaceId s) {
+    // Profile points (z, y) from the leading foot to the trailing foot.
+    std::vector<std::array<float, 2>> p;
+    const float z0 = zCenter - 0.5f * length;
+    if (profile == BumpProfile::Round) {
+        const int n = 24;
+        for (int k = 0; k <= n; ++k) {
+            const float u = float(k) / float(n);
+            p.push_back({z0 + u * length, y0 + 0.5f * height * (1.0f - std::cos(2.0f * kPi * u))});
+        }
+    } else {
+        const float run = std::min(height / std::tan(deg(60.0f)), 0.45f * length);
+        p = {{z0, y0}, {z0 + run, y0 + height}, {z0 + length - run, y0 + height}, {z0 + length, y0}};
+    }
+    for (std::size_t k = 0; k + 1 < p.size(); ++k) {
+        const Vec3 a(x0, p[k][1], p[k][0]), b(x1, p[k][1], p[k][0]);
+        const Vec3 c(x1, p[k + 1][1], p[k + 1][0]), d(x0, p[k + 1][1], p[k + 1][0]);
+        addQuad(a, d, c, b, s);
+        // End caps: a strip down to the ground on both sides.
+        if (p[k][1] > y0 || p[k + 1][1] > y0) {
+            addQuad(Vec3(x1, y0, p[k][0]), Vec3(x1, p[k][1], p[k][0]), Vec3(x1, p[k + 1][1], p[k + 1][0]),
+                    Vec3(x1, y0, p[k + 1][0]), s);
+            addQuad(Vec3(x0, y0, p[k + 1][0]), Vec3(x0, p[k + 1][1], p[k + 1][0]), Vec3(x0, p[k][1], p[k][0]),
+                    Vec3(x0, y0, p[k][0]), s);
+        }
+    }
 }
 
 void TrackGeometry::addRock(Vec3Arg center, Vec3Arg radii, float yaw, std::uint32_t seed, SurfaceId s) {
@@ -485,6 +515,13 @@ void TestTrack::buildProvingGround() {
         m_rocks.push_back({-3.5f, 67.0f, 1.2f});
     }
 
+    // Bump strip west of the climbs: a 0.35 m mound (2.5 m long cosine) across both wheel tracks, then one under the
+    // left wheels only (vehicle driving +Z along x = kBumpStripX).
+    g.addBump(kBumpStripX - 2.5f, kBumpStripX + 2.5f, -24.0f, 2.5f, 0.35f, BumpProfile::Round, 0.0f,
+              SurfaceId::PackedDirt);
+    g.addBump(kBumpStripX + 0.1f, kBumpStripX + 2.5f, -10.0f, 2.5f, 0.35f, BumpProfile::Round, 0.0f,
+              SurfaceId::PackedDirt);
+
     // Mini handling track in its own walled area south of the proving ground (teleport only).
     buildMiniTrack(g);
 
@@ -509,6 +546,7 @@ void TestTrack::buildProvingGround() {
     feature("Meadow (grass)", 19.0f, 50.0f);
     feature("Puddle (splash)", pathCenterX(57.0f), 49.5f); // the first path puddle is 4-5 m ahead
     feature("Wheat patch (visual)", -37.0f, 52.5f);           // the patch starts 3.5 m ahead
+    feature("Bump strip 0.35 m", kBumpStripX, -43.0f);
     m_features.push_back(miniTrack().start);                  // grid spot 12 m behind the start/finish line
 }
 

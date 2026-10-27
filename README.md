@@ -176,6 +176,12 @@ Command-line options:
 - `hillbrake` — holding on climbs with the brake;
 - `susp [feature throttle low secs steer]` — per-wheel suspension length, compression and hub height in body space
   over a track feature (default 2, the diagonal twister), body-terrain contact ticks;
+- `bump all|quick [hold|cruise|coast|full]` — straight runs over one bump on the flat pad for every shipped vehicle
+  and `builtin` (or `TRAILFORGE_VEHICLE`): 1 m kicker, 2.5 m mound and 60° step, under both wheel tracks or the left
+  ones, 0.20 / 0.30 / 0.40 m at 20 / 30 / 40 km/h (`quick`: 0.30 / 0.35 / 0.40 m at 30 km/h); from 1 m before the
+  bump the driver holds the speed, freezes the throttle, coasts or floors it; prints CoM rise, airtime, roll / pitch,
+  suspension speed, hard stop and rim hits, body hits and rollovers per run and a `RESULT` line;
+  `bump trace OFFSET H KMH DRIVER SHAPE` prints one run per tick;
 - `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,
   climbs on dirt 20° and mud 15° per drive mode, the twister, steady-speed energy (electric only);
 - `minitrack [vehicle.json ...]` — scripted laps of the mini handling track for the SUV, the EV, `builtin` and
@@ -280,7 +286,11 @@ real.
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
 
-Other scenarios: `tools/scenarios/controls.txt` (Controls page: drive keys, gamepad button names auto / override,
+Other scenarios: `tools/scenarios/bump_check.txt` (every shipped vehicle accelerated to 30 km/h on the proving
+ground's bump strip, teleport 16, coasting over a 0.35 m, 2.5 m long mound under both wheel tracks and then one under
+the left wheels (the KESTREL M only takes the first: its nose stops on the face of the one-sided mound); no
+rollover (`max_tilt` < 45°), upright on four wheels afterwards; `/tmp/trailforge_bump_*.png`),
+`tools/scenarios/controls.txt` (Controls page: drive keys, gamepad button names auto / override,
 no overlapping callouts, wheel scroll, values kept, then a drive with the arrow keys including the pedal ramp;
 `/tmp/trailforge_controls_*.png`), `tools/scenarios/menus.txt` (intro, start menu, Settings, Controls, the blurred pause menu, reset
 and quit to the start menu through keys and mouse clicks; the pause freezes ticks and position;
@@ -360,7 +370,7 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 `soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
-`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `susp_spread` (longest minus shortest suspension length, m), `susp_min` / `susp_max` (shortest / longest of the four), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
+`cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `max_tilt` (largest body tilt from upright since `reset_stats`, deg), `susp_spread` (longest minus shortest suspension length, m), `susp_min` / `susp_max` (shortest / longest of the four), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
 `min_cam_clearance`, `front_spring`, `mass`, `depth_w/h`, `depth_creations`, `depth_matches_window`,
 `auto_reverse`, `hint` (1 while the driving hint is on screen), driver aids: `abs` (0/1), `tc` (0 off, 1 on,
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
@@ -644,7 +654,8 @@ The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format bel
   concept sheet (v0.15.0–v0.22.0) is still available as `"bodyShape": "traced"`; see "Vehicle blueprints".
 - Wheels (lugged tire, rim, hub) and suspension parts (two arms, half shaft, shock body and shaft, coil spring)
   are placed every frame from the Jolt wheel transforms and suspension length; there is no decorative animation.
-- Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.45, anti-roll bars off by default.
+- Suspension: travel 0.15–0.55 m, 1.35 Hz, damping 0.35 compression / 0.55 rebound with a digressive knee at
+  0.25 m/s, bump stops over the last 6 cm, tire rate 250 kN/m, anti-roll bars off by default.
 - Part-time 4WD (since v0.8.0; full-time AWD before): starts in 2H (rear-wheel drive), V engages 4H (front axle,
   center locked) and 4L; see "Drivetrain layouts".
   - engine 520 N·m, 800–4800 rpm;
@@ -684,9 +695,9 @@ TrailForge EV sits at the light end of that range.
   0.8 kW auxiliary load. Below 2 % SoC the drive torque fades to zero.
 - Tires 285/70R17 all-terrain (17 in rim 431.8 mm + 2 × 0.70 × 285 mm = 830.8 mm, `radius` 0.4155 m), 40 kg,
   4.0 kg·m².
-- Retuned for the mass: springs 1.45 Hz (SUV 1.35), damping 0.50 compression / 0.55 rebound (SUV 0.45 / 0.45),
-  anti-roll bars 400 / 200 N/m (label units; Jolt's bar acts much stiffer than the label, see the roll angles in the
-  table below), bump stops over the last 4 cm (×3), travel 0.15–0.53 m (SUV 0.55); brakes 4800 N·m front / 2400 N·m
+- Retuned for the mass: springs 1.45 Hz (SUV 1.35), damping 0.50 compression / 0.55 rebound (SUV 0.35 / 0.55),
+  anti-roll bars 17500 / 8800 N/m at the wheel (400 / 200 in Jolt's bar units before they became suspension forces;
+  converted to keep the corner roll), bump stops over the last 6 cm, travel 0.15–0.53 m (SUV 0.55); brakes 4800 N·m front / 2400 N·m
   rear per wheel (SUV 4200 / 2200; both 3800 / 3200 and 3000 / 3000 before v0.24.0); longitudinal tire peak 1.10
   (all-terrain tread on concrete; lateral 1.00, SUV mud-terrain 1.00 / 1.00).
 - Driver aids as on the SUV (B, T, X); X locks the per-axle differentials (there is no center differential).
@@ -696,16 +707,18 @@ ABS off unless stated):
 
 | | SUV (2000 kg) | EV (2650 kg) |
 |---|---|---|
-| 0–30 / 0–60 / 0–100 km/h, concrete | 1.92 / 4.59 / 9.68 s | 1.42 / 2.49 / 4.31 s (peak 401 kW, 0.357 kWh) |
-| 50–0 km/h ABS off / on | 14.06 / 11.97 m | 14.52 / 11.56 m (regen 2 / 4 % of the kinetic energy) |
-| 100–0 km/h ABS off / on | 51.43 / 42.85 m | 50.38 / 39.92 m (regen 1 / 2 %) |
+| 0–30 / 0–60 / 0–100 km/h, concrete | 1.93 / 4.62 / 9.71 s | 1.42 / 2.48 / 4.31 s (peak 401 kW, 0.357 kWh) |
+| 50–0 km/h ABS off / on | 14.07 / 11.96 m | 14.57 / 11.57 m (regen 3 / 4 % of the kinetic energy) |
+| 100–0 km/h ABS off / on | 51.39 / 42.85 m | 50.39 / 39.92 m (regen 1 / 3 %) |
 | lift-off at 80 km/h | 0.63 m/s² (drag, engine braking) | 1.36 m/s² (regen and drag) |
-| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.34 m/s², roll 2.16 / 2.59° |
-| climb dirt 20°, full pedal | 4.33 s (4H), 5.05 s (4L) | 3.76 s (NORMAL), 3.77 s (OFF-ROAD) |
-| climb mud 15°, full pedal | 6.12 s (4H), 7.04 s (4L) | 6.09 s (NORMAL and OFF-ROAD) |
-| diagonal twister, travel used FL / FR / RL / RR | 0.309 / 0.244 / 0.402 / 0.404 m, 6.01 wheel-s in the air | 0.315 / 0.233 / 0.362 / 0.299 m, 4.28 wheel-s |
+| corner 40 km/h, steer 0.25 / 0.45 | 6.87 / 7.91 m/s², roll 4.08 / 4.95° | 7.33 / 8.34 m/s², roll 2.23 / 2.66° |
+| climb dirt 20°, full pedal | 4.33 s (4H), 5.06 s (4L) | 3.69 s (NORMAL), 3.71 s (OFF-ROAD) |
+| climb mud 15°, full pedal | 6.12 s (4H), 7.03 s (4L) | 6.08 s (NORMAL and OFF-ROAD) |
+| diagonal twister, travel used FL / FR / RL / RR | 0.328 / 0.301 / 0.400 / 0.375 m, 6.18 wheel-s in the air | 0.347 / 0.240 / 0.380 / 0.373 m, 5.24 wheel-s |
 | steady 50 / 90 km/h energy | — | 14.2 / 28.9 kWh/100 km (drag, wheel damping, aux; no rolling resistance) |
 
+Re-measured 2026-10-27 after the suspension force rework (per-step rates, anti-roll bars as forces; before it: SUV
+0–100 9.68 s, 100–0 ABS off 51.43 m, twister 6.01 wheel-s; EV corner roll 2.16 / 2.59°, twister 4.28 wheel-s).
 Measured on v0.24.0 (kit bodies, box collision, 2.80 / 1.80 m; front-biased brakes, ABS re-apply memory, 8 1/s
 foot-brake rise). On v0.23.0 the stops were SUV 50–0 13.70 / 13.49 m, 100–0 47.57 / 46.42 m, EV 14.95 / 13.88 m and
 52.32 / 46.37 m (regen 12 / 16 and 5 / 9 %), the EV 0–100 4.36 s; the corner values and the twister contact counts
@@ -730,7 +743,7 @@ on-demand AWD rather than RWD.
 
 - 750 kg, front weight 0.42, wheelbase 2.07 m, track 1.35 m, tires 0.33 m radius / 0.229 m wide (beadlock rims),
   32 cm of suspension travel (front 0.186–0.503 m, rear 0.193–0.510 m), springs 1.35 / 1.55 Hz, front anti-roll
-  300 N/m, brakes 900 / 550 N·m per wheel, no ABS or traction control by default (B / T turn them on), drag area 1.9 m².
+  3500 N/m at the wheel, brakes 900 / 550 N·m per wheel, no ABS or traction control by default (B / T turn them on), drag area 1.9 m².
 - Engine with the character of a 1.0 L high-revving inline-four: 112 N·m peak at 8400 rpm, about 119 kW (160 hp) at
   11000 rpm, limiter 11800 rpm (12000 rpm curve end), 0.06 kg·m² flywheel; six speeds 3.30–1.15 with an 8.0 final
   drive and 0.05 s shifts (up at 11500, down at 7000 rpm), no low range (L reports "No low range on this vehicle").
@@ -1047,7 +1060,7 @@ folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks th
 | `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
-| `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m), `bumpStop` {`range` (m before full compression), `frequencyScale`}}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
+| `axles.front` / `axles.rear` | `track`, `wheel` {`radius`, `width`, `mass`, `inertia` (0 = solid disc), `angularDamping`, optional visual `rimRatio` (rim / tire diameter, default 0.58) and `tread` (`mud_terrain` default, `all_terrain`)}, `suspension` {`frequency` (Hz), `compressionDamping`, `reboundDamping` (damping ratios), `preload` (m), `minLength`, `maxLength`, `antiRoll` (N/m at the wheel per metre of left-right hub height difference), `bumpStop` {`range` (m before full compression), `frequencyScale` (bump stop tangent rate at full compression, × the spring rate), optional `hysteresis` (force fraction lost while the suspension extends, default 0.5)}, optional `damperCurve` {`kneeSpeed` (m/s), `compressionSlope`, `reboundSlope` (damping above the knee, × the ratio below it); default 0.25 / 0.5 / 0.5}}, optional `wheel.vertical` {`stiffness` (N/m tire rate), `maxDeflection` (m to the rim; default 250000 / 0.10)}, `brakeTorque` (N·m per wheel), `handBrakeTorque`; front: `maxSteerAngleDeg` |
 | `tires` | `longitudinal` {`peakSlip`, `peakFriction`, `slideFriction`}, `lateral` {`peakSlipAngleDeg`, `peakFriction`, `slideFriction`}, `staticGrip`, `slipSpeedFloor`, `frictionEllipse`, `surfaceGrip` {per surface: `concrete`, `packed_dirt`, `rock`, `low_grip`, `mud`, `grass`, `sand`, `snow`; optional `asphalt`, `gravel` (default 1)}, optional `set` (`offroad` default, `road`, `slick`: the tire set fitted by default, see "Tire sets and temperature"; the curves above always describe the vehicle's own off-road tire) |
 | `steering` | `maxAngleDeg`, `rate`, `returnRate` (1/s), `ackermann` (0 parallel .. 1 full) |
 | `engine` | `type` (`combustion` or `electric`); combustion: `maxTorque`, `torqueCurve` [[rpm fraction, torque fraction], ...], `idleRPM`, `maxRPM`, `revLimitRPM`, `inertia`, `angularDamping` |
@@ -1345,6 +1358,9 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   There is **no sinkage**: sand is only a lower-μ rigid surface with a light sandy material.
 - **Mud bath and west strip** (west edge, x −44.5…−38.5, teleport "Mud bath to concrete"): a flat 6 × 12 m `Mud`
   patch (z 34–46) that ends directly on a 30 m concrete strip (z 4–34), for driving out of mud onto concrete.
+- **Bump strip** (west edge south of the west strip, x −43…−38, teleport "Bump strip 0.35 m", starting at z −43):
+  two 0.35 m high, 2.5 m long round mounds of packed dirt, at z −24 across both wheel tracks and at z −10 under the
+  left wheels only (`tools/scenarios/bump_check.txt`).
 - Teleports "Meadow (grass)" (open grass east of the mud path) and "Puddle (splash)" (on the mud path just before a
   puddle) are spawn points for the wheel spray checks.
 - **Wheat test patch** (west meadow, x −46…−28, z 56…76, teleport "Wheat patch (visual)"): render-only wheat. The
@@ -1358,7 +1374,7 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
   (see "Tire marks"). Deformable terrain is a later stage.
 
 - **Mini handling track** (`src/track/MiniTrack`, walled area x −185…185, z −232…−51 south of the proving ground,
-  teleport 17 "Mini handling track", `teleport mini` in scenarios): a 1044 m asphalt circuit, 10 m wide, driven
+  the last teleport, "Mini handling track", `teleport mini` in scenarios): a 1044 m asphalt circuit, 10 m wide, driven
   counter-clockwise from the map's view (east on the start / finish straight). Sections: a ~330 m start / finish
   straight (the EV reaches 138 km/h in the probe), a R13 hairpin, a chicane
   (8 m offset over 44 m), a R18 double-apex corner, a R32 constant-radius corner (steady lateral g window), a 150 m
@@ -2401,11 +2417,29 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   no lift, downforce, side force or wind. Rolling resistance only on gravel (0.015 × load at each contact patch);
   none on paved or other ground (linear damping = 0).
   The engine is a torque curve, with no flywheel inertia beyond Jolt's model.
-- Compression / rebound damping: Jolt has one damping coefficient per wheel; before each step it is set to the
-  compression or the rebound ratio by the direction the suspension moved in the previous step (one step of lag).
-- Bump stops: within `bumpStop.range` of full compression the spring frequency ramps up to `frequencyScale` ×; a
-  progressive spring, not a separate rubber element. Jolt's hard stop at `minLength` stays (it can be passed by a
-  few mm under load).
+- Suspension forces: Jolt's wheel constraint takes one stiffness and one damping coefficient per wheel. Each step,
+  after collision detection, they are set from that step's contact: the stiffness is the secant rate of spring +
+  bump stop + anti-roll bar + tire at the current length, the damping coefficient comes from the digressive damper
+  curve (compression or rebound ratio by the direction of the suspension speed, × the slope above `kneeSpeed`).
+  Within one step the force is linear in the compression.
+- Bump stops: an additive progressive force (zero at `bumpStop.range` before full compression, tangent rate
+  `frequencyScale` × the spring rate at full compression), scaled by 1 − `hysteresis` while the suspension extends
+  to stand for the rubber's energy loss (the 0.5 default is an assumption, not a measured elastomer).
+- Tire compliance: the tire acts as a vertical spring (`wheel.vertical`, damped at 5 % of critical) only once the
+  suspension is solid; then the wheel can push `maxDeflection` further up to the rim, where Jolt's hard stop is. The
+  tire does not deflect in series with the spring otherwise, and the contact patch has no relaxation length or load
+  sensitivity.
+- Anti-roll bars are applied as suspension forces (N/m at the wheel on the left-right hub height difference, an
+  airborne wheel counting at full droop), not with Jolt's `VehicleAntiRollBar`, whose impulse enters the
+  constraint as a velocity bias, so its effective rate depends on the damping and the step and it added load noise.
+- No drivetrain or brake reaction torque on the body: Jolt's controller turns the wheels but does not push back on
+  the chassis, so throttle and braking do not pitch the body through the axles (only through the tire forces at the
+  contact patches). For a flying vehicle this misses −I_wheel·Δω about the axle (estimated ~13°/s of pitch rate
+  for the patrol buggy flooring it in the air).
+- Bumps (`trailforge_probe bump`, `tools/scenarios/bump_check.txt`): no shipped vehicle rolls over a 0.35 m mound
+  at 30 km/h with a constant or no throttle; a 1 m long kicker of the same height or a step acts as a ramp, and
+  holding or flooring the throttle over it can still flip the short-travel IRONCLAD G (8–10 cm of bump travel,
+  the body hits) and the light patrol buggy (see the devlog for the per-vehicle counts).
 - Ackermann: the outer wheel's maximum angle is lowered before each step (cot(outer) = cot(inner) + track /
   wheelbase, blended by `ackermann`); Jolt steers each wheel to input × its maximum angle, so the geometry holds
   exactly only at full lock and is proportional in between.

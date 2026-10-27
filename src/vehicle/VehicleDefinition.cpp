@@ -133,6 +133,11 @@ void readAxle(Obj& axles, const char* key, AxleConfig& a, AxleTuning& t, bool fr
         w.num("mass", a.wheelMass, 5.0, 200.0, "kg");
         w.num("inertia", a.wheelInertia, 0.0, 50.0, "kg*m^2 (0 = solid disc)");
         w.num("angularDamping", a.wheelAngularDamping, 0.0, 5.0, "1/s");
+        if (const json::Value* vertical = w.member("vertical", false)) {
+            Obj v(vertical, w.child("vertical"), source, errors);
+            v.num("stiffness", a.tireStiffness, 20000.0, 2000000.0, "N/m");
+            v.num("maxDeflection", a.tireDeflection, 0.0, 0.5 * a.wheelRadius, "m (at most half the radius)");
+        }
         w.num("rimRatio", a.rimRatio, 0.35, 0.85, "(rim / tire diameter, visual)", false);
         w.str("tread", a.tread, false);
         if (a.tread != "mud_terrain" && a.tread != "all_terrain")
@@ -150,11 +155,20 @@ void readAxle(Obj& axles, const char* key, AxleConfig& a, AxleTuning& t, bool fr
         s.num("antiRoll", t.antiRoll, 0.0, 300000.0, "N/m");
         if (a.suspensionMaxLength <= a.suspensionMinLength + 0.02f)
             s.error(s.child("maxLength"), "must exceed minLength by at least 0.02 m (travel)");
+        if (a.suspensionMinLength < a.tireDeflection)
+            s.error(s.child("minLength"), "must be at least the tire's wheel.vertical.maxDeflection");
         Obj b(s.member("bumpStop"), s.child("bumpStop"), source, errors);
         b.num("range", t.bumpStopRange, 0.0, 0.5, "m");
         b.num("frequencyScale", t.bumpStopFrequencyScale, 1.0, 10.0, "");
+        b.num("hysteresis", t.bumpStopHysteresis, 0.0, 0.9, "(force fraction lost while extending)", false);
         if (t.bumpStopRange > a.suspensionMaxLength - a.suspensionMinLength)
             b.error(b.child("range"), "must not exceed the suspension travel");
+        if (const json::Value* curve = s.member("damperCurve", false)) {
+            Obj d(curve, s.child("damperCurve"), source, errors);
+            d.num("kneeSpeed", t.damperKneeSpeed, 0.05, 2.0, "m/s");
+            d.num("compressionSlope", t.compressionHighSpeedSlope, 0.05, 1.0, "(x the low-speed slope)");
+            d.num("reboundSlope", t.reboundHighSpeedSlope, 0.05, 1.0, "(x the low-speed slope)");
+        }
     }
     o.num("brakeTorque", t.brakeTorque, 0.0, 20000.0, "N*m per wheel");
     o.num("handBrakeTorque", t.handBrakeTorque, 0.0, 20000.0, "N*m per wheel");

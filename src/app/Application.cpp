@@ -1124,6 +1124,7 @@ void Application::renderFrame(float frameTime) {
         for (const auto& w : m_sim.vehicle().telemetry().wheels) air += w.contact ? 0 : 1;
         m_maxAirWheels = std::max(m_maxAirWheels, air);
         const VehicleTelemetry& t = m_sim.vehicle().telemetry();
+        m_maxTilt = std::max(m_maxTilt, std::acos(std::fmin(1.0f, t.upDot)) * 57.2958f);
         int locked = 0;
         for (const auto& w : t.wheels)
             locked += w.contact && std::abs(w.groundSpeed) > 2.0f && std::abs(w.rollingSpeed) < 0.2f * std::abs(w.groundSpeed);
@@ -2385,6 +2386,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
     if (c.op == "reset_stats") {
         m_minCamClearance = 1e9f;
         m_maxAirWheels = 0;
+        m_maxTilt = 0.0f;
         m_maxLockedWheels = 0;
         m_lockedWheelTime = 0.0;
         m_absSeen = m_tcSeen = false;
@@ -2613,6 +2615,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "cam_clearance") return m_camClearance;
     if (n == "min_cam_clearance") return m_minCamClearance;
     if (n == "max_air") return m_maxAirWheels;
+    if (n == "max_tilt") return m_maxTilt;
     if (n == "garage_open") return m_flow.screen() == Screen::Garage ? 1.0 : 0.0;
     if (n == "map_open") return m_flow.screen() == Screen::Map ? 1.0 : 0.0;
     if (n == "map_ready") return m_mapUI.hasMap() ? 1.0 : 0.0;

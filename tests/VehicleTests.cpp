@@ -1,9 +1,15 @@
 // Vehicle definitions, drivetrain layouts and garage setups (headless). Usage: trailforge_vehicle_tests <test_name>
 
 #include "sim/Simulation.h"
+#include "track/TestTrack.h"
+#include "vehicle/Vehicle.h"
 #include "vehicle/VehicleDefinition.h"
 #include "vehicle/VehicleSetup.h"
 #include "vehicle/VehicleShape.h"
+
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
 #include <algorithm>
 #include <cmath>
@@ -525,6 +531,7 @@ void suvDefinitionMatchesBuiltin() {
         a.wheelMass = 43.0f;
         a.wheelInertia = 4.7f;
         a.rimRatio = 0.495f;
+        a.tireDeflection = 0.13f; // 60 % of the taller sidewall
     }
     expected.tuning.finalDrive = 4.27f;
     // v0.24: front-biased brakes (4200 / 2200 N*m per wheel; 3000 / 3000 left the front axle short of its grip).
@@ -1023,8 +1030,106 @@ void tireSets() {
     std::filesystem::remove_all(dir);
 }
 
+// Damper curve, bump stop and anti-roll bar forces of Vehicle::updateSuspension.
+void suspensionForceModel() {
+    AxleTuning a;
+    a.compressionDamping = 0.3f;
+    a.reboundDamping = 0.5f;
+    a.damperKneeSpeed = 0.25f;
+    a.compressionHighSpeedSlope = 0.5f;
+    a.reboundHighSpeedSlope = 0.4f;
+    CHECK(suspensionDampingRatio(a, -0.1f) == 0.3f && suspensionDampingRatio(a, 0.2f) == 0.5f,
+          "below the knee: %.3f / %.3f", suspensionDampingRatio(a, -0.1f), suspensionDampingRatio(a, 0.2f));
+    // Force / speed at 1 m/s: knee + slope x (1 - knee).
+    CHECK(std::abs(suspensionDampingRatio(a, -1.0f) - 0.3f * 0.625f) < 1e-6f, "compression at 1 m/s: %.4f",
+          suspensionDampingRatio(a, -1.0f));
+    CHECK(std::abs(suspensionDampingRatio(a, 1.0f) - 0.5f * 0.55f) < 1e-6f, "rebound at 1 m/s: %.4f",
+          suspensionDampingRatio(a, 1.0f));
+    a.damperKneeSpeed = 0.0f;
+    CHECK(suspensionDampingRatio(a, -3.0f) == 0.3f, "linear damper changed with speed");
+
+    a.bumpStopRange = 0.06f;
+    a.bumpStopFrequencyScale = 4.0f;
+    CHECK(bumpStopForceRatio(a, 0.0f) == 0.0f && bumpStopForceRatio(a, -0.01f) == 0.0f, "bump stop before contact");
+    // Rate rising linearly from 0 to (s^2 - 1) x the spring rate over the range: F / k = (s^2 - 1) x^2 / (2 range).
+    const float full = bumpStopForceRatio(a, 0.06f), half = bumpStopForceRatio(a, 0.03f);
+    CHECK(std::abs(full - 15.0f * 0.03f) < 1e-6f && std::abs(half - full / 4.0f) < 1e-6f, "bump stop %.4f / %.4f m", half,
+          full);
+    const float slope = (bumpStopForceRatio(a, 0.06f) - bumpStopForceRatio(a, 0.0599f)) / 0.0001f;
+    CHECK(std::abs(slope - 15.0f) < 0.05f, "bump stop rate at full compression %.2f x spring (expected 15)", slope);
+
+    // Anti-roll bar: in a steady circle the roll moment is shared by springs and bars. Total roll stiffness per
+    // axle = (spring rate / 2 + bar rate) x track^2, so bars of 1.5 x the spring's share must cut the roll angle.
+    const auto circleRoll = [](float bar) {
+        VehicleConfig c;
+        for (AxleTuning& t : c.tuning.axles) t.antiRoll = bar;
+        Simulation sim(settings(c, TrackLayout::Flat));
+        run(sim, 1.0);
+        run(sim, 6.0, DriverIntent{.throttle = 0.35f, .steer = 0.5f});
+        const JPH::Quat q = sim.currentSnapshot().body.rotation;
+        return std::abs(std::atan2(q.RotateAxisX().GetY(), q.RotateAxisY().GetY())) * 57.2958f;
+    };
+    const float soft = circleRoll(0.0f), stiff = circleRoll(30000.0f);
+    std::printf("    circle roll: no bars %.2f deg, 30 kN/m bars %.2f deg\n", soft, stiff);
+    CHECK(soft > 1.0f && stiff < 0.8f * soft, "anti-roll bars: %.2f -> %.2f deg", soft, stiff);
+}
+
+// Every shipped vehicle over a 0.35 m bump at 30 km/h (the probe's mound and kicker, full width and under the left
+// wheels; throttle held at its cruise value from 1 m before the bump): it may lift wheels, it must not roll over.
+void bumpNoRollover() {
+    std::vector<std::string> errors;
+    const std::vector<VehicleDefinition> defs = loadVehicleCatalog(kAssets, errors);
+    CHECK(errors.empty() && !defs.empty(), "catalog");
+    for (const VehicleDefinition& def : defs) {
+        for (const float length : {2.5f, 1.0f})
+            for (const bool left : {false, true}) {
+                Simulation sim(settings(def.config, TrackLayout::Flat));
+                const float zc = 40.0f, h = 0.35f, zIn = zc - 0.5f * length;
+                TrackGeometry g;
+                g.addBump(left ? 0.35f : -3.0f, 3.0f, zc, length, h, BumpProfile::Round, 0.0f, SurfaceId::Concrete);
+                JPH::TriangleList tris;
+                for (std::size_t i = 0; i < g.triangleCount(); ++i)
+                    tris.emplace_back(g.positions[3 * i], g.positions[3 * i + 1], g.positions[3 * i + 2], 0u);
+                JPH::PhysicsMaterialList mats;
+                mats.push_back(sim.surfaces().material(SurfaceId::Concrete));
+                auto& bi = sim.world().bodies();
+                bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(),
+                                                              JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
+                                                              JPH::EMotionType::Static, Layers::Static),
+                                    JPH::EActivation::DontActivate);
+                float cruiseThrottle = -1.0f, minUp = 1.0f, maxRise = 0.0f, rest = 0.0f;
+                for (int i = 0; i < int(16.0 / sim.fixedStep()); ++i) {
+                    const float z = sim.currentSnapshot().wheels[0].position.GetZ();
+                    const float err = 30.0f / 3.6f - sim.vehicle().telemetry().forwardSpeed;
+                    DriverIntent in;
+                    in.throttle = std::clamp(0.15f + 0.5f * err, 0.0f, 1.0f);
+                    if (z < zIn - 3.0f && err < -1.0f) in.brake = std::clamp(-0.2f * err, 0.0f, 0.5f);
+                    if (z > zIn - 1.0f) {
+                        if (cruiseThrottle < 0.0f) {
+                            cruiseThrottle = in.throttle;
+                            rest = position(sim).GetY();
+                        }
+                        in.throttle = cruiseThrottle;
+                        maxRise = std::max(maxRise, position(sim).GetY() - rest);
+                    }
+                    sim.setIntent(in);
+                    sim.tick();
+                    minUp = std::min(minUp, sim.currentSnapshot().body.rotation.RotateAxisY().GetY());
+                    if (z > zc + 12.0f) break;
+                }
+                const float endUp = sim.currentSnapshot().body.rotation.RotateAxisY().GetY();
+                std::printf("    %-18s %-6s %-5s rise %.2f m, min up %.2f, end up %.2f\n", def.id.c_str(),
+                            length > 2.0f ? "mound" : "kicker", left ? "left" : "full", maxRise, minUp, endUp);
+                CHECK(cruiseThrottle >= 0.0f && minUp > 0.0f && endUp > 0.9f, "%s rolled over the %s 0.35 m bump",
+                      def.id.c_str(), length > 2.0f ? "mound" : "kicker");
+            }
+    }
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"suspension_force_model", suspensionForceModel},
+        {"bump_no_rollover", bumpNoRollover},
         {"tire_thermal_model", tireThermalModel},
         {"tire_sets", tireSets},
         {"vehicle_catalog_sweep", vehicleCatalogSweep},

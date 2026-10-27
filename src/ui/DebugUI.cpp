@@ -728,8 +728,10 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
         row("Susp. length [m]", [](const WheelTelemetry& w) { ImGui::Text("%.3f", w.suspensionLength); });
         row("Compression [m]", [](const WheelTelemetry& w) { ImGui::Text("%.3f", w.compression); });
         row("Compression [%]", [](const WheelTelemetry& w) {
-            ImGui::ProgressBar(w.compressionRatio, ImVec2(-1, 0), w.bumpStop ? "BUMP STOP" : nullptr);
+            ImGui::ProgressBar(w.compressionRatio, ImVec2(-1, 0), w.rimHit ? "RIM" : w.bumpStop ? "SOLID" : nullptr);
         });
+        row("Tire defl. [mm]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.tireDeflection * 1000.0f); });
+        row("Susp. speed [m/s]", [](const WheelTelemetry& w) { ImGui::Text("%+.2f", w.suspensionSpeed); });
         row("Load [N]", [](const WheelTelemetry& w) { ImGui::Text("%.0f", w.load); });
         row("Long. force [N]", [](const WheelTelemetry& w) { ImGui::Text("%+.0f", w.longitudinalForce); });
         row("Lat. force [N]", [](const WheelTelemetry& w) { ImGui::Text("%+.0f", w.lateralForce); });
@@ -780,8 +782,11 @@ void DebugUI::drawTuning(Simulation& sim, UiRequests&, GraphicsState& gfx) {
         changed |= ImGui::SliderFloat("Rear rebound [-]", &ra.reboundDamping, 0.05f, 1.5f, "%.2f");
         changed |= ImGui::SliderFloat("Anti-roll front [N/m]", &fa.antiRoll, 0.0f, 40000.0f, "%.0f");
         changed |= ImGui::SliderFloat("Anti-roll rear [N/m]", &ra.antiRoll, 0.0f, 40000.0f, "%.0f");
-        ImGui::TextDisabled("Damping ratio per direction: Jolt has one coefficient, set before\n"
-                            "each step from the direction of the previous step.");
+        changed |= ImGui::SliderFloat("Damper knee [m/s]", &fa.damperKneeSpeed, 0.0f, 1.0f, "%.2f");
+        ra.damperKneeSpeed = fa.damperKneeSpeed;
+        ImGui::TextDisabled("Damping ratio per direction (and above the knee the\n"
+                            "high-speed slope): Jolt has one coefficient, set inside\n"
+                            "each step from that step's suspension speed.");
     }
     if (ImGui::CollapsingHeader("Tires (live)", ImGuiTreeNodeFlags_DefaultOpen)) {
         changed |= ImGui::SliderFloat("Long. peak mu", &m_tuning.tirePeakLongFriction, 0.2f, 2.0f, "%.2f");

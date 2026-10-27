@@ -221,7 +221,9 @@ if(TRAILFORGE_BUILD_TESTS)
             ev_battery
             ev_simulation
             tire_thermal_model
-            tire_sets)
+            tire_sets
+            suspension_force_model
+            bump_no_rollover)
         add_test(NAME ${test_name} COMMAND trailforge_vehicle_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()

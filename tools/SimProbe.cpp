@@ -25,6 +25,12 @@
 //                                       (lap times, tread and core temperatures per lap), warm-start laps; 150 s on a
 //                                       40 m circle at the limit; limit-driver laps (budget = k x g x current mu) with
 //                                       grip use; one slow lap from the middle of the window
+//   trailforge_probe bump [all|quick [hold|cruise|coast|full]] | bump trace offset h kmh driver shape
+//                                     - straight runs over one bump on the flat pad: 1 m kicker, 2.5 m mound and
+//                                       60 degree step, full width and under the left wheels, 0.2 / 0.3 /
+//                                       0.4 m at 20 / 30 / 40 km/h (quick: 0.30 / 0.35 / 0.40 m at 30 km/h): CoM rise,
+//                                       airtime, roll / pitch, suspension speed, hard stop hits, rollovers; per
+//                                       vehicle the suspension numbers Jolt uses (effective mass, rates, ratios)
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -40,6 +46,10 @@
 #include "track/Level.h"
 #include "track/MiniTrack.h"
 #include "vehicle/VehicleDefinition.h"
+
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
 #include <algorithm>
 #include <chrono>
@@ -2938,6 +2948,267 @@ void tiresProbe(int argc, char** argv) {
     }
 }
 
+// ---- bump: straight runs over one bump on the flat pad (TrackGeometry::addBump), per vehicle.
+// From 1 m before the bump: Hold keeps the speed controller (it opens the throttle up to full as the bump slows the
+// vehicle), Cruise freezes the throttle at its cruise value, Coast lifts off, Full floors it.
+enum class BumpDriver { Hold, Cruise, Coast, Full };
+
+// Kicker: a 1 m long round bump (steepest face atan(pi h / 1 m): 43 deg at 0.30 m, 51 deg at 0.40 m), a ramp at
+// speed. Mound: the same cosine over 2.5 m (21 / 27 deg), a hummock. Step: a ledge with 60 degree faces.
+enum class BumpShape { Kicker, Mound, Step };
+const char* bumpShapeName(BumpShape s) { return s == BumpShape::Kicker ? "kicker" : s == BumpShape::Mound ? "mound" : "step"; }
+BumpShape bumpShape(const std::string& s) {
+    return s == "mound" ? BumpShape::Mound : s == "step" ? BumpShape::Step : BumpShape::Kicker;
+}
+
+struct BumpRun {
+    BumpShape shape = BumpShape::Kicker;
+    bool offset = false; // under the left wheels only
+    float height = 0.3f; // m
+    float kmh = 30.0f;   // target speed at the bump
+    BumpDriver driver = BumpDriver::Hold;
+};
+
+struct BumpOutcome {
+    float entryKmh = 0.0f;
+    float gain = 0.0f;       // m, max center-of-mass rise over the cruise height
+    float air = 0.0f;        // s, longest time with no wheel in contact
+    float lift = 0.0f;       // s, longest time with two or more wheels off the ground
+    float roll = 0.0f;       // deg, max |roll|
+    float pitch = 0.0f;      // deg, max |pitch|
+    float suspVel = 0.0f;    // m/s, max compression speed of a wheel in contact
+    int stops = 0;           // suspension solid (minLength), rising edges summed over the wheels
+    int rims = 0;            // Jolt's rigid hard point (tire at its rim, or minLength with a rigid tire)
+    float peakLoad = 0.0f;   // N, max single-wheel suspension force
+    float nz = 0.0f;         // g, max vertical specific force of the body (50 ms mean; 1 = at rest)
+    bool bodyHit = false;    // chassis touched the bump
+    bool rolled = false;     // body upside down at any time or more than 60 degrees tilted at the end
+};
+
+float bumpBase(BumpShape p, float h) {
+    if (p == BumpShape::Step) return 2.0f * h / std::tan(60.0f * 3.14159265f / 180.0f) + 0.3f;
+    return p == BumpShape::Kicker ? 1.0f : 2.5f;
+}
+
+BumpOutcome bumpRun(const VehicleConfig& cfg, const BumpRun& run, bool trace = false) {
+    SimulationSettings s;
+    s.layout = TrackLayout::Flat;
+    s.vehicle = cfg;
+    Simulation sim(s);
+    const float zc = 40.0f, base = bumpBase(run.shape, run.height);
+    const float zIn = zc - 0.5f * base, zOut = zc + 0.5f * base;
+    TrackGeometry g;
+    g.addBump(run.offset ? 0.35f : -3.0f, 3.0f, zc, base, run.height,
+              run.shape == BumpShape::Step ? BumpProfile::Step : BumpProfile::Round, 0.0f, SurfaceId::Concrete);
+    JPH::TriangleList tris;
+    for (std::size_t i = 0; i < g.triangleCount(); ++i)
+        tris.emplace_back(g.positions[3 * i], g.positions[3 * i + 1], g.positions[3 * i + 2], 0u);
+    JPH::PhysicsMaterialList mats;
+    mats.push_back(sim.surfaces().material(SurfaceId::Concrete));
+    auto& bi = sim.world().bodies();
+    const JPH::BodyID bumpId =
+        bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(), JPH::RVec3::sZero(),
+                                                      JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::Static),
+                            JPH::EActivation::DontActivate);
+    const JPH::BodyID vid = sim.vehicle().bodyId();
+    const double dt = sim.fixedStep();
+    const float target = run.kmh / 3.6f;
+    BumpOutcome o;
+    double restSum = 0.0;
+    int restN = 0;
+    float rest = 0.0f, prevL[4] = {0, 0, 0, 0};
+    bool prevStop[4] = {false, false, false, false}, prevRim[4] = {false, false, false, false};
+    bool prevContact[4] = {false, false, false, false};
+    std::vector<float> vy;
+    double airRun = 0.0, liftRun = 0.0, tOut = -1.0;
+    float cruiseThrottle = -1.0f;
+    bool measuring = false;
+    for (int i = 0; i < int(30.0 / dt); ++i) {
+        const auto& t = sim.vehicle().telemetry();
+        const float frontZ = float(sim.currentSnapshot().wheels[0].position.GetZ());
+        const float rearZ = float(sim.currentSnapshot().wheels[2].position.GetZ());
+        DriverIntent in;
+        const float err = target - t.forwardSpeed;
+        in.throttle = std::clamp(0.15f + 0.5f * err, 0.0f, 1.0f);
+        if (frontZ < zIn - 3.0f && err < -1.0f) in.brake = std::clamp(-0.2f * err, 0.0f, 0.5f);
+        if (frontZ > zIn - 1.0f && run.driver != BumpDriver::Hold) {
+            if (cruiseThrottle < 0.0f) cruiseThrottle = in.throttle;
+            in.throttle = run.driver == BumpDriver::Coast ? 0.0f : run.driver == BumpDriver::Full ? 1.0f : cruiseThrottle;
+        }
+        sim.setIntent(in);
+        sim.tick();
+        const auto& tw = sim.vehicle().telemetry();
+        const JPH::RVec3 com = bi.GetCenterOfMassPosition(vid);
+        const JPH::Quat q = bi.GetRotation(vid);
+        const JPH::Vec3 up = q.RotateAxisY(), left = q.RotateAxisX(), fwd = q.RotateAxisZ();
+        vy.push_back(bi.GetLinearVelocity(vid).GetY());
+        if (frontZ > zIn - 15.0f && frontZ < zIn - 5.0f) {
+            restSum += com.GetY();
+            ++restN;
+        }
+        if (!measuring && frontZ > zIn - 1.0f) {
+            measuring = true;
+            rest = restN > 0 ? float(restSum / restN) : float(com.GetY());
+            o.entryKmh = tw.forwardSpeed * 3.6f;
+            for (int w = 0; w < 4; ++w) prevL[w] = tw.wheels[w].suspensionLength;
+        }
+        if (tOut < 0.0 && rearZ > zOut + 0.5f) tOut = i * dt;
+        if (measuring) {
+            o.gain = std::max(o.gain, float(com.GetY()) - rest);
+            int contacts = 0;
+            for (int w = 0; w < 4; ++w) {
+                const auto& wt = tw.wheels[w];
+                contacts += wt.contact;
+                if (wt.contact && prevContact[w])
+                    o.suspVel = std::max(o.suspVel, float((prevL[w] - wt.suspensionLength) / dt));
+                if (wt.bumpStop && !prevStop[w]) ++o.stops;
+                if (wt.rimHit && !prevRim[w]) ++o.rims;
+                prevRim[w] = wt.rimHit;
+                o.peakLoad = std::max(o.peakLoad, wt.load);
+                prevStop[w] = wt.bumpStop;
+                prevContact[w] = wt.contact;
+                prevL[w] = wt.suspensionLength;
+            }
+            airRun = contacts == 0 ? airRun + dt : 0.0;
+            liftRun = contacts <= 2 ? liftRun + dt : 0.0;
+            o.air = std::max(o.air, float(airRun));
+            o.lift = std::max(o.lift, float(liftRun));
+            o.roll = std::max(o.roll, std::abs(std::atan2(left.GetY(), up.GetY())) * 57.2958f);
+            o.pitch = std::max(o.pitch, std::abs(std::atan2(fwd.GetY(), up.GetY())) * 57.2958f);
+            if (vy.size() > 6) {
+                const float a = float((vy.back() - vy[vy.size() - 7]) / (6.0 * dt));
+                o.nz = std::max(o.nz, (a + 9.81f) / 9.81f);
+            }
+            o.bodyHit = o.bodyHit || sim.world().system().WereBodiesInContact(vid, bumpId);
+            o.rolled = o.rolled || up.GetY() < 0.0f;
+            if (trace && i % 6 == 0)
+                std::printf("  t=%5.2f z=%6.2f dy=%+.3f roll=%+6.1f pitch=%+6.1f v=%5.1f | L %.3f %.3f %.3f %.3f | %c%c%c%c\n",
+                            i * dt, frontZ, float(com.GetY()) - rest, std::atan2(left.GetY(), up.GetY()) * 57.2958f,
+                            std::atan2(fwd.GetY(), up.GetY()) * 57.2958f, tw.forwardSpeed * 3.6f,
+                            tw.wheels[0].suspensionLength, tw.wheels[1].suspensionLength, tw.wheels[2].suspensionLength,
+                            tw.wheels[3].suspensionLength, tw.wheels[0].contact ? 'C' : '-', tw.wheels[1].contact ? 'C' : '-',
+                            tw.wheels[2].contact ? 'C' : '-', tw.wheels[3].contact ? 'C' : '-');
+        }
+        if (tOut >= 0.0 && i * dt > tOut + 4.0) break;
+    }
+    o.rolled = o.rolled || bi.GetRotation(vid).RotateAxisY().GetY() < 0.5f;
+    return o;
+}
+
+// Suspension numbers as Jolt uses them: effective mass of each wheel constraint (body mass and inertia at the force
+// point), spring rate and damper coefficient from frequency and ratio, and the ratio against the static corner load.
+void bumpVehicleHeader(const std::string& id, const VehicleConfig& cfg) {
+    SimulationSettings s;
+    s.layout = TrackLayout::Flat;
+    s.vehicle = cfg;
+    Simulation sim(s);
+    for (int i = 0; i < 360; ++i) sim.tick();
+    const auto& t = sim.vehicle().telemetry();
+    JPH::Vec3 inertia, invI;
+    float invMass = 0.0f;
+    {
+        JPH::BodyLockRead lock(sim.world().system().GetBodyLockInterface(), sim.vehicle().bodyId());
+        const JPH::MotionProperties* mp = lock.GetBody().GetMotionProperties();
+        invMass = mp->GetInverseMass();
+        invI = mp->GetInverseInertiaDiagonal();
+        inertia = JPH::Vec3(1.0f / invI.GetX(), 1.0f / invI.GetY(), 1.0f / invI.GetZ());
+    }
+    auto& bi = sim.world().bodies();
+    const float comY = float(bi.GetCenterOfMassPosition(sim.vehicle().bodyId()).GetY());
+    std::printf("bump vehicle %s: %.0f kg, principal inertia %.0f / %.0f / %.0f kg*m^2 (radii of gyration %.2f / %.2f / "
+                "%.2f m), CoM %.2f m above ground, SSF track/(2h) %.2f\n",
+                id.c_str(), cfg.mass, inertia.GetX(), inertia.GetY(), inertia.GetZ(), std::sqrt(inertia.GetX() / cfg.mass),
+                std::sqrt(inertia.GetY() / cfg.mass), std::sqrt(inertia.GetZ() / cfg.mass), comY,
+                cfg.axles[kFrontAxle].track / (2.0f * comY));
+    for (int axle = 0; axle < 2; ++axle) {
+        const AxleConfig& a = cfg.axles[axle];
+        const AxleTuning& at = cfg.tuning.axles[axle];
+        const int w = 2 * axle;
+        const float hz = 0.5f * cfg.wheelBase * (axle == 0 ? 1.0f : -1.0f);
+        const JPH::Vec3 fp(0.5f * a.track, cfg.attachHeight - 0.5f * (a.suspensionMinLength + a.suspensionMaxLength), hz);
+        const JPH::Vec3 r = fp.Cross(JPH::Vec3(0, -1, 0));
+        const float meff = 1.0f / (invMass + r.Dot(invI * r));
+        const float omega = 2.0f * 3.14159265f * at.springFrequency;
+        const float k = meff * omega * omega;
+        const float cC = 2.0f * meff * at.compressionDamping * omega, cR = 2.0f * meff * at.reboundDamping * omega;
+        const float corner = 0.5f * (t.wheels[w].load + t.wheels[w + 1].load) / 9.81f;
+        const float crit = 2.0f * std::sqrt(k * corner);
+        const float travel = a.suspensionMaxLength - a.suspensionMinLength;
+        const float restL = 0.5f * (t.wheels[w].suspensionLength + t.wheels[w + 1].suspensionLength);
+        std::printf("  %s: corner %.0f kg (static), Jolt m_eff %.0f kg, %.2f Hz -> k %.1f N/mm, c %.2f / %.2f kN*s/m "
+                    "(ratio %.2f / %.2f of the corner's critical), travel %.3f m, rest %.0f%% compressed, bump travel "
+                    "left %.3f m, anti-roll %.0f, bump stop %.3f m x%.1f (%.1f kN at full), damper knee %.2f m/s "
+                    "slopes %.2f / %.2f\n",
+                    axle == 0 ? "front" : "rear ", corner, meff, at.springFrequency, k / 1000.0f, cC / 1000.0f,
+                    cR / 1000.0f, cC / crit, cR / crit, travel, 100.0f * (a.suspensionMaxLength - restL) / travel,
+                    restL - a.suspensionMinLength, at.antiRoll, at.bumpStopRange, at.bumpStopFrequencyScale,
+                    k * bumpStopForceRatio(at, at.bumpStopRange) / 1000.0f, at.damperKneeSpeed,
+                    at.compressionHighSpeedSlope, at.reboundHighSpeedSlope);
+    }
+}
+
+void bumpProbe(int argc, char** argv) {
+    const std::string section = argc > 2 ? argv[2] : "all";
+    const auto driver = [](const std::string& d) {
+        return d == "cruise" ? BumpDriver::Cruise : d == "coast" ? BumpDriver::Coast : d == "full" ? BumpDriver::Full
+                                                                                    : BumpDriver::Hold;
+    };
+    std::vector<std::string> paths;
+    if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) {
+        paths.push_back(env);
+    } else {
+        for (const char* id : {"trailforge_suv", "trailforge_ev", "trailforge_patrol", "ironclad_suv", "kestrel_coupe"})
+            paths.push_back(std::string(TRAILFORGE_SOURCE_DIR "/assets/vehicles/") + id + "/vehicle.json");
+        paths.push_back("builtin");
+    }
+    std::vector<float> heights = {0.2f, 0.3f, 0.4f}, speeds = {20.0f, 30.0f, 40.0f};
+    if (section == "quick") {
+        heights = {0.3f, 0.35f, 0.4f};
+        speeds = {30.0f};
+    }
+    for (const std::string& path : paths) {
+        VehicleConfig cfg;
+        std::string id = "builtin";
+        if (path != "builtin") {
+            VehicleDefinition def;
+            std::vector<std::string> errors;
+            if (!loadVehicleDefinition(path, def, errors)) {
+                for (const auto& e : errors) std::fprintf(stderr, "%s\n", e.c_str());
+                continue;
+            }
+            cfg = def.config;
+            id = def.id;
+        }
+        bumpVehicleHeader(id, cfg);
+        if (section == "trace") {
+            const BumpRun run{argc > 7 ? bumpShape(argv[7]) : BumpShape::Kicker,
+                              argc > 3 && std::atoi(argv[3]) != 0, argc > 4 ? float(std::atof(argv[4])) : 0.35f,
+                              argc > 5 ? float(std::atof(argv[5])) : 30.0f, argc > 6 ? driver(argv[6]) : BumpDriver::Hold};
+            bumpRun(cfg, run, true);
+            continue;
+        }
+        int rolls = 0, runs = 0;
+        std::printf("  driver %s\n", argc > 3 ? argv[3] : "hold");
+        std::printf("  shape  side  h(m) km/h | entry | gain(m) air(s) lift(s) | roll  pitch (deg) | susp(m/s) solid rim "
+                    "peak(kN) nz(g) | body\n");
+        for (BumpShape p : {BumpShape::Kicker, BumpShape::Mound, BumpShape::Step})
+            for (bool offset : {false, true})
+                for (float h : heights)
+                    for (float v : speeds) {
+                        const BumpOutcome o = bumpRun(cfg, {p, offset, h, v, argc > 3 ? driver(argv[3]) : BumpDriver::Hold});
+                        rolls += o.rolled;
+                        ++runs;
+                        std::printf("  %-6s %-5s %.2f %4.0f | %5.1f | %6.3f %6.2f %6.2f | %5.1f %5.1f | %6.2f %5d %3d "
+                                    "%7.1f %5.2f | %s%s\n",
+                                    bumpShapeName(p), offset ? "left" : "full", h, v, o.entryKmh,
+                                    o.gain, o.air, o.lift, o.roll, o.pitch, o.suspVel, o.stops, o.rims, o.peakLoad / 1000.0f,
+                                    o.nz,
+                                    o.bodyHit ? "hit" : "-", o.rolled ? "  ROLLED" : "");
+                    }
+        std::printf("bump RESULT %-18s %-6s %d of %d runs rolled over\n", id.c_str(), argc > 3 ? argv[3] : "hold", rolls, runs);
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
     if (mode == "levelprofile" && argc > 6) {
@@ -3002,6 +3273,7 @@ int main(int argc, char** argv) {
     else if (mode == "minitrack") miniTrackProbe(argc, argv);
     else if (mode == "drift") driftProbe(argc, argv);
     else if (mode == "tires") tiresProbe(argc, argv);
+    else if (mode == "bump") bumpProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

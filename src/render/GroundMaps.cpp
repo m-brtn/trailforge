@@ -71,7 +71,7 @@ float smooth(float e0, float e1, float x) {
 // 1 away from the proving-ground lanes (they are driven on), ramping to 0 inside them.
 float laneFree(float x, float z) {
     if (z > 46.0f) return 1.0f;
-    const float lanes[][2] = {{-8.0f, 8.0f}, {-34.0f, -18.0f}, {16.0f, 36.0f}};
+    const float lanes[][2] = {{-8.0f, 8.0f}, {-34.0f, -18.0f}, {16.0f, 36.0f}, {-43.0f, -38.0f}}; // + bump strip
     float f = 1.0f;
     for (const auto& l : lanes) {
         const float d = std::max(l[0] - x, x - l[1]); // > 0 outside the lane

@@ -377,7 +377,7 @@ void tireMarksSurfaces() {
         sim.requestToggleLowRange();
         run(sim, 0.1);
         w0 = marks.written();
-        run(sim, 1.5, DriverIntent{.throttle = 1.0f, .steer = 1.0f});
+        run(sim, 1.7, DriverIntent{.throttle = 1.0f, .steer = 1.0f});
         const MarkStats spin = marksSince(marks, w0);
         std::snprintf(label, sizeof(label), "%s, power turn (low range):", lane.name);
         printMarks(label, spin, sim);
@@ -1633,7 +1633,7 @@ void miniTrackLap() {
 
     Simulation sim(settingsFor(TrackLayout::ProvingGround));
     const auto& features = sim.track().features();
-    CHECK(features.size() == 17 && features.back().name == "Mini handling track", "%zu features, last '%s'",
+    CHECK(features.size() == 18 && features.back().name == "Mini handling track", "%zu features, last '%s'",
           features.size(), features.back().name.c_str());
     // The asphalt is clear: a ray down every 5 m along the center line lands on the ribbon (no tyres, walls, rocks).
     int blocked = 0;

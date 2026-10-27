@@ -48,7 +48,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 105 tests, 94 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 107 tests, 96 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -75,7 +75,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `drift` (scripted drift attempts on the mini track's 32 m corner), `lap` (autopilot laps of a circuit level), `tires` (tire sets: braking per
 surface cold / warm, mini track and Suncoast laps with tire temperatures, `circle` limit circle, `limit` limit-driver
-laps with grip use, `cooldown` slow lap); they drive the vehicle of
+laps with grip use, `cooldown` slow lap), `bump` (rollovers over single 0.20–0.40 m bumps per shipped vehicle and driver); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -100,6 +100,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/car1_views.txt # vehicle model views vs Cars.png, /tmp/trailforge_car1_*.png
 ./build/release/trailforge --script tools/scenarios/wheel_fit.txt # visual wheels / arches follow a tire size change
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
+./build/release/trailforge --script tools/scenarios/bump_check.txt     # 0.35 m bump strip at 30 km/h, every shipped vehicle, no rollover, /tmp/trailforge_bump_*.png
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
 ./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
 ./build/release/trailforge --script tools/scenarios/map_edge_views.txt # Exploration Peaks map edge / horizon ring from fixed high and low cameras, PERF per preset, /tmp/trailforge_edge_*.png

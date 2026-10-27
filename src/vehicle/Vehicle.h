@@ -22,6 +22,14 @@ class PhysicsWorld;
 inline constexpr int kWheelCount = 4;
 inline constexpr const char* kWheelNames[kWheelCount] = {"FL", "FR", "RL", "RR"};
 
+// Damper: the damping ratio that gives the damper force at suspension speed `speed` (m/s, + = extending / rebound)
+// with the linear Jolt damper: the compression or rebound ratio up to damperKneeSpeed, above it the force grows with
+// the high-speed slope (AxleTuning).
+float suspensionDampingRatio(const AxleTuning& a, float speed);
+// Bump stop force / spring rate (m) at `into` m inside the bump stop range (0 outside): the rate rises linearly from
+// the spring rate at contact to bumpStopFrequencyScale^2 x the spring rate at full compression.
+float bumpStopForceRatio(const AxleTuning& a, float into);
+
 // Driver commands for one physics tick (already smoothed).
 struct DriverCommand {
     float throttle = 0.0f;  // 0..1
@@ -34,8 +42,11 @@ enum class DriveDirection { Forward, Reverse };
 
 struct WheelTelemetry {
     bool contact = false;
-    bool bumpStop = false;            // suspension hit the bump stop (min length)
+    bool bumpStop = false;            // suspension solid: at its minimum length (or the tire at its rim)
+    bool rimHit = false;              // Jolt's rigid hard point: the tire deflected to the rim (or no tire deflection)
+    float tireDeflection = 0.0f;      // m, tire deflection with the suspension solid (AxleConfig::tireDeflection)
     float suspensionLength = 0.0f;    // m, from the attachment point to the wheel center
+    float suspensionSpeed = 0.0f;     // m/s, change of suspensionLength over the last tick (+ = extending)
     float compression = 0.0f;         // m, maxLength - length
     float compressionRatio = 0.0f;    // 0 = full droop, 1 = full compression
     float load = 0.0f;                // N, suspension force = suspension impulse / dt
@@ -199,7 +210,7 @@ private:
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
     float clutchStrength(float throttle) const;
     void applyDifferentials();
-    void applySuspensionPerTick(); // compression / rebound damping, bump stops
+    void updateSuspension(float dt); // compression / rebound damping, damper curve, bump stops (inside the step)
     void applyAckermann(float steer);
     void applyDrag();
     void applyRollingResistance();
@@ -242,7 +253,8 @@ private:
     TransferMode m_transfer = TransferMode::TwoHigh;
     bool m_revCut = false;
     std::array<float, kWheelCount> m_prevSuspLength{};
-    std::array<float, kWheelCount> m_suspVelocity{}; // m/s, + = extending (rebound)
+    std::array<float, kWheelCount> m_stepSuspLength{}; // after the wheel casts of the last physics step (updateSuspension)
+    std::array<float, kWheelCount> m_suspensionMass{}; // kg, effective mass of each wheel's suspension constraint
     DriverCommand m_command;
     AidControls m_controls;
     DrivingAids m_aids;
