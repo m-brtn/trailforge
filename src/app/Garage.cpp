@@ -125,6 +125,19 @@ void Garage::selectVehicle(int index) {
         SetupFile loaded;
         if (loadSetupFile(path, loaded, &error) && loaded.vehicleId == vehicle().id) {
             m_file = loaded;
+            if (loaded.loadedSchema < kSetupSchema) {
+                // Keep the original next to it once, then store the migrated file so this runs only once.
+                const std::string backup = path + ".schema" + std::to_string(loaded.loadedSchema) + ".bak";
+                if (!std::filesystem::exists(backup, ec)) std::filesystem::copy_file(path, backup, ec);
+                for (const std::string& n : loaded.migrationNotes) std::printf("Garage: %s\n", n.c_str());
+                if (persist()) {
+                    say(loaded.migrationNotes.empty()
+                            ? "Setups of " + vehicle().name + " updated to the new file format"
+                            : "Setups of " + vehicle().name + ": old anti-roll values reset to the vehicle's bars");
+                    std::printf("Garage: %s migrated from schema %d (backup %s)\n", path.c_str(),
+                                loaded.loadedSchema, backup.c_str());
+                }
+            }
         } else {
             say("Setups of " + vehicle().name + " not loaded: " + (error.empty() ? "wrong vehicle id" : error));
             std::printf("Garage: %s\n", m_message.c_str());

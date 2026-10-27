@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -962,8 +963,96 @@ void mapLevelRaster() {
     CHECK(std::abs(R - G) < 25 && std::abs(G - B) < 25, "start pad color %d %d %d", R, G, B);
 }
 
+// Setup files of schema 1 (anti-roll in Jolt bar units) load with their anti-roll values dropped, everything else
+// kept; the garage keeps a backup and stores the file as schema 2 once.
+void setupMigration() {
+    // A real schema 1 file as the v0.27.0 garage wrote it (the owner's SUV setup).
+    const std::string v1 = R"({
+  "schema": 1,
+  "selected": "Setup 1",
+  "setups": [
+    {
+      "kit": "",
+      "name": "Setup 1",
+      "values": {
+        "suspension.front.antiRoll": 11000,
+        "suspension.front.compression": 0.5399999618530273,
+        "suspension.front.preload": 0.03999999910593033,
+        "suspension.front.rebound": 0.6800000071525574,
+        "suspension.rear.antiRoll": 15000,
+        "suspension.rear.compression": 0.5799999833106995,
+        "suspension.rear.preload": 0.03999999910593033,
+        "suspension.rear.rebound": 0.7400000095367432,
+        "suspension.rideHeight": -0.04999999701976776,
+        "tires.gripScale": 1.0399999618530273
+      }
+    },
+    {"kit": "", "name": "No bars", "values": {"suspension.front.frequency": 1.5}}
+  ],
+  "vehicle": "trailforge_suv"
+})";
+    SetupFile f;
+    std::string error;
+    CHECK(parseSetupFile(v1, f, &error), "schema 1 rejected: %s", error.c_str());
+    for (const std::string& n : f.migrationNotes) std::printf("    %s\n", n.c_str());
+    CHECK(f.loadedSchema == 1 && f.migrationNotes.size() == 2, "schema %d, %zu notes", f.loadedSchema,
+          f.migrationNotes.size());
+    const VehicleSetup* s = f.find("Setup 1");
+    CHECK(s && s->values.size() == 8 && !s->values.count("suspension.front.antiRoll") &&
+              !s->values.count("suspension.rear.antiRoll") &&
+              std::abs(s->values.at("suspension.front.rebound") - 0.68f) < 1e-6f,
+          "Setup 1 keeps its other 8 values");
+    CHECK(f.find("No bars") && f.find("No bars")->values.size() == 1 && f.selected == "Setup 1", "second setup kept");
+
+    // Schema 2 keeps anti-roll values (N/m) as they are; unknown schemas fail.
+    SetupFile back;
+    const std::string v2 = writeSetupFile(f);
+    CHECK(v2.find("\"schema\": 2") != std::string::npos, "written as schema 2");
+    SetupFile withBars = f;
+    withBars.setups[0].values["suspension.front.antiRoll"] = 12000.0f;
+    CHECK(parseSetupFile(writeSetupFile(withBars), back, &error) && back.loadedSchema == 2 &&
+              back.migrationNotes.empty() && back.find("Setup 1")->values.at("suspension.front.antiRoll") == 12000.0f,
+          "schema 2 anti-roll kept");
+    std::string bad = v1;
+    bad.replace(bad.find("\"schema\": 1"), 11, "\"schema\": 3");
+    CHECK(!parseSetupFile(bad, back, &error), "schema 3 accepted");
+
+    // Garage: migrates the file on disk once, with a backup of the original.
+    std::vector<std::string> errors;
+    std::vector<VehicleDefinition> catalog = loadVehicleCatalog(TRAILFORGE_SOURCE_DIR "/assets/vehicles", errors);
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_setup_migration";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / "trailforge_suv.json";
+    { std::ofstream(path, std::ios::binary) << v1; }
+    Garage g(catalog, dir.string());
+    std::printf("    garage message: %s\n", g.message().c_str());
+    CHECK(g.vehicle().id == "trailforge_suv", "garage starts on the SUV");
+    const std::filesystem::path backup = dir / "trailforge_suv.json.schema1.bak";
+    std::string kept;
+    {
+        std::ifstream in(backup, std::ios::binary);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        kept = ss.str();
+    }
+    CHECK(kept == v1, "backup holds the original schema 1 text");
+    SetupFile onDisk;
+    CHECK(loadSetupFile(path.string(), onDisk, &error) && onDisk.loadedSchema == 2 && onDisk.migrationNotes.empty() &&
+              onDisk.find("Setup 1") && onDisk.find("Setup 1")->values.size() == 8,
+          "file stored as schema 2 without the anti-roll values");
+    CHECK(g.message().find("anti-roll") != std::string::npos, "garage message '%s'", g.message().c_str());
+    const VehicleConfig& c = g.config();
+    CHECK(c.tuning.axles[kFrontAxle].antiRoll == catalog[0].config.tuning.axles[kFrontAxle].antiRoll &&
+              c.tuning.axles[kRearAxle].antiRoll == catalog[0].config.tuning.axles[kRearAxle].antiRoll &&
+              std::abs(c.tuning.axles[kFrontAxle].reboundDamping - 0.68f) < 1e-6f,
+          "active setup: vehicle bars, the other values applied");
+    std::filesystem::remove_all(dir);
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
+        {"setup_migration", setupMigration},
         {"map_view_math", mapViewMath},
         {"map_level_raster", mapLevelRaster},
         {"settings_roundtrip", settingsRoundtrip},

@@ -306,7 +306,7 @@ if(TRAILFORGE_BUILD_TESTS)
     target_link_libraries(trailforge_app_tests PRIVATE trailforge_flow trailforge_sim)
     target_compile_definitions(trailforge_app_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     foreach(test_name settings_roundtrip menu_navigation pause_freezes_ticks garage_model vehicle_page controls_layout pad_glyph_detect
-                         callout_spread map_view_math map_level_raster best_laps_file)
+                         callout_spread map_view_math map_level_raster best_laps_file setup_migration)
         add_test(NAME ${test_name} COMMAND trailforge_app_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()

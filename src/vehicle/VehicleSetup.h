@@ -69,10 +69,17 @@ float frequencyFromWheelRate(float rateNPerM, float cornerMass);   // Hz
 float criticalDamping(float frequencyHz, float cornerMass);        // N*s/m
 
 // All setups of one vehicle, persisted as JSON (setups/<vehicle id>.json in the user data directory).
+// Schema 2 (v0.28.0): anti-roll bars are N/m at the wheel. Schema 1 stored them in the units of Jolt's anti-roll
+// bar, whose effective rate depended on the damping and the physics step, so they have no fixed conversion: loading
+// a schema 1 file drops its anti-roll values (the vehicle's own bars apply) and lists them in migrationNotes.
+constexpr int kSetupSchema = 2;
+
 struct SetupFile {
     std::string vehicleId;
     std::string selected;               // name of the active setup; empty = factory
     std::vector<VehicleSetup> setups;
+    int loadedSchema = kSetupSchema;           // schema of the parsed text
+    std::vector<std::string> migrationNotes;   // what parsing an older schema changed (not written)
     VehicleSetup* find(const std::string& name);
     const VehicleSetup* find(const std::string& name) const;
 };

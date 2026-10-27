@@ -303,7 +303,7 @@ const VehicleSetup* SetupFile::find(const std::string& name) const {
 
 std::string writeSetupFile(const SetupFile& f) {
     json::Value root = json::Value::makeObject();
-    root.object["schema"] = json::Value::makeNumber(1);
+    root.object["schema"] = json::Value::makeNumber(kSetupSchema);
     root.object["vehicle"] = json::Value::makeString(f.vehicleId);
     root.object["selected"] = json::Value::makeString(f.selected);
     json::Value list = json::Value::makeArray();
@@ -327,12 +327,14 @@ bool parseSetupFile(const std::string& text, SetupFile& out, std::string* error)
         if (error) *error = "invalid JSON: " + e;
         return false;
     }
-    if (!root.isObject() || root["schema"].numberOr(0) != 1 || root["vehicle"].type != json::Value::Type::String ||
-        !root["setups"].isArray()) {
-        if (error) *error = "expected {\"schema\": 1, \"vehicle\": ..., \"setups\": [...]}";
+    const double schema = root.isObject() ? root["schema"].numberOr(0) : 0;
+    if (!root.isObject() || (schema != 1 && schema != kSetupSchema) ||
+        root["vehicle"].type != json::Value::Type::String || !root["setups"].isArray()) {
+        if (error) *error = "expected {\"schema\": 1 or 2, \"vehicle\": ..., \"setups\": [...]}";
         return false;
     }
     SetupFile f;
+    f.loadedSchema = int(schema);
     f.vehicleId = root["vehicle"].string;
     f.selected = root["selected"].stringOr("");
     for (const json::Value& s : root["setups"].array) {
@@ -345,6 +347,14 @@ bool parseSetupFile(const std::string& text, SetupFile& out, std::string* error)
         }
         for (const auto& [k, x] : s["values"].object)
             if (x.isNumber()) v.values[k] = float(x.number);
+        if (f.loadedSchema == 1)
+            for (const char* key : {"suspension.front.antiRoll", "suspension.rear.antiRoll"})
+                if (const auto it = v.values.find(key); it != v.values.end()) {
+                    f.migrationNotes.push_back("setup '" + v.name + "': " + key + " = " + fmt(it->second) +
+                                               " (old Jolt bar units, no fixed conversion to N/m) dropped; the "
+                                               "vehicle's own anti-roll bar applies");
+                    v.values.erase(it);
+                }
         f.setups.push_back(std::move(v));
     }
     if (!f.selected.empty() && !f.find(f.selected)) f.selected.clear();

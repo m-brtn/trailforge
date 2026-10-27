@@ -1233,7 +1233,11 @@ Live values change the running vehicle between physics ticks; layout, preload an
 rebuild the vehicle in place (same position and heading, lowered onto the ground by a raycast, aid switches and the
 transfer mode kept). Setups (several per vehicle: Factory is read-only; save, save as new, rename, delete, reset to
 factory) are saved as JSON in `<user data>/setups/<vehicle id>.json` (`trailforge --paths`); the selected setup is
-applied at the next start. Keyboard (arrows, Enter, Esc), mouse (hover, click arrows, click or drag a slider) and
+applied at the next start. Files are `"schema": 2` since v0.28.0 (anti-roll bars in N/m at the wheel). A schema 1
+file (anti-roll in the units of Jolt's bar, whose effective rate depended on the damping and the step, so there is
+no fixed conversion) loads with its anti-roll values dropped, so the vehicle's own bars apply; every other value is
+kept. The garage logs each dropped value, shows a message, keeps the original as `<vehicle id>.json.schema1.bak`
+and stores the migrated file once. Keyboard (arrows, Enter, Esc), mouse (hover, click arrows, click or drag a slider) and
 gamepad (D-pad, A, B) work. Rename, Delete and Reset to factory open a modal dialog over the dimmed garage (one
 reusable component): Rename has a text field with the current name preselected (typing replaces it) and a caret,
 SDL text input runs only while it is open, names are checked live (not empty, not "Factory", unique, at most 32
