@@ -1483,10 +1483,13 @@ the development level and is what scenarios and `--demo` start on.
   preset, the mesh LODs switch at 0.145 / 0.37 of it; the last 12% before each switch is a dithered cross-fade of
   both LODs, so trees do not pop; drawn out to 2 / 3 / 3.5 / 4.5 km per preset); grass, flowers, wheat, trees, rocks
   and props keep clear of every road corridor and of bridge decks with their ramps (a 1.5–3 m fade from the edge,
-  CTest `level_grass_clear`); a render-only horizon ring outside the bake (ridged hills that continue the bake edge, a northern range from
-  ~1 km out; the edge heights are averaged over a window that grows with the distance and the material continues the
-  bake's ground colors at the edge, then a per-pixel grass / rock / snow / sand palette from noise, so the bake square
-  does not read from above) and the open sea
+  CTest `level_grass_clear`); a render-only horizon ring outside the bake out to 24 km (ridged hills that continue the
+  bake edge, a northern range from ~1 km out; the ring rounds from the bake's square into a circle over the first
+  ~4 km, the coast continues the bake's own sea / land along the edge with noisy bays, capes and small islands, and
+  an outer coast 15–21 km out sinks into the open sea; the edge heights are averaged over a window that grows with
+  the distance and the material starts from the bake's ground colors at the edge, then a per-pixel grass / forest /
+  rock / snow / sand palette from noise tinted to the edge's mean tone; snow follows the level's own snow line, so
+  the bake square does not read from above) and the open sea
   to 80 km; longer shadow cascades. Camera-relative rendering was not needed: at ±1280 m a float position step is
   ~1.2e-4 m and reversed-Z keeps the depth precision.
 - **Map (M / LB):** see [Map, waypoint and compass](#map-waypoint-and-compass). No fast travel: teleports are in the

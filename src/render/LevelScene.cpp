@@ -280,8 +280,10 @@ MeshData buildLevelWaterfallMesh(const Level& level) {
 // ring's lighting (no ground AO, more sky light), set so the ring next to the bake edge matches the bake's mean
 // pixel colour in top-down captures at 10:00.
 constexpr glm::vec3 kEdgeGrass(0.090f, 0.108f, 0.030f), kEdgeSoil(0.150f, 0.118f, 0.078f), kEdgeRock(0.190f, 0.175f, 0.160f),
-                    kEdgeSand(0.360f, 0.310f, 0.210f), kEdgeSnow(0.720f, 0.740f, 0.780f);
-constexpr glm::vec3 kEdgeLight(1.15f, 1.05f, 0.69f);
+                    kEdgeSand(0.360f, 0.310f, 0.210f);
+constexpr glm::vec3 kEdgeLight(1.46f, 1.08f, 0.88f);
+// Mean of the ring's own grass / dry / forest palette (paletteMean in lit_fs MAT_HORIZON).
+constexpr glm::vec3 kPaletteMean(0.098f, 0.093f, 0.045f);
 
 MeshData buildLevelHorizonMesh(const Level& level) {
     const int n = level.samples();
@@ -309,16 +311,25 @@ MeshData buildLevelHorizonMesh(const Level& level) {
             cols.push_back({{x, z}, level.heightSample(i, j), 0.0f});
         }
     const int nc = int(cols.size());
+    // Sea where the bake's ground is below the open sea plane (y = 0) just inside the edge, smoothed along the edge.
+    // The bake tags sea water only near its coast, so open sea at the edge is told by height; levels without any
+    // sea water are land all round, whatever their heights.
+    const bool hasSea = std::find(level.waterKinds().begin(), level.waterKinds().end(), WaterKind::Sea) != level.waterKinds().end();
+    const auto seaAt = [&](glm::vec2 q) {
+        return hasSea && (level.waterKindAt(q.x, q.y) == WaterKind::Sea || level.heightAt(q.x, q.y) < 0.0f);
+    };
+    std::vector<float> sea(static_cast<std::size_t>(nc));
+    for (int c = 0; c < nc; ++c) sea[std::size_t(c)] = seaAt(cols[std::size_t(c)].p * (1.0f - 2.0f * level.cell() / e)) ? 1.0f : 0.0f;
     for (int c = 0; c < nc; ++c) {
         float sum = 0.0f;
-        for (int d = -20; d <= 20; ++d) sum += cols[std::size_t((c + d + nc) % nc)].h0;
-        cols[std::size_t(c)].land = glm::smoothstep(-6.0f, 8.0f, sum / 41.0f);
+        for (int d = -10; d <= 10; ++d) sum += sea[std::size_t((c + d + nc) % nc)];
+        cols[std::size_t(c)].land = 1.0f - sum / 21.0f;
     }
 
-    // Rings: geometric spacing out to ~14 km; the square scales outward from the center.
-    static constexpr float kRings[] = {0,    8,    24,   50,   90,   150,  220,  300,  400,  520,  660,  820,  1000, 1200,
-                                       1450, 1750, 2100, 2500, 3000, 3600, 4300, 5100, 6100, 7300, 8700, 10300, 12100, 14000};
-    constexpr int nr = int(std::size(kRings));
+    // Rings: 8 m apart at the edge, then 9 % farther apart per ring out past the outer coast.
+    std::vector<float> rings{0.0f};
+    while (rings.back() < kHorizonLand) rings.push_back(rings.back() + std::clamp(rings.back() * 0.15f, 8.0f, 1800.0f));
+    const int nr = int(rings.size());
     // The bake edge profile (hills, cut walls) would run outward as radial ridges while it fades: it is averaged along
     // the edge over a window that grows with the distance (about +-r/2), so the ring loses it smoothly.
     std::vector<double> prefix(std::size_t(nc) + 1, 0.0);
@@ -333,41 +344,81 @@ MeshData buildLevelHorizonMesh(const Level& level) {
         else sum = range(a, b);
         return float(sum / double(2 * half + 1));
     };
-    auto heightAt = [&](int c, const Column& col, float r) {
-        const glm::vec2 p = col.p * ((e + r) / e);
-        const float w = glm::smoothstep(0.0f, 1200.0f, r);
-        // Ridged hills everywhere on land (they rise out of the valley haze right past the edge); to the north (-Z)
-        // a mountain range from ~1 km out, lower again far away.
+    // Land / sea along the edge around a fractional column, averaged over +-half columns (wraps around the loop).
+    std::vector<double> landPrefix(std::size_t(2 * nc) + 1, 0.0);
+    for (int c = 0; c < 2 * nc; ++c)
+        landPrefix[std::size_t(c) + 1] = landPrefix[std::size_t(c)] + double(cols[std::size_t(c % nc)].land);
+    const auto landAlong = [&](float c, int half) {
+        half = std::clamp(half, 0, nc / 4);
+        const int i = int(std::floor(c));
+        const int a = ((i - half) % nc + nc) % nc;
+        return float((landPrefix[std::size_t(a + 2 * half + 1)] - landPrefix[std::size_t(a)]) / double(2 * half + 1));
+    };
+    // Ring point of a column: on the square of the bake edge, rounding into a circle from ~200 m to ~4 km out, so
+    // the surrounding land has no square silhouette from far above.
+    const float roundR = 1.148f * e; // mean distance of the square's edge points from its centre
+    const auto place = [&](const Column& col, float r) {
+        const float len = glm::length(col.p);
+        return col.p / len * glm::mix(len * (e + r) / e, roundR + r, glm::smoothstep(200.0f, 4000.0f, r));
+    };
+    // Surrounding land in world space (r: distance past the bake edge): ridged hills everywhere (they rise out of the
+    // valley haze right past the edge); to the north (-Z) a mountain range from ~1 km out, lower again far away.
+    const auto landHeight = [&](glm::vec2 p, float r) {
         const float north = glm::smoothstep(0.1f, 0.8f, -p.y / glm::length(p));
         const float spur = 1.0f - std::abs(2.0f * fbm2(p.x / 420.0f, p.y / 420.0f, 3, 719u) - 1.0f);
         const float hills = 60.0f + 230.0f * fbm2(p.x / 950.0f, p.y / 950.0f, 4, 711u) + 70.0f * spur * spur;
         const float ridge = 1.0f - std::abs(2.0f * fbm2(p.x / 1700.0f, p.y / 1700.0f, 4, 733u) - 1.0f);
         const float range = (260.0f + 640.0f * ridge * ridge) * glm::smoothstep(500.0f, 3200.0f, r) *
                             (1.0f - 0.55f * glm::smoothstep(7000.0f, 14000.0f, r));
-        const float land = glm::mix(hills, std::max(hills, range), north);
-        const float seabed = -18.0f - 12.0f * glm::smoothstep(0.0f, 2500.0f, r);
-        const float target = glm::mix(seabed, land, col.land);
-        return glm::mix(edgeHeight(c, r), target, w);
+        return glm::mix(hills, std::max(hills, range), north);
+    };
+    // The land starts at the level of the bake edge (averaged over ~320 m) and settles to its own heights by ~3.5 km.
+    std::vector<float> offset(static_cast<std::size_t>(nc));
+    for (int c = 0; c < nc; ++c) offset[std::size_t(c)] = edgeHeight(c, 640.0f) - landHeight(cols[std::size_t(c)].p, 0.0f);
+    auto heightAt = [&](int c, glm::vec2 p, float r) {
+        const Column& col = cols[std::size_t(c)];
+        const glm::vec2 dir = col.p / glm::length(col.p);
+        // Coast: the edge's land / sea read at a column shifted by noise growing with the distance (bays and capes
+        // instead of a straight line out of the bake corner), small islands and inlets, and an outer coast 15-21 km
+        // out where the land sinks into the open sea.
+        const float shift = (fbm2(p.x / 3100.0f, p.y / 3100.0f, 3, 747u) - 0.5f) * 0.9f * r / float(kStride);
+        float land = landAlong(float(c) + shift, int(r / (4.0f * float(kStride) * level.cell())));
+        land += (fbm2(p.x / 1700.0f, p.y / 1700.0f, 4, 751u) - 0.5f) * 0.6f * glm::smoothstep(300.0f, 3500.0f, r);
+        const float coastR = 15000.0f + 6000.0f * fbm2(dir.x * 2.2f + 11.0f, dir.y * 2.2f + 5.0f, 3, 757u);
+        land -= glm::smoothstep(coastR - 6000.0f, coastR, r);
+        // Kept well above the sea where the coast noise raises land off a sea column (its edge offset is negative).
+        const float hills = landHeight(p, r);
+        const float ground = std::max(hills + offset[std::size_t(c)] * (1.0f - glm::smoothstep(0.0f, 3500.0f, r)), 0.35f * hills);
+        const float seabed = -18.0f - 22.0f * glm::smoothstep(0.0f, 4000.0f, r);
+        // A narrow land / sea transition: shallow flats would read as pale lagoons under the sea's fog.
+        const float target = glm::mix(seabed, ground, glm::smoothstep(0.42f, 0.58f, land));
+        // Land stays above the open sea plane (y = 0, everywhere outside the bake) and its beach band: levels whose
+        // edge is near sea level would otherwise show shallow sea around the bake.
+        const float h = glm::mix(edgeHeight(c, r), target, glm::smoothstep(0.0f, 600.0f, r));
+        // Only land is lifted (the seabed stays below the sea plane), easing in from the coastline without a step.
+        const float lift = 8.0f * glm::smoothstep(0.5f, 1.0f, land) * glm::smoothstep(0.0f, 60.0f, r);
+        return h + std::max(0.0f, lift - h) * glm::smoothstep(0.5f, 0.6f, land);
     };
     std::vector<glm::vec3> pos(std::size_t(nc + 1) * nr);
     for (int c = 0; c <= nc; ++c)
         for (int k = 0; k < nr; ++k) {
             const Column& col = cols[std::size_t(c % nc)];
-            const glm::vec2 p = col.p * ((e + kRings[k]) / e);
-            pos[std::size_t(c) * nr + k] = glm::vec3(p.x, heightAt(c % nc, col, kRings[k]), p.y);
+            const glm::vec2 p = place(col, rings[std::size_t(k)]);
+            pos[std::size_t(c) * nr + k] = glm::vec3(p.x, heightAt(c % nc, p, rings[std::size_t(k)]), p.y);
         }
     auto P = [&](int c, int k) { return pos[std::size_t(c) * nr + std::size_t(k)]; };
     auto normal = [&](int c, int k) {
-        const glm::vec3 dc = P(std::min(c + 1, nc), k) - P(std::max(c - 1, 0), k);
+        const glm::vec3 dc = P(c == nc ? 1 : c + 1, k) - P(c == 0 ? nc - 1 : c - 1, k);
         const glm::vec3 dk = P(c, std::min(k + 1, nr - 1)) - P(c, std::max(k - 1, 0));
         glm::vec3 nn = glm::cross(dk, dc);
         if (nn.y < 0.0f) nn = -nn;
         return glm::normalize(nn);
     };
-    // Vertex colour: far-view ground colour of the baked terrain just inside each column (mean grass, soil, rock,
-    // sand and snow tones of the textured ground seen from hundreds of meters, from the render masks over the last
-    // 160 m), smoothed along the edge. The palette itself is per pixel (MatId::Horizon in lit_fs), which fades from
-    // this tone to its own over the first ~3 km.
+    // Vertex colour: far-view ground colour of the baked terrain just inside each column (mean grass, soil, rock and
+    // sand tones of the textured ground seen from hundreds of meters, from the render masks over the last 160 m),
+    // smoothed along the edge over a window growing with the distance. Snow is left out: lit_fs puts it on the ring
+    // by the level's snow line, so a snowy edge tone does not smear outward. The palette itself is per pixel
+    // (MatId::Horizon in lit_fs): it starts from this tone and keeps its mean (as a tint) over the first few km.
     const int cn = level.cells();
     const auto cellAt = [&](float x, float z) {
         const int i = std::clamp(int((x - level.origin()) / level.cell()), 0, cn - 1);
@@ -384,31 +435,37 @@ MeshData buildLevelHorizonMesh(const Level& level) {
             for (float t = 8.0f; t <= 160.0f; t += 8.0f) {
                 const glm::vec2 q = p + in * t + glm::vec2(-in.y, in.x) * (float(d) * 12.0f);
                 const std::size_t k = cellAt(q.x, q.y);
+                if (seaAt(q)) continue; // sea floor: the ring's palette (no tint) under the sea
                 const float grass = byte(level.maskTexels()[k], 0);
                 const std::uint32_t sp = level.splatTexels()[k];
-                const float rock = byte(sp, 1), sand = std::max(0.0f, 2.0f * byte(sp, 2) - 1.0f),
-                            snow = std::max(0.0f, 1.0f - 2.0f * byte(sp, 2));
+                const float rock = byte(sp, 1), sand = std::max(0.0f, 2.0f * byte(sp, 2) - 1.0f);
                 glm::vec3 g = glm::mix(kEdgeSoil, kEdgeGrass, grass);
                 g = glm::mix(g, kEdgeSand, sand);
                 g = glm::mix(g, kEdgeRock, rock);
-                g = glm::mix(g, kEdgeSnow, snow);
                 sum += g;
                 ++count;
             }
-        edgeColor[std::size_t(c)] = sum / float(count);
+        edgeColor[std::size_t(c)] = count > 0 ? sum / float(count) : kPaletteMean / kEdgeLight;
     }
-    std::vector<glm::vec3> edgeSmooth(edgeColor.size());
-    for (int c = 0; c < nc; ++c) {
-        glm::vec3 sum(0.0f);
-        for (int d = -24; d <= 24; ++d) sum += edgeColor[std::size_t((c + d + nc) % nc)];
-        edgeSmooth[std::size_t(c)] = sum / 49.0f * kEdgeLight;
-    }
+    std::vector<glm::dvec3> colorPrefix(std::size_t(2 * nc) + 1, glm::dvec3(0.0));
+    for (int c = 0; c < 2 * nc; ++c)
+        colorPrefix[std::size_t(c) + 1] = colorPrefix[std::size_t(c)] + glm::dvec3(edgeColor[std::size_t(c % nc)]);
+    const auto edgeTone = [&](int c, float r) {
+        const int half = std::clamp(4 + int(r / (2.0f * float(kStride) * level.cell())), 0, nc / 4);
+        const int a = ((c - half) % nc + nc) % nc;
+        const glm::dvec3 sum = colorPrefix[std::size_t(a + 2 * half + 1)] - colorPrefix[std::size_t(a)];
+        return glm::vec3(sum / double(2 * half + 1)) * kEdgeLight;
+    };
 
     MeshData m;
     m.vertices.reserve(std::size_t(nc) * std::size_t(nr - 1) * 6);
+    // Material z: the level's snow line at the vertex (lit_fs puts snow above it on gentle faces, as the bake does).
     auto vert = [&](int c, int k) {
         const glm::vec3 p = P(c, k), nn = normal(c, k);
-        m.vertices.push_back({p, nn, edgeSmooth[std::size_t(c % nc)], glm::vec4(float(MatId::Horizon), 0.92f, 0.0f, 0.0f)});
+        // From ~300 m out the line climbs to at least 520 m by ~3 km, so snow stays on the range and the high hills.
+        const float line = level.snowLine() + level.snowEastRise() * std::max(0.0f, p.x - level.snowEastFrom());
+        const float snowLine = glm::mix(line, std::max(line, 520.0f), glm::smoothstep(300.0f, 3000.0f, rings[std::size_t(k)]));
+        m.vertices.push_back({p, nn, edgeTone(c % nc, rings[std::size_t(k)]), glm::vec4(float(MatId::Horizon), 0.92f, snowLine, 0.0f)});
     };
     for (int c = 0; c < nc; ++c)
         for (int k = 0; k + 1 < nr; ++k) {

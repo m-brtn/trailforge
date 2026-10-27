@@ -1,0 +1,97 @@
+# Exploration Peaks map edge from fixed high cameras: the 2 x 2 km bake against the render-only horizon terrain in
+# all four directions, the north-west corner, a top view and an outward view from above the centre, then PERF of an
+# edge view per quality preset.
+#   ./build/release/trailforge --script tools/scenarios/map_edge_views.txt --no-audio
+# Captures /tmp/trailforge_edge_*.png (time 10:00, High), then PERF lines. Exit code 1 on FAIL.
+set ui 0
+set hud 0
+set auto_reverse 0
+quality High
+level exploration_peaks
+until level == 1 10
+time 10
+wait 1.5
+
+# ---------------------------------------------------------------- outside the edge, looking in
+camera 0.0 2200.0 3600.0 0.0 0.0 0.0
+wait 2.0
+capture /tmp/trailforge_edge_01_south.png
+wait 0.3
+camera 3600.0 2200.0 0.0 0.0 0.0 0.0
+wait 2.0
+capture /tmp/trailforge_edge_02_east.png
+wait 0.3
+camera 0.0 2200.0 -3600.0 0.0 0.0 0.0
+wait 2.0
+capture /tmp/trailforge_edge_03_north.png
+wait 0.3
+camera -3600.0 2200.0 0.0 0.0 0.0 0.0
+wait 2.0
+capture /tmp/trailforge_edge_04_west.png
+wait 0.3
+
+# ---------------------------------------------------------------- north-west corner
+camera -2600.0 1500.0 -2600.0 -600.0 0.0 -600.0
+wait 2.0
+capture /tmp/trailforge_edge_05_nw_corner.png
+wait 0.3
+camera 400.0 900.0 400.0 -1000.0 200.0 -1000.0
+wait 2.0
+capture /tmp/trailforge_edge_06_nw_from_inside.png
+wait 0.3
+
+# ---------------------------------------------------------------- very high: top view and looking outward
+camera 0.0 7000.0 1.0 0.0 0.0 0.0
+wait 2.0
+capture /tmp/trailforge_edge_07_top.png
+wait 0.3
+camera 0.0 3000.0 0.0 -3000.0 0.0 -3000.0
+wait 2.0
+capture /tmp/trailforge_edge_08_out_nw.png
+wait 0.3
+camera 0.0 3000.0 0.0 3000.0 0.0 3000.0
+wait 2.0
+capture /tmp/trailforge_edge_09_out_se.png
+wait 0.3
+
+# ---------------------------------------------------------------- low cameras inside the play area, looking out
+camera 905.0 102.0 150.0 2400.0 110.0 -250.0
+wait 2.0
+capture /tmp/trailforge_edge_10_low_east.png
+wait 0.3
+camera 300.0 205.0 -950.0 300.0 150.0 -2500.0
+wait 2.0
+capture /tmp/trailforge_edge_11_low_north.png
+wait 0.3
+camera -600.0 420.0 -500.0 -1300.0 150.0 -1500.0
+wait 2.0
+capture /tmp/trailforge_edge_12_low_nw.png
+wait 0.3
+camera -900.0 160.0 100.0 -2600.0 120.0 300.0
+wait 2.0
+capture /tmp/trailforge_edge_13_low_west.png
+wait 0.3
+
+# ---------------------------------------------------------------- PERF: high edge view per preset
+set vsync 0
+camera -2600.0 1500.0 -2600.0 -600.0 0.0 -600.0
+quality Low
+wait 2.0
+perf_begin edge_low
+wait 4
+perf_end
+quality Medium
+wait 2.0
+perf_begin edge_medium
+wait 4
+perf_end
+quality High
+wait 2.0
+perf_begin edge_high
+wait 4
+perf_end
+quality Ultra
+wait 2.0
+perf_begin edge_ultra
+wait 4
+perf_end

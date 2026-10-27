@@ -25,9 +25,13 @@ MeshData buildLevelWaterMesh(const Level& level);
 // 1 foam, 2 mist); material: drop (m), river width (m), seed.
 MeshData buildLevelWaterfallMesh(const Level& level);
 // Render-only horizon around the baked square (no collision; the play area ends well inside the bake): a ring of
-// low-detail terrain that starts at the bake edge heights and eases into hills, a mountain range to the north and
-// a seabed under the sea elsewhere, out to ~14 km. Fog and distance hide its coarseness.
+// low-detail terrain that starts at the bake edge heights and colours, rounds from the square into a circle over
+// the first ~4 km and eases into hills, a mountain range to the north and a seabed under the sea elsewhere, with a
+// noisy coast and an outer coast 15-21 km out where the land sinks into the open sea (out to kHorizonLand). Snow
+// follows the level's snow line. Fog and distance hide its coarseness.
 MeshData buildLevelHorizonMesh(const Level& level);
+// Outer radius of the horizon ring past the bake edge (m).
+inline constexpr float kHorizonLand = 24000.0f;
 // Open sea plane half extent around the level (m).
 inline constexpr float kHorizonSea = 80000.0f;
 // Procedural pine instances of the level: the trees without a model (the trunks are collision in the terrain tiles).

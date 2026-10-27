@@ -903,22 +903,37 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
             s.ao = vehicleAO(P);
         } else if (mat == MAT_HORIZON) {
             // Per pixel, so the long radial ring quads do not smear a per-vertex palette into streaks: grass and
-            // forest patches, rock on steep or high ground, snow on gentle faces above a noisy line, sand at the
-            // waterline. It fades from the edge tone in the vertex colour (half within ~400 m of the bake edge along
-            // a noisy line, the rest by ~3 km), so the ring starts in the colour the baked ground ends with.
+            // forest patches tinted to the mean tone of the bake edge (vertex colour; the tint fades out from 1.5 to 6 km),
+            // rock on steep or high ground, snow on gentle faces above the level's snow line (material z), sand at
+            // the waterline. Within ~900 m of the bake edge (along a noisy line) it starts from the edge tone itself,
+            // so the ring begins in the colour the baked ground ends with.
             const float n1 = noiseTex.Sample(noiseSampler, P.xz / 5600.0).r * 0.65 + noiseTex.Sample(noiseSampler, P.xz / 1900.0).g * 0.35;
             const float n2 = noiseTex.Sample(noiseSampler, P.xz / 2100.0 + 0.37).g * 0.6 + noiseTex.Sample(noiseSampler, P.xz / 640.0).r * 0.4;
+            const float n3 = noiseTex.Sample(noiseSampler, P.xz / 230.0 + 0.61).r;
             const float slope = 1.0 - N.y;
+            const float r = max(abs(P.x), abs(P.z)) + f.groundRect.x; // past the bake edge
             float3 c = lerp(float3(0.085, 0.092, 0.040), float3(0.150, 0.122, 0.062), smoothstep(0.35, 0.75, n1));
             c = lerp(c, float3(0.045, 0.060, 0.030), 0.7 * smoothstep(0.50, 0.70, n2)); // forest
+            // Tree crowns and clearings as dark specks (the bake's forest seen from above); where the specks are
+            // below a pixel the mips would average them away, so they turn into their mean darkening instead.
+            const float4 fine = noiseTex.Sample(noiseSampler, P.xz / 41.0 + 0.23);
+            const float specks = smoothstep(0.52, 0.68, fine.a);
+            const float speckMip = saturate(length(fwidth(P.xz)) / 41.0 * 3.0);
+            c *= 1.0 - 0.45 * lerp(specks, 0.3, speckMip) * smoothstep(0.30, 0.60, n2 + 0.2 * n1);
+            const float3 paletteMean = float3(0.098, 0.093, 0.045);
+            c *= lerp(clamp(vin.color / paletteMean, 0.5, 2.0), (float3)1.0, smoothstep(1500.0, 6000.0, r));
+            c = lerp(vin.color * (0.80 + 0.40 * n2), c, 0.6 * smoothstep(0.0, 300.0, r + (n2 - 0.5) * 400.0) + 0.4 * smoothstep(100.0, 900.0, r));
             const float3 rockC = lerp(float3(0.115, 0.105, 0.095), float3(0.205, 0.190, 0.170), n2);
             c = lerp(c, rockC, max(smoothstep(0.18, 0.32, slope), smoothstep(380.0, 560.0, P.y)));
-            const float snowLine = 720.0 + 260.0 * (n1 - 0.5);
-            c = lerp(c, float3(0.72, 0.74, 0.78), smoothstep(snowLine, snowLine + 120.0, P.y) * (1.0 - smoothstep(0.22, 0.36, slope)));
+            // Snow fields break up into rock and scree along a noisy line instead of fading over a wide band; the
+            // far-view albedo of the bake's textured snow.
+            const float n4 = fine.g;
+            const float snowLine = vin.material.z + 60.0 * (n2 - 0.5) + 50.0 * (n3 - 0.5) + 24.0 * (n4 - 0.5);
+            const float snow = smoothstep(snowLine, snowLine + 30.0, P.y) *
+                               (1.0 - smoothstep(0.20, 0.30, slope + 0.12 * (n3 - 0.5) + 0.10 * (n4 - 0.5)));
+            c = lerp(c, float3(0.38, 0.39, 0.42) * (0.85 + 0.2 * n3 + 0.1 * n4), snow);
             c = lerp(c, float3(0.36, 0.31, 0.21), 1.0 - smoothstep(1.5, 5.0, P.y));
-            const float r = max(abs(P.x), abs(P.z)) + f.groundRect.x; // past the bake edge (the rings scale the square)
-            const float3 edgeTone = vin.color * (0.80 + 0.40 * n2);
-            s.albedo = lerp(edgeTone, c, 0.45 * smoothstep(0.0, 400.0, r + (n2 - 0.5) * 500.0) + 0.55 * smoothstep(300.0, 3000.0, r));
+            s.albedo = c;
             s.metallic = 0.0;
         } else if (mat == MAT_CLADDING) {
             // Stippled plastic: noise fixed to the vehicle, projected along the dominant local axis.

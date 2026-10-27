@@ -2646,6 +2646,8 @@ void LevelBaker::bake() {
     L.m_origin = m_origin;
     L.m_cell = m_cell;
     L.m_snowLine = m_snowLine;
+    L.m_snowEastRise = m_snowEastRise;
+    L.m_snowEastFrom = m_snowEastFrom;
     const std::size_t total = std::size_t(m_n) * std::size_t(m_n);
     m_h.assign(total, 0.0f);
     m_lakeId.assign(total, 0);

@@ -223,6 +223,7 @@ public:
     // Per sample water surface (kNoWater where dry) and kind.
     float waterSample(int i, int j) const { return m_water[std::size_t(j) * m_n + i]; }
     const std::vector<float>& waterSurfaces() const { return m_water; }
+    const std::vector<WaterKind>& waterKinds() const { return m_waterKind; }
     // Water surface over (x, z) if the ground there is under water (nearest sample), else nullopt.
     std::optional<float> waterAt(float x, float z) const;
     WaterKind waterKindAt(float x, float z) const;
@@ -252,6 +253,9 @@ public:
     const std::vector<LevelBuildingType>& buildingTypes() const { return m_buildingTypes; }
     const std::vector<LevelBuilding>& buildings() const { return m_buildings; }
     float snowLine() const { return m_snowLine; }
+    // The snow line rises by snowEastRise() m per m east of x = snowEastFrom() (level.json "snow").
+    float snowEastRise() const { return m_snowEastRise; }
+    float snowEastFrom() const { return m_snowEastFrom; }
     // Closed loop along the roads for the menu attract drive ("attractRoute" legs); empty when the level has none.
     const DriveRoute& attractRoute() const { return m_attractRoute; }
 
@@ -292,6 +296,7 @@ private:
     std::string m_id, m_name;
     int m_n = 0;
     float m_origin = 0.0f, m_cell = 1.0f, m_playHalf = 1000.0f, m_snowLine = 200.0f;
+    float m_snowEastRise = 0.0f, m_snowEastFrom = 0.0f;
     float m_ambientC = 20.0f;
     std::vector<float> m_height, m_water;
     std::vector<WaterKind> m_waterKind;

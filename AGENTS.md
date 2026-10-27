@@ -102,6 +102,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/suspension.txt     # stops with a wheel in the air, /tmp/trailforge_v_susp_*.png
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
 ./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
+./build/release/trailforge --script tools/scenarios/map_edge_views.txt # Exploration Peaks map edge / horizon ring from fixed high and low cameras, PERF per preset, /tmp/trailforge_edge_*.png
 ./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, PERF tex vs off, /tmp/trailforge_tex_*.png
 ./build/release/trailforge --script tools/scenarios/lamp_flare.txt # night lamps without lens flare ghosts (glb test body, SUV, EV), sunset flare, /tmp/trailforge_flare_*.png
 ./build/release/trailforge --script tools/scenarios/buildings_views.txt # village + every POI with buildings from fixed cameras, PERF per preset + Ultra stress, /tmp/trailforge_bld_*.png
