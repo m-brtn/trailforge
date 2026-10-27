@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TrailForge VERSION 0.27.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.28.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
