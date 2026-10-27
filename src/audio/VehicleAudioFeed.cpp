@@ -34,6 +34,7 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     f.gear = t.gear;
     f.referenceLoad = 0.25f * cfg.mass * 9.81f;
     f.tireSound = cfg.tireSound;
+    f.bodySound = cfg.bodySound;
     float wheelOmega = 0.0f;
     for (const auto& w : t.wheels) wheelOmega += 0.25f * w.angularVelocity;
     const float finalDrive = cfg.tuning.finalDrive * (t.lowRange ? cfg.lowRangeRatio : 1.0f);
@@ -99,10 +100,14 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
         }
         m_gear = t.gear;
         for (int i = 0; i < kAudioWheels; ++i) {
-            m_prevLoad[std::size_t(i)] = f.wheels[std::size_t(i)].load;
+            m_prevLength[std::size_t(i)] = t.wheels[std::size_t(i)].suspensionLength;
             m_prevBumpStop[std::size_t(i)] = t.wheels[std::size_t(i)].bumpStop;
             m_prevWater[std::size_t(i)] = f.wheels[std::size_t(i)].inWater;
         }
+        m_prevVelocity = t.velocity;
+        m_feltG = 1.0f;
+        m_rattleArmed = true;
+        m_rattlePending = false;
         return;
     }
 
@@ -117,28 +122,24 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     }
     m_gear = t.gear;
 
+    // Bump-stop knock: the tick a suspension reaches its compression limit, if it was still compressing fast.
     for (int i = 0; i < kAudioWheels; ++i) {
         const std::size_t k = std::size_t(i);
         const WheelAudio& w = f.wheels[k];
-        const bool bump = t.wheels[k].bumpStop && w.contact;
-        if (bump && !m_prevBumpStop[k] && m_time - m_lastBump[k] > s.wheelEventInterval) {
+        const WheelTelemetry& wt = t.wheels[k];
+        const float compressionSpeed = (m_prevLength[k] - wt.suspensionLength) / dt;
+        m_prevLength[k] = wt.suspensionLength;
+        const bool bump = wt.bumpStop && w.contact;
+        if (bump && !m_prevBumpStop[k] && compressionSpeed >= s.bumpStopMinSpeed &&
+            m_time - m_lastBump[k] > s.bumpStopInterval && m_time - m_lastKnock > s.bumpStopGap) {
             AudioEvent e;
             e.type = AudioEventType::BumpStop;
-            e.intensity = std::clamp(w.load / s.bumpStopFullLoad, 0.25f, 1.0f);
-            e.position = toAudio(t.wheels[k].suspensionTop);
+            e.intensity = std::clamp((compressionSpeed - s.bumpStopMinSpeed) / (s.bumpStopFullSpeed - s.bumpStopMinSpeed),
+                                     0.0f, 1.0f);
+            e.position = toAudio(wt.suspensionTop);
             m_events.push_back(e);
             m_lastBump[k] = m_time;
-            m_lastThump[k] = m_time;
-        } else {
-            const float step = w.load - m_prevLoad[k];
-            if (step > s.thumpLoadStep && m_time - m_lastThump[k] > s.wheelEventInterval) {
-                AudioEvent e;
-                e.type = AudioEventType::SuspensionThump;
-                e.intensity = std::clamp(step / s.thumpFullStep, 0.15f, 1.0f);
-                e.position = w.position;
-                m_events.push_back(e);
-                m_lastThump[k] = m_time;
-            }
+            m_lastKnock = m_time;
         }
         if (w.inWater && !m_prevWater[k] && w.rollSpeed > s.splashMinSpeed && m_time - m_lastSplash[k] > 0.3) {
             AudioEvent e;
@@ -149,8 +150,36 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
             m_lastSplash[k] = m_time;
         }
         m_prevBumpStop[k] = bump;
-        m_prevLoad[k] = w.load;
         m_prevWater[k] = w.inWater;
+    }
+
+    // Body rattle: felt vertical acceleration along the body's up axis (velocity change of the center of mass plus
+    // gravity), from the solver's velocities of consecutive ticks.
+    {
+        const JPH::Vec3 up = body.rotation.RotateAxisY();
+        const float felt = ((t.velocity - m_prevVelocity) / dt + JPH::Vec3(0.0f, 9.81f, 0.0f)).Dot(up) / 9.81f;
+        m_prevVelocity = t.velocity;
+        m_feltG += (felt - m_feltG) * (1.0f - std::exp(-dt / s.rattleSmoothing));
+        if (m_rattleArmed && m_feltG > s.rattleOnG && m_time - m_lastRattle > s.rattleInterval) {
+            m_rattleArmed = false;
+            m_rattlePending = true;
+            m_rattleStart = m_time;
+            m_rattlePeak = m_feltG;
+        }
+        // The event waits for the peak of the jolt (at most rattlePeakWait) so its intensity is the peak's.
+        if (m_rattlePending) {
+            m_rattlePeak = std::max(m_rattlePeak, m_feltG);
+            if (m_feltG < m_rattlePeak * 0.97f || m_time - m_rattleStart >= s.rattlePeakWait) {
+                AudioEvent e;
+                e.type = AudioEventType::BodyRattle;
+                e.intensity = std::clamp((m_rattlePeak - s.rattleOnG) / (s.rattleFullG - s.rattleOnG), 0.0f, 1.0f);
+                e.position = f.vehiclePos;
+                m_events.push_back(e);
+                m_rattlePending = false;
+                m_lastRattle = m_rattleStart;
+            }
+        }
+        if (!m_rattlePending && m_feltG < s.rattleRearmG) m_rattleArmed = true;
     }
 
     // Strongest body contact of the tick.

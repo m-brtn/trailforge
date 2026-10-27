@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mutex>
 
+#include "vehicle/BodySound.h"
 #include "vehicle/TireSound.h"
 
 namespace tf {
@@ -78,6 +79,7 @@ struct AudioFrame {
     float referenceLoad = 4905.0f; // N, static load of one wheel
     std::array<WheelAudio, kAudioWheels> wheels;
     TireSoundProfile tireSound;  // the vehicle's tire sound (VehicleConfig::tireSound); default = "sporty"
+    BodySoundProfile bodySound;  // the vehicle's body rattle and knock (VehicleConfig::bodySound); default = "suv"
     // Electric drive: the engine loops, starter and gear shift sounds stay silent; the motors are synthesized.
     bool electric = false;
     std::array<MotorAudio, 2> motors{}; // front, rear
@@ -96,8 +98,8 @@ enum class UiSound : std::uint8_t { Click, Hover, Confirm, Back, SliderTick, Men
 enum class AudioEventType : std::uint8_t {
     EngineStart,     // spawn / reset
     GearShift,       // a gear was engaged
-    BumpStop,        // suspension reached its compression limit
-    SuspensionThump, // large suspension load step (landing, hitting a bump)
+    BumpStop,        // suspension hit its compression limit fast (knock at that wheel)
+    BodyRattle,      // hard vertical jolt of the body (landing, big bump): the whole vehicle shakes
     BodyImpact,      // body collision with an estimated impulse above the threshold
     Splash,          // a wheel entered a puddle
     ChassisCreak,    // large articulation
@@ -131,6 +133,8 @@ struct AudioStats {
     float motorLevel = 0.0f;       // electric: RMS of all synthesized motor / gear / inverter tone gains
     float inverterLevel = 0.0f;    // electric: inverter tone gain (both motors)
     float road = 0.0f;             // rolling road hum level (RMS over the wheels)
+    float rattle = 0.0f;           // body shake envelope driving the synthesized rattle (0..1)
+    int knocks = 0;                // synthesized suspension knocks started
     float gameplayGain = 1.0f;     // 0 while paused (gameplay sounds are paused)
     float musicGain = 0.0f;        // current music level (before the volume settings)
     double musicSeconds = 0.0;     // music played since the last restart (s, counts across loops)

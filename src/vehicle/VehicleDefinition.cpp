@@ -429,6 +429,10 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
         if (!c.audioProfile.empty() && !knownAudioProfile(c.audioProfile))
             root.error("audioProfile", "unknown profile '" + c.audioProfile + "' (known: trailforge_suv, ev, sporty)");
         c.tireSound = tireSoundPreset(c.audioProfile);
+        c.bodySoundId = defaultBodySound(c.audioProfile);
+        root.str("bodySound", c.bodySoundId, false);
+        if (!bodySoundPreset(c.bodySoundId, c.bodySound))
+            root.error("bodySound", "unknown body sound '" + c.bodySoundId + "' (known: suv, tube_frame, coupe)");
         if (root.member("tireSound", false)) {
             TireSoundProfile& ts = c.tireSound;
             Obj s(root.member("tireSound", false), "tireSound", source, errors);

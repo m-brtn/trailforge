@@ -48,7 +48,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 104 tests, 93 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 105 tests, 94 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -117,6 +117,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
 python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 # EV motor sound: tools/scenarios/ev_audio.txt with --audio-capture, same analysis (motor order vs motor_hz)
+# landings / bumps: tools/scenarios/landing_audio.txt with --audio-capture, same analysis (body / suspension events)
 ```
 
 Scenario time is a fixed 1/120 s per frame (paced to real time; not inside `perf_begin`..`perf_end`), so checks

@@ -316,7 +316,8 @@ input, `/tmp/trailforge_launchmarks_*.png`),
 `tools/scenarios/garage.txt` (garage from the pause and the start menu: keyboard, mouse slider click, rebuild in
 place, RWD layout, save / typed rename / save as new / select / delete / reset, `/tmp/trailforge_garage_*.png`),
 `tools/scenarios/audio_check.txt` (the situations the sound reacts to, checks the mixer parameters; run it with
-`--audio-capture`, see [Audio](#audio)),
+`--audio-capture`, see [Audio](#audio)), `tools/scenarios/landing_audio.txt` (bumps and landings: quiet crawling,
+body rattle and bump-stop knocks on hard hits, SUV and buggy; `--audio-capture`),
 `tools/scenarios/suspension.txt` (stops on the diagonal twister with a wheel in the air; follow view with the HUD,
 rear and side views, `/tmp/trailforge_v_susp_*.png`),
 `tools/scenarios/tread_dirt.txt` (soil printed onto concrete after the mud bath and the sand, rolling and with
@@ -404,8 +405,8 @@ audio: `audio_active`, `audio_t` (captured seconds), `audio_src_rpm`, `audio_loa
 `audio_dirt`, `audio_mud`, `audio_grass`, `audio_wind`, `audio_motor_hz` (electric motor order), `audio_motor`,
 `audio_inverter`, `audio_road` (mixer levels), `audio_day`, `audio_night`, `audio_gameplay` (gain of the
 gameplay sounds, 0 while paused), `audio_music` (music bus gain 0..1), `audio_music_t` (seconds of music played), `audio_voices`, `audio_oneshots`, `audio_peak_db`, `audio_clipped`, `audio_cpu`, `audio_ev<N>` (events
-received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 suspension thump, 4 body impact, 5 splash, 6 creak,
-7 UI), and more. Full list: `Application::scenarioValue`.
+received by the mixer: 0 engine start, 1 gear, 2 bump-stop knock, 3 body rattle, 4 body impact, 5 splash, 6 creak,
+7 UI), `audio_rattle` (body shake envelope 0..1), `audio_knocks` (synthesized knocks started), and more. Full list: `Application::scenarioValue`.
 Driver aid `set` keys: `abs 0/1`, `tc 0/1/2`, `diff_locks 0..3`.
 Audio `set` keys: `audio_ui` (panel 0/1), `audio_mute`, `audio_master`, `audio_pitch`, `audio_whine`, `audio_motor`,
 `audio_play_ui N` (play UI sound N: 0 click, 1 hover, 2 confirm, 3 back, 4 slider tick, 5 menu open, 6 menu close).
@@ -1042,7 +1043,7 @@ folder (see "Blender bodies (body.glb)" below); `visualModel` then only picks th
 
 | Section | Keys |
 |---|---|
-| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, optional `bodyShape` (`kit` default, `traced`), `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset); `visualModel` known ids: `trailforge_suv`, `trailforge_ev`, `trailforge_patrol` (kit body only: `traced` builds the kit) |
+| top level | `schema` (1), `id`, `name`, `description`, `visualModel`, optional `bodyShape` (`kit` default, `traced`), `audioProfile` (known ids: `trailforge_suv`, `ev`, `sporty`; also selects the tire sound preset), optional `bodySound` (body rattle and bump-stop knock: `suv`, `tube_frame`, `coupe`; default `coupe` for `sporty`, otherwise `suv`); `visualModel` known ids: `trailforge_suv`, `trailforge_ev`, `trailforge_patrol` (kit body only: `traced` builds the kit) |
 | `tireSound` (optional) | overrides of the `audioProfile` tire sound preset: `squealPitch`, `squealGain`, `lowpassMinHz`, `lowpassMaxHz`, `scrubGain` (0 = no scrub), `scrubLowHz`, `scrubHighHz`, `treadPitch` (m, scrub modulation = sliding speed / treadPitch), `roadGain` (0..2, tread-rate road hum while rolling; the `ev` preset sets 1) |
 | `body` | `mass`, `inertiaScale` (× the box inertia) or `inertia` [Ixx, Iyy, Izz], `centerOfMass` {`frontWeightFraction`, `height` (vs. the frame centre)}, `friction`, `angularDamping`; optional `model` (`"body.glb"`: a `.glb` file name in the vehicle folder, no paths) and `paint` {`paint_primary` / `paint_secondary` / `paint_accent`: [r, g, b] sRGB 0..1} (needs `model`) |
 | `geometry` | `wheelBase`, `attachHeight` (suspension top vs. the frame centre) |
@@ -2148,7 +2149,7 @@ individually (the preset becomes "Custom"). Physics debug lines are off by defau
 
 ## Audio
 
-Recorded sounds (`assets/audio/`, 55 WAV files, 48 kHz / 16-bit) driven by the simulation. The mixer is our own
+Recorded sounds (`assets/audio/`, 54 WAV files, 48 kHz / 16-bit) driven by the simulation. The mixer is our own
 code on top of [miniaudio](https://miniaud.io) 0.11.25, of which only the low-level parts are used: `ma_device`
 (Core Audio playback, f32 stereo 48 kHz, 10 ms period), `ma_decoder` (WAV loading) and `ma_encoder` (capture).
 The `ma_engine` / node graph / resource manager are compiled out (`MA_NO_ENGINE`, `MA_NO_NODE_GRAPH`,
@@ -2193,8 +2194,22 @@ parameter set, and the offline capture must run the exact same code without a de
   dirt roll and scrub on packed dirt and rock, mud slosh plus
   random squelches, grass rustle and swishes, a water splash when a wheel drops into a puddle (contact below the
   puddle's water level inside its rectangle).
-- **Body.** Suspension thump on load steps, bump-stop hits, chassis creak at large articulation, metal impacts from a
-  Jolt contact listener on the chassis body (impulse threshold 600 N·s, see the simplifications below).
+- **Body.** What a hard landing sounds like is the whole vehicle, not a tire: normal bumps add nothing to the rolling
+  and surface sounds. Two synthesized layers on the impacts bus, shaped per vehicle by `bodySound`
+  (`src/vehicle/BodySound.h`): a **body rattle** — random short grains on four body resonances (panels, brackets,
+  loose items) plus a broadband click per grain, rate and level following a shake envelope (time constant 0.16–0.22 s)
+  — raised when the felt vertical acceleration of the body (velocity change of the center of mass plus gravity, along
+  the body's up axis, low-passed 15 ms) rises through 2.3 g (intensity 0 at 2.3 g, 1 at 6 g; re-armed below 1.6 g,
+  at most every 0.25 s, the event waits up to 50 ms for the peak of the jolt); and a **bump-stop knock** at the wheel —
+  three decaying modes and a 3 ms noise transient — when a suspension reaches its bump stop while still compressing
+  at ≥ 1.2 m/s (full at 3.5 m/s; 0.4 s per wheel, 0.1 s between wheels). Knocks above half intensity add one of the
+  recorded car-body slams (`suspension_bottom_out_*`) high-passed at 250 Hz (two poles) so only their clunk and
+  rattle remain. Presets: `suv` (dense 0.5–2.3 kHz panel rattle), `tube_frame` (the buggy: sparser, 0.95–4.3 kHz,
+  longer-ringing), `coupe` (little rattle, tight knock). Chassis creak at large articulation and metal impacts from a
+  Jolt contact listener on the chassis body (impulse threshold 1000 N·s, see the simplifications below; an impact
+  also shakes the rattle). Test `audio_landing`: no rattle and no knock crawling over the rock field (10 km/h) or
+  rolling over the bump sequence at 15 km/h; at most 2 events/s over the bump sequence and the twister at 30 km/h;
+  one rattle and one knock rendered alone have < 10 % of their energy below 200 Hz.
 - **Ambience.** Wind by speed (from 3 m/s, full at 30 m/s), day and night beds crossfaded by the sun elevation
   (−6° … +6°).
 - **Space.** Every source has a position on the vehicle (exhaust, bay, wheels); gain and equal-power pan are
@@ -2223,12 +2238,16 @@ renders the mix without a device: every physics tick produces exactly one tick o
 time), so the sound lines up with the simulation regardless of the frame rate. The mixer parameters of every tick go
 to `out.wav.csv`. `tools/audio/analyze_capture.py out.wav` (needs numpy; uses ffmpeg and sox if installed) prints
 sample/true peak, clipping, integrated loudness, engine pitch tracking against the simulated rpm, the skid band level
-while braking and the day/night spectrum balance, and writes spectrograms `/tmp/trailforge_audio_*.png`. The
+while braking, the day/night spectrum balance and the body / suspension events (count, rate, level against the
+500 ms before each event, spectral centroid of the event's own sound: the spectrum of the 250 ms after the onset minus
+the one before it), and writes spectrograms `/tmp/trailforge_audio_*.png`. `tools/scenarios/landing_audio.txt`
+drives the proving ground for it: a rock crawl and the bump sequence at ~15 km/h (no knock, no rattle expected), the
+bump sequence and the twister at ~30 km/h, the steps, and the tube-frame buggy over the bumps. The
 capture is deterministic for the same tick sequence, but scenario input is timed in real time, so two runs differ
 slightly.
 
 **Assets.** `assets/audio/manifest.json` lists every file with its source, license, processing and verification;
-`assets/audio/CREDITS.md` has the attributions (54 files CC0 1.0, one CC BY 4.0 — credit required, see the file).
+`assets/audio/CREDITS.md` has the attributions (53 files CC0 1.0, one CC BY 4.0 — credit required, see the file).
 `tools/audio/fetch_freesound.py` rebuilds the set from Freesound (needs `FREESOUND_API_KEY` in the environment,
 ffmpeg and sox; the key is never written to disk). The game reads the assets from `assets/audio/` inside the app
 bundle or next to the binary, and in development builds also from the source tree (see "Build and run").
@@ -2421,7 +2440,10 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
 - Sound is cosmetic: it never feeds back into the simulation. Mud slosh, puddle splashes and grass rustle are
   triggered by contact data on rigid ground, not by any fluid or vegetation simulation. Body impact strength is an
   estimate: Jolt's contact listener runs before the solver and reports no impulse, so the sound uses
-  `J = v_approach / (1/m + (r×n)·I⁻¹(r×n))` (N·s) from the approach speed at the contact point. The engine sound is
+  `J = v_approach / (1/m + (r×n)·I⁻¹(r×n))` (N·s) from the approach speed at the contact point. The body rattle
+  and the bump-stop knock are synthesized from the rigid body's felt vertical acceleration and the bump-stop hits;
+  there are no simulated panels or loose parts, and Jolt's wheels have no unsprung mass, so there is no top-out
+  (full rebound) event to sound. The engine sound is
   a recorded petrol inline-4 pitched down, not a synthesized model of the simulated engine. The electric drive
   sound is synthesized from the motor speed and torque (no recordings); its tone choices (pole pairs, slot count,
   gear teeth, carrier) are plausible values, not measurements of a real motor.

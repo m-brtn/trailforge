@@ -1,0 +1,96 @@
+# Landing / bump sound check on the proving ground: crawling and slow bumps stay quiet, hard landings shake the body.
+#   ./build/release/trailforge --script tools/scenarios/landing_audio.txt --audio-capture /tmp/trailforge_landing.wav
+#   python3 tools/audio/analyze_capture.py /tmp/trailforge_landing.wav
+# audio_ev2 counts bump-stop knocks (suspension reaching its bump stop at >= 1.2 m/s), audio_ev3 body rattles (felt
+# vertical acceleration of the body rising through 2.3 g), audio_ev4 body impacts. Needs --audio-capture (no device
+# needed) or an audio device.
+set ui 0
+set auto_reverse 0
+set hud 0
+time Noon
+controls pad_type none
+expect audio_active == 1
+
+# ---------------------------------------------------------------- rock field crawl: no knocks, no rattle
+place 26 14 0
+wait 2.5
+mark audio_ev2
+mark audio_ev3
+log rocks_begin
+pedal throttle 0.15
+wait 6
+pedal throttle 0
+down S
+until speed_kmh < 0.5 8
+up S
+log rocks_end
+expect d_audio_ev2 == 0
+expect d_audio_ev3 == 0
+
+# ---------------------------------------------------------------- bump sequence at ~15 km/h: no knocks, no rattle
+place 0 -38 0
+wait 2.5
+mark audio_ev2
+mark audio_ev3
+log bumps15_begin
+down W
+until speed_kmh > 15 6
+up W
+until z > -8 10
+down S
+until speed_kmh < 0.5 8
+up S
+log bumps15_end
+expect d_audio_ev2 == 0
+expect d_audio_ev3 == 0
+
+# ---------------------------------------------------------------- bump sequence and twister at ~30 km/h: landings
+place 0 -44 0
+wait 2.5
+mark audio_ev3
+log bumps30_begin
+down W
+until speed_kmh > 30 8
+up W
+pedal throttle 0.45
+until z > 16 12
+pedal throttle 0
+down S
+until speed_kmh < 0.5 8
+up S
+log bumps30_end
+expect d_audio_ev3 >= 1
+
+# ---------------------------------------------------------------- steps 0.15 / 0.30 m up and off (full throttle;
+# the SUV cannot climb the 0.45 m step from there)
+place 26 -7.5 0
+wait 2.5
+log steps_begin
+down W
+until z > 6 12
+up W
+down S
+until speed_kmh < 0.5 8
+up S
+log steps_end
+
+# ---------------------------------------------------------------- tube-frame buggy: bump sequence at ~30 km/h
+vehicle trailforge_patrol
+wait 0.5
+place 0 -44 0
+wait 2.5
+mark audio_ev3
+log patrol_begin
+down W
+until speed_kmh > 30 8
+up W
+pedal throttle 0.35
+until z > 16 12
+pedal throttle 0
+down S
+until speed_kmh < 0.5 8
+up S
+log patrol_end
+expect d_audio_ev3 >= 1
+expect audio_clipped == 0
+quit

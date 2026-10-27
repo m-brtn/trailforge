@@ -2848,7 +2848,9 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (n == "audio_inverter") return a.inverterLevel;
         if (n == "audio_road") return a.road;
         if (n == "audio_src_rpm_raw") return a.rpm;
-        // audio_ev<N>: events of AudioEventType N received by the mixer (0 start, 1 gear, 2 bump stop, 3 thump,
+        if (n == "audio_rattle") return a.rattle;
+        if (n == "audio_knocks") return a.knocks;
+        // audio_ev<N>: events of AudioEventType N received by the mixer (0 start, 1 gear, 2 bump stop, 3 body rattle,
         // 4 body impact, 5 splash, 6 creak, 7 UI).
         if (n.size() == 9 && n.rfind("audio_ev", 0) == 0 && n[8] >= '0' && n[8] <= '7')
             return a.eventsByType[std::size_t(n[8] - '0')];

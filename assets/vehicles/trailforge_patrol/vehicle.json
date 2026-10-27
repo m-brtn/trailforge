@@ -5,6 +5,7 @@
   "description": "Two-seat tube-frame patrol buggy: mid-mounted 1.0 L high-revving inline-four, fast sequential six-speed, on-demand AWD, 32 cm of suspension travel, cargo bed with the spare.",
   "visualModel": "trailforge_patrol",
   "audioProfile": "sporty",
+  "bodySound": "tube_frame",
   "body": {
     "mass": 750,
     "inertiaScale": 1.0,

@@ -20,7 +20,7 @@ enum class SoundId : std::uint8_t {
     MudSquelch1, MudSquelch2, MudSquelch3, MudSquelch4,
     WaterSplash1, WaterSplash2, WaterSplash3,
     GrassRustleLoop, GrassSwish1, GrassSwish2, GrassSwish3,
-    SuspensionThump, BottomOut1, BottomOut2, BottomOut3,
+    BottomOut1, BottomOut2, BottomOut3,
     BodyImpactMetal1, BodyImpactMetal2, BodyImpactMetal3, BodyImpactClank,
     ChassisCreak1, ChassisCreak2, ChassisCreak3,
     WindLoop, AmbienceDayLoop, AmbienceNightLoop,

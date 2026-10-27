@@ -841,6 +841,7 @@ void Vehicle::postPhysics(float dt) {
     const Quat rot = bi.GetRotation(m_bodyId);
     const Vec3 vel = bi.GetLinearVelocity(m_bodyId);
     t.speed = vel.Length();
+    t.velocity = vel;
     t.forwardSpeed = vel.Dot(rot.RotateAxisZ());
     t.upDot = rot.RotateAxisY().GetY();
     t.engineRPM = m_controller->GetEngine().GetCurrentRPM();

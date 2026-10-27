@@ -53,7 +53,6 @@ No attribution is required; the authors are credited here with thanks.
 - "bell2.wav" by Tairblenn (https://freesound.org/people/Tairblenn/sounds/549897/). Used in: `ui_confirm`.
 - "Foley_Movement_High_Grass_Mono.wav" by Nox_Sound (https://freesound.org/people/Nox_Sound/sounds/559082/). Used in: `grass_rustle_loop`, `grass_swish_01`, `grass_swish_02`, `grass_swish_03`.
 - "Water Puddle Splash" by cookies+policy (https://freesound.org/people/cookies+policy/sounds/563021/). Used in: `water_splash_01`.
-- "Heavy Metal Thud on Ground" by 7of9Designs (https://freesound.org/people/7of9Designs/sounds/640204/). Used in: `suspension_thump_01`.
 - "Car driving on a gravel dirt road, close recording of front wheel from outside" by felix.blume (https://freesound.org/people/felix.blume/sounds/685231/). Used in: `tire_dirt_roll_loop`.
 - "Shifting Lotus Elise 1-6 Interior" by conicity (https://freesound.org/people/conicity/sounds/697836/). Used in: `gear_shift_01`, `gear_shift_02`, `gear_shift_03`.
 - "MTLimpt_Metal Impact Medium Bang Resonate x17" by harrisonlace (https://freesound.org/people/harrisonlace/sounds/798843/). Used in: `body_impact_metal_01`, `body_impact_metal_02`, `body_impact_metal_03`.

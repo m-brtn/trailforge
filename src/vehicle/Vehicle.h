@@ -91,6 +91,7 @@ struct EvTelemetry {
 struct VehicleTelemetry {
     float speed = 0.0f;         // m/s, magnitude
     float forwardSpeed = 0.0f;  // m/s, projection onto the body +Z axis
+    JPH::Vec3 velocity = JPH::Vec3::sZero(); // m/s, world linear velocity of the center of mass
     float engineRPM = 0.0f;     // rpm
     int gear = 0;               // -1 = R, 0 = N, 1.. = gears
     float clutchFriction = 0.0f; // 0..1

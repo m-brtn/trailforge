@@ -132,7 +132,6 @@ ASSETS = [
     dict(id="grass_swish_02", cat="tires", src=559082, start=8.45, length=1.1, kind="oneshot", mono=True, highpass=60),
     dict(id="grass_swish_03", cat="tires", src=559082, start=9.95, length=1.1, kind="oneshot", mono=True, highpass=60),
     # ---------------- suspension / body ----------------
-    dict(id="suspension_thump_01", cat="suspension", src=640204, start=0.0, length=0.65, kind="oneshot", mono=True),
     dict(id="suspension_bottom_out_01", cat="suspension", src=452550, start=0.25, length=0.9, kind="oneshot", mono=True,
          note="car trunk closed hard (proxy for a bump-stop / bottom-out clunk)"),
     dict(id="suspension_bottom_out_02", cat="suspension", src=450766, start=36.1, length=1.7, kind="oneshot", mono=True,

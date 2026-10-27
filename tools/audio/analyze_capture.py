@@ -6,7 +6,9 @@ Reads out.wav (float32 stereo) and the per-tick mixer parameters in out.wav.csv,
   - engine pitch tracking during the first full-throttle run: the fundamental found in the audio vs. the firing
     frequency of the inline-4 at the played engine speed (rpm_src / 30, two firings per revolution);
   - the 1-6 kHz band level while the tires skid compared with the run before braking;
-  - spectrum balance of the day and the night ambience segments.
+  - spectrum balance of the day and the night ambience segments;
+  - body / suspension events (bump-stop knocks, body rattle, body impacts): count, rate, level against the sound
+    before each event and the spectral centroid of the event's own sound.
 Writes spectrograms with sox (if installed) to <prefix>_*.png.
 
 Usage: analyze_capture.py out.wav [--png-prefix /tmp/trailforge_audio]
@@ -109,6 +111,66 @@ def spectrogram(path, png, title, t0=None, dur=None, max_hz=None):
         cmd += ["rate", str(int(max_hz * 2))]
     cmd += ["spectrogram", "-o", png, "-t", title, "-x", "1400", "-y", "513", "-z", "90"]
     return subprocess.run(cmd, capture_output=True).returncode == 0
+
+
+def analyze_impacts(mono, rate, p, prefix, wav):
+    """Body / suspension events (CSV columns ev_bump, ev_rattle, ev_impact: cumulative counts per tick). For every
+    onset: peak and RMS of the 250 ms after it against the 500 ms before it (engine, tires and wind), the event's own
+    power (event window minus the window before, in power), and the spectral centroid and the share below 200 Hz of
+    that difference spectrum (the event's own sound with the steady bed removed)."""
+    if "ev_rattle" not in p:
+        return
+    t = p["t"]
+    dur = len(mono) / rate
+    win, pre = 0.25, 0.5
+    names = (("ev_bump", "bump-stop / knock"), ("ev_rattle", "rattle (before: suspension thump)"),
+             ("ev_impact", "body impact"))
+    onsets_all = []
+    print(f"body / suspension events over {dur:.1f} s:")
+    for col, label in names:
+        c = p[col]
+        rows = np.nonzero(np.diff(c) > 0)[0] + 1
+        onsets = [max(0.0, t[i] - 1.0 / 120.0) for i in rows for _ in range(int(c[i] - c[i - 1]))]
+        onsets_all += onsets
+        if not onsets:
+            print(f"  {label:34s}: 0 events")
+            continue
+        ons = np.array(onsets)
+        per_s = max(int(((ons >= o) & (ons < o + 1.0)).sum()) for o in ons)
+        stats = []
+        for o in sorted(set(onsets)):
+            if o < pre or o + win > dur:
+                continue
+            ev = mono[int(o * rate):int((o + win) * rate)]
+            base = mono[int((o - pre) * rate):int((o - 0.02) * rate)]
+            pe, pb = float(np.mean(ev ** 2)), float(np.mean(base ** 2))
+            n = len(ev)
+            se = np.abs(np.fft.rfft(ev * np.hanning(n))) ** 2
+            sb = np.abs(np.fft.rfft(base[-n:] * np.hanning(n), n)) ** 2 if len(base) >= n else \
+                np.abs(np.fft.rfft(np.resize(base, n) * np.hanning(n))) ** 2
+            f = np.fft.rfftfreq(n, 1.0 / rate)
+            d = np.clip(se - sb, 0.0, None)
+            band = (f >= 20) & (f <= 16000)
+            tot = d[band].sum()
+            centroid = float((d[band] * f[band]).sum() / tot) if tot > 0 else float("nan")
+            low = float(d[(f >= 20) & (f < 200)].sum() / tot) if tot > 0 else float("nan")
+            stats.append((o, db(np.abs(ev).max()), 10 * np.log10(max(pe, 1e-20)), 10 * np.log10(max(pb, 1e-20)),
+                          10 * np.log10(max(pe - pb, 1e-20)), centroid, low))
+        s = np.array(stats) if stats else np.zeros((0, 7))
+        print(f"  {label:34s}: {len(onsets)} events, {len(onsets) / dur:.2f}/s over the capture, max {per_s} in 1 s")
+        if len(s):
+            own_rel = s[:, 4] - s[:, 3]
+            print(f"    peak {np.median(s[:, 1]):6.1f} dBFS median / {s[:, 1].max():6.1f} max; window RMS "
+                  f"{np.median(s[:, 2]):6.1f} dB vs {np.median(s[:, 3]):6.1f} dB before (median "
+                  f"{np.median(s[:, 2] - s[:, 3]):+.1f} dB, max {(s[:, 2] - s[:, 3]).max():+.1f} dB)")
+            print(f"    event's own power {np.median(own_rel):+.1f} dB re the bed before (median), max "
+                  f"{own_rel.max():+.1f} dB; centroid of the event's own spectrum {np.nanmedian(s[:, 5]):.0f} Hz "
+                  f"median ({np.nanmin(s[:, 5]):.0f}-{np.nanmax(s[:, 5]):.0f}), share below 200 Hz "
+                  f"{100 * np.nanmedian(s[:, 6]):.0f} % median")
+    if onsets_all:
+        o = min(onsets_all)
+        spectrogram(wav, f"{prefix}_impacts.png", "body / suspension events (first 12 s from the first event)",
+                    max(0.0, o - 1.0), min(12.0, dur - max(0.0, o - 1.0)))
 
 
 def analyze_electric(mono, rate, p, prefix, wav):
@@ -255,6 +317,7 @@ def main():
         spectrogram(args.wav, f"{args.png_prefix}_day_night.png", "day ambience -> night ambience", d0,
                     n1 - d0)
 
+    analyze_impacts(mono, rate, p, args.png_prefix, args.wav)
     spectrogram(args.wav, f"{args.png_prefix}_full.png", "full capture")
     return 0
 

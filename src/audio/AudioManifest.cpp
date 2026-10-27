@@ -18,7 +18,7 @@ const std::array<const char*, kSoundCount> kSoundNames = {
     "mud_squelch_01", "mud_squelch_02", "mud_squelch_03", "mud_squelch_04",
     "water_splash_01", "water_splash_02", "water_splash_03",
     "grass_rustle_loop", "grass_swish_01", "grass_swish_02", "grass_swish_03",
-    "suspension_thump_01", "suspension_bottom_out_01", "suspension_bottom_out_02", "suspension_bottom_out_03",
+    "suspension_bottom_out_01", "suspension_bottom_out_02", "suspension_bottom_out_03",
     "body_impact_metal_01", "body_impact_metal_02", "body_impact_metal_03", "body_impact_clank",
     "chassis_creak_01", "chassis_creak_02", "chassis_creak_03",
     "wind_speed_loop", "ambience_day_meadow_loop", "ambience_night_crickets_loop",

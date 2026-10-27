@@ -42,7 +42,8 @@ public:
 // squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, a pool of
 // one-shots and a streamed music track (looped; not paused with the game). An electric vehicle (AudioFrame::electric)
 // silences the engine loops and plays synthesized motor tones instead (evMotorTones); a tire profile with roadGain
-// adds a synthesized rolling road hum per wheel. Gains ramp
+// adds a synthesized rolling road hum per wheel. The body rattle and the bump-stop knocks are synthesized from the
+// vehicle's BodySoundProfile (mixBodyShake). Gains ramp
 // linearly over each 64-frame control block; a look-ahead peak limiter guards the master output.
 class AudioMixer {
 public:
@@ -83,6 +84,8 @@ private:
         std::uint32_t serial = 0; // one-shots: start count, tells a tracked shot from a later reuse of its slot
         float lowpass = 0.0f;  // one-pole low-pass coefficient per sample (0 = off)
         float lpL = 0.0f, lpR = 0.0f;
+        float highpass = 0.0f; // two cascaded one-pole high-passes, pole per sample (0 = off)
+        std::array<float, 8> hp{}; // [in, out] x 2 stages x 2 channels
     };
 
     // Rubber squeal of one wheel: its own voice of the skid loop with per-slide variation.
@@ -169,6 +172,42 @@ private:
     std::array<RoadHum, kAudioWheels> m_road{};
     float m_roadHp = 0.0f, m_roadLp = 0.0f;
     void mixRoad(float* acc, int frames);
+
+    // Body shake (synthesized from the vehicle's BodySoundProfile). Resonator: y = c*y1 - rr*y2 + s*x, a sine of
+    // amplitude x decaying with the mode's time constant per unit impulse.
+    struct Resonator {
+        float c = 0.0f, rr = 0.0f, s = 0.0f, y1 = 0.0f, y2 = 0.0f;
+        void tune(float hz, float decay, float rate);
+        float step(float x) {
+            const float y = c * y1 - rr * y2 + s * x;
+            y2 = y1;
+            y1 = y;
+            return y;
+        }
+    };
+    // Bump-stop knock at one wheel: three modes and a noise transient, struck once.
+    struct Knock {
+        std::array<Resonator, 3> modes{};
+        float amp = 0.0f;           // strike amplitude, for the impulse on the first sample
+        float noise = 0.0f;         // transient envelope
+        float age = 0.0f, life = 0.0f; // s
+        bool active = false, struck = false;
+        AudioVec3 position;
+        float l = 0.0f, r = 0.0f, tl = 0.0f, tr = 0.0f;
+    };
+    std::array<Knock, 3> m_knocks{};
+    // Rattle: random grains on four resonances, rate and amplitude from the shake envelope (one source at the body).
+    std::array<Resonator, 4> m_rattleModes{};
+    BodySoundProfile m_bodyProfile{};
+    bool m_bodyTuned = false;
+    float m_shake = 0.0f, m_shakeTau = 0.3f; // envelope 0..1, its current decay time constant (s)
+    float m_click = 0.0f, m_clickDecay = 0.0f; // grain click envelope and its per-sample decay
+    float m_rattleL = 0.0f, m_rattleR = 0.0f, m_rattleTl = 0.0f, m_rattleTr = 0.0f;
+    std::uint32_t m_shakeNoise = 0x2545F491u;
+    void retuneBody(const BodySoundProfile& p);
+    void startKnock(float intensity, const AudioVec3& position);
+    void shake(float level, float decay);
+    void mixBodyShake(float* acc, int frames);
 
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;

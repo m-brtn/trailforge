@@ -25,6 +25,14 @@ constexpr float kPinionTeeth = 10.0f; // whine = propeller shaft speed x pinion 
 // Road hum at roadGain 1 and full hum: band noise (70..450 Hz) of RMS ~0.03 per wheel.
 constexpr float kRoadLevel = 0.9f;
 constexpr float kRoadLowHz = 70.0f, kRoadHighHz = 450.0f;
+// Body shake: output level of the synthesized rattle at full shake and of a full-intensity knock (resonator
+// amplitude 1 per unit impulse), before the profile gains and the impacts bus.
+constexpr float kRattleLevel = 0.25f;
+constexpr float kKnockLevel = 0.18f;
+constexpr float kShakeGate = 0.03f; // no new rattle grains below this envelope
+constexpr std::array<float, 3> kKnockModeAmp = {1.0f, 0.6f, 0.35f};
+constexpr std::array<float, 3> kKnockModeDecay = {1.0f, 0.7f, 0.45f};
+constexpr float kBottomOutHighpassHz = 250.0f; // the recorded slams keep their body rattle, not their low thud
 
 float smoothstep(float a, float b, float x) {
     const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
@@ -78,6 +86,7 @@ AudioMixer::AudioMixer(const SoundBank& bank, int sampleRate, std::uint32_t seed
     for (std::size_t i = 0; i < m_road.size(); ++i) m_road[i].noise = 0x85EBCA6Bu * std::uint32_t(i + 1);
     m_roadHp = std::exp(-6.2831853f * kRoadLowHz / float(m_rate));
     m_roadLp = 1.0f - std::exp(-6.2831853f * kRoadHighHz / float(m_rate));
+    retuneBody(m_bodyProfile);
 }
 
 float AudioMixer::rand01() {
@@ -178,14 +187,21 @@ void AudioMixer::trigger(const AudioEvent& e) {
         startOneShot(pick(SoundId::GearShift1, 3), 0.35f * i, Bus::Engine, &e.position, jitter);
         break;
     case AudioEventType::BumpStop:
-        startOneShot(pick(SoundId::BottomOut1, 3), 0.55f * (0.4f + 0.6f * i), Bus::Impacts, &e.position, jitter);
+        startKnock(i, e.position);
+        shake(0.3f + 0.4f * i, 0.5f * m_bodyProfile.rattleDecay);
+        // A hard hit also gets a recorded car-body slam, high-passed so only its clunk and rattle remain.
+        if (i > 0.5f) {
+            if (Voice* v = startOneShot(pick(SoundId::BottomOut1, 3), 0.3f * i, Bus::Impacts, &e.position, jitter))
+                v->highpass = std::exp(-6.2831853f * kBottomOutHighpassHz / float(m_rate));
+        }
         break;
-    case AudioEventType::SuspensionThump:
-        startOneShot(SoundId::SuspensionThump, 0.5f * i, Bus::Impacts, &e.position, 0.85f + 0.3f * rand01());
+    case AudioEventType::BodyRattle:
+        shake(0.25f + 0.75f * i, m_bodyProfile.rattleDecay * (0.5f + 0.5f * i));
         break;
     case AudioEventType::BodyImpact:
         startOneShot(i > 0.6f ? SoundId::BodyImpactClank : pick(SoundId::BodyImpactMetal1, 3),
-                     0.6f * (0.3f + 0.7f * i), Bus::Impacts, &e.position, jitter);
+                     0.45f * (0.3f + 0.7f * i), Bus::Impacts, &e.position, jitter);
+        shake(0.3f + 0.7f * i, m_bodyProfile.rattleDecay);
         break;
     case AudioEventType::Splash:
         startOneShot(pick(SoundId::WaterSplash1, 3), 0.6f * (0.4f + 0.6f * i), Bus::Tires, &e.position, jitter);
@@ -393,6 +409,26 @@ void AudioMixer::controlUpdate(float dt) {
         }
         m_stats.road = std::sqrt(0.25f * roadPower);
     }
+    {
+        // Body shake: rattle at the body, knocks at their wheels.
+        if (!(f.bodySound == m_bodyProfile)) retuneBody(f.bodySound);
+        const float bus = m_bus[std::size_t(Bus::Impacts)] * m_master * m_gameplay;
+        const StereoGain g = place(f.vehiclePos + f.vehicleUp * 0.3f);
+        const float rattle = kRattleLevel * m_bodyProfile.rattleGain * bus;
+        m_rattleTl = g.l * rattle;
+        m_rattleTr = g.r * rattle;
+        for (Knock& k : m_knocks) {
+            if (!k.active) continue;
+            const StereoGain kg = place(k.position);
+            k.tl = kg.l * kKnockLevel * m_bodyProfile.knockGain * bus;
+            k.tr = kg.r * kKnockLevel * m_bodyProfile.knockGain * bus;
+            if (!k.struck) {
+                k.l = k.tl;
+                k.r = k.tr;
+            }
+        }
+        m_stats.rattle = m_shake;
+    }
     m_tireGain[std::size_t(TireLayer::Skid)] = std::sqrt(0.25f * skidPower);
     m_stats.skid = m_tireGain[0];
     m_stats.gravel = m_tireGain[1];
@@ -490,6 +526,19 @@ void AudioMixer::mixVoice(Voice& v, float* acc, int frames) {
             v.lpR += v.lowpass * (r - v.lpR);
             l = v.lpL;
             r = v.lpR;
+        }
+        if (v.highpass > 0.0f) {
+            float* h = v.hp.data();
+            for (int s = 0; s < 2; ++s) {
+                float& x = s == 0 ? l : r;
+                for (int stage = 0; stage < 2; ++stage) {
+                    float* st = h + 4 * s + 2 * stage; // [previous input, previous output]
+                    const float y = v.highpass * (st[1] + x - st[0]);
+                    st[0] = x;
+                    st[1] = y;
+                    x = y;
+                }
+            }
         }
         acc[2 * i] += l * (v.gl + dl * float(i));
         acc[2 * i + 1] += r * (v.gr + dr * float(i));
@@ -594,6 +643,118 @@ void AudioMixer::mixRoad(float* acc, int frames) {
     }
 }
 
+void AudioMixer::Resonator::tune(float hz, float decay, float rate) {
+    const float w = 6.2831853f * std::min(hz, 0.45f * rate) / rate;
+    const float r = std::exp(-1.0f / (std::max(decay, 1e-4f) * rate));
+    c = 2.0f * r * std::cos(w);
+    rr = r * r;
+    s = std::sin(w);
+}
+
+void AudioMixer::retuneBody(const BodySoundProfile& p) {
+    m_bodyProfile = p;
+    const float rate = float(m_rate);
+    for (std::size_t j = 0; j < m_rattleModes.size(); ++j)
+        m_rattleModes[j].tune(p.rattleHz[j], p.rattleRing * (1.2f - 0.15f * float(j)), rate);
+    m_clickDecay = std::exp(-1.0f / (0.0015f * rate));
+    m_bodyTuned = true;
+}
+
+void AudioMixer::shake(float level, float decay) {
+    if (level >= m_shake) {
+        m_shake = std::min(level, 1.0f);
+        m_shakeTau = std::max(decay, 0.02f);
+    }
+}
+
+void AudioMixer::startKnock(float intensity, const AudioVec3& position) {
+    if (!m_bodyTuned) retuneBody(m_bodyProfile);
+    Knock* slot = &m_knocks[0];
+    for (Knock& k : m_knocks) {
+        if (!k.active) {
+            slot = &k;
+            break;
+        }
+        if (k.age > slot->age) slot = &k;
+    }
+    Knock& k = *slot;
+    const float rate = float(m_rate);
+    const float pitch = 0.95f + 0.1f * rand01();
+    for (std::size_t m = 0; m < k.modes.size(); ++m) {
+        k.modes[m] = Resonator{};
+        k.modes[m].tune(m_bodyProfile.knockHz[m] * pitch, m_bodyProfile.knockDecay * kKnockModeDecay[m], rate);
+    }
+    k.amp = 0.3f + 0.7f * std::clamp(intensity, 0.0f, 1.0f);
+    k.noise = 0.5f * k.amp;
+    k.age = 0.0f;
+    k.life = 7.0f * m_bodyProfile.knockDecay;
+    k.active = true;
+    k.struck = false;
+    k.position = position;
+    // Start at the target gain (set by the next control update; the gains ramp from zero within that block).
+    k.l = k.r = k.tl = k.tr = 0.0f;
+    ++m_stats.knocks;
+}
+
+void AudioMixer::mixBodyShake(float* acc, int frames) {
+    const float rate = float(m_rate);
+    const float invN = 1.0f / float(frames);
+    auto noise = [this] {
+        m_shakeNoise ^= m_shakeNoise << 13;
+        m_shakeNoise ^= m_shakeNoise >> 17;
+        m_shakeNoise ^= m_shakeNoise << 5;
+        return float(m_shakeNoise) * (2.0f / 4294967296.0f) - 1.0f;
+    };
+    // Rattle: grains while the envelope is up; the resonators ring out after it.
+    float energy = m_click;
+    for (const Resonator& r : m_rattleModes) energy += std::abs(r.y1) + std::abs(r.y2);
+    const bool ringing = energy > 1e-6f;
+    if (m_shake > 0.0f || ringing) {
+        const float decay = std::exp(-1.0f / (m_shakeTau * rate));
+        const float grainChance = m_bodyProfile.rattleRate / rate;
+        for (int i = 0; i < frames; ++i) {
+            std::array<float, 4> kick{};
+            if (m_shake > kShakeGate && rand01() < grainChance * m_shake) {
+                const std::size_t j = std::min<std::size_t>(3, std::size_t(rand01() * 4.0f));
+                const float amp = m_shake * (0.35f + 0.65f * rand01());
+                kick[j] = rand01() < 0.5f ? amp : -amp;
+                m_click = std::max(m_click, amp * m_bodyProfile.clickGain);
+            }
+            float y = noise() * m_click;
+            for (std::size_t j = 0; j < 4; ++j) y += m_rattleModes[j].step(kick[j]);
+            m_click *= m_clickDecay;
+            m_shake *= decay;
+            const float t = float(i) * invN;
+            acc[2 * i] += y * (m_rattleL + (m_rattleTl - m_rattleL) * t);
+            acc[2 * i + 1] += y * (m_rattleR + (m_rattleTr - m_rattleR) * t);
+        }
+        if (m_shake <= kShakeGate) m_shake = 0.0f;
+        if (!ringing && m_shake == 0.0f)
+            for (Resonator& r : m_rattleModes) r.y1 = r.y2 = 0.0f;
+    }
+    m_rattleL = m_rattleTl;
+    m_rattleR = m_rattleTr;
+
+    const float noiseDecay = std::exp(-1.0f / (0.003f * rate));
+    for (Knock& k : m_knocks) {
+        if (!k.active) continue;
+        for (int i = 0; i < frames; ++i) {
+            const float x = k.struck ? 0.0f : k.amp;
+            k.struck = true;
+            float y = noise() * k.noise;
+            for (std::size_t m = 0; m < k.modes.size(); ++m) y += k.modes[m].step(x * kKnockModeAmp[m]);
+            k.noise *= noiseDecay;
+            const float t = float(i) * invN;
+            acc[2 * i] += y * (k.l + (k.tl - k.l) * t);
+            acc[2 * i + 1] += y * (k.r + (k.tr - k.r) * t);
+        }
+        k.l = k.tl;
+        k.r = k.tr;
+        k.age += float(frames) / rate;
+        if (k.age > k.life) k.active = false;
+    }
+}
+
 void AudioMixer::renderBlock(float* out, int frames) {
     const float dt = float(frames) / float(m_rate);
     controlUpdate(dt);
@@ -640,6 +801,7 @@ void AudioMixer::renderBlock(float* out, int frames) {
         mixScrub(acc, frames);
         mixElectric(acc, frames);
         mixRoad(acc, frames);
+        mixBodyShake(acc, frames);
     }
 
     // Look-ahead limiter: the output is delayed by kLookahead frames; the gain follows the largest peak inside the

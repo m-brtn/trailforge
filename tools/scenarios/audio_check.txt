@@ -3,8 +3,8 @@
 #   python3 tools/audio/analyze_capture.py /tmp/trailforge_audio_check.wav
 # With --audio-capture the mix is rendered offline (one physics tick of audio per tick, no device) and every tick's
 # mixer parameters go to <file>.csv; "log" lines print audio_t, the capture time in seconds.
-# audio_ev<N> counts events received by the mixer: 0 engine start, 1 gear, 2 bump stop, 3 thump, 4 body impact,
-# 5 splash, 6 creak, 7 UI.
+# audio_ev<N> counts events received by the mixer: 0 engine start, 1 gear, 2 bump-stop knock, 3 body rattle,
+# 4 body impact, 5 splash, 6 creak, 7 UI. Landings and bumps in detail: tools/scenarios/landing_audio.txt.
 set ui 0
 set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
 set hud 0
@@ -64,12 +64,13 @@ down S
 until speed_kmh < 0.5 8
 up S
 
-# ---------------------------------------------------------------- bumps: suspension thumps and bump stops
+# ---------------------------------------------------------------- bumps at full throttle: body rattle on the landings
 teleport 1
 wait 2.5
 log bumps_begin
 down W
-until audio_ev3 >= 3 12
+until audio_ev3 >= 1 12
+until z > -8 6
 log bumps
 up W
 down S

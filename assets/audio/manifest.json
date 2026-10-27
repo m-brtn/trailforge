@@ -1573,47 +1573,6 @@
       }
     },
     {
-      "id": "suspension_thump_01",
-      "category": "suspension",
-      "file": "suspension/suspension_thump_01.wav",
-      "loop": false,
-      "duration_s": 0.4302,
-      "channels": 1,
-      "sample_rate": 48000,
-      "bits": 16,
-      "freesound_id": 640204,
-      "original_name": "Heavy Metal Thud on Ground",
-      "author": "7of9Designs",
-      "license": "CC0 1.0",
-      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
-      "source_url": "https://freesound.org/people/7of9Designs/sounds/640204/",
-      "source_window_s": [
-        0.1625,
-        0.4302
-      ],
-      "processing": [
-        "decoded Freesound HQ preview (OGG), resampled to 48000 Hz (sox rate -v)",
-        "downmixed to mono",
-        "silence trimmed (-50 dB below peak), 2 ms fade-in when trimmed, 30 ms fade-out",
-        "true-peak normalized to -1.0 dBTP",
-        "written as 48 kHz 16-bit PCM WAV with TPDF dither"
-      ],
-      "loudness_lufs": -10.8,
-      "true_peak_dbtp": -1.0,
-      "source_loudness_lufs": -10.2,
-      "applied_gain_db": -0.6,
-      "verification": {
-        "channels": 1,
-        "sample_rate": 48000,
-        "bits": 16,
-        "frames": 20650,
-        "duration_s": 0.4302,
-        "peak_dbfs": -1.02,
-        "rms_dbfs": -8.54,
-        "clipped_samples": 0
-      }
-    },
-    {
       "id": "suspension_bottom_out_01",
       "category": "suspension",
       "file": "suspension/suspension_bottom_out_01.wav",

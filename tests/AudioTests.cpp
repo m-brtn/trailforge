@@ -1038,6 +1038,157 @@ void music() {
           rewinds, track.rewinds, mixer.stats().musicSeconds);
 }
 
+// Landings and bumps on the real simulation (shipped SUV): the body rattle and the bump-stop knock stay silent for
+// crawling over rocks and rolling over the bump sequence at 15 km/h and fire, at most twice per second, for the
+// landings on the bump sequence and the twister at 30 km/h and off the steps at 15 km/h.
+struct LandingCase {
+    const char* name;
+    float x, z, kmh, seconds;
+};
+
+struct LandingResult {
+    int rattles = 0, knocks = 0, impacts = 0;
+    float maxRattle = 0.0f, maxKnock = 0.0f, maxSpeed = 0.0f;
+    double seconds = 0.0;
+};
+
+LandingResult driveLanding(const LandingCase& c, const VehicleConfig& vehicle) {
+    Driver d(TrackLayout::ProvingGround, 1.0 / 120.0, &vehicle);
+    TrackFeature at;
+    at.position = JPH::Vec3(c.x, 0.0f, c.z);
+    d.sim.requestPlace(at);
+    d.run(1.5);
+    LandingResult r;
+    r.seconds = c.seconds;
+    for (int k = 0; k < d.ticks(c.seconds); ++k) {
+        const float v = d.sim.vehicle().telemetry().speed * 3.6f;
+        DriverIntent in;
+        in.throttle = std::fmin(1.0f, std::fmax(0.0f, 0.25f + 0.08f * (c.kmh - v)));
+        d.sim.setIntent(in);
+        d.sim.tick();
+        d.feed.onTick(d.sim);
+        for (const AudioEvent& e : d.feed.events()) {
+            if (e.type == AudioEventType::BodyRattle) ++r.rattles, r.maxRattle = std::max(r.maxRattle, e.intensity);
+            if (e.type == AudioEventType::BumpStop) ++r.knocks, r.maxKnock = std::max(r.maxKnock, e.intensity);
+            r.impacts += e.type == AudioEventType::BodyImpact;
+            d.mixer.trigger(e);
+        }
+        d.feed.clearEvents();
+        AudioFrame f = d.feed.frame();
+        f.listenerPos = f.vehiclePos - f.vehicleForward * 8.0f + AudioVec3{0, 2.6f, 0};
+        d.mixer.setFrame(f);
+        d.mixer.render(d.buf.data(), d.framesPerTick);
+        for (float x : d.buf) d.finite = d.finite && std::isfinite(x);
+        r.maxSpeed = std::max(r.maxSpeed, v);
+    }
+    CHECK(d.finite, "%s: NaN/Inf in the output", c.name);
+    return r;
+}
+
+// Body shake synthesis per profile: one full-intensity rattle and one full knock, no other sound. The energy sits
+// above the low "thud" band and the tube frame rings higher than the SUV panels; both decay to silence.
+struct ShakeResult {
+    double rmsDb = -120.0, centroid = 0.0, below200 = 0.0, tailDb = -120.0;
+    float peak = 0.0f;
+};
+
+ShakeResult renderShake(const BodySoundProfile& profile, AudioEventType type) {
+    const SoundBank bank = syntheticBank();
+    AudioMixer mixer(bank, 48000, 11u);
+    AudioFrame f;
+    f.vehicleValid = false; // engine, tires and wind silent
+    f.settings.ambience = 0.0f;
+    f.bodySound = profile;
+    f.listenerPos = {0.0f, 1.5f, -4.0f};
+    mixer.setFrame(f);
+    std::vector<float> buf(2 * 400), mono, tail;
+    ShakeResult r;
+    for (int i = 0; i < 120; ++i) {
+        if (i == 6) {
+            AudioEvent e;
+            e.type = type;
+            e.intensity = 1.0f;
+            mixer.trigger(e);
+        }
+        mixer.render(buf.data(), 400);
+        for (int k = 0; k < 400; ++k) {
+            const float x = 0.5f * (buf[std::size_t(2 * k)] + buf[std::size_t(2 * k + 1)]);
+            r.peak = std::max(r.peak, std::abs(x));
+            if (i >= 6 && i < 6 + 48) mono.push_back(x);
+            if (i >= 100) tail.push_back(x);
+        }
+    }
+    auto rmsDb = [](const std::vector<float>& v) {
+        double e = 0.0;
+        for (float x : v) e += double(x) * double(x);
+        return 10.0 * std::log10(std::max(e / double(std::max<std::size_t>(v.size(), 1)), 1e-12));
+    };
+    r.rmsDb = rmsDb(mono);
+    r.tailDb = rmsDb(tail);
+    const std::vector<double> ps = powerSpectrum(mono);
+    double total = 0.0, moment = 0.0;
+    for (std::size_t k = 1; k < ps.size(); ++k) {
+        const double hz = double(k) * 48000.0 / 4096.0;
+        total += ps[k];
+        moment += ps[k] * hz;
+        if (hz < 200.0) r.below200 += ps[k];
+    }
+    r.centroid = moment / std::max(total, 1e-30);
+    r.below200 /= std::max(total, 1e-30);
+    return r;
+}
+
+void landing() {
+    const VehicleConfig suv = suvConfig();
+    const LandingCase quiet[] = {{"rock field 10 km/h", 26.0f, 14.0f, 10.0f, 6.0f},
+                                 {"bump sequence 15 km/h", 0.0f, -40.0f, 15.0f, 9.0f}};
+    const LandingCase hard[] = {{"bump sequence 30 km/h", 0.0f, -48.0f, 30.0f, 7.0f},
+                                {"twister 30 km/h", 0.0f, -14.0f, 30.0f, 6.0f},
+                                {"steps 15 km/h", 26.0f, -7.5f, 15.0f, 7.0f}};
+    auto report = [](const LandingCase& c, const LandingResult& r) {
+        std::printf("    %-22s max %.0f km/h: %d rattles (max intensity %.2f), %d knocks (max %.2f), %d body impacts, "
+                    "%.2f events/s\n",
+                    c.name, r.maxSpeed, r.rattles, r.maxRattle, r.knocks, r.maxKnock, r.impacts,
+                    double(r.rattles + r.knocks) / r.seconds);
+    };
+    for (const LandingCase& c : quiet) {
+        const LandingResult r = driveLanding(c, suv);
+        report(c, r);
+        CHECK(r.rattles == 0 && r.knocks == 0, "%s: %d rattles, %d knocks", c.name, r.rattles, r.knocks);
+    }
+    int hardRattles = 0;
+    for (const LandingCase& c : hard) {
+        const LandingResult r = driveLanding(c, suv);
+        report(c, r);
+        hardRattles += r.rattles;
+        CHECK(double(r.rattles + r.knocks) / r.seconds < 2.0, "%s: %.2f events/s", c.name,
+              double(r.rattles + r.knocks) / r.seconds);
+    }
+    CHECK(hardRattles >= 2, "hard landings gave only %d rattles", hardRattles);
+
+    ShakeResult suvRattle, tubeRattle;
+    for (const char* id : {"suv", "tube_frame", "coupe"}) {
+        const BodySoundProfile p = bodySoundPreset(id);
+        const ShakeResult rattle = renderShake(p, AudioEventType::BodyRattle);
+        const ShakeResult knock = renderShake(p, AudioEventType::BumpStop);
+        std::printf("    %-10s rattle %.1f dBFS, peak %.3f, centroid %.0f Hz, %.1f %% below 200 Hz, tail %.0f dB | knock "
+                    "%.1f dBFS, peak %.3f, centroid %.0f Hz, %.1f %% below 200 Hz, tail %.0f dB\n",
+                    id, rattle.rmsDb, rattle.peak, rattle.centroid, 100.0 * rattle.below200, rattle.tailDb, knock.rmsDb,
+                    knock.peak, knock.centroid, 100.0 * knock.below200, knock.tailDb);
+        for (const ShakeResult* r : {&rattle, &knock}) {
+            CHECK(r->rmsDb > -60.0, "%s: silent (%.1f dBFS)", id, r->rmsDb);
+            CHECK(r->peak < 0.5f, "%s: peak %.3f", id, r->peak);
+            CHECK(r->below200 < 0.1, "%s: %.1f %% of the energy below 200 Hz", id, 100.0 * r->below200);
+            CHECK(r->centroid > 600.0, "%s: centroid %.0f Hz", id, r->centroid);
+            CHECK(r->tailDb < -90.0, "%s: still sounding after 0.8 s (%.0f dB)", id, r->tailDb);
+        }
+        if (std::strcmp(id, "suv") == 0) suvRattle = rattle;
+        if (std::strcmp(id, "tube_frame") == 0) tubeRattle = rattle;
+    }
+    CHECK(tubeRattle.centroid > suvRattle.centroid * 1.3, "tube frame %.0f Hz vs SUV %.0f Hz", tubeRattle.centroid,
+          suvRattle.centroid);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1051,6 +1202,7 @@ int main(int argc, char** argv) {
         {"audio_squeal_release", squealRelease},
         {"audio_tire_profiles", tireProfiles},
         {"audio_electric", electricSound},
+        {"audio_landing", landing},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {
