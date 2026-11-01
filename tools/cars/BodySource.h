@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-// Reading a Blender glTF export of a vehicle body (README "Vehicle data format", body.glb contract) into a
+// Reading a Blender glTF export of a vehicle body (docs/vehicle-format.md, body.glb contract) into a
 // BodyModel, and the simplified LODs. Used by trailforge_vehiclec and the body tests.
 
 namespace tf {

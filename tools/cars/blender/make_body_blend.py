@@ -1,4 +1,4 @@
-"""Builds a starting .blend for a Blender-authored vehicle body (README "Vehicle data format", body.glb).
+"""Builds a starting .blend for a Blender-authored vehicle body (docs/vehicle-format.md, body.glb).
 
 Run headless:
   /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \

@@ -1,4 +1,4 @@
-"""Shared code of the level Blender pipeline (README "Editing a level in Blender").
+"""Shared code of the level Blender pipeline (docs/levels.md "Editing a level in Blender").
 
 Game files of a baked level (assets/levels/<id>/, level.json "baked"):
   heightmap.pgm  16-bit P5, samples^2 heights, row j = game z (origin + j * cell), column i = game x; the range is

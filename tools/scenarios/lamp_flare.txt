@@ -1,4 +1,4 @@
-# Lamps at night and the lens flare (README "Post effects"): the lens flare ghosts start only from the sun, so the
+# Lamps at night and the lens flare (docs/rendering.md "Post effects"): the lens flare ghosts start only from the sun, so the
 # head, tail and brake lamps of every body (Blender body.glb test vehicle, procedural SUV and EV) keep their glow
 # on the lamps and leave no enlarged ghost copies on the ground or in the air. At sunset with the sun in view the
 # flare is still there.

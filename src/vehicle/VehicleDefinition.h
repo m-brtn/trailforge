@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-// Vehicle definitions as data: assets/vehicles/<id>/vehicle.json (format reference in README "Vehicle data format").
+// Vehicle definitions as data: assets/vehicles/<id>/vehicle.json (format reference in docs/vehicle-format.md).
 // The loader validates every field (type, unit range, cross-field rules) and rejects unknown keys, with messages of
 // the form "<file>: <path>: <problem>".
 

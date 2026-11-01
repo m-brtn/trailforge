@@ -1,4 +1,4 @@
-# Tire sets and tire temperature (src/vehicle/TireModel, README "Tire sets and temperature"):
+# Tire sets and tire temperature (src/vehicle/TireModel, docs/vehicles.md "Tire sets and temperature"):
 #   ./build/release/trailforge --script tools/scenarios/tires.txt --no-audio
 # Off-road -> slick (cold, then warm) -> road through the garage parameter, the air temperature, the compact HUD
 # widget and the telemetry grid. Captures /tmp/trailforge_tires_*.png (time 11:00). Exit code 1 on FAIL.

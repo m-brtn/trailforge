@@ -28,7 +28,7 @@ enum class DiffMode { Open, LimitedSlip, Locked };
 // mostly brakes the spinning wheel).
 enum class TractionMode { Off, On, OffRoad };
 
-// Which axles the engine drives (see README "Drivetrain layouts").
+// Which axles the engine drives (see docs/vehicles.md "Drivetrain layouts").
 //  Rwd / Fwd: one driven axle. Awd: full-time, both axles through the center differential (frontTorqueShare, center
 //  diff mode). PartTime: transfer case 2H (rear only) / 4H (center locked) / 4L (center locked + low range).
 //  OnDemand: both axles through a center LSD with a rear-biased base split (a simplification of a clutch coupling).

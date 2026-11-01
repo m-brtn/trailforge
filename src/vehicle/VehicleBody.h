@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-// Blender-authored vehicle bodies (README "Vehicle data format", body.glb): the converted model the game reads,
+// Blender-authored vehicle bodies (docs/vehicle-format.md, body.glb): the converted model the game reads,
 // written by trailforge_vehiclec (tools/cars) from a Blender glTF export. Body space (+X left, +Y up, +Z forward, m,
 // origin = the vehicle body origin the physics wheels are placed from). Named parts with LOD meshes, materials
 // mapped to the game's material roles, convex collision pieces (COL_*) and spare wheel seats. Wheels, tires and

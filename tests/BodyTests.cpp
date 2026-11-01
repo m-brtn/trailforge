@@ -1,4 +1,4 @@
-// Blender-authored vehicle bodies (body.glb, README "Vehicle data format"), headless: the converter round trip on the
+// Blender-authored vehicle bodies (body.glb, docs/vehicle-format.md), headless: the converter round trip on the
 // committed test source, validation (convex collision pieces, wheel sweep, names, roles, bounds), the vehicle.json
 // reference and the Jolt collision built from the COL_* pieces. Usage: trailforge_body_tests <test_name>
 

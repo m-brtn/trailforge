@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for coding agents working on TrailForge. Human-facing documentation is in `README.md`.
+Instructions for coding agents working on TrailForge. Human-facing documentation is in `README.md` (short overview) and `docs/` (index `docs/README.md`).
 
 ## Project overview
 
@@ -59,7 +59,7 @@ cmake --preset linux-release && cmake --build --preset linux-release && ctest --
 ```
 
 Shaders: `shaders/scene.hlsl` is the only shader source (49 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
-register/space conventions; see README "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
+register/space conventions; see `docs/rendering.md` "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
 tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
 MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->
 DXIL on Windows hosts only; `cmake/EmbedShaders.cmake` embeds the blobs. When adding a shader entry, add it to
@@ -69,7 +69,7 @@ Captures differ slightly between runs of the same binary (timing), so identity c
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
 `trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
-`trailforge_vehiclec` (Blender body converter, README "Blender bodies (body.glb)"), `trailforge_probe`
+`trailforge_vehiclec` (Blender body converter, `docs/vehicle-format.md` "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `drift` (scripted drift attempts on the mini track's 32 m corner), `lap` (autopilot laps of a circuit level), `tires` (tire sets: braking per
 surface cold / warm, mini track and Suncoast laps with tire temperatures, `circle` limit circle, `limit` limit-driver
@@ -123,7 +123,7 @@ behave the same at 60 and 120 Hz and with VSync on or off. A real gamepad may be
 Other app flags: `--level ID` (`exploration_peaks`, `proving_ground`; scenarios and `--demo` start on the proving ground), `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
 `--audio-capture file.wav`, `--paths`, `--version`. Scenario checks must not depend on an audio device: everything except
 `audio_check.txt` and `skid_check.txt` (both check the mixer) passes with `--no-audio`.
-The scenario command reference is in `README.md` ("Scenario mode").
+The scenario command reference is in `docs/testing.md` ("Scenario mode").
 
 Before committing a code change, build both `debug` and `release`, run `ctest` for both, and run `full_check.txt`
 in Release.
@@ -199,13 +199,15 @@ tools/        SimProbe (headless measurements), scenarios/ (scripts for --script
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
  blender/: make_body_blend.py (headless bpy .blend generator), export_body.py (export + convert), tf_vehicle.py),
  levels/ (fetch_osm_track.py: OSM + DEM source data with a sha256 lock; blender/: tf_level.py, import_level.py,
- export_level.py, carve_track.py, make_suncoast_raceway.py; README "Editing a level in Blender")
-docs/releases/ release notes per version
+ export_level.py, carve_track.py, make_suncoast_raceway.py; `docs/levels.md` "Editing a level in Blender")
+docs/         topic documentation moved out of README.md (index docs/README.md: building, controls, architecture,
+ vehicles, vehicle-format, levels, rendering, audio, physics, testing, roadmap); README screenshots (*.jpg);
+ releases/ release notes per version
 .github/      workflows/ci.yml (Linux / Windows build + ctest + packages, lavapipe smoke; manual only)
-assets/vehicles/ <id>/vehicle.json vehicle definitions (format: README "Vehicle data format"; folder name = id),
- <id>/blueprint.json traced body (generated; README "Vehicle blueprints"), optional <id>/body.glb Blender
- body (Git LFS; README "Blender bodies (body.glb)")
-assets/levels/ <id>/level.json open-world levels (README "Exploration Peaks"; folder name = id); suncoast_raceway/ is a
+assets/vehicles/ <id>/vehicle.json vehicle definitions (format: `docs/vehicle-format.md`; folder name = id),
+ <id>/blueprint.json traced body (generated; `docs/vehicle-format.md` "Vehicle blueprints"), optional <id>/body.glb Blender
+ body (Git LFS; `docs/vehicle-format.md` "Blender bodies (body.glb)")
+assets/levels/ <id>/level.json open-world levels (`docs/levels.md` "Exploration Peaks"; folder name = id); suncoast_raceway/ is a
  baked level (heightmap.pgm, surfaces.pgm, layout.json from Blender, plain files, not LFS; raw OSM (ODbL) +
  DEM data, CREDITS.md)
 assets/textures/ terrain/ terrain.json + <layer>_albedo.ktx2 / <layer>_nra.ktx2 (Git LFS), sources.lock.json; buildings/
@@ -290,7 +292,7 @@ stays in the git history and in the LFS storage after deletion.
 - Sound is cosmetic and never feeds back into physics. It is driven only by simulation data (rpm, throttle, wheel
   contact samples, contacts); body impact strength is an estimated impulse (Jolt's listener has no solved impulse).
   Sound quality claims must come from capture analysis; nobody has judged the mix by ear unless the devlog says so.
-- Keep the "Physics simplifications" list in `README.md` honest when behavior changes.
+- Keep the "Physics simplifications" list in `docs/physics.md` honest when behavior changes.
 - Only claim platforms that were actually run (currently macOS / Apple Silicon / Metal).
 
 ### Commits and pushing

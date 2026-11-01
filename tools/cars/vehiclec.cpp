@@ -1,5 +1,5 @@
-// trailforge_vehiclec: converts a Blender glTF export of a vehicle body into the game's body.glb (README "Vehicle
-// data format", body.glb) and validates it against the vehicle definition: part names, material roles, convex
+// trailforge_vehiclec: converts a Blender glTF export of a vehicle body into the game's body.glb
+// (docs/vehicle-format.md, body.glb) and validates it against the vehicle definition: part names, material roles, convex
 // collision pieces, no body point within the wheel sweep (tire over the full suspension travel and steering lock
 // of every kit and garage ride height), visual vs collision bounds.
 //

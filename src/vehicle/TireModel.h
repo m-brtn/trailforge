@@ -34,7 +34,7 @@ struct TireCompound {
     float coldLoss = 0.0f, coldWidthC = 30.0f;
     float hotLoss = 0.0f, hotWidthC = 50.0f;
     // Rolling resistance coefficient: the hysteresis heat of a rolling tire (Crr x load x speed). Heat only: the
-    // paved-road rolling resistance force itself is not applied (README "Physics simplifications").
+    // paved-road rolling resistance force itself is not applied (docs/physics.md).
     float rollingResistance = 0.012f;
     // Tire mass x this against the vehicle's own (off-road) tire of the same size: lighter street and racing
     // constructions heat up faster.
