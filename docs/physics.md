@@ -16,8 +16,8 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   ABS 0.90 g on asphalt, 0.60–0.63 g on gravel and dirt, 0.47 g on grass; 0.91 g lateral on asphalt, 0.64 g on dirt,
   0.53 g on gravel and 0.46 g on grass. These match published ranges for these surfaces; most of Exploration Peaks is grass
   (54 % of the bake), sand (21 %) and snow (10 %), so most driving there is at μ 0.3–0.55 by design. Keyboard
-  steering has a speed-dependent range (a driver-input model, [Controls](controls.md)); at full lock at every speed a
-  held key at 60 km/h slid the front tires at 30–37° of slip angle and the car turned at 72–76 % of its grip.
+  steering has a speed- and grip-dependent range (a driver-input model, [Controls](controls.md)); at full lock at every
+  speed a held key at 60 km/h slid the front tires at 30–37° of slip angle and the car turned at 72–76 % of its grip.
 - Tire sets and temperature ("Tire sets and temperature"): a set only scales the off-road curves (peak slip, sliding
   μ, μ per surface); the per-surface and window values are hand-tuned within published ranges. Temperature is a
   2-node lumped model (tread surface layer, core) per wheel; it changes grip only through one factor on μ, at the

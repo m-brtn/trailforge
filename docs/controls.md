@@ -37,15 +37,22 @@ directly bypass the ramp.
 | Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
 | Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
 
-**Keyboard steering.** Steering keys have a speed-dependent range (`Simulation::keyboardSteerRange`, `InputSmoothing::keyboardSteerSlip`),
-also a driver-input model and not a force: a held steering key turns the front wheels to the steer angle of a corner at the
-tire's peak friction (atan(wheelBase × μ g / v²)) plus one peak slip angle, at most full lock — full lock below about
-25 km/h, 18.5° at 40 km/h, 12° at 60 km/h and 10° at 75 km/h on the SUV. Before, a held key was full lock (35°) at
-every speed. Measured with the SUV (ABS, off-road TC, all locks; 60 km/h, key held 3 s, full lock → range): front slip
-angle 36 → 12° and lateral acceleration 0.69 → 0.89 g on asphalt, 38 → 15° and 0.33 → 0.43 g on grass, 37 → 14° and
-0.46 → 0.60 g on dirt. The range ignores the surface: on grass and gravel the held key still overshoots the peak, and
-with the front tires gripping, a hard turn released at 75 km/h on grass or gravel can swing the tail out where full
-lock used to plough straight on. The stick and the autopilot are analog and keep the full range.
+**Keyboard steering.** Steering keys have a speed- and grip-dependent range (`Simulation::keyboardSteerRange`,
+`InputSmoothing::keyboardSteerSlip`, `keyboardGripTime`), also a driver-input model and not a force: a held steering
+key turns the front wheels to the steer angle of a corner at the front tires' peak friction (atan(wheelBase × μ g /
+v²)) plus 0.25 × their peak slip angle, at most full lock. μ and the peak slip angle are those of the surface under
+the front wheels (surface friction × tire set surface grip × tire temperature grip; loose surfaces move the peak slip
+angle), averaged over the fronts in contact and smoothed over 0.5 s so a patchwork of surfaces does not make the range
+jitter. On the SUV: full lock at a crawl; at 60 km/h 7.3° on asphalt, 5.1° on dirt, 6.4° on gravel and 4.1° on grass.
+Measured with the SUV (ABS, off-road TC, all locks; key held 3 s; full lock → the previous range, which used the
+tire's asphalt peak on every surface → this range), 60 km/h: front slip angle 36 → 12 → 7.4° and lateral acceleration
+0.69 → 0.89 → 0.91 g on asphalt, 37 → 14 → 7.0° and 0.46 → 0.60 → 0.62 g on dirt, 42 → 20 → 13.4° (peak 12°) and 0.45
+→ 0.55 → 0.53 g on gravel, 38 → 15 → 7.0° and 0.33 → 0.43 → 0.45 g on grass (tire peak 6°). The scripted steps
+(`trailforge_probe grip`, not in the repository; SUV, EV and patrol; asphalt, dirt, gravel, grass; 40 / 60 / 75 km/h;
+key held 0.15 / 0.3 / 0.6 / 3 s at 0.3 throttle) spun (body slip angle > 20°) 0 times with ABS, off-road TC and all
+locks (previous range: 2) and 4 times with the shipped aids (all off; previous range: 12, full lock: 5); the remaining
+spins are the 2H SUV and the patrol holding the key for 3 s under power on grass or gravel. The stick and the
+autopilot are analog and keep the full range.
 
 **Close follow camera.** A nearer, steeper chase view (the second step of the C / RB cycle; the follow view is
 unchanged). It is sized from the vehicle's collision bounds in body space (`Vehicle::bodyBounds`): 0.565 body
