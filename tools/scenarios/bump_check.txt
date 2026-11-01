@@ -91,53 +91,6 @@ expect max_tilt < 45
 expect tilt < 10
 expect wheels_contact == 4
 
-vehicle ironclad_suv
-wait 1.0
-teleport 16
-wait 1.5
-reset_stats
-down W
-until fwd_kmh >= 30 10
-up W
-until z > -26.4 5
-log ironclad_at_mound
-until z > -24.0 2
-capture /tmp/trailforge_bump_05_ironclad_mound.png
-until z > -21.0 2
-down W
-until fwd_kmh >= 30 3
-up W
-until z > -11.4 5
-log ironclad_at_left_mound
-until z > -6 5
-down S
-wait 2.0
-up S
-log ironclad_after
-expect max_tilt < 45
-expect tilt < 10
-expect wheels_contact == 4
-
-vehicle kestrel_coupe
-wait 1.0
-teleport 16
-wait 1.5
-reset_stats
-down W
-until fwd_kmh >= 30 10
-up W
-until z > -26.4 5
-log kestrel_at_mound
-# The coupe's low nose stops on the face of the one-sided mound, so it only takes the full-width one.
-until z > -20.0 2
-down S
-wait 2.0
-up S
-log kestrel_after
-expect max_tilt < 45
-expect tilt < 10
-expect wheels_contact == 4
-
 # Overview of the strip from the south-east; the SUV waits at the strip start, behind the camera.
 vehicle trailforge_suv
 wait 1.0

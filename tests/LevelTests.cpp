@@ -5,10 +5,8 @@
 
 #include "core/Json.h"
 #include "core/Ktx2.h"
-#include "core/ModelAsset.h"
 #include "core/TerrainTextureSet.h"
 #include "physics/PhysicsWorld.h"
-#include "sim/DriftScore.h"
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
@@ -25,7 +23,6 @@
 #include <Jolt/Physics/Body/BodyFilter.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1756,156 +1753,6 @@ void levelBakedLap(const char* id, const std::shared_ptr<const Level>& level, do
     CHECK(!lt.running() && lt.laps() == 1, "after autopilot off: running %d, laps %d", int(lt.running()), lt.laps());
 }
 
-const std::shared_ptr<const Level>& stadiumLevel() {
-    static const std::shared_ptr<const Level> l = loadOrExit(TRAILFORGE_SOURCE_DIR "/assets/levels/ironwall_stadium/level.json");
-    return l;
-}
-
-// Ironwall Stadium (tools/levels/blender/convert_stadium.py): static scene meshes carry the vehicle. Their collision
-// is the render LOD triangle for triangle, they are one body for the level's lifetime, and spawns and resets stand on
-// them, not on the height grid under them.
-void levelStaticScene() {
-    const Level& lv = *stadiumLevel();
-    for (const std::string& issue : lv.layoutIssues()) std::printf("    layout: %s\n", issue.c_str());
-    CHECK(lv.layoutIssues().empty() && lv.modelError().empty(), "%zu layout issues, models: %s", lv.layoutIssues().size(),
-          lv.modelError().c_str());
-    CHECK(lv.staticGround() && !lv.grassBlades(), "static ground %d, grass blades %d", int(lv.staticGround()),
-          int(lv.grassBlades()));
-    std::size_t statics = 0, collidable = 0, collisionTris = 0;
-    for (const LevelModel& m : lv.models()) {
-        if (m.kind != "static") continue;
-        ++statics;
-        ModelAsset a;
-        std::string err;
-        CHECK(a.load(m.path, true, &err) && a.lods.size() == 1, "%s: %s, %zu LODs", m.id.c_str(), err.c_str(), a.lods.size());
-        if (a.lods.empty() || m.collision.empty()) continue;
-        ++collidable;
-        // Same triangles: the corner positions of every render triangle, in order, are the collision corners.
-        const ModelLod& lod = a.lods[0];
-        bool same = m.collision.size() == lod.indices.size();
-        for (std::size_t k = 0; same && k < lod.indices.size(); ++k) {
-            const float* p = lod.vertices[lod.indices[k]].pos;
-            same = m.collision[k].x == p[0] && m.collision[k].y == p[1] && m.collision[k].z == p[2];
-        }
-        CHECK(same, "%s: %zu collision corners, %zu render corners", m.id.c_str(), m.collision.size(), lod.indices.size());
-        collisionTris += m.collision.size() / 3;
-        std::printf("  %-36s %-9s %7zu triangles\n", m.id.c_str(), a.surface.c_str(), lod.triangles());
-    }
-    CHECK(statics == 7 && collidable == 4, "%zu static models, %zu with collision", statics, collidable);
-    CHECK(lv.circuit().gates.size() == 6 && lv.circuit().length > 400.0f && lv.circuit().length < 450.0f,
-          "%zu gates, circuit %.0f m", lv.circuit().gates.size(), double(lv.circuit().length));
-
-    JoltRuntime runtime;
-    PhysicsWorld world;
-    SurfaceTable surfaces;
-    TerrainTiles tiles(world, surfaces, stadiumLevel());
-    tiles.ensureLoaded(lv.spawn().position.GetX(), lv.spawn().position.GetZ(), 120.0f);
-    world.system().OptimizeBroadPhase();
-    // The meshes lie over the height grid at the spawn and the POIs (the paddock is 150 m from the oval: no tile
-    // streaming involved).
-    for (const LevelPoi& poi : lv.pois()) {
-        const float x = poi.atX, z = poi.atZ, grid = lv.heightAt(x, z);
-        const JPH::RRayCast ray(JPH::RVec3(x, grid + 8.0f, z), JPH::Vec3(0, -10.0f, 0));
-        JPH::RayCastResult hit;
-        const bool ok = world.system().GetNarrowPhaseQuery().CastRay(ray, hit);
-        const float y = grid + 8.0f - 10.0f * hit.mFraction;
-        std::printf("  POI %-16s grid %.2f m, mesh %.2f m\n", poi.name.c_str(), double(grid), double(y));
-        CHECK(ok && y > grid + 0.3f && y < grid + 0.8f, "%s: grid %.2f, hit %d at %.2f", poi.name.c_str(), double(grid),
-              int(ok), double(y));
-    }
-    std::printf("  %zu collision triangles in the static scene body\n", collisionTris);
-
-    // Drift scoring: the course area holds the spawn, the start / infield POIs and every gate end; the clipping zones
-    // lie inside it; the outer wall bands are the x2 zones, the clipping points x1.5.
-    const DriftConfig& drift = lv.drift();
-    DriftZone area;
-    area.polygon = drift.area;
-    int outside = 0, wallZones = 0, clips = 0;
-    outside += !area.contains(lv.spawn().position.GetX(), lv.spawn().position.GetZ());
-    for (const LevelPoi& poi : lv.pois())
-        if (poi.kind != "paddock") outside += !area.contains(poi.atX, poi.atZ);
-    for (const LevelGate& g : lv.circuit().gates)
-        for (float u : {-1.0f, 1.0f}) outside += !area.contains(g.x + g.dz * u * g.halfWidth, g.z - g.dx * u * g.halfWidth);
-    for (const DriftZone& z : drift.zones) {
-        wallZones += z.multiplier == 2.0f;
-        clips += z.multiplier == 1.5f;
-        for (const DriftPoint& q : z.polygon) outside += !area.contains(q.x, q.z);
-    }
-    std::printf("  drift: area %zu points, %d wall zones x2, %d clipping zones x1.5, %d points outside the area\n",
-                drift.area.size(), wallZones, clips, outside);
-    CHECK(drift.enabled && drift.area.size() >= 20 && wallZones == 4 && clips >= 6 && outside == 0,
-          "drift: enabled %d, area %zu, wall zones %d, clips %d, outside %d", int(drift.enabled), drift.area.size(),
-          wallZones, clips, outside);
-
-    // The whole drift area (the oval and the infield) is asphalt: rays onto the physics every 1 m may hit only the
-    // Asphalt meshes or the structures (Concrete: walls, tyre stacks and blocks standing on it), and the height grid
-    // under it is the asphalt class. The grass verges and the dirt path lie outside the area; the area runs 0.5 m
-    // behind the wall face (onto the verge under the barrier), so the sweep keeps 1 m inside its boundary.
-    auto rimDistance = [&](float x, float z) {
-        float best = 1e9f;
-        for (std::size_t k = 0; k < drift.area.size(); ++k) {
-            const DriftPoint& a = drift.area[k];
-            const DriftPoint& b = drift.area[(k + 1) % drift.area.size()];
-            const float ex = b.x - a.x, ez = b.z - a.z;
-            const float t = std::clamp(((x - a.x) * ex + (z - a.z) * ez) / std::max(ex * ex + ez * ez, 1e-6f), 0.0f, 1.0f);
-            best = std::min(best, std::hypot(x - a.x - t * ex, z - a.z - t * ez));
-        }
-        return best;
-    };
-    float ax0 = 1e9f, ax1 = -1e9f, az0 = 1e9f, az1 = -1e9f;
-    for (const DriftPoint& q : drift.area) {
-        ax0 = std::min(ax0, q.x), ax1 = std::max(ax1, q.x);
-        az0 = std::min(az0, q.z), az1 = std::max(az1, q.z);
-    }
-    std::array<int, kSurfaceCount> hits{};
-    int sampled = 0, missed = 0, gridOff = 0;
-    for (float z = std::floor(az0) + 0.5f; z < az1; z += 1.0f)
-        for (float x = std::floor(ax0) + 0.5f; x < ax1; x += 1.0f) {
-            if (!area.contains(x, z) || rimDistance(x, z) < 1.0f) continue;
-            ++sampled;
-            gridOff += lv.surfaceAt(x, z) != SurfaceId::Asphalt;
-            const JPH::RRayCast ray(JPH::RVec3(x, 40.0f, z), JPH::Vec3(0, -80.0f, 0));
-            JPH::RayCastResult hit;
-            if (!world.system().GetNarrowPhaseQuery().CastRay(ray, hit)) {
-                ++missed;
-                continue;
-            }
-            JPH::BodyLockRead lock(world.system().GetBodyLockInterface(), hit.mBodyID);
-            const SurfaceId sf = surfaces.lookup(lock.GetBody().GetShape()->GetMaterial(hit.mSubShapeID2));
-            if (std::size_t(sf) < kSurfaceCount) ++hits[std::size_t(sf)];
-            if (sf != SurfaceId::Asphalt && sf != SurfaceId::Concrete)
-                std::printf("    %s at (%.1f, %.1f)\n", surfaces.get(sf).name, double(x), double(z));
-        }
-    int other = 0;
-    std::printf("  drift area surfaces (%d rays, 1 m):", sampled);
-    for (std::size_t k = 0; k < kSurfaceCount; ++k) {
-        if (hits[k] == 0) continue;
-        std::printf(" %s %d", surfaces.get(SurfaceId(k)).name, hits[k]);
-        if (SurfaceId(k) != SurfaceId::Asphalt && SurfaceId(k) != SurfaceId::Concrete) other += hits[k];
-    }
-    std::printf(", missed %d, grid cells not asphalt %d\n", missed, gridOff);
-    CHECK(sampled > 10000 && other == 0 && missed == 0 && gridOff == 0 &&
-              hits[std::size_t(SurfaceId::Concrete)] < sampled / 20,
-          "drift area: %d rays, %d not asphalt / concrete, %d missed, %d grid cells not asphalt, %d concrete", sampled,
-          other, missed, gridOff, hits[std::size_t(SurfaceId::Concrete)]);
-
-    SimulationSettings s;
-    s.level = stadiumLevel();
-    s.vehicle = vehicle("trailforge_suv");
-    s.terrain.async = false;
-    Simulation sim(s);
-    runFor(sim, 2.0);
-    const JPH::Vec3 p = sim.currentSnapshot().body.position;
-    const float grid = lv.heightAt(p.GetX(), p.GetZ());
-    const VehicleTelemetry& tel = sim.vehicle().telemetry();
-    int asphalt = 0;
-    for (const auto& w : tel.wheels) asphalt += w.contact && w.surface == SurfaceId::Asphalt;
-    std::printf("  spawn: body %.2f m over the grid, %d wheels on asphalt, speed %.2f m/s\n", double(p.GetY() - grid),
-                asphalt, double(tel.speed));
-    CHECK(asphalt == 4 && p.GetY() > grid + 0.5f && tel.speed < 0.3f,
-          "spawn: %d wheels on asphalt, %.2f m over the grid", asphalt, double(p.GetY() - grid));
-}
-
 // Round trip (CTest level_blender_roundtrip): the bake of a level.json with the original files and with the files
 // exported again from Blender are identical.
 int levelBakedCompare(const char* a, const char* b) {
@@ -1945,9 +1792,6 @@ int main(int argc, char** argv) {
         {"level_baked_track_smooth", levelBakedTrackSmooth},
         {"level_baked_lap", [] { levelBakedLap("trailforge_suv", circuitLevel(), 60.0); }},
         {"level_baked_lap_ev", [] { levelBakedLap("trailforge_ev", circuitLevel(), 60.0); }},
-        {"level_static_scene", levelStaticScene},
-        {"level_static_lap", [] { levelBakedLap("trailforge_suv", stadiumLevel(), 20.0); }},
-        {"level_static_lap_ev", [] { levelBakedLap("trailforge_ev", stadiumLevel(), 20.0); }},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

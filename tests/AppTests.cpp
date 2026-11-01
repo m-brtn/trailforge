@@ -424,7 +424,7 @@ void vehiclePage() {
                   "EV power = motor ratings");
             CHECK(vehicleSpecs(d.config)[4].label == "BATTERY", "EV card shows the battery");
         } else {
-            // Plausibility of the card value; the upper bound has room for the 430 kW V8 of ironclad_suv.
+            // Plausibility of the card value.
             CHECK(peakPowerKW(d.config) > 100.0f && peakPowerKW(d.config) < 500.0f, "engine power %.0f kW",
                   double(peakPowerKW(d.config)));
         }

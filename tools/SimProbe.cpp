@@ -3157,7 +3157,7 @@ void bumpProbe(int argc, char** argv) {
     if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) {
         paths.push_back(env);
     } else {
-        for (const char* id : {"trailforge_suv", "trailforge_ev", "trailforge_patrol", "ironclad_suv", "kestrel_coupe"})
+        for (const char* id : {"trailforge_suv", "trailforge_ev", "trailforge_patrol"})
             paths.push_back(std::string(TRAILFORGE_SOURCE_DIR "/assets/vehicles/") + id + "/vehicle.json");
         paths.push_back("builtin");
     }

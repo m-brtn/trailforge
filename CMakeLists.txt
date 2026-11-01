@@ -264,10 +264,7 @@ if(TRAILFORGE_BUILD_TESTS)
             lap_timer_gates
             level_baked_track_smooth
             level_baked_lap
-            level_baked_lap_ev
-            level_static_scene
-            level_static_lap
-            level_static_lap_ev)
+            level_baked_lap_ev)
         add_test(NAME ${test_name} COMMAND trailforge_level_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()

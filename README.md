@@ -14,12 +14,6 @@ and `assets/audio/CREDITS.md`) and the CC0 photo-scanned ground materials of the
 `assets/models/CREDITS.md`). Everything else (vehicles, the proving ground, sky, grass) is procedural; the buggy's proportions were referenced
 from a purchased model that is not redistributed.
 
-**Third-party content (private repository only):** the level [Ironwall Stadium](#ironwall-stadium-banked-oval)
-(`assets/levels/ironwall_stadium/`, `assets/models/ironwall_stadium/`) is converted from a community track mod
-without a licence and is not CC0. It is in the build at the repository owner's decision while the repository is
-private and **must be removed or replaced before the repository or any build is made public** (provenance in
-`assets/levels/ironwall_stadium/CREDITS.md`).
-
 ![Showcase](docs/showcase.jpg)
 
 Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun/moon shadows, a time of day (0–24 h, presets,
@@ -161,7 +155,7 @@ Command-line options:
 - `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
   choice on the vehicle page (not in scenario mode);
-- `--level ID` — start on level ID (`exploration_peaks`, `suncoast_raceway`, `ironwall_stadium`, `proving_ground`); scenarios and `--demo` start on the
+- `--level ID` — start on level ID (`exploration_peaks`, `suncoast_raceway`, `proving_ground`); scenarios and `--demo` start on the
   proving ground unless it is given;
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](#audio));
@@ -256,7 +250,7 @@ One command per line, `#` starts a comment:
 | `tires offroad\|road\|slick` / `tires warm\|cold` / `tires ambient C` | fit a tire set through the garage parameter `tires.set` (rebuild in place, new tires at the air temperature) / put all four tires (surface and core) in the middle of the set's window or at the air temperature / set the air temperature live (`tools/scenarios/tires.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
-| `camera local X Y Z TX TY TZ [FOV]` | free camera with position and target in the vehicle frame (+X left, +Y up, +Z forward, m; FOV default 60 deg) for close-ups of body details (`tools/scenarios/badge_views.txt`) |
+| `camera local X Y Z TX TY TZ [FOV]` | free camera with position and target in the vehicle frame (+X left, +Y up, +Z forward, m; FOV default 60 deg) for close-ups of body details |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
 | `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
@@ -271,7 +265,7 @@ One command per line, `#` starts a comment:
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
-| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `ironwall_stadium`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
 | `drift on\|off\|level` | force drift scoring on / off for the session, or back to the level's `"drift"` setting (same as F1 → Simulation → Drift scoring) |
 | `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
@@ -288,7 +282,7 @@ Scenarios start in gameplay (no intro, no menu) and never read or write the sett
 
 Other scenarios: `tools/scenarios/bump_check.txt` (every shipped vehicle accelerated to 30 km/h on the proving
 ground's bump strip, teleport 16, coasting over a 0.35 m, 2.5 m long mound under both wheel tracks and then one under
-the left wheels (the KESTREL M only takes the first: its nose stops on the face of the one-sided mound); no
+the left wheels; no
 rollover (`max_tilt` < 45°), upright on four wheels afterwards; `/tmp/trailforge_bump_*.png`),
 `tools/scenarios/controls.txt` (Controls page: drive keys, gamepad button names auto / override,
 no overlapping callouts, wheel scroll, values kept, then a drive with the arrow keys including the pedal ramp;
@@ -297,9 +291,7 @@ and quit to the start menu through keys and mouse clicks; the pause freezes tick
 `/tmp/trailforge_menu_*.png`), `tools/scenarios/visual_tour.txt` (showcase screenshots `/tmp/trailforge_vis_*.png`),
 `tools/scenarios/track_check.txt` (Suncoast Raceway: an autopilot lap through every checkpoint with sector times,
 the stored best lap, R to the last checkpoint, the map, fixed cameras, frame times per preset;
-`/tmp/trailforge_track_*.png`), `tools/scenarios/ironwall_check.txt` (Ironwall Stadium: spawn on the static meshes,
-SUV and EV autopilot laps, R to the last gate, a judged hand brake drift (rwd_test), the three POIs, the map, fixed cameras, frame times per preset;
-`/tmp/trailforge_ironwall_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
+`/tmp/trailforge_track_*.png`), `tools/scenarios/minitrack.txt` (mini handling track: teleport by name, the lap timer starting at the line, fixed
 cameras on every section, the map; `/tmp/trailforge_minitrack_*.png`), `tools/scenarios/surfaces.txt` (asphalt rubber
 marks after a locked-wheel stop on the mini track, gravel spray and displaced-gravel tracks in a trap;
 `/tmp/trailforge_surfaces_*.png`),
@@ -344,8 +336,7 @@ brake tap, audible for lock-up and handbrake slides, never while the mud layer i
 regen, blended braking, SoC and energy counters, drive modes, the low range message, reverse, an empty battery, the
 mud bath in OFF-ROAD; `/tmp/trailforge_ev_*.png`), `tools/scenarios/ev_audio.txt` (EV launch, regen and stop for an
 `--audio-capture` analysed by `tools/audio/analyze_capture.py`), `tools/scenarios/patrol_views.txt` (buggy views, full droop and full bump coil-over close-ups,
-`/tmp/trailforge_patrol_*.png`), `tools/scenarios/thirdparty_views.txt` (IRONCLAD G and KESTREL M bodies: views,
-steering lock, night lamps, hood camera, twister, slicks on the coupe; `/tmp/trailforge_tp_*.png`),
+`/tmp/trailforge_patrol_*.png`),
 `tools/scenarios/car2_views.txt` (EV model views
 for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`), `tools/scenarios/tires.txt` (tire sets and
 temperature: cold slicks, warming on the mini track, slicks taken off warmers, the telemetry grid, the road set fitted
@@ -401,7 +392,7 @@ map: `map_open`, `map_ready`, `map_build_ms`, `map_pois`, `map_scale` (points pe
 `marker_set`, `marker_x` / `marker_z`, `marker_dist` (m, horizontal), `marker_bearing` (deg, relative to the heading, + = right),
 `heading` (deg clockwise from north), attract drive: `autopilot` (0 off, 1 drive, 2 hold), `autopilot_driven` (m),
 `autopilot_progress`, `autopilot_lateral` (m from the route), `autopilot_resets`,
-lap timing (Suncoast Raceway, Ironwall Stadium, the mini handling track): `lap_active`, `lap_running`, `lap_count`, `lap_time` (running
+lap timing (Suncoast Raceway, the mini handling track): `lap_active`, `lap_running`, `lap_count`, `lap_time` (running
 lap, s), `lap_last`, `lap_best` (session), `lap_stored_best` (best_laps.cfg, this level and vehicle), `lap_saved`
 (entries in it), `lap_best_gap` (best − last), `lap_stored_gap` (stored − session best), `lap_next` / `lap_next_gate`,
 `lap_last_gate`, `lap_checkpoints`, `lap_gates`, `lap_gate_dist_N` (m from gate N), `lap_sectors`, `lap_sector_N`
@@ -773,53 +764,6 @@ on-demand AWD rather than RWD.
 
 The engine sound uses the `sporty` profile (car recordings pitched to the engine rpm); nobody has listened to it at
 11000 rpm.
-
-### IRONCLAD G and KESTREL M (`ironclad_suv`, `kestrel_coupe`)
-
-Two vehicles with Blender bodies (`body.glb`, see "Blender bodies (body.glb)") converted from third-party models of
-unknown licence: private builds only, they must be removed before the repository or a build is made public
-(`CREDITS.md` in each folder). The physics follow published manufacturer data and tests of the real cars; wheel
-positions were measured from the models.
-
-- **IRONCLAD G**: boxy body-on-frame off-roader, 2560 kg (front 0.54), wheelbase 2.883 m, track 1.672 m, 295/40 R22
-  tires (r 0.396 m), 4.0 L twin-turbo V8 (850 N·m, 430 kW rated, 437 kW curve peak), 9-speed automatic, 2.93:1 low
-  range, permanent AWD 40:60 with a centre LSD, OFF-ROAD tire set by default. Bump travel 83 / 101 mm above rest.
-- **KESTREL M**: rear-drive coupe, 1740 kg (front 0.53), wheelbase 2.748 m, 275/35 R19 front and 285/30 R20 rear,
-  3.0 L twin-turbo six (550 N·m, 338 kW rated, 346 kW curve peak), 8-speed automatic, rear LSD, ROAD tire set by
-  default (`tires.set`; its `tires` curves are the earlier road-tire tuning divided by the ROAD multipliers on
-  concrete, so ROAD reproduces it there and OFF-ROAD / SLICK scale from the same baseline).
-- Bodies: the arch lips were flared outward (IRONCLAD up to 40 mm paint / 47 mm trim, KESTREL up to 69 / 27 mm) so
-  every body vertex keeps 10 mm from the wheel sweep over the full travel, the steering lock and the garage ride
-  heights (`trailforge_vehiclec --check` without `--clearance`; closest 12.3 mm on the IRONCLAD). The arches leave
-  no room to lower either car: the garage ride height only raises it (IRONCLAD 0..+80 mm, KESTREL 0..+30 mm).
-- No manufacturer marks: the body prep replaces every emblem (grille, hood, spare cover, trunk, steering wheel) with
-  a blank dark disc of the same size, deletes the model lettering and stickers, and paints the logo and lettering
-  areas of the texture atlases (interior plates, number plates, engine bay, grille mesh stripes) with their
-  background colour before the colour bake; the grille shapes are unchanged. Wheels are the game's own, so there are
-  no wheel-centre logos. Close-ups: `tools/scenarios/badge_views.txt` (the steering wheels are not visible through
-  the tinted glass).
-- Coil-overs under a Blender body: the body has no shock towers, so the procedural layout moves with each axle's hub
-  (the shock 0.06 m longer than its body at full bump, the lower arm level at rest) and the coil sits inboard of the
-  steered tire; `model_suspension_mounts` checks the shock length, a 5 mm coil-to-tire gap and that the top eye is
-  under the body skin.
-
-`trailforge_probe compare` (Release, 120 Hz, TC and ABS off unless stated; default tire sets):
-
-| | IRONCLAD G (2560 kg, OFF-ROAD) | KESTREL M (1740 kg, ROAD) |
-|---|---|---|
-| 0–30 / 0–60 / 0–100 km/h, concrete | 1.21 / 2.35 / 4.63 s | 1.69 / 3.04 / 4.96 s |
-| 50–0 km/h ABS off / on | 14.28 / 13.57 m | 11.13 / 11.05 m |
-| 100–0 km/h ABS off / on | 49.50 / 43.28 m | 36.33 / 33.34 m |
-| corner 40 km/h, steer 0.25 / 0.45 | 6.51 / 7.72 m/s², roll 2.46 / 3.08° | 6.52 / 9.64 m/s², roll 0.81 / 1.45° |
-| climb dirt 20° / mud 15°, full pedal | 3.97 / 5.85 s (4H) | 7.63 s / does not climb the mud (7.7 m) |
-| diagonal twister, travel used FL / FR / RL / RR | 0.174 / 0.160 / 0.230 / 0.222 m | 0.106 / 0.107 / 0.109 / 0.119 m |
-
-The real cars are quoted at 4.5 s (IRONCLAD) and 4.1 s (KESTREL, 8-speed) to 100 km/h; the probe launch has no
-launch control and the KESTREL's rear tires limit it. `trailforge_probe tires` (autopilot, best clean flying lap,
-20 C air), OFF-ROAD / ROAD / SLICK: mini track IRONCLAD 56.10 / 51.63 / 52.44 s, KESTREL 55.70 / 51.43 / 47.35 s
-(slick treads 62–66 C average, below the 80–110 C window); Suncoast Raceway IRONCLAD 110.42 / 109.96 s / no clean
-lap, KESTREL 104.48 / 99.19 / 103.95 s (slick treads about 55 C). 60–0 km/h on asphalt with ABS, cold / warm tires:
-KESTREL ROAD 14.19 / 13.33 m, SLICK 16.84 / 12.53 m.
 
 ### Vehicle blueprints (bodies traced from the concept sheet)
 
@@ -1638,8 +1582,7 @@ physics tick; it only reads simulation data and never feeds back.
   Bad values fail the level load with a message (`parseDriftConfig`). The proving ground enables it in code for the
   mini handling track (`miniTrackDrift()`): area = the walled rectangle of the mini track, zone "Outer zone" ×2 (the
   outer 3.7 m band of the asphalt and edge over the steady part of the 32 m 180° corner), zone "Apex" ×1.5 (a line
-  on the inner edge over the middle third of that arc, reach 2.5 m). Ironwall Stadium has its own `"drift"` block
-  (see [Ironwall Stadium](#ironwall-stadium-banked-oval)).
+  on the inner edge over the middle third of that arc, reach 2.5 m).
 - **Switch:** F1 → Simulation → Drift scoring (World setting / On / Off) and the scenario command `drift
   on|off|level`; the override lasts the session.
 - **HUD:** a panel below the lap panel while scoring is active and the vehicle is on the course: slip angle, speed,
@@ -1653,52 +1596,6 @@ physics tick; it only reads simulation data and never feeds back.
   best 353 (50 km/h handbrake, 86.3°), 15 scored, 2 spins, 5 walls; SUV best 364 (45 km/h handbrake, 24.2°), 15
   scored, 0 spins, 3 walls; EV best 462 (40 km/h handbrake, 53.6°), 7 scored, 8 spins, 4 walls. The best runs
   spend 0–0.3 s in the clipping zones: this driver holds a tighter line than the outer band.
-
-## Ironwall Stadium (banked oval)
-
-A fictional name for a converted scene: **third-party content without a licence**, in the build only while the
-repository is private (see the note at the top; it must be removed or replaced before going public; provenance in
-`assets/levels/ironwall_stadium/CREDITS.md`, nowhere else). LEVEL row of the start menu (IRONWALL STADIUM),
-`--level ironwall_stadium`, scenario `level ironwall_stadium`.
-
-- **Conversion** (`tools/levels/blender/convert_stadium.py`, headless Blender 5.3 Beta, ~10 s): the meshes of the
-  source scene grouped by material into seven static models (`trailforge_modelc` kind `static`, one LOD, BC7 KTX2
-  albedo at most 2048² for the track asphalt and 1024² otherwise, no normal maps, constant roughness):
-  asphalt 13,421 triangles, grass 2,027, gravel 128, structures (walls, tyre stacks, stands, buildings, poles)
-  161,915, markers (cones, clipping-point boards) 4,816, decals (lines, tyre marks, banners) 60,830, vegetation
-  cards 5,088. The real venue name is painted out of the textures.
-- **Collision = render:** asphalt, grass, gravel and structures collide with exactly their render triangles (one
-  Jolt `StaticCompoundShape` of `MeshShape`s, 177,491 triangles, a permanent static body; CTest
-  `level_static_scene` checks the triangle order against LOD0). Surfaces per material: `Asphalt` (μ 1.00),
-  `Grass` (rigid, μ 0.50), `Gravel` (rigid, loose μ), structures `Concrete`. Markers, decals and the vegetation
-  cards are render-only (the source's collision naming did not survive the export, and its cones are props).
-  The whole floor inside the walls (oval, infield and its two worn-asphalt islands) is `Asphalt`; grass is only the
-  verges outside the walls, gravel only the dirt path west of the oval behind the barrier. CTest
-  `level_static_scene` casts a ray every 1 m over the drift area and allows only `Asphalt` and the `Concrete`
-  structures standing on it (measured: 14,401 asphalt, 118 concrete, nothing else).
-  The whole floor inside the walls (oval, infield and its two worn-asphalt islands) is `Asphalt`; grass is only the
-  verges outside the walls, gravel only the dirt path west of the oval behind the barrier. CTest
-  `level_static_scene` casts a ray every 1 m over the drift area and allows only `Asphalt` and the `Concrete`
-  structures standing on it (measured: 14,401 asphalt, 118 concrete, nothing else).
-- **Height grid:** a 513² heightmap rasterised 0.5 m under the lowest mesh ground (it carries the map, the grass
-  colour and the far terrain; spawns and resets ray-cast onto the meshes), ramped to flat land outside. No grass
-  blades (`"grassBlades": false`): they would grow on the grid under the meshes.
-- **Circuit:** a 424 m oval 10 m inside the outer asphalt edge, driven counter-clockwise, banked 5–14°; gate 0 is
-  the start / finish line, 6 gates with two sector lines; spawn 12 m behind the line. POIs: Start / Finish,
-  Infield (drift area), Paddock. The lap timer is the shared one (see Suncoast Raceway).
-- **Drift scoring** (level.json `"drift"`, written by `convert_stadium.py --drift-only` from the source scene; see
-  [Drift scoring](#drift-scoring)): area = the outer wall face loop 0.5 m back (the oval and the infield, not the
-  paddock); ×2 "Outer wall" zones along the outer wall, 2.5 m in from the wall face (a line zone per straight, a band
-  polygon per turn); ×1.5 "Clip 1" … "Clip 12" octagons (3 m radius) around the source's clipping-point boards that
-  stand off the wall (the inner clipping points; the boards on the wall mark the outer zones). Default thresholds.
-  CTest `level_static_scene` checks that the area holds the spawn, the gates and every zone polygon.
-- **Autopilot laps** (`trailforge_probe lap assets/levels/ironwall_stadium/level.json`, 70 km/h cruise, 5 m/s² in
-  curves): SUV 30.605 s (49.8 km/h mean, 67.0 km/h max), EV 30.144 s (50.6 km/h mean, 69.0 km/h max), both 100 % of
-  the ticks on four asphalt wheels, no resets (CTest `level_static_lap` / `level_static_lap_ev`).
-- **Frame times** (2880 × 1800, Metal, VSync off, `ironwall_check.txt`, three runs): Low 120–304 FPS, Medium
-  120–132 (GPU 13.5–14.9 ms), High 96–105 (GPU 17.5–19.1 ms), Ultra 88–92 (GPU 20.3–20.8 ms). Model load 7 models,
-  ~118 ms.
-- **Size:** 54.3 MB in Git LFS (glb + KTX2 in `assets/models/ironwall_stadium/`), 0.8 MB of plain level files.
 
 ## Map, waypoint and compass
 
@@ -2348,9 +2245,6 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   `Gravel` surface (no sinkage or deceleration bed), the tyre walls and armco are rigid
   convex pieces (no energy absorption), and the track surface is a smooth fit to a 30 m DEM, not a survey of the
   real asphalt (real bumps and camber are unknown). The lap timer and the best laps only observe the body position.
-- Ironwall Stadium: the walls, tyre stacks and fences are rigid triangle meshes (no energy absorption, nothing
-  moves or breaks); cones, clipping-point boards, painted lines, decals and tree cards are render-only; the meshes
-  have no normal maps and a constant roughness; the height grid lies 0.5 m under the meshes and is never driven on.
 - Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
   engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
   message (the only teleports besides R (on Suncoast Raceway during a lap: to the last gate passed), the F1 teleport buttons, the attract-drive reset behind the start menu and
@@ -2442,8 +2336,7 @@ and bump stop peaks reach ~330 kN per substep. This is physics, not a conversion
   for the patrol buggy flooring it in the air).
 - Bumps (`trailforge_probe bump`, `tools/scenarios/bump_check.txt`): no shipped vehicle rolls over a 0.35 m mound
   at 30 km/h with a constant or no throttle; a 1 m long kicker of the same height or a step acts as a ramp, and
-  holding or flooring the throttle over it can still flip the short-travel IRONCLAD G (8–10 cm of bump travel,
-  the body hits) and the light patrol buggy (see the devlog for the per-vehicle counts).
+  holding or flooring the throttle over it can still flip the light patrol buggy (see the devlog for the per-vehicle counts).
 - Ackermann: the outer wheel's maximum angle is lowered before each step (cot(outer) = cot(inner) + track /
   wheelbase, blended by `ackermann`); Jolt steers each wheel to input × its maximum angle, so the geometry holds
   exactly only at full lock and is proportional in between.

@@ -22,7 +22,7 @@
 // Impostor: LOD0 rasterized on the CPU (orthographic, alpha-tested, 2 x 2 supersampled) from N azimuths into one
 // atlas row; albedo + coverage and the view-space normal + AO. Output is deterministic for the same inputs.
 //
-// Kind "static" (level ground and structures converted from a scene, tools/levels/blender/convert_stadium.py): the
+// Kind "static" (level ground and structures converted from a scene): the
 // source coordinates are kept ("origin": "none" by default), there is one LOD with the source triangles unchanged
 // (no simplification, card reduction or wind), "collisionLod": 0 stores the same triangles as the collision mesh,
 // and "surface" (asphalt, grass, gravel, ...) names the physics surface. Material maps are used at their own size
