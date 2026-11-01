@@ -875,6 +875,54 @@ void suvMarksKeyboard() {
           full.marks.segments, full.marks.maxSlip);
 }
 
+// Keyboard steering range (Simulation::keyboardSteerRange) on the shipped SUV, flat concrete pad: at a crawl a held
+// key reaches full lock; at 60 km/h it stops at the peak-friction corner angle plus one peak slip angle, so the front
+// tires work near their peak instead of sliding at 30+ deg (full lock at 60 km/h); the stick is not limited.
+void keyboardSteerRange() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    CHECK(loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json", def, errors),
+          "SUV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    SimulationSettings st = settingsFor(TrackLayout::Flat);
+    st.vehicle = def.config;
+    const float maxDeg = def.config.axles[kFrontAxle].maxSteerAngleDeg;
+    const VehicleTuning& t = def.config.tuning;
+    {
+        Simulation sim(st);
+        run(sim, 1.0);
+        cruise(sim, 1.0, 5.0f);
+        cruise(sim, 1.0, 5.0f, 1.0f);
+        const float crawl = std::abs(sim.vehicle().telemetry().steerAngleDeg);
+        std::printf("  held key at %.1f km/h: steer %.1f deg (full lock %.0f)\n", sim.vehicle().telemetry().speed * 3.6f, crawl, maxDeg);
+        CHECK(crawl > 0.97f * maxDeg, "full lock at a crawl: %.1f deg", crawl);
+    }
+    {
+        Simulation sim(st);
+        run(sim, 1.0);
+        cruise(sim, 10.0, 60.0f);
+        cruise(sim, 2.0, 60.0f, 1.0f);
+        const auto& tel = sim.vehicle().telemetry();
+        const float v = tel.speed;
+        const float expected = std::atan(def.config.wheelBase * t.tirePeakLatFriction * 9.81f / (v * v)) * 57.2958f + t.tirePeakSlipAngleDeg;
+        const float steer = std::abs(tel.steerAngleDeg);
+        const float front = 0.5f * (std::abs(tel.wheels[0].lateralSlipDeg) + std::abs(tel.wheels[1].lateralSlipDeg));
+        std::printf("  held key at %.0f km/h: steer %.1f deg (range %.1f), front slip %.1f deg, up %.3f\n", v * 3.6f, steer, expected,
+                    front, tel.upDot);
+        CHECK(std::abs(steer - expected) < 1.0f, "keyboard range at speed: %.1f deg vs %.1f", steer, expected);
+        CHECK(front < 18.0f, "front tires not deep in the slide: %.1f deg", front);
+        CHECK(tel.upDot > 0.9f, "upright");
+    }
+    {
+        Simulation sim(st);
+        run(sim, 1.0);
+        cruise(sim, 10.0, 60.0f);
+        run(sim, 0.5, {.throttle = 0.3f, .steer = 1.0f, .analog = true});
+        const float stick = std::abs(sim.vehicle().telemetry().steerAngleDeg);
+        std::printf("  stick at 60 km/h: steer %.1f deg\n", stick);
+        CHECK(stick > 0.97f * maxDeg, "the stick is not limited: %.1f deg", stick);
+    }
+}
+
 // Launch rubber follows how much and how long the tire spins (shipped SUV, flat concrete): normal pull-aways leave
 // none, a full-pedal 2H launch (~2 s of spin at < 5 m/s) a faint, narrow mark, 4H none; a stationary burnout
 // (brake 0.6 + full throttle, rears at ~10 m/s) builds up from light and narrow after 2 s to dark and full width
@@ -1887,6 +1935,7 @@ int main(int argc, char** argv) {
         {"surface_launch_grip", surfaceLaunchGrip},
         {"skid_mark_profile", skidMarkProfile},
         {"suv_marks_keyboard", suvMarksKeyboard},
+        {"keyboard_steer_range", keyboardSteerRange},
         {"launch_marks_proportional", launchMarksProportional},
         {"tire_marks_boundary", tireMarksBoundary},
         {"wheel_spray", wheelSpray},

@@ -37,6 +37,16 @@ directly bypass the ramp.
 | Free camera | the cluster that does not drive (arrow keys with W A S D driving, W A S D with the arrows), PgUp/PgDn, Shift — faster | — |
 | Menus: select / back | Enter (Return on a Mac) / Esc or Backspace (Delete on a Mac), or the ◀ BACK button | A (South) / B (East) |
 
+**Keyboard steering.** Steering keys have a speed-dependent range (`Simulation::keyboardSteerRange`, `InputSmoothing::keyboardSteerSlip`),
+also a driver-input model and not a force: a held steering key turns the front wheels to the steer angle of a corner at the
+tire's peak friction (atan(wheelBase × μ g / v²)) plus one peak slip angle, at most full lock — full lock below about
+25 km/h, 18.5° at 40 km/h, 12° at 60 km/h and 10° at 75 km/h on the SUV. Before, a held key was full lock (35°) at
+every speed. Measured with the SUV (ABS, off-road TC, all locks; 60 km/h, key held 3 s, full lock → range): front slip
+angle 36 → 12° and lateral acceleration 0.69 → 0.89 g on asphalt, 38 → 15° and 0.33 → 0.43 g on grass, 37 → 14° and
+0.46 → 0.60 g on dirt. The range ignores the surface: on grass and gravel the held key still overshoots the peak, and
+with the front tires gripping, a hard turn released at 75 km/h on grass or gravel can swing the tail out where full
+lock used to plough straight on. The stick and the autopilot are analog and keep the full range.
+
 **Close follow camera.** A nearer, steeper chase view (the second step of the C / RB cycle; the follow view is
 unchanged). It is sized from the vehicle's collision bounds in body space (`Vehicle::bodyBounds`): 0.565 body
 lengths behind the rear bumper, 1.65 roof heights above the body origin, looking 12° down at a point half a body

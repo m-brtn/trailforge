@@ -536,7 +536,7 @@ void skidGating() {
         d.cruise(8.0, 50.0f);
         r.brake = d.peakSkid(3.0, {.brake = 1.0f});
         spawn();
-        r.powerSlide = d.peakSkid(5.0, {.throttle = 1.0f, .steer = 1.0f});
+        r.powerSlide = d.peakSkid(5.0, {.throttle = 1.0f, .steer = 1.0f, .analog = true});
         r.chirps = d.mixer.stats().skidChirps - chirps0;
         return r;
     };

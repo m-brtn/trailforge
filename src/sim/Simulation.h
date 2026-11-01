@@ -51,6 +51,9 @@ struct InputSmoothing {
     float pedalRise = 3.0f;       // 1/s, throttle and hand brake
     float pedalFall = 6.0f;       // 1/s
     float brakeRise = 8.0f;       // 1/s, foot brake: full line pressure ~0.13 s after a stamp (booster, brake assist)
+    // Keyboard steering range: the peak-friction corner angle plus this x the tire's peak slip angle; 0 = full lock
+    // at every speed (Simulation::keyboardSteerRange).
+    float keyboardSteerSlip = 1.0f;
 };
 
 struct Pose {
@@ -234,6 +237,7 @@ private:
     void setMessage(const char* text);
     void resolvePedals(float dt);
     void smoothInput(float dt);
+    float keyboardSteerRange() const;
     void runAutopilot(float dt);
     void updateLapTimer(const JPH::Vec3& before);
     void applyDriftConfig();
@@ -267,6 +271,7 @@ private:
     // is released; only a fresh press at a standstill switches the direction.
     bool m_brakeLatch = false;
     DriverCommand m_smoothed;
+    float m_keySteer = 0.0f; // smoothed steering key position, -1..1 of the keyboard range
     bool m_pendingToggleDirection = false;
     bool m_pendingToggleLowRange = false;
     bool m_pendingReset = false;
