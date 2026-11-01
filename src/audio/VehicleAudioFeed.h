@@ -32,7 +32,7 @@ struct AudioFeedSettings {
     float impactFullImpulse = 8000.0f;
     float splashMinSpeed = 1.0f;     // m/s
     float creakArticulation = 0.75f; // |(FL - FR) - (RL - RR)| of the compression ratios
-    float impactInterval = 0.12f;    // s
+    float impactInterval = 0.2f;     // s
     float creakInterval = 2.5f;      // s
     // Rubber squeal per wheel: the drive (wheelSquealDrive) is followed with attack/release time constants and
     // gated with hysteresis, so single-tick slip spikes stay silent. The release ends a full squeal within ~0.1 s
@@ -42,6 +42,18 @@ struct AudioFeedSettings {
     float squealReleaseLoose = 0.03f; // s, after the wheel left the hard surface or lost contact
     float squealOn = 0.15f;          // gate opens above this smoothed drive
     float squealOff = 0.05f;         // and closes below this one
+    // Touchdown: a wheel that was in the air for squealAirMin or longer (bounce, jump, rollover) lands with a load
+    // spike of 10-100 x the static load and a tread spinning at its own speed; it squeals only after it has rolled
+    // in contact for a while. Short lifts during a slide (below squealAirMin) are not touchdowns.
+    float squealAirMin = 0.05f;      // s in the air before a contact counts as a touchdown
+    float squealLandedMin = 0.08f;   // s after the touchdown: no squeal before ...
+    float squealLandedFull = 0.20f;  // ... full squeal drive after
+    // Body tilt: the tires squeal only on their tread (body up axis against world up, cos of the tilt angle).
+    float squealUprightMin = 0.5f;   // silent beyond 60 degrees of tilt ...
+    float squealUprightFull = 0.8f;  // ... full below ~37 degrees
+    // Chassis creak only with the body upright on its wheels (not on its side or roof during a rollover).
+    float creakUprightMin = 0.8f;    // cos of the tilt angle (~37 degrees)
+    int creakMinWheels = 3;          // wheels in contact
 };
 
 // Runs on the game thread after every physics tick: keeps the latest continuous state (AudioFrame vehicle part)
@@ -83,6 +95,8 @@ private:
     std::array<TreadSoil, kAudioWheels> m_soil{};
     std::array<float, kAudioWheels> m_squealEnv{};
     std::array<bool, kAudioWheels> m_squealOpen{};
+    std::array<float, kAudioWheels> m_airTime{};     // s out of contact
+    std::array<float, kAudioWheels> m_sinceLanding{}; // s since the last touchdown (large: none)
 };
 
 } // namespace tf

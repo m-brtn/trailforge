@@ -3023,6 +3023,7 @@ BumpOutcome bumpRun(const VehicleConfig& cfg, const BumpRun& run, bool trace = f
     double airRun = 0.0, liftRun = 0.0, tOut = -1.0;
     float cruiseThrottle = -1.0f;
     bool measuring = false;
+    VehicleAudioFeed feed;
     for (int i = 0; i < int(30.0 / dt); ++i) {
         const auto& t = sim.vehicle().telemetry();
         const float frontZ = float(sim.currentSnapshot().wheels[0].position.GetZ());
@@ -3037,6 +3038,23 @@ BumpOutcome bumpRun(const VehicleConfig& cfg, const BumpRun& run, bool trace = f
         }
         sim.setIntent(in);
         sim.tick();
+        if (trace) {
+            feed.onTick(sim);
+            static const char* kEventNames[] = {"start", "gear", "bump-stop", "rattle", "impact", "splash", "creak", "ui"};
+            for (const AudioEvent& e : feed.events())
+                std::printf("  t=%5.2f audio event %s %.2f\n", i * dt, kEventNames[int(e.type)], e.intensity);
+            feed.clearEvents();
+            const AudioFrame& af = feed.frame();
+            bool any = false;
+            for (const WheelAudio& w : af.wheels) any = any || w.squeal > 0.0f;
+            if (any) {
+                std::printf("  t=%5.2f squeal", i * dt);
+                for (const WheelAudio& w : af.wheels)
+                    std::printf(" | %.2f c%d slip %.1f m/s long %.2f lat %.2f roll %.1f load %.0f", w.squeal, int(w.contact),
+                                w.slipSpeed, w.longRatio, w.latRatio, w.rollSpeed, w.load);
+                std::printf("\n");
+            }
+        }
         const auto& tw = sim.vehicle().telemetry();
         const JPH::RVec3 com = bi.GetCenterOfMassPosition(vid);
         const JPH::Quat q = bi.GetRotation(vid);

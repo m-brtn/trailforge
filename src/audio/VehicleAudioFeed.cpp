@@ -54,6 +54,11 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     const WaterSurface& water = sim.waterSurface();
     const bool newSpawn = !m_seen || sim.spawnCount() != m_spawnCount;
     const float dt = float(sim.fixedStep());
+    const auto smoothstep = [](float a, float b, float x) {
+        const float u = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+        return u * u * (3.0f - 2.0f * u);
+    };
+    const float upright = smoothstep(s.squealUprightMin, s.squealUprightFull, f.vehicleUp.y);
     for (int i = 0; i < kAudioWheels; ++i) {
         const WheelContactSample& c = contacts[std::size_t(i)];
         const WheelTelemetry& wt = t.wheels[std::size_t(i)];
@@ -76,10 +81,20 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
             m_soil[k] = {};
             m_squealEnv[k] = 0.0f;
             m_squealOpen[k] = false;
+            m_airTime[k] = 0.0f;
+            m_sinceLanding[k] = 1e3f;
         }
         m_soil[k].update(c, dt);
         w.soil = m_soil[k].amount;
-        const float drive = wheelSquealDrive(w, f.referenceLoad);
+        if (c.contact) {
+            if (m_airTime[k] >= s.squealAirMin) m_sinceLanding[k] = 0.0f;
+            m_airTime[k] = 0.0f;
+            m_sinceLanding[k] = std::min(m_sinceLanding[k] + dt, 1e3f);
+        } else {
+            m_airTime[k] += dt;
+        }
+        const float landed = smoothstep(s.squealLandedMin, s.squealLandedFull, m_sinceLanding[k]);
+        const float drive = wheelSquealDrive(w, f.referenceLoad) * upright * landed;
         const bool hard = c.contact && squealSurface(c.surface) > 0.0f;
         float& env = m_squealEnv[k];
         const float tau = drive > env ? s.squealAttack : (hard ? s.squealRelease : s.squealReleaseLoose);
@@ -198,8 +213,11 @@ void VehicleAudioFeed::onTick(const Simulation& sim) {
     // Articulation: diagonal difference of the suspension compression (twisting the frame).
     const auto cr = [&](int i) { return t.wheels[std::size_t(i)].compressionRatio; };
     const float articulation = std::abs((cr(0) - cr(1)) - (cr(2) - cr(3)));
+    int grounded = 0;
+    for (const WheelAudio& w : f.wheels) grounded += w.contact ? 1 : 0;
     if (articulation > s.creakArticulation && std::abs(articulation - m_prevArticulation) > 1e-4f &&
-        t.speed < 6.0f && m_time - m_lastCreak > s.creakInterval) {
+        t.speed < 6.0f && f.vehicleUp.y > s.creakUprightMin && grounded >= s.creakMinWheels &&
+        m_time - m_lastCreak > s.creakInterval) {
         AudioEvent e;
         e.type = AudioEventType::ChassisCreak;
         e.intensity = std::clamp((articulation - s.creakArticulation) / 0.5f + 0.4f, 0.4f, 1.0f);
