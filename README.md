@@ -1,11 +1,12 @@
 ![TrailForge](external_assets/images/Banner.png)
 
-# TrailForge — off-road simulator prototype
+# TrailForge — driving simulator prototype
 
-TrailForge is an off-road driving prototype on a small custom C++20 engine: SDL3 (window, input, gamepad), SDL GPU
+TrailForge is a driving simulator prototype on a small custom C++20 engine: SDL3 (window, input, gamepad), SDL GPU
 (Metal on macOS) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`), Dear
-ImGui (diagnostics), GLM and miniaudio (device and WAV I/O; the mixer is our own). The focus is believable vehicle
-behavior: mass, suspension travel, wheelspin, wheel lift, rocks and climbs.
+ImGui (diagnostics), GLM and miniaudio (device and WAV I/O; the mixer is our own). It covers off-road trails in an
+open world, a circuit with lap timing, a handling track with drift scoring, and tire sets with temperature. The focus
+is believable vehicle behavior: mass, suspension travel, wheelspin, grip at the limit, wheel lift, rocks and climbs.
 
 <!-- README screenshots: one of the start menu and two of Exploration Peaks with the vehicle seen from behind
      will replace the three images below. -->

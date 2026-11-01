@@ -4,7 +4,7 @@ Instructions for coding agents working on TrailForge. Human-facing documentation
 
 ## Project overview
 
-TrailForge is a C++20 off-road vehicle prototype on a small custom engine: SDL3 (window, input, gamepad),
+TrailForge is a C++20 driving simulator prototype (off-road trails, circuit racing, drift) on a small custom engine: SDL3 (window, input, gamepad),
 SDL GPU (Metal on macOS; D3D12 / Vulkan elsewhere) with one HLSL shader source, Jolt Physics (`VehicleConstraint` + `WheeledVehicleController`),
 Dear ImGui (diagnostics), GLM, miniaudio (audio device / WAV I/O only; the mixer is our own). The focus is
 believable vehicle behavior: mass, suspension travel, wheelspin, wheel lift, rocks, climbs. All geometry is
