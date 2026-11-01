@@ -42,8 +42,8 @@ public:
 // squeal voice per wheel, wind, day and night ambience, the menu drone, a synthesized transmission whine, a pool of
 // one-shots and a streamed music track (looped; not paused with the game). An electric vehicle (AudioFrame::electric)
 // silences the engine loops and plays synthesized motor tones instead (evMotorTones); a tire profile with roadGain
-// adds a synthesized rolling road hum per wheel. The body rattle and the bump-stop knocks are synthesized from the
-// vehicle's BodySoundProfile (mixBodyShake). Gains ramp
+// adds a synthesized rolling road hum per wheel. The body rattle and the suspension / body thuds are synthesized
+// from the vehicle's BodySoundProfile (mixBodyShake). Gains ramp
 // linearly over each 64-frame control block; a look-ahead peak limiter guards the master output.
 class AudioMixer {
 public:
@@ -86,6 +86,8 @@ private:
         float lpL = 0.0f, lpR = 0.0f;
         float highpass = 0.0f; // two cascaded one-pole high-passes, pole per sample (0 = off)
         std::array<float, 8> hp{}; // [in, out] x 2 stages x 2 channels
+        // One-shots: after fadeHold s the gain decays with time constant fade (0 = plays as recorded).
+        float fadeHold = 0.0f, fade = 0.0f, age = 0.0f;
     };
 
     // Rubber squeal of one wheel: its own voice of the skid loop with per-slide variation.
@@ -185,29 +187,54 @@ private:
             return y;
         }
     };
-    // Bump-stop knock at one wheel: three modes and a noise transient, struck once.
+    // Low-Q band-pass (trapezoidal state-variable filter); retuned per rattle tick, state kept.
+    struct BandPass {
+        float a1 = 0.0f, a2 = 0.0f, a3 = 0.0f, ic1 = 0.0f, ic2 = 0.0f;
+        void tune(float hz, float q, float rate);
+        float step(float x) {
+            const float v3 = x - ic2;
+            const float v1 = a1 * ic1 + a2 * v3;
+            const float v2 = ic2 + a2 * ic1 + a3 * v3;
+            ic1 = 2.0f * v1 - ic1;
+            ic2 = 2.0f * v2 - ic2;
+            return v1;
+        }
+    };
+    // Suspension / body thud: one low mode that dies within a few periods and a low-passed noise hit whose
+    // brightness follows the intensity, struck once.
     struct Knock {
-        std::array<Resonator, 3> modes{};
+        Resonator mode;
         float amp = 0.0f;           // strike amplitude, for the impulse on the first sample
-        float noise = 0.0f;         // transient envelope
+        float noise = 0.0f, noiseDecay = 0.0f; // noise hit envelope and its per-sample decay
+        float lp = 0.0f, lp1 = 0.0f, lp2 = 0.0f; // two-stage low-pass of the noise hit (coefficient, states)
         float age = 0.0f, life = 0.0f; // s
         bool active = false, struck = false;
         AudioVec3 position;
         float l = 0.0f, r = 0.0f, tl = 0.0f, tr = 0.0f;
     };
     std::array<Knock, 3> m_knocks{};
-    // Rattle: random grains on four resonances, rate and amplitude from the shake envelope (one source at the body).
-    std::array<Resonator, 4> m_rattleModes{};
+    double m_lastKnockTime = -1e9;
+    float m_lastKnockAmp = 0.0f;
+    // Rattle: sparse noise ticks, each band-passed around its own random frequency (no fixed resonances), rate and
+    // amplitude from the shake envelope (one source at the body).
+    BandPass m_tickFilter;
+    float m_tick = 0.0f, m_tickDecay = 0.0f; // tick envelope and its per-sample decay
+    float m_sinceTick = 1e9f;   // s
     BodySoundProfile m_bodyProfile{};
     bool m_bodyTuned = false;
     float m_shake = 0.0f, m_shakeTau = 0.3f; // envelope 0..1, its current decay time constant (s)
-    float m_click = 0.0f, m_clickDecay = 0.0f; // grain click envelope and its per-sample decay
     float m_rattleL = 0.0f, m_rattleR = 0.0f, m_rattleTl = 0.0f, m_rattleTr = 0.0f;
-    std::uint32_t m_shakeNoise = 0x2545F491u;
+    std::uint32_t m_shakeNoise = 0x2545F491u; // body synthesis random numbers (separate from rand01)
+    float shakeRand01();
+    float shakeNoise() { return 2.0f * shakeRand01() - 1.0f; }
     void retuneBody(const BodySoundProfile& p);
     void startKnock(float intensity, const AudioVec3& position);
     void shake(float level, float decay);
     void mixBodyShake(float* acc, int frames);
+    // Recorded body slams and metal impacts: a hit within kShotGap of the last one of its kind replaces nothing
+    // unless it is clearly harder.
+    double m_lastSlam = -1e9, m_lastImpactShot = -1e9;
+    float m_lastSlamGain = 0.0f, m_lastImpactGain = 0.0f;
 
     // Transmission whine (synthesized)
     double m_whinePhase = 0.0;

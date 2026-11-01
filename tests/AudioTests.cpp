@@ -1085,8 +1085,9 @@ LandingResult driveLanding(const LandingCase& c, const VehicleConfig& vehicle) {
     return r;
 }
 
-// Body shake synthesis per profile: one full-intensity rattle and one full knock, no other sound. The energy sits
-// above the low "thud" band and the tube frame rings higher than the SUV panels; both decay to silence.
+// Body shake synthesis per profile: one full-intensity body jolt (thud + rattle) and one full bump-stop knock, no
+// other sound. The short low thud carries only a part of the energy (no dull "dropped tire" boom), the tube frame
+// sounds higher than the SUV panels, and both decay to silence.
 struct ShakeResult {
     double rmsDb = -120.0, centroid = 0.0, below200 = 0.0, tailDb = -120.0;
     float peak = 0.0f;
@@ -1178,15 +1179,398 @@ void landing() {
         for (const ShakeResult* r : {&rattle, &knock}) {
             CHECK(r->rmsDb > -60.0, "%s: silent (%.1f dBFS)", id, r->rmsDb);
             CHECK(r->peak < 0.5f, "%s: peak %.3f", id, r->peak);
-            CHECK(r->below200 < 0.1, "%s: %.1f %% of the energy below 200 Hz", id, 100.0 * r->below200);
+            CHECK(r->below200 < 0.35, "%s: %.1f %% of the energy below 200 Hz", id, 100.0 * r->below200);
             CHECK(r->centroid > 600.0, "%s: centroid %.0f Hz", id, r->centroid);
             CHECK(r->tailDb < -90.0, "%s: still sounding after 0.8 s (%.0f dB)", id, r->tailDb);
         }
         if (std::strcmp(id, "suv") == 0) suvRattle = rattle;
         if (std::strcmp(id, "tube_frame") == 0) tubeRattle = rattle;
     }
-    CHECK(tubeRattle.centroid > suvRattle.centroid * 1.3, "tube frame %.0f Hz vs SUV %.0f Hz", tubeRattle.centroid,
+    CHECK(tubeRattle.centroid > suvRattle.centroid * 1.1, "tube frame %.0f Hz vs SUV %.0f Hz", tubeRattle.centroid,
           suvRattle.centroid);
+}
+
+// Rollover and touchdowns on the real simulation (shipped SUV, rock field at ~50 km/h until it tips over): no
+// chassis creak unless the body is upright on at least three wheels, no tire squeal on the side or roof, and no
+// squeal in the first squealLandedMin after a wheel lands from the air.
+void rollover() {
+    const VehicleConfig suv = suvConfig();
+    Driver d(TrackLayout::ProvingGround, 1.0 / 120.0, &suv);
+    TrackFeature at;
+    at.position = JPH::Vec3(42.0f, 0.0f, -41.2f);
+    d.sim.requestPlace(at);
+    d.run(1.5);
+    const AudioFeedSettings fs;
+    std::array<float, kAudioWheels> air{}, landed{};
+    landed.fill(1e3f);
+    float maxTilt = 0.0f;
+    int creaks = 0, tiltedCreaks = 0, tiltedSquealTicks = 0, touchdownSquealTicks = 0, squealTicks = 0;
+    std::array<int, 8> events{};
+    for (int k = 0; k < d.ticks(9.0); ++k) {
+        const float v = d.sim.vehicle().telemetry().speed * 3.6f;
+        DriverIntent in;
+        in.throttle = 1.0f;
+        in.steer = k > d.ticks(2.0) ? 1.0f : 0.0f;
+        d.sim.setIntent(in);
+        d.sim.tick();
+        d.feed.onTick(d.sim);
+        const AudioFrame& f = d.feed.frame();
+        const float tilt = std::acos(std::clamp(f.vehicleUp.y, -1.0f, 1.0f)) * 57.29578f;
+        maxTilt = std::max(maxTilt, tilt);
+        int grounded = 0;
+        for (const WheelAudio& w : f.wheels) grounded += w.contact ? 1 : 0;
+        for (const AudioEvent& e : d.feed.events()) {
+            ++events[std::size_t(e.type)];
+            if (e.type == AudioEventType::ChassisCreak) {
+                ++creaks;
+                if (f.vehicleUp.y < fs.creakUprightMin || grounded < fs.creakMinWheels) ++tiltedCreaks;
+            }
+            d.mixer.trigger(e);
+        }
+        d.feed.clearEvents();
+        for (std::size_t i = 0; i < kAudioWheels; ++i) {
+            const WheelAudio& w = f.wheels[i];
+            if (w.contact) {
+                if (air[i] >= fs.squealAirMin) landed[i] = 0.0f;
+                air[i] = 0.0f;
+                landed[i] += 1.0f / 120.0f;
+            } else {
+                air[i] += 1.0f / 120.0f;
+            }
+            if (w.squeal <= 0.0f) continue;
+            ++squealTicks;
+            if (f.vehicleUp.y < fs.squealUprightMin) ++tiltedSquealTicks;
+            if (landed[i] < fs.squealLandedMin) ++touchdownSquealTicks;
+        }
+        AudioFrame mf = f;
+        mf.listenerPos = mf.vehiclePos - mf.vehicleForward * 8.0f + AudioVec3{0, 2.6f, 0};
+        d.mixer.setFrame(mf);
+        d.mixer.render(d.buf.data(), d.framesPerTick);
+        for (float x : d.buf) d.finite = d.finite && std::isfinite(x);
+    }
+    std::printf("    max tilt %.0f deg; events: bump stop %d, rattle %d, impact %d, creak %d (%d tilted or < 3 wheels); "
+                "squeal wheel-ticks %d (%d beyond 60 deg tilt, %d right after a touchdown)\n",
+                maxTilt, events[2], events[3], events[4], creaks, tiltedCreaks, squealTicks, tiltedSquealTicks,
+                touchdownSquealTicks);
+    CHECK(d.finite, "NaN/Inf in the output");
+    CHECK(maxTilt > 60.0f, "the SUV did not tip over (max tilt %.0f deg)", maxTilt);
+    CHECK(tiltedCreaks == 0, "%d creaks with the body tilted or off its wheels", tiltedCreaks);
+    CHECK(tiltedSquealTicks == 0 && touchdownSquealTicks == 0, "squeal: %d ticks tilted, %d right after a touchdown",
+          tiltedSquealTicks, touchdownSquealTicks);
+}
+
+// The given sounds from the shipped recordings, every other sound empty (silent).
+SoundBank recordedBank(std::initializer_list<SoundId> ids) {
+    SoundBank bank;
+    std::string error;
+    loadAudioManifest(kManifest, bank.manifest, &error);
+    for (SoundId id : ids) {
+        SoundData& d = bank.sounds[std::size_t(id)];
+        const std::string path = std::string(TRAILFORGE_SOURCE_DIR) + "/assets/audio/" + bank.manifest[id].file;
+        CHECK(readPcm16Mono(path, d), "cannot read %s", path.c_str());
+        d.loop = bank.manifest[id].loop;
+    }
+    return bank;
+}
+
+// RMS envelope in windows of `win` frames, dB.
+std::vector<double> envelopeDb(const std::vector<float>& x, std::size_t win) {
+    std::vector<double> e;
+    for (std::size_t s = 0; s + win <= x.size(); s += win) {
+        double p = 0.0;
+        for (std::size_t k = s; k < s + win; ++k) p += double(x[k]) * double(x[k]);
+        e.push_back(10.0 * std::log10(std::max(p / double(win), 1e-14)));
+    }
+    return e;
+}
+
+struct SpectrumShares {
+    double centroid = 0.0, below200 = 0.0, below1k = 0.0, above2k = 0.0, above3k = 0.0;
+};
+
+SpectrumShares spectrumShares(const std::vector<float>& x) {
+    const std::vector<double> ps = powerSpectrum(x);
+    SpectrumShares s;
+    double total = 0.0, moment = 0.0;
+    for (std::size_t k = 1; k < ps.size(); ++k) {
+        const double hz = double(k) * 48000.0 / 4096.0;
+        total += ps[k];
+        moment += ps[k] * hz;
+        if (hz < 200.0) s.below200 += ps[k];
+        if (hz < 1000.0) s.below1k += ps[k];
+        if (hz >= 2000.0) s.above2k += ps[k];
+        if (hz >= 3000.0) s.above3k += ps[k];
+    }
+    total = std::max(total, 1e-30);
+    s.centroid = moment / total;
+    s.below200 /= total;
+    s.below1k /= total;
+    s.above2k /= total;
+    s.above3k /= total;
+    return s;
+}
+
+// Distinct attacks: 5 ms envelope peaks at least 10 dB above the lowest window of the 20 ms before them and 20 ms
+// apart, counted only above `floorDb`.
+int countAttacks(const std::vector<float>& x, double floorDb) {
+    const std::vector<double> e = envelopeDb(x, 240);
+    int n = 0, last = -100;
+    for (int i = 4; i + 1 < int(e.size()); ++i) {
+        double lo = e[std::size_t(i - 4)];
+        for (int k = i - 4; k < i; ++k) lo = std::min(lo, e[std::size_t(k)]);
+        if (e[std::size_t(i)] > floorDb && e[std::size_t(i)] - lo >= 10.0 && e[std::size_t(i)] >= e[std::size_t(i - 1)] &&
+            e[std::size_t(i)] > e[std::size_t(i + 1)] && i - last >= 4) {
+            ++n;
+            last = i;
+        }
+    }
+    return n;
+}
+
+// Tonal ring: the most prominent narrow spectral line in 150 Hz .. 6 kHz, dB above the mean of the bins 45-120 Hz
+// to either side. A decaying sine (a ringing mode) is a line of a few Hz; a thud that dies within a few periods and
+// band-passed noise ticks at random frequencies are broad.
+double tonalPeakDb(const std::vector<float>& x) {
+    const std::vector<double> ps = powerSpectrum(x);
+    double best = 0.0;
+    for (std::size_t k = 20; k + 10 < ps.size(); ++k) {
+        const double hz = double(k) * 48000.0 / 4096.0;
+        if (hz < 150.0 || hz > 6000.0) continue;
+        double side = 0.0;
+        for (std::size_t d = 4; d <= 10; ++d) side += ps[k - d] + ps[k + d];
+        side /= 14.0;
+        best = std::max(best, 10.0 * std::log10(std::max(ps[k], 1e-30) / std::max(side, 1e-30)));
+    }
+    return best;
+}
+
+// 1-6 kHz band of a signal (one-pole high-pass, two one-pole low-passes).
+std::vector<float> upperBand(const std::vector<float>& x) {
+    const float hp = std::exp(-6.2831853f * 1000.0f / 48000.0f), lp = 1.0f - std::exp(-6.2831853f * 6000.0f / 48000.0f);
+    std::vector<float> y(x.size());
+    float hin = 0.0f, hout = 0.0f, l1 = 0.0f, l2 = 0.0f;
+    for (std::size_t k = 0; k < x.size(); ++k) {
+        hout = hp * (hout + x[k] - hin);
+        hin = x[k];
+        l1 += lp * (hout - l1);
+        l2 += lp * (l1 - l2);
+        y[k] = l2;
+    }
+    return y;
+}
+
+// Shape of the rubber squeal on the real recordings: one rear wheel locks over 0.25 s from t = 0.5 s, slides with a
+// slip that fluctuates by +-20 % per tick (pseudo-random, fixed seed) and grips again at 2.0 s. The per-wheel squeal
+// follows the feed's envelope and gate (AudioFeedSettings defaults, same formula as VehicleAudioFeed).
+struct SquealShape {
+    double riseS = 0.0, onsetStepDb = 0.0, roughnessDb = 0.0, releaseS = 0.0, heldDb = 0.0, peakDb = 0.0;
+    SpectrumShares spectrum;
+    int chirps = 0;
+};
+
+SquealShape renderSquealShape(const SoundBank& bank, const TireSoundProfile& profile) {
+    AudioMixer mixer(bank, 48000, 5u);
+    AudioFrame f;
+    f.vehicleValid = true;
+    f.settings.whine = 0.0f;
+    f.tireSound = profile;
+    f.listenerPos = {0.0f, 1.5f, -6.0f};
+    const AudioFeedSettings fs;
+    const float dt = 1.0f / 120.0f;
+    float env = 0.0f;
+    bool open = false;
+    std::uint32_t rng = 0x1234567u;
+    std::vector<float> buf(2 * 400), mono;
+    for (int i = 0; i < 3 * 120; ++i) {
+        const double t = i / 120.0;
+        const float ramp = float(std::clamp((t - 0.5) / 0.25, 0.0, 1.0));
+        const bool sliding = t >= 0.5 && t < 2.0;
+        rng ^= rng << 13, rng ^= rng >> 17, rng ^= rng << 5;
+        const float jitter = 0.8f + 0.4f * float(rng >> 8) / float(1u << 24);
+        const float drive = sliding ? ramp * jitter : 0.0f;
+        env += (drive - env) * (1.0f - std::exp(-dt / (drive > env ? fs.squealAttack : fs.squealRelease)));
+        if (env > fs.squealOn) open = true;
+        else if (env < fs.squealOff) open = false;
+        WheelAudio& w = f.wheels[2];
+        w.contact = true;
+        w.position = {0.8f, 0.0f, -1.4f};
+        w.squeal = open ? (env - fs.squealOff) / (1.0f - fs.squealOff) : 0.0f;
+        w.slipSpeed = sliding ? 9.0f * ramp * jitter : 0.0f;
+        w.load = f.referenceLoad;
+        mixer.setFrame(f);
+        mixer.render(buf.data(), 400);
+        for (int k = 0; k < 400; ++k) mono.push_back(0.5f * (buf[std::size_t(2 * k)] + buf[std::size_t(2 * k + 1)]));
+    }
+    SquealShape r;
+    r.chirps = mixer.stats().skidChirps;
+    const std::vector<double> e5 = envelopeDb(mono, 240); // 5 ms
+    auto at5 = [&](double t) { return std::size_t(t / 0.005); };
+    std::vector<double> held(e5.begin() + long(at5(1.0)), e5.begin() + long(at5(1.95)));
+    std::sort(held.begin(), held.end());
+    r.heldDb = held[held.size() / 2];
+    r.peakDb = *std::max_element(e5.begin(), e5.end());
+    double t10 = -1.0, t90 = -1.0;
+    for (std::size_t k = at5(0.45); k < at5(1.5); ++k) {
+        if (t10 < 0.0 && e5[k] >= r.heldDb - 20.0) t10 = double(k) * 0.005;
+        if (t90 < 0.0 && e5[k] >= r.heldDb - 0.92) t90 = double(k) * 0.005;
+    }
+    r.riseS = t90 - t10;
+    for (std::size_t k = at5(0.45); k < at5(1.0); ++k)
+        r.onsetStepDb = std::max(r.onsetStepDb, std::max(e5[k], r.heldDb - 40.0) - std::max(e5[k - 1], r.heldDb - 40.0));
+    const std::vector<double> e10 = envelopeDb(mono, 480);
+    double sum = 0.0, sum2 = 0.0;
+    int n = 0;
+    for (std::size_t k = std::size_t(1.0 / 0.01); k < std::size_t(1.95 / 0.01); ++k, ++n) {
+        const double d = e10[k] - e10[k - 1];
+        sum += d;
+        sum2 += d * d;
+    }
+    r.roughnessDb = std::sqrt(std::max(0.0, sum2 / n - (sum / n) * (sum / n)));
+    for (std::size_t k = at5(2.0); k < e5.size(); ++k)
+        if (e5[k] > r.heldDb - 40.0) r.releaseS = double(k + 1) * 0.005 - 2.0;
+    r.spectrum = spectrumShares(std::vector<float>(mono.begin() + 48000, mono.begin() + 93600));
+    return r;
+}
+
+void squealShape() {
+    const SoundBank bank = recordedBank({SoundId::TireSkidLoop, SoundId::TireSkidShort});
+    for (const char* id : {"sporty", "trailforge_suv", "ev"}) {
+        const SquealShape r = renderSquealShape(bank, tireSoundPreset(id));
+        std::printf("    %-15s held %.3f dBFS (peak %.3f), rise %.0f ms (-20 -> -1 dB), max 5 ms onset step %.3f dB, held "
+                    "roughness %.3f dB, release to -40 dB %.0f ms, centroid %.1f Hz, <1 kHz %.2f %%, >3 kHz %.2f %%, "
+                    "%d chirps\n",
+                    id, r.heldDb, r.peakDb, 1000.0 * r.riseS, r.onsetStepDb, r.roughnessDb, 1000.0 * r.releaseS,
+                    r.spectrum.centroid, 100.0 * r.spectrum.below1k, 100.0 * r.spectrum.above3k, r.chirps);
+    }
+    // The squeal of genuine slides must not change: values of v0.29.0.
+    struct Ref {
+        const char* id;
+        double held, peak, step, roughness, centroid;
+    };
+    for (const Ref& ref : {Ref{"sporty", -26.756, -19.202, 7.893, 2.290, 1605.1},
+                           Ref{"trailforge_suv", -25.793, -21.252, 7.438, 1.669, 1077.3},
+                           Ref{"ev", -25.981, -21.315, 9.511, 1.530, 1208.7}}) {
+        const SquealShape r = renderSquealShape(bank, tireSoundPreset(ref.id));
+        CHECK(std::abs(r.heldDb - ref.held) < 0.05 && std::abs(r.peakDb - ref.peak) < 0.05 &&
+                  std::abs(r.onsetStepDb - ref.step) < 0.05 && std::abs(r.roughnessDb - ref.roughness) < 0.05 &&
+                  std::abs(r.spectrum.centroid - ref.centroid) < 5.0 && r.chirps == 1,
+              "%s: squeal changed (held %.3f, peak %.3f, step %.3f, roughness %.3f dB, centroid %.1f Hz, %d chirps)",
+              ref.id, r.heldDb, r.peakDb, r.onsetStepDb, r.roughnessDb, r.spectrum.centroid, r.chirps);
+    }
+}
+
+// Body sound shape on the real slam / impact recordings: a landing (body jolt at 0.8, then two bump-stop hits), a
+// washboard of light bump-stop hits every 0.1 s with jolts every 0.25 s, and a chassis dragging over rocks (body
+// impacts every 0.12 s).
+struct BodyShape {
+    double rmsDb = -120.0, peakDb = -120.0, decay20S = 0.0;
+    SpectrumShares spectrum;
+    int attacks = 0, upperAttacks = 0;
+    double tonalDb = 0.0;
+    double busy = 0.0; // share of the 5 ms windows within 20 dB of the peak
+};
+
+BodyShape renderBodyShape(const BodySoundProfile& profile, const std::vector<std::pair<double, AudioEvent>>& events,
+                          double seconds) {
+    const SoundBank bank = recordedBank({SoundId::BottomOut1, SoundId::BottomOut2, SoundId::BottomOut3,
+                                         SoundId::BodyImpactMetal1, SoundId::BodyImpactMetal2,
+                                         SoundId::BodyImpactMetal3, SoundId::BodyImpactClank});
+    AudioMixer mixer(bank, 48000, 11u);
+    AudioFrame f;
+    f.vehicleValid = false; // engine, tires and wind silent
+    f.settings.ambience = 0.0f;
+    f.bodySound = profile;
+    f.listenerPos = {0.0f, 1.5f, -6.0f};
+    mixer.setFrame(f);
+    std::vector<float> buf(2 * 400), mono;
+    std::size_t next = 0;
+    for (int i = 0; i < int(seconds * 120.0); ++i) {
+        while (next < events.size() && events[next].first <= i / 120.0) mixer.trigger(events[next++].second);
+        mixer.render(buf.data(), 400);
+        for (int k = 0; k < 400; ++k) mono.push_back(0.5f * (buf[std::size_t(2 * k)] + buf[std::size_t(2 * k + 1)]));
+    }
+    BodyShape r;
+    const std::vector<double> e5 = envelopeDb(mono, 240);
+    const auto pk = std::max_element(e5.begin(), e5.end());
+    r.peakDb = *pk;
+    for (std::size_t k = std::size_t(pk - e5.begin()); k < e5.size(); ++k)
+        if (e5[k] > r.peakDb - 20.0) r.decay20S = double(k - std::size_t(pk - e5.begin()) + 1) * 0.005;
+    double p = 0.0;
+    for (float x : mono) p += double(x) * double(x);
+    r.rmsDb = 10.0 * std::log10(std::max(p / double(mono.size()), 1e-14));
+    r.spectrum = spectrumShares(mono);
+    r.attacks = countAttacks(mono, r.peakDb - 40.0);
+    const std::vector<float> upper = upperBand(mono);
+    r.upperAttacks = countAttacks(upper, *std::max_element(e5.begin(), e5.end()) - 40.0);
+    r.tonalDb = tonalPeakDb(mono);
+    r.busy = double(std::count_if(e5.begin(), e5.end(), [&](double v) { return v > r.peakDb - 20.0; })) / double(e5.size());
+    return r;
+}
+
+void bodyShape() {
+    auto ev = [](AudioEventType type, float intensity, AudioVec3 pos) {
+        AudioEvent e;
+        e.type = type;
+        e.intensity = intensity;
+        e.position = pos;
+        return e;
+    };
+    const AudioVec3 fl{0.8f, 0.6f, 1.4f}, fr{-0.8f, 0.6f, 1.4f}, rl{0.8f, 0.6f, -1.4f}, rr{-0.8f, 0.6f, -1.4f}, mid{0, 0.6f, 0};
+    const std::vector<std::pair<double, AudioEvent>> landing = {
+        {0.10, ev(AudioEventType::BodyRattle, 0.8f, mid)}, {0.11, ev(AudioEventType::BumpStop, 0.9f, fl)},
+        {0.22, ev(AudioEventType::BumpStop, 0.7f, rl)}};
+    std::vector<std::pair<double, AudioEvent>> washboard, rocks;
+    const AudioVec3 wheels[4] = {fl, fr, rl, rr};
+    for (int k = 0; k < 15; ++k) washboard.push_back({0.1 + 0.1 * k, ev(AudioEventType::BumpStop, 0.45f, wheels[k % 4])});
+    for (int k = 0; k < 6; ++k) washboard.push_back({0.12 + 0.25 * k, ev(AudioEventType::BodyRattle, 0.3f, mid)});
+    std::sort(washboard.begin(), washboard.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (int k = 0; k < 10; ++k) rocks.push_back({0.1 + 0.12 * k, ev(AudioEventType::BodyImpact, 0.5f, mid)});
+    const std::vector<std::pair<double, AudioEvent>> knock = {{0.1, ev(AudioEventType::BumpStop, 0.45f, fl)}};
+    const std::vector<std::pair<double, AudioEvent>> jolt = {{0.1, ev(AudioEventType::BodyRattle, 0.8f, mid)}};
+    const std::vector<std::pair<double, AudioEvent>> slam = {{0.1, ev(AudioEventType::BumpStop, 1.0f, fl)}};
+    const std::vector<std::pair<double, AudioEvent>> impact = {{0.1, ev(AudioEventType::BodyImpact, 0.5f, mid)}};
+    for (const char* id : {"suv", "tube_frame", "coupe"}) {
+        const BodySoundProfile profile = bodySoundPreset(id);
+        const BodyShape l = renderBodyShape(profile, landing, 1.2);
+        const BodyShape w = renderBodyShape(profile, washboard, 1.8);
+        const BodyShape r = renderBodyShape(profile, rocks, 1.6);
+        const BodyShape k = renderBodyShape(profile, knock, 0.8);
+        const BodyShape j = renderBodyShape(profile, jolt, 0.8);
+        const BodyShape sl = renderBodyShape(profile, slam, 1.0);
+        const BodyShape im = renderBodyShape(profile, impact, 1.5);
+        std::printf("    %-10s landing: rms %.1f dBFS, peak %.1f dB, centroid %.0f Hz, <200 Hz %.0f %%, >2 kHz %.0f %%, "
+                    "decay to -20 dB %.0f ms, attacks %d (1-6 kHz %d), tonal peak %.1f dB\n",
+                    id, l.rmsDb, l.peakDb, l.spectrum.centroid, 100.0 * l.spectrum.below200,
+                    100.0 * l.spectrum.above2k, 1000.0 * l.decay20S, l.attacks, l.upperAttacks, l.tonalDb);
+        std::printf("    %-10s washboard (15 hits + 6 jolts in 1.5 s): rms %.1f dBFS, centroid %.0f Hz, attacks %d (1-6 kHz "
+                    "%d), tonal peak %.1f dB, busy %.0f %% | rocks (10 impacts in 1.2 s): rms %.1f dBFS, centroid %.0f Hz, attacks %d "
+                    "(1-6 kHz %d), decay %.0f ms\n",
+                    "", w.rmsDb, w.spectrum.centroid, w.attacks, w.upperAttacks, w.tonalDb, 100.0 * w.busy, r.rmsDb, r.spectrum.centroid,
+                    r.attacks, r.upperAttacks, 1000.0 * r.decay20S);
+        std::printf("    %-10s knock 0.45 alone: peak %.1f dB, decay to -20 dB %.0f ms, tonal peak %.1f dB, attacks %d | "
+                    "jolt 0.8 alone: peak %.1f dB, decay %.0f ms, tonal peak %.1f dB, attacks %d (1-6 kHz %d)\n",
+                    "", k.peakDb, 1000.0 * k.decay20S, k.tonalDb, k.attacks, j.peakDb, 1000.0 * j.decay20S, j.tonalDb,
+                    j.attacks, j.upperAttacks);
+        std::printf("    %-10s slam (bump stop 1.0) alone: decay %.0f ms, tonal peak %.1f dB, attacks %d (1-6 kHz %d) | "
+                    "impact 0.5 alone: decay %.0f ms, tonal peak %.1f dB, attacks %d (1-6 kHz %d)\n",
+                    "", 1000.0 * sl.decay20S, sl.tonalDb, sl.attacks, sl.upperAttacks, 1000.0 * im.decay20S, im.tonalDb,
+                    im.attacks, im.upperAttacks);
+        // Resonator knock and rattle of v0.29 for comparison (suv / tube_frame / coupe): knock alone decay 215 / 245 /
+        // 125 ms and a 24-29 dB spectral line, jolt alone 240-335 ms, washboard lines 18-22 dB and 79-88 % of the
+        // time within 20 dB of the peak, slam 195-260 ms, metal impact 410 ms, landing peak -19.7 / -20.9 / -23.0 dBFS.
+        CHECK(k.decay20S <= 0.06 && k.tonalDb <= 10.0, "%s: knock decay %.0f ms, tonal peak %.1f dB", id,
+              1000.0 * k.decay20S, k.tonalDb);
+        CHECK(j.decay20S <= 0.12 && j.tonalDb <= 10.0 && j.upperAttacks <= 4,
+              "%s: jolt decay %.0f ms, tonal peak %.1f dB, %d ticks", id, 1000.0 * j.decay20S, j.tonalDb, j.upperAttacks);
+        CHECK(l.decay20S <= 0.08 && l.tonalDb <= 10.0, "%s: landing decay %.0f ms, tonal peak %.1f dB", id,
+              1000.0 * l.decay20S, l.tonalDb);
+        CHECK(l.peakDb > -26.0, "%s: landing peak %.1f dBFS (inaudible)", id, l.peakDb);
+        CHECK(w.tonalDb <= 6.0 && w.busy <= 0.4, "%s: washboard tonal peak %.1f dB, busy %.0f %%", id, w.tonalDb,
+              100.0 * w.busy);
+        CHECK(sl.decay20S <= 0.15 && sl.tonalDb <= 10.0, "%s: slam decay %.0f ms, tonal peak %.1f dB", id,
+              1000.0 * sl.decay20S, sl.tonalDb);
+        CHECK(im.decay20S <= 0.18, "%s: impact decay %.0f ms", id, 1000.0 * im.decay20S);
+    }
 }
 
 } // namespace
@@ -1203,6 +1587,9 @@ int main(int argc, char** argv) {
         {"audio_tire_profiles", tireProfiles},
         {"audio_electric", electricSound},
         {"audio_landing", landing},
+        {"audio_squeal_shape", squealShape},
+        {"audio_body_shape", bodyShape},
+        {"audio_rollover", rollover},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

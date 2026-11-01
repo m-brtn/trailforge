@@ -6,9 +6,12 @@ Reads out.wav (float32 stereo) and the per-tick mixer parameters in out.wav.csv,
   - engine pitch tracking during the first full-throttle run: the fundamental found in the audio vs. the firing
     frequency of the inline-4 at the played engine speed (rpm_src / 30, two firings per revolution);
   - the 1-6 kHz band level while the tires skid compared with the run before braking;
+  - every tire squeal segment (mixer skid > 0.05 for >= 0.2 s): rise time, largest 5 ms level step, held roughness,
+    release, spectral centroid and share above 3 kHz;
   - spectrum balance of the day and the night ambience segments;
   - body / suspension events (bump-stop knocks, body rattle, body impacts): count, rate, level against the sound
-    before each event and the spectral centroid of the event's own sound.
+    before each event, the spectral centroid of the event's own sound, its decay to -20 dB, the 1-6 kHz transients
+    after its onset and its crest factor.
 Writes spectrograms with sox (if installed) to <prefix>_*.png.
 
 Usage: analyze_capture.py out.wav [--png-prefix /tmp/trailforge_audio]
@@ -113,6 +116,137 @@ def spectrogram(path, png, title, t0=None, dur=None, max_hz=None):
     return subprocess.run(cmd, capture_output=True).returncode == 0
 
 
+def bandpass(x, rate, lo, hi):
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(len(x), 1.0 / rate)
+    spec[(f < lo) | (f >= hi)] = 0.0
+    return np.fft.irfft(spec, len(x))
+
+
+def envelope_db(x, rate, win):
+    n = max(1, int(win * rate))
+    k = len(x) // n
+    e = np.sqrt(np.mean(x[:k * n].reshape(k, n) ** 2, axis=1))
+    return 20.0 * np.log10(np.maximum(e, 1e-9))
+
+
+def event_shape(mono, rate, o):
+    """Decay and clatter of one body event at onset o (s): time until the event's own 5 ms envelope (power above the
+    bed of the 300 ms before) stays 20 dB below its peak; the number of distinct 1-6 kHz transients in the 400 ms
+    after the onset (2 ms envelope peaks 6 dB above the band's bed, >= 8 ms apart); crest factor of the 250 ms."""
+    pre, post = 0.3, 0.6
+    if o < pre or int((o + post) * rate) > len(mono):
+        return (float("nan"), 0.0, float("nan"))
+    seg = mono[int((o - pre) * rate):int((o + post) * rate)]
+    e = 10 ** (envelope_db(seg, rate, 0.005) / 10.0)
+    k0 = int(pre / 0.005)
+    bed = np.median(e[:k0 - 4])
+    own = np.clip(e[k0:] - bed, 0.0, None)
+    decay = float("nan")
+    if own.max() > 0:
+        ipk = int(np.argmax(own))
+        above = np.nonzero(own > own[ipk] * 0.01)[0]
+        decay = (above[-1] + 1) * 0.005
+    hb = bandpass(seg, rate, 1000, 6000)
+    eh = envelope_db(hb, rate, 0.002)
+    kb = int(pre / 0.002)
+    bedh = np.median(eh[:kb - 10])
+    win = eh[kb:kb + int(0.4 / 0.002)]
+    count, last = 0, -100
+    for i in range(1, len(win) - 1):
+        if win[i] > bedh + 6.0 and win[i] >= win[i - 1] and win[i] > win[i + 1] and i - last >= 4:
+            count += 1
+            last = i
+    ev = mono[int(o * rate):int((o + 0.25) * rate)]
+    crest = db(np.abs(ev).max()) - db(np.sqrt(np.mean(ev ** 2)))
+    return (decay, float(count), crest)
+
+
+def runs(mask, t, min_len):
+    out, i, n = [], 0, len(mask)
+    while i < n:
+        if mask[i]:
+            j = i
+            while j + 1 < n and mask[j + 1]:
+                j += 1
+            if t[j] - t[i] >= min_len:
+                out.append((i, j))
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
+def analyze_squeal(mono, rate, p):
+    """Tire squeal segments (mixer `skid` > 0.05 for >= 0.2 s). For each: the 0.7-6 kHz band of the capture, its own
+    power above the bed of the 0.4 s before the segment; onset rise time 10 -> 90 % of the own amplitude peak, the
+    largest 5 ms step of the band envelope in the first 0.4 s (abruptness), the roughness of the held part (std of
+    10 ms envelope differences, dB), the release time (end of the segment until the own power is 20 dB below the
+    held level) and the centroid / share above 3 kHz of the squeal's own spectrum."""
+    t, skid = p["t"], p["skid"]
+    segs = runs(skid > 0.05, t, 0.2)
+    if not segs:
+        print("tire squeal: no squeal segments")
+        return
+    rows = []
+    for i, j in segs:
+        a, b = t[i], t[j]
+        if a < 0.6 or int((b + 0.8) * rate) > len(mono):
+            continue
+        t0 = a - 0.5
+        seg = mono[int(t0 * rate):int((b + 0.8) * rate)]
+        band = bandpass(seg, rate, 700, 6000)
+        e5 = 10 ** (envelope_db(band, rate, 0.005) / 10.0)
+        bed = np.median(e5[int(0.05 / 0.005):int(0.45 / 0.005)])
+        own = np.sqrt(np.clip(e5 - bed, 0.0, None))
+        k0 = int(0.5 / 0.005)
+        kb = int((b - t0) / 0.005)
+        held = own[k0:kb + 1]
+        if held.max() <= 0:
+            continue
+        pk = held.max()
+        i10 = np.nonzero(own[k0 - 10:] >= 0.1 * pk)[0]
+        i90 = np.nonzero(own[k0 - 10:] >= 0.9 * pk)[0]
+        rise = (i90[0] - i10[0]) * 0.005 if len(i10) and len(i90) else float("nan")
+        edb = 20 * np.log10(np.maximum(np.sqrt(e5), 1e-9))
+        step = float(np.max(np.diff(edb[k0 - 4:k0 + 80]))) if kb > k0 + 2 else float("nan")
+        e10 = envelope_db(band, rate, 0.010)
+        h0, h1 = int((a - t0 + 0.3) / 0.01), int((b - t0 - 0.05) / 0.01)
+        rough = float(np.std(np.diff(e10[h0:h1]))) if h1 - h0 > 5 else float("nan")
+        level = np.median(held[len(held) // 3:]) if len(held) > 6 else pk
+        quiet = own[kb:] < 0.1 * level
+        release = float("nan")
+        for k in range(len(quiet) - 10):
+            if quiet[k:k + 10].all():
+                release = k * 0.005
+                break
+        s = mono[int(a * rate):int(b * rate)]
+        bseg = mono[int((a - 0.45) * rate):int((a - 0.05) * rate)]
+        n = len(s)
+        ss = np.abs(np.fft.rfft(s * np.hanning(n))) ** 2 / n
+        sb = np.abs(np.fft.rfft(np.resize(bseg, n) * np.hanning(n))) ** 2 / n
+        f = np.fft.rfftfreq(n, 1.0 / rate)
+        d = np.clip(ss - sb, 0.0, None)
+        m = (f >= 200) & (f <= 16000)
+        tot = d[m].sum()
+        centroid = float((d[m] * f[m]).sum() / tot) if tot > 0 else float("nan")
+        hi = float(d[(f >= 3000) & (f <= 16000)].sum() / tot) if tot > 0 else float("nan")
+        rows.append((a, b - a, float(skid[i:j + 1].max()), rise, step, rough, release, centroid, hi,
+                     db(np.sqrt(np.mean(band[k0 * 240:kb * 240] ** 2)))))
+    if not rows:
+        print("tire squeal: no analysable segments")
+        return
+    r = np.array(rows)
+    print(f"tire squeal: {len(r)} segments (mixer skid > 0.05 for >= 0.2 s)")
+    for row in r:
+        print(f"    t={row[0]:6.2f} s {row[1]:4.2f} s skid max {row[2]:.2f}: rise {1000 * row[3]:4.0f} ms, max 5 ms step "
+              f"{row[4]:+5.1f} dB, held roughness {row[5]:4.2f} dB, release {1000 * row[6]:4.0f} ms, centroid "
+              f"{row[7]:5.0f} Hz, >3 kHz {100 * row[8]:4.1f} %, 0.7-6 kHz {row[9]:6.1f} dBFS")
+    print(f"  median: rise {1000 * np.nanmedian(r[:, 3]):.0f} ms, max 5 ms step {np.nanmedian(r[:, 4]):+.1f} dB, held "
+          f"roughness {np.nanmedian(r[:, 5]):.2f} dB, release {1000 * np.nanmedian(r[:, 6]):.0f} ms, centroid "
+          f"{np.nanmedian(r[:, 7]):.0f} Hz, >3 kHz {100 * np.nanmedian(r[:, 8]):.1f} %")
+
+
 def analyze_impacts(mono, rate, p, prefix, wav):
     """Body / suspension events (CSV columns ev_bump, ev_rattle, ev_impact: cumulative counts per tick). For every
     onset: peak and RMS of the 250 ms after it against the 500 ms before it (engine, tires and wind), the event's own
@@ -156,7 +290,8 @@ def analyze_impacts(mono, rate, p, prefix, wav):
             low = float(d[(f >= 20) & (f < 200)].sum() / tot) if tot > 0 else float("nan")
             stats.append((o, db(np.abs(ev).max()), 10 * np.log10(max(pe, 1e-20)), 10 * np.log10(max(pb, 1e-20)),
                           10 * np.log10(max(pe - pb, 1e-20)), centroid, low))
-        s = np.array(stats) if stats else np.zeros((0, 7))
+            stats[-1] += event_shape(mono, rate, o)
+        s = np.array(stats) if stats else np.zeros((0, 10))
         print(f"  {label:34s}: {len(onsets)} events, {len(onsets) / dur:.2f}/s over the capture, max {per_s} in 1 s")
         if len(s):
             own_rel = s[:, 4] - s[:, 3]
@@ -167,6 +302,9 @@ def analyze_impacts(mono, rate, p, prefix, wav):
                   f"{own_rel.max():+.1f} dB; centroid of the event's own spectrum {np.nanmedian(s[:, 5]):.0f} Hz "
                   f"median ({np.nanmin(s[:, 5]):.0f}-{np.nanmax(s[:, 5]):.0f}), share below 200 Hz "
                   f"{100 * np.nanmedian(s[:, 6]):.0f} % median")
+            print(f"    decay to -20 dB of the event's own envelope {1000 * np.nanmedian(s[:, 7]):.0f} ms median "
+                  f"(max {1000 * np.nanmax(s[:, 7]):.0f}); 1-6 kHz transients in the 400 ms after the onset "
+                  f"{np.median(s[:, 8]):.0f} median (max {s[:, 8].max():.0f}); crest factor {np.median(s[:, 9]):.1f} dB")
     if onsets_all:
         o = min(onsets_all)
         spectrogram(wav, f"{prefix}_impacts.png", "body / suspension events (first 12 s from the first event)",
@@ -317,6 +455,7 @@ def main():
         spectrogram(args.wav, f"{args.png_prefix}_day_night.png", "day ambience -> night ambience", d0,
                     n1 - d0)
 
+    analyze_squeal(mono, rate, p)
     analyze_impacts(mono, rate, p, args.png_prefix, args.wav)
     spectrogram(args.wav, f"{args.png_prefix}_full.png", "full capture")
     return 0

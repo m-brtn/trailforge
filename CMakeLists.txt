@@ -293,6 +293,9 @@ if(TRAILFORGE_BUILD_TESTS)
             audio_tire_profiles
             audio_electric
             audio_landing
+            audio_squeal_shape
+            audio_body_shape
+            audio_rollover
             audio_music)
         add_test(NAME ${test_name} COMMAND trailforge_audio_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)

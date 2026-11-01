@@ -36,7 +36,10 @@ parameter set, and the offline capture must run the exact same code without a de
   ground speed (1..2.5 m/s) and wheel load — so pulling away (the SUV's 2H full-throttle launch spins its rear
   wheels at ~5 m/s, ratio ~0.5), braking up to ~0.3 pedal, ABS stops and normal turns are silent, while lock-up,
   handbrake and power slides squeal. Envelope per wheel: attack 0.03 s, release 0.04 s, so a squeal stops within
-  ~0.2 s of the slide. One voice per wheel (random loop start and pitch per slide, pitch from sliding speed and
+  ~0.2 s of the slide. A wheel that lands after at least 0.05 s in the air (bounce, jump, rollover) does not squeal for
+  0.08 s and reaches full squeal drive after 0.2 s, and the drive fades out between 37° and 60° of body tilt (no squeal
+  on the side or roof); short lifts during a slide are not touchdowns. Test `audio_squeal_shape` checks the slide
+  squeal against the v0.29.0 values (level, onset step, roughness, centroid, one onset chirp). One voice per wheel (random loop start and pitch per slide, pitch from sliding speed and
   load, an onset chirp that fades out with the slide instead of playing its 1.7 s file to the end). The vehicle's
   `audioProfile` sets the tire sound (`src/vehicle/TireSound.h`): `sporty` plays the recordings as they are (a road
   tire); `trailforge_suv` plays them at 0.78× pitch, 0.7× level and a darker low-pass (1.1–3.2 kHz instead of
@@ -49,20 +52,30 @@ parameter set, and the offline capture must run the exact same code without a de
   puddle's water level inside its rectangle).
 - **Body.** What a hard landing sounds like is the whole vehicle, not a tire: normal bumps add nothing to the rolling
   and surface sounds. Two synthesized layers on the impacts bus, shaped per vehicle by `bodySound`
-  (`src/vehicle/BodySound.h`): a **body rattle** — random short grains on four body resonances (panels, brackets,
-  loose items) plus a broadband click per grain, rate and level following a shake envelope (time constant 0.16–0.22 s)
-  — raised when the felt vertical acceleration of the body (velocity change of the center of mass plus gravity, along
-  the body's up axis, low-passed 15 ms) rises through 2.3 g (intensity 0 at 2.3 g, 1 at 6 g; re-armed below 1.6 g,
-  at most every 0.25 s, the event waits up to 50 ms for the peak of the jolt); and a **bump-stop knock** at the wheel —
-  three decaying modes and a 3 ms noise transient — when a suspension reaches its bump stop while still compressing
-  at ≥ 1.2 m/s (full at 3.5 m/s; 0.4 s per wheel, 0.1 s between wheels). Knocks above half intensity add one of the
-  recorded car-body slams (`suspension_bottom_out_*`) high-passed at 250 Hz (two poles) so only their clunk and
-  rattle remain. Presets: `suv` (dense 0.5–2.3 kHz panel rattle), `tube_frame` (the buggy: sparser, 0.95–4.3 kHz,
-  longer-ringing), `coupe` (little rattle, tight knock). Chassis creak at large articulation and metal impacts from a
-  Jolt contact listener on the chassis body (impulse threshold 1000 N·s, see the simplifications below; an impact
-  also shakes the rattle). Test `audio_landing`: no rattle and no knock crawling over the rock field (10 km/h) or
-  rolling over the bump sequence at 15 km/h; at most 2 events/s over the bump sequence and the twister at 30 km/h;
-  one rattle and one knock rendered alone have < 10 % of their energy below 200 Hz.
+  (`src/vehicle/BodySound.h`), with no fixed resonances (fixed decaying sines read as a twanging rubber band or a
+  stick in a barrel): a **thud** — one low mode (SUV 130 Hz, buggy 170 Hz, coupe 150 Hz) that falls by 20 dB within
+  two periods plus a noise hit low-passed between 0.5 kHz (light) and 2.6 kHz (full; buggy 0.8–4 kHz), 10 ms — and a
+  **rattle** of sparse noise ticks, each band-passed (Q 1.2–1.5) around its own random frequency (SUV 0.45–2.6 kHz,
+  buggy 1.2–6 kHz, coupe 0.7–3.5 kHz), at most one per 18 ms, rate and level following a shake envelope (time
+  constant 0.09–0.12 s). A **body jolt** — the felt vertical acceleration of the body (velocity change of the center of
+  mass plus gravity, along the body's up axis, low-passed 15 ms) rising through 2.3 g (intensity 0 at 2.3 g, 1 at
+  6 g; re-armed below 1.6 g, at most every 0.25 s, the event waits up to 50 ms for the peak of the jolt) — plays a
+  thud at 0.8× its intensity and the rattle; a **bump stop** — a suspension reaching it while still compressing at
+  ≥ 1.2 m/s (full at 3.5 m/s; 0.4 s per wheel, 0.1 s between wheels) — plays a thud at the wheel and a light rattle.
+  A thud within 70 ms of the previous one plays only if it is 1.3× harder (four wheels and the body landing are one
+  hit). Bump stops above half intensity add the first clunk of a recorded car-body slam (`suspension_bottom_out_*`,
+  high-passed at 250 Hz, faded out after 40 ms with a 50 ms time constant). Body impacts from a Jolt contact listener
+  on the chassis body (impulse threshold 1000 N·s, at most every 0.2 s, see the simplifications below) play a metal
+  recording faded after 60 ms (70 ms time constant), a thud and the rattle; a repeated recorded slam or impact
+  within 0.15 s plays only if 1.3× louder. Chassis creak at large articulation only below 6 m/s with the body upright
+  (tilt < 37°) on at least three wheels (not on its side or roof). Tests: `audio_landing` (no rattle and no knock
+  crawling over the rock field at 10 km/h or rolling over the bump sequence at 15 km/h; at most 2 events/s over the
+  bump sequence and the twister at 30 km/h; a body jolt and a bump stop rendered alone have < 35 % of their energy
+  below 200 Hz), `audio_body_shape` (shipped recordings, per preset: a thud alone falls by 20 dB within 60 ms, a jolt
+  within 120 ms, a landing within 80 ms, a slam within 150 ms, an impact within 180 ms — v0.29.0: 125–245, 240–335,
+  155–300, 195–260 and 410 ms; strongest narrow spectral line <= 10 dB above its neighbours, v0.29.0 24–29 dB for a
+  knock; a washboard of 15 hits in 1.5 s within 20 dB of its peak <= 40 % of the time, v0.29.0 79–88 %) and
+  `audio_rollover` (the SUV tipped over at full lock on the skid strip: no creak while tilted or off its wheels).
 - **Ambience.** Wind by speed (from 3 m/s, full at 30 m/s), day and night beds crossfaded by the sun elevation
   (−6° … +6°).
 - **Space.** Every source has a position on the vehicle (exhaust, bay, wheels); gain and equal-power pan are
