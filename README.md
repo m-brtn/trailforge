@@ -16,6 +16,10 @@ from a purchased model that is not redistributed.
 
 ![Showcase](docs/showcase.jpg)
 
+| | |
+|---|---|
+| ![Sunset over the mud and puddles meadow](docs/sunset.jpg) | ![SUV on the diagonal twister with a wheel in the air](docs/twister.jpg) |
+
 Rendering (Metal only, see [Rendering](#rendering)): PBR, cascaded sun/moon shadows, a time of day (0–24 h, presets,
 time-lapse) that drives the sun, sky, fog and ambient light, procedural sky with clouds, a large sun disc and layered
 distant mountains, height fog, HDR with ACES tonemapping and bloom, MSAA or FXAA, instanced grass (several species,
