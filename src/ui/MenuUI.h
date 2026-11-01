@@ -111,15 +111,25 @@ private:
         float x0, y0, x1, y1;
     };
     void drawBackButton(ImDrawList* dl, float x0, float titleRuleY, bool selected, float alpha);
+    float backButtonHeight() const;
     Box m_backBox{};
+    // Footer: version bottom left, key cap hints bottom right; the lists end footerHeight() above the bottom.
+    struct Hint {
+        std::string key, label;
+    };
+    void drawFooter(const std::vector<Hint>& hints, const char* version, float alpha);
+    float footerHeight() const;
     // Controls page diagrams; both add their callout boxes and obstacles (key caps, controller outline) for the
     // overlap count.
     void drawKeyboard(ImDrawList* dl, float x, float y, float u, const MenuView& view, float alpha);
     void drawGamepad(ImDrawList* dl, float cx, float y, float g, const MenuView& view, float alpha);
     float labelSize(float u) const;
     // Vehicle page block under the VEHICLE row: one card per vehicle, then the selected vehicle's description and specs.
-    float vehicleBlockHeight(const MenuView& view) const;
+    float vehicleBlockHeight(const MenuView& view, float w) const;
     void drawVehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha);
+    // Measures (dl == nullptr) or draws the block and records the card boxes; returns its height.
+    float vehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha,
+                       std::vector<Box>* cardBoxes) const;
     void drawHints(const GameFlow& flow, const MenuView& view, float alpha);
     void updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
                       float viewH, bool follow);

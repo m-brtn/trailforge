@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <optional>
+#include <tuple>
 
 namespace tf {
 namespace {
@@ -58,6 +59,90 @@ void text(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 c, const c
         dl->AddText(font, size, pos, c, p, p + 1);
         pos.x += font->CalcTextSizeA(size, FLT_MAX, 0.0f, p, p + 1).x + tracking * size;
     }
+}
+
+// Type scale: every menu size follows the window height, with a floor in points so that small windows stay
+// readable. DisplaySize is in points where the framebuffer is scaled (macOS Retina), else in pixels: the floor then
+// follows the display content scale.
+float uiDpi() {
+    const ImGuiIO& io = ImGui::GetIO();
+    return io.DisplayFramebufferScale.x > 1.0f ? 1.0f : std::max(1.0f, ImGui::GetStyle().FontScaleDpi);
+}
+float px(float fractionOfHeight, float minPoints) {
+    return std::max(fractionOfHeight * ImGui::GetIO().DisplaySize.y, minPoints * uiDpi());
+}
+
+struct TypeScale {
+    float title, item, row, section, hint, small, back;
+};
+TypeScale typeScale() {
+    return {px(0.052f, 30.0f), px(0.043f, 24.0f), px(0.030f, 18.0f), px(0.021f, 14.0f),
+            px(0.021f, 14.0f), px(0.018f, 12.0f), px(0.026f, 16.0f)};
+}
+
+// The string cut to `maxW` with "..." (whole string when it fits).
+std::string fitText(ImFont* font, float size, const std::string& s, float maxW, float tracking = 0.0f) {
+    if (textWidth(font, size, s.c_str(), tracking) <= maxW) return s;
+    std::string t = s;
+    while (!t.empty() && textWidth(font, size, (t + "...").c_str(), tracking) > maxW) t.pop_back();
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    return t + "...";
+}
+
+// Greedy word wrap to `maxW`; a single word wider than the line is cut with "...".
+std::vector<std::string> wrapText(ImFont* font, float size, const std::string& s, float maxW, float tracking = 0.0f) {
+    std::vector<std::string> lines;
+    std::string line;
+    std::size_t p = 0;
+    while (p < s.size()) {
+        std::size_t q = s.find(' ', p);
+        if (q == std::string::npos) q = s.size();
+        const std::string word = s.substr(p, q - p);
+        p = q + 1;
+        if (word.empty()) continue;
+        const std::string joined = line.empty() ? word : line + " " + word;
+        if (line.empty() || textWidth(font, size, joined.c_str(), tracking) <= maxW) {
+            line = joined;
+        } else {
+            lines.push_back(line);
+            line = word;
+        }
+        if (textWidth(font, size, line.c_str(), tracking) > maxW) line = fitText(font, size, line, maxW, tracking);
+    }
+    if (!line.empty()) lines.push_back(line);
+    return lines;
+}
+
+std::string upper(std::string s) {
+    for (char& ch : s) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+// Filled value arrows either side of a value (menu pages and garage).
+void valueArrows(ImDrawList* dl, float lx, float rx, float cy, float h, ImU32 c) {
+    dl->AddTriangleFilled(ImVec2(lx - h * 0.6f, cy), ImVec2(lx + h * 0.6f, cy - h), ImVec2(lx + h * 0.6f, cy + h), c);
+    dl->AddTriangleFilled(ImVec2(rx + h * 0.6f, cy), ImVec2(rx - h * 0.6f, cy - h), ImVec2(rx - h * 0.6f, cy + h), c);
+}
+
+// Dark backdrop for a left column: solid to `solid`, then an eased fade over `fade` (linear ramps show a band).
+void columnShade(ImDrawList* dl, float solid, float fade, float H, float alpha) {
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2(solid, H), col(kDark, alpha));
+    constexpr int kSteps = 8;
+    for (int i = 0; i < kSteps; ++i) {
+        const float t0 = float(i) / kSteps, t1 = float(i + 1) / kSteps;
+        const float a0 = alpha * (1.0f - smooth(0.0f, 1.0f, t0)), a1 = alpha * (1.0f - smooth(0.0f, 1.0f, t1));
+        dl->AddRectFilledMultiColor(ImVec2(solid + t0 * fade, 0), ImVec2(solid + t1 * fade, H), col(kDark, a0), col(kDark, a1),
+                                    col(kDark, a1), col(kDark, a0));
+    }
+}
+
+// Section heading: spaced orange caps, then a thin rule to `x1`.
+void sectionHeading(ImDrawList* dl, ImFont* font, float size, float x0, float x1, float y, const char* s, float alpha) {
+    text(dl, font, size, ImVec2(x0, y), col(kOrange, alpha), s, 0.24f);
+    const float sw = textWidth(font, size, s, 0.24f);
+    if (x0 + sw + size < x1)
+        dl->AddRectFilled(ImVec2(x0 + sw + 0.8f * size, y + size * 0.55f), ImVec2(x1, y + size * 0.55f + 1.0f),
+                          col(kWhite, 0.18f * alpha));
 }
 
 std::string findFile(const std::vector<std::string>& dirs, const char* name) {
@@ -269,7 +354,7 @@ void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const Menu
             dl->AddRectFilled(ImVec2(W * 0.5f - lineW * 0.5f, ly), ImVec2(W * 0.5f + lineW * 0.5f, ly + 2.0f),
                               col(kOrange, logoA));
             const char* tag = "OFF-ROAD PROVING GROUND";
-            const float ts = 0.024f * H;
+            const float ts = px(0.026f, 15.0f);
             text(dl, m_body, ts, ImVec2(W * 0.5f - textWidth(m_body, ts, tag, 0.35f) * 0.5f, ly + 0.025f * H),
                  col(kWhite, 0.75f * smooth(1.6f, 2.8f, t)), tag, 0.35f);
             return;
@@ -277,8 +362,8 @@ void MenuUI::draw(const GameFlow& flow, const GameSettings& settings, const Menu
         drawMenu(flow, settings, view, smooth(0.35f, 1.0f, flow.menuFade()));
         return;
     }
-    // The Controls diagrams and the vehicle cards need the room.
-    if (flow.page() != MenuPage::Controls && flow.page() != MenuPage::Vehicle) drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f);
+    // The logo heads the start and pause menus; the sub-pages need the room (BACK and the title sit at the top).
+    if (flow.page() == MenuPage::Main || flow.page() == MenuPage::Pause) drawLogo(menuLogoC.x, menuLogoC.y, menuLogoW, 1.0f);
     drawMenu(flow, settings, view, 1.0f);
 }
 
@@ -290,33 +375,77 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     const bool paused = flow.screen() == Screen::Paused;
     const MenuPage page = flow.page();
 
-    // Readability: a dark gradient behind the left column (the frame itself is blurred in the pause menu).
     const bool controls = page == MenuPage::Controls;
-    const float shade = paused ? 0.45f : 0.62f;
-    const float gradW = 0.62f * W;
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(gradW, H), col(kDark, shade * alpha), 0, 0, col(kDark, shade * alpha));
-    dl->AddRectFilledMultiColor(ImVec2(0, H * 0.82f), ImVec2(W, H), 0, 0, col(kDark, 0.5f * alpha), col(kDark, 0.5f * alpha));
-    if (controls) dl->AddRectFilled(ImVec2(0, 0), ds, col(kDark, 0.5f * alpha)); // the diagrams span the whole width
 
+    const TypeScale type = typeScale();
+    const std::vector<MenuItem>& items = flow.items();
+    const bool pinBack = !items.empty() && items.back() == MenuItem::Back;
+    const bool withLogo = page == MenuPage::Main || page == MenuPage::Pause;
     const float logoW = std::min(0.27f * W, 0.75f * H);
     const float logoBottom = 0.08f * H + logoW / m_logoAspect;
     const bool compact = page == MenuPage::Settings || controls;
     const bool vehiclePage = page == MenuPage::Vehicle;
-    float y = controls || vehiclePage ? 0.05f * H : logoBottom + 0.05f * H;
+    // Sub-pages: BACK at the top left, the title rule under it.
+    float y = withLogo ? logoBottom + 0.04f * H : std::max(0.035f * H, 18.0f) + backButtonHeight() + 0.008f * H;
+
+    // Row metrics and columns, from the real text widths: labels, then the value column (centred value between
+    // arrows) wide enough for the longest value on the page.
+    const float textSize = compact ? type.row : type.item;
+    const float rowH = textSize * (compact ? 1.62f : 1.75f);
+    const std::size_t listN = pinBack ? items.size() - 1 : items.size();
+    const std::string defaultLevel = flow.levels().empty() ? std::string() : flow.levels().front();
+    std::vector<std::string> values(items.size());
+    float labelW = 0.0f, valueW = 0.0f;
+    bool anyValue = false;
+    for (std::size_t i = 0; i < listN; ++i) {
+        const MenuItem item = items[i];
+        labelW = std::max(labelW, textWidth(m_body, textSize, menuLabel(item), 0.08f));
+        if (!menuAdjustable(item)) continue;
+        std::string v = menuValue(item, settings, defaultLevel);
+        if (item == MenuItem::VehicleChoice && view.vehicles && !view.vehicles->empty()) {
+            const int vi = std::clamp(flow.vehicleIndex(settings), 0, int(view.vehicles->size()) - 1);
+            v = upper((*view.vehicles)[std::size_t(vi)].name);
+        }
+        if (item == MenuItem::PadGlyphs && settings.padGlyphs == int(PadGlyphSetting::Auto))
+            v += std::string(" (") + padGlyphsName(view.padGlyphs) + ")";
+        valueW = std::max(valueW, textWidth(m_body, textSize, v.c_str(), 0.06f));
+        values[i] = std::move(v);
+        anyValue = true;
+    }
+    const float labelX = x0 + 0.5f * textSize;
+    const float arrowGap = 1.1f * textSize; // value edge to arrow centre
+    const float maxBarW = W - x0 - std::max(0.04f * W, 24.0f);
+    valueW = std::max(valueW, 8.0f * textSize);
+    const auto spanOf = [&](float vw) { return vw + 2.0f * arrowGap + 1.6f * textSize; };
+    const float labelSpan = labelX - x0 + labelW + 2.0f * textSize;
+    float barW = anyValue ? labelSpan + spanOf(valueW) : std::max(labelSpan + textSize, 0.24f * W);
+    if (vehiclePage) barW = std::max(barW, std::min(0.42f * W, 0.9f * H));
+    if (controls) barW = std::max(barW, 0.46f * W);
+    barW = std::min(barW, maxBarW);
+    if (anyValue && labelSpan + spanOf(valueW) > barW) valueW = std::max(5.0f * textSize, barW - labelSpan - spanOf(0.0f));
+    const float valueX = x0 + barW - 0.5f * spanOf(valueW); // centre of the value column
+    const float labelMaxW = std::max(2.0f * textSize, (anyValue ? valueX - 0.5f * spanOf(valueW) : x0 + barW) - labelX - textSize);
+
+    // Readability: dark behind the whole column (labels and values), fading out to the right; the frame itself is
+    // blurred under the sub-pages and the pause menu.
+    {
+        columnShade(dl, std::min(W, x0 + 0.6f * barW), 0.4f * barW + 0.25f * W, H, (paused ? 0.5f : 0.62f) * alpha);
+        dl->AddRectFilledMultiColor(ImVec2(0, H * 0.82f), ImVec2(W, H), 0, 0, col(kDark, 0.5f * alpha), col(kDark, 0.5f * alpha));
+        if (controls) dl->AddRectFilled(ImVec2(0, 0), ds, col(kDark, 0.45f * alpha)); // the diagrams span the whole width
+    }
 
     // Page title: thin rule, large spaced uppercase heading.
     const float titleRuleY = y;
     if (const char* title = menuPageTitle(page); title[0]) {
-        const float ts = 0.048f * H;
-        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + 0.34f * W, y + 1.0f), col(kWhite, 0.35f * alpha));
-        y += 0.018f * H;
-        text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, alpha), title, 0.22f);
-        y += ts + 0.03f * H;
+        const float ts = type.title;
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + std::max(barW, 0.34f * W), y + 1.0f), col(kWhite, 0.35f * alpha));
+        y += 0.016f * H;
+        text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, alpha), title, 0.18f);
+        y += ts + 0.028f * H;
     } else {
-        y += 0.06f * H;
+        y += 0.05f * H;
     }
 
-    const std::vector<MenuItem>& items = flow.items();
     const int cursor = flow.cursor();
     const bool newPage = int(page) != m_lastPage;
     if (newPage) {
@@ -326,15 +455,15 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     }
     m_selectAnim += (float(cursor) - m_selectAnim) * std::min(1.0f, ImGui::GetIO().DeltaTime * 18.0f);
 
-    const float textSize = compact ? 0.027f * H : 0.036f * H;
-    const float rowH = compact ? 0.040f * H : 0.064f * H;
-    const float barW = page == MenuPage::Settings || controls ? 0.46f * W : 0.34f * W;
-    const float valueX = x0 + 0.36f * W; // centre of the value column (Settings, Controls)
-    const float arrowDx = 0.075f * W;
+    const float hx0 = x0 - 0.4f * textSize; // left edge of the highlight bar and the row hit boxes
 
     // Controls: the keyboard diagram under DRIVE KEYS, the gamepad diagram under GAMEPAD BUTTONS.
     const float contentW = W - 2.0f * x0;
-    const float u = std::min(0.056f * H, contentW / (kKbPitches * kPitchX));
+    // The keyboard diagram fits under its row in one screen (the gamepad diagram scrolls into view below it).
+    float u = std::min(0.056f * H, contentW / (kKbPitches * kPitchX));
+    const float kbRoom = H - footerHeight() - y - rowH - 0.03f * H;
+    for (int k = 0; k < 3; ++k)
+        if (const float kh = kbHeight(u, labelSize(u)); kh > kbRoom) u = std::max(0.03f * H, u * kbRoom / kh);
     const float g = 1.1f * u;
     const float lf = labelSize(u);
     const float kbBlock = 0.02f * H + kbHeight(u, lf), padBlock = 0.01f * H + padHeight(g, lf);
@@ -343,20 +472,19 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     // space) and the Controls diagrams. Positions are relative to the top of the list.
     // BACK (the last item of the sub-pages) sits above the page title, top left, outside the scrolling list: Up from
     // the first row reaches it, the page opens on the first real option.
-    const bool pinBack = !items.empty() && items.back() == MenuItem::Back;
-    const std::size_t listN = pinBack ? items.size() - 1 : items.size();
     if (pinBack && (std::size_t(cursor) == listN || m_lastCursor == int(listN))) m_selectAnim = float(cursor);
-    const float listTop = y, listBottom = 0.88f * H;
+    const float listTop = y, listBottom = H - footerHeight();
+    const float sectionH = 1.9f * type.section, sectionGap = 0.7f * rowH;
     float cy = 0.0f;
     std::vector<float> rowY(items.size()), blockH(items.size(), 0.0f);
     for (std::size_t i = 0; i < listN; ++i) {
-        if (page == MenuPage::Settings && menuSection(items[i])) cy += 0.020f * H + (i > 0 ? 0.014f * H : 0.0f);
-        if (items[i] == MenuItem::Controls) cy += 0.016f * H;
+        if (page == MenuPage::Settings && menuSection(items[i])) cy += sectionH + (i > 0 ? sectionGap : 0.0f);
+        if (items[i] == MenuItem::Controls) cy += 0.5f * rowH;
         rowY[i] = cy;
         cy += rowH;
         if (controls && items[i] == MenuItem::DriveKeys) blockH[i] = kbBlock;
         if (controls && items[i] == MenuItem::PadGlyphs) blockH[i] = padBlock;
-        if (vehiclePage && items[i] == MenuItem::VehicleChoice) blockH[i] = vehicleBlockHeight(view);
+        if (vehiclePage && items[i] == MenuItem::VehicleChoice) blockH[i] = vehicleBlockHeight(view, x0 + barW - hx0);
         cy += blockH[i];
     }
     const float viewH = listBottom - listTop;
@@ -393,16 +521,16 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
     if (vehiclePage)
         for (std::size_t i = 0; i < items.size(); ++i)
             if (items[i] == MenuItem::VehicleChoice)
-                drawVehicleBlock(dl, x0 - 0.012f * W, rowY[i] + rowH, barW + 0.012f * W, flow.vehicleIndex(settings), view, alpha);
+                drawVehicleBlock(dl, hx0, rowY[i] + rowH, x0 + barW - hx0, flow.vehicleIndex(settings), view, alpha);
     // Highlight bar eased between rows: soft fill fading to the right, orange edge on the left.
     const auto highlight = [&] {
         const float f = std::clamp(m_selectAnim, 0.0f, float(listN - 1));
         const int i0 = int(std::floor(f));
         const int i1 = std::min(i0 + 1, int(listN) - 1);
         const float by = rowY[std::size_t(i0)] + (rowY[std::size_t(i1)] - rowY[std::size_t(i0)]) * (f - float(i0));
-        const ImVec2 a(x0 - 0.012f * W, by), b(x0 + barW, by + rowH * 0.92f);
-        dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f * alpha), col(kWhite, 0.0f), col(kWhite, 0.0f),
-                                    col(kWhite, 0.16f * alpha));
+        const ImVec2 a(hx0, by), b(x0 + barW, by + rowH * 0.92f);
+        dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.18f * alpha), col(kWhite, 0.03f * alpha), col(kWhite, 0.03f * alpha),
+                                    col(kWhite, 0.18f * alpha));
         dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x * 0.7f + a.x * 0.3f, a.y), col(kWhite, 0.22f * alpha), 1.0f);
         dl->AddLine(ImVec2(a.x, b.y), ImVec2(b.x * 0.7f + a.x * 0.3f, b.y), col(kWhite, 0.22f * alpha), 1.0f);
         dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, alpha));
@@ -419,39 +547,23 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
             m_rows.push_back(Row{item, int(i), m_backBox.x0, m_backBox.y0, m_backBox.x1, m_backBox.y1});
             continue;
         }
-        if (page == MenuPage::Settings) {
-            if (const char* section = menuSection(item)) {
-                const float ss = 0.018f * H;
-                const float sy = ry - 0.020f * H - 0.004f * H;
-                text(dl, m_heading, ss, ImVec2(x0, sy), col(kOrange, alpha), section, 0.3f);
-                const float sw = textWidth(m_heading, ss, section, 0.3f);
-                dl->AddRectFilled(ImVec2(x0 + sw + 0.01f * W, sy + ss * 0.55f), ImVec2(x0 + barW, sy + ss * 0.55f + 1.0f),
-                                  col(kWhite, 0.18f * alpha));
-            }
-        }
+        if (page == MenuPage::Settings)
+            if (const char* section = menuSection(item))
+                sectionHeading(dl, m_heading, type.section, x0, x0 + barW, ry - sectionH + 0.15f * type.section, section, alpha);
         const float ty = ry + (rowH * 0.92f - textSize) * 0.5f;
-        const ImU32 c = col(kWhite, (sel ? 1.0f : 0.62f) * alpha);
-        text(dl, m_body, textSize, ImVec2(x0 + 0.006f * W, ty), c, menuLabel(item), 0.08f);
-        Row row{item, int(i), x0 - 0.012f * W, ry, x0 + barW, ry + rowH * 0.92f};
+        const ImU32 c = col(kWhite, (sel ? 1.0f : 0.66f) * alpha);
+        const std::string label = fitText(m_body, textSize, menuLabel(item), labelMaxW, 0.08f);
+        text(dl, m_body, textSize, ImVec2(labelX, ty), c, label.c_str(), 0.08f);
+        Row row{item, int(i), hx0, ry, x0 + barW, ry + rowH * 0.92f};
         if (menuAdjustable(item)) {
-            std::string v = menuValue(item, settings, flow.levels().empty() ? std::string() : flow.levels().front());
-            if (item == MenuItem::VehicleChoice && view.vehicles && !view.vehicles->empty()) {
-                const int vi = std::clamp(flow.vehicleIndex(settings), 0, int(view.vehicles->size()) - 1);
-                v = (*view.vehicles)[std::size_t(vi)].name;
-                for (char& ch : v) ch = char(std::toupper(static_cast<unsigned char>(ch)));
-            }
-            if (item == MenuItem::PadGlyphs && settings.padGlyphs == int(PadGlyphSetting::Auto))
-                v += std::string(" (") + padGlyphsName(view.padGlyphs) + ")";
+            const std::string v = fitText(m_body, textSize, values[i], valueW, 0.06f);
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.06f);
-            const float adx = std::max(arrowDx, 0.5f * vw + 0.7f * textSize); // long values (level names) push the arrows out
-            text(dl, m_body, textSize, ImVec2(valueX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.75f) * alpha),
+            text(dl, m_body, textSize, ImVec2(valueX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.8f) * alpha),
                  v.c_str(), 0.06f);
-            // Value arrows (clickable); bright on the selected row.
-            const float ah = textSize * 0.32f, acy = ty + textSize * 0.55f;
-            const ImU32 ac = sel ? col(kOrange, alpha) : col(kWhite, 0.25f * alpha);
-            const float lx = valueX - adx, rx = valueX + adx;
-            dl->AddTriangleFilled(ImVec2(lx - ah * 0.6f, acy), ImVec2(lx + ah * 0.6f, acy - ah), ImVec2(lx + ah * 0.6f, acy + ah), ac);
-            dl->AddTriangleFilled(ImVec2(rx + ah * 0.6f, acy), ImVec2(rx - ah * 0.6f, acy - ah), ImVec2(rx - ah * 0.6f, acy + ah), ac);
+            // Value arrows (clickable) at the edges of the value column; bright on the selected row.
+            const float ah = textSize * 0.30f, acy = ty + textSize * 0.55f;
+            const float lx = valueX - 0.5f * valueW - arrowGap, rx = valueX + 0.5f * valueW + arrowGap;
+            valueArrows(dl, lx, rx, acy, ah, sel ? col(kOrange, alpha) : col(kWhite, 0.3f * alpha));
             row.arrowL0 = lx - textSize;
             row.arrowL1 = lx + textSize;
             row.arrowR0 = rx - textSize;
@@ -463,17 +575,11 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         if (row.y1 > row.y0) m_rows.push_back(row);
     }
     if (listN == items.size()) dl->PopClipRect();
-    drawScrollMarks(x0 - 0.012f * W, x0 + barW, listTop, listBottom, m_menuScroll, cy - viewH, alpha);
-
-    // Footer: version bottom-left, input hints bottom-right.
-    const float fs = 0.018f * H;
-    char version[64];
-    std::snprintf(version, sizeof(version), "TRAILFORGE %s", view.version);
-    text(dl, m_body, fs, ImVec2(x0, H - 0.05f * H), col(kWhite, 0.4f * alpha), version, 0.2f);
+    drawScrollMarks(hx0, x0 + barW, listTop, listBottom, m_menuScroll, cy - viewH, alpha);
     drawHints(flow, view, alpha);
 }
 
-float MenuUI::labelSize(float u) const { return std::min(0.0165f * ImGui::GetIO().DisplaySize.y, 0.31f * u); }
+float MenuUI::labelSize(float u) const { return std::min(px(0.019f, 12.0f), 0.35f * u); }
 
 void MenuUI::drawKeyboard(ImDrawList* dl, float ox, float oy, float u, const MenuView& view, float alpha) {
     const float lf = labelSize(u), lineH = 1.12f * lf;
@@ -512,7 +618,7 @@ void MenuUI::drawKeyboard(ImDrawList* dl, float ox, float oy, float u, const Men
                 if (q == std::string::npos) q = face.size();
                 lines.push_back(face.substr(p, q - p));
             }
-            float size = face.size() <= 2 ? 0.40f * u : face.size() <= 3 ? 0.30f * u : 0.28f * u;
+            float size = face.size() <= 2 ? 0.42f * u : face.size() <= 3 ? 0.32f * u : 0.30f * u;
             for (const std::string& l : lines)
                 size = std::min(size, (z.x - a.x - 0.16f * u) / std::max(1.0f, textWidth(m_heading, 1.0f, l.c_str(), 0.04f)));
             float ty = c.y - 0.5f * float(lines.size()) * 1.05f * size;
@@ -833,52 +939,83 @@ void MenuUI::drawGamepad(ImDrawList* dl, float cx, float oy, float g, const Menu
     m_callouts.push_back({cx - edge - sw, oy + 0.1f * g, cx - edge, oy + 0.1f * g + lineH});
 }
 
-float MenuUI::vehicleBlockHeight(const MenuView& view) const {
-    const float H = ImGui::GetIO().DisplaySize.y;
-    const std::size_t specs = view.vehicles && !view.vehicles->empty() ? view.vehicles->front().specs.size() + 1 : 6;
-    return 0.012f * H + 0.075f * H + 0.02f * H + 0.075f * H + float(specs) * 0.032f * H + 0.02f * H;
+float MenuUI::vehicleBlockHeight(const MenuView& view, float w) const {
+    return vehicleBlock(nullptr, 0.0f, 0.0f, w, 0, view, 1.0f, nullptr);
 }
 
 void MenuUI::drawVehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha) {
-    if (!view.vehicles || view.vehicles->empty()) return;
+    vehicleBlock(dl, x, y, w, selected, view, alpha, &m_cards);
+}
+
+float MenuUI::vehicleBlock(ImDrawList* dl, float x, float y, float w, int selected, const MenuView& view, float alpha,
+                           std::vector<Box>* cardBoxes) const {
+    // The height is the same for every selection, so the DRIVE row below does not move when the vehicle changes.
+    if (!view.vehicles || view.vehicles->empty()) return 0.0f;
     const std::vector<VehicleCard>& cards = *view.vehicles;
     const float H = ImGui::GetIO().DisplaySize.y;
+    const float y0 = y;
     selected = std::clamp(selected, 0, int(cards.size()) - 1);
-    // Card strip: name and drivetrain type; the selected card is lit with an orange edge.
+    // Card grid: name and drive type; the selected card is lit with an orange edge. Cards wrap to more rows rather
+    // than squeezing their names.
     y += 0.012f * H;
-    const float gap = 0.008f * H, cardH = 0.075f * H;
-    const float cardW = (w - gap * float(cards.size() - 1)) / float(cards.size());
-    for (std::size_t i = 0; i < cards.size(); ++i) {
-        const bool sel = int(i) == selected;
-        const ImVec2 a(x + float(i) * (cardW + gap), y), b(a.x + cardW, y + cardH);
-        dl->AddRectFilled(a, b, col(kDark, (sel ? 0.55f : 0.35f) * alpha), 4.0f);
-        dl->AddRect(a, b, col(kWhite, (sel ? 0.55f : 0.18f) * alpha), 4.0f, 0, 1.0f);
-        if (sel) dl->AddRectFilled(ImVec2(a.x, b.y - 3.0f), ImVec2(b.x, b.y), col(kOrange, alpha));
-        const float ns = 0.026f * H, ks = 0.017f * H;
-        std::string name = cards[i].name;
-        for (char& ch : name) ch = char(std::toupper(static_cast<unsigned char>(ch)));
-        text(dl, m_heading, ns, ImVec2(a.x + 0.012f * H, a.y + 0.012f * H), col(kWhite, (sel ? 1.0f : 0.6f) * alpha),
-             name.c_str(), 0.06f);
-        const char* kind = cards[i].electric ? "ELECTRIC" : "GASOLINE";
-        text(dl, m_body, ks, ImVec2(a.x + 0.012f * H, a.y + 0.012f * H + ns * 1.1f),
-             col(cards[i].electric ? ImVec4(0.45f, 0.72f, 1.0f, 1.0f) : kOrange, (sel ? 0.95f : 0.55f) * alpha), kind, 0.25f);
-        m_cards.push_back({a.x, a.y, b.x, b.y});
+    const float ns = px(0.024f, 15.0f), ks = px(0.016f, 12.0f), pad = 0.6f * ns;
+    const float gap = 0.4f * ns, cardH = 2.0f * pad + 1.12f * ns + ks;
+    const int n = int(cards.size());
+    const int cols = std::clamp(int((w + gap) / (7.5f * ns + gap)), 1, n);
+    const int rows = (n + cols - 1) / cols;
+    const float cardW = (w - gap * float(cols - 1)) / float(cols);
+    if (dl) {
+        for (int i = 0; i < n; ++i) {
+            const bool sel = i == selected;
+            const ImVec2 a(x + float(i % cols) * (cardW + gap), y + float(i / cols) * (cardH + gap)), b(a.x + cardW, a.y + cardH);
+            dl->AddRectFilled(a, b, col(kDark, (sel ? 0.6f : 0.38f) * alpha), 4.0f);
+            dl->AddRect(a, b, col(kWhite, (sel ? 0.6f : 0.2f) * alpha), 4.0f, 0, 1.0f);
+            if (sel) dl->AddRectFilled(ImVec2(a.x, b.y - 3.0f), ImVec2(b.x, b.y), col(kOrange, alpha));
+            const std::string name = upper(cards[std::size_t(i)].name);
+            const float room = cardW - 2.0f * pad;
+            const float full = textWidth(m_heading, ns, name.c_str(), 0.05f);
+            const float s = full > room ? std::max(0.82f * ns, ns * room / full) : ns;
+            const std::string shown = fitText(m_heading, s, name, room, 0.05f);
+            text(dl, m_heading, s, ImVec2(a.x + pad, a.y + pad + (ns - s) * 0.6f), col(kWhite, (sel ? 1.0f : 0.65f) * alpha),
+                 shown.c_str(), 0.05f);
+            const bool ev = cards[std::size_t(i)].electric;
+            text(dl, m_body, ks, ImVec2(a.x + pad, a.y + pad + 1.12f * ns), col(ev ? ImVec4(0.45f, 0.72f, 1.0f, 1.0f) : kOrange,
+                 (sel ? 0.95f : 0.6f) * alpha), ev ? "ELECTRIC" : "GASOLINE", 0.22f);
+            if (cardBoxes) cardBoxes->push_back({a.x, a.y, b.x, b.y});
+        }
     }
-    y += cardH + 0.02f * H;
-    // Description and specs of the selected vehicle.
+    y += float(rows) * cardH + float(rows - 1) * gap + 0.9f * ns;
+    // Description and specs of the selected vehicle; the label column fits the longest label of the catalog.
+    const float ds = px(0.022f, 14.0f), ls = px(0.018f, 12.0f), vs = px(0.022f, 14.0f), rowH = 1.6f * vs;
+    const float tx = x + 0.3f * ds;
+    std::size_t descLines = 1, specRows = 0;
+    float labelW = 0.0f;
+    for (const VehicleCard& c : cards) {
+        descLines = std::max(descLines, wrapText(m_body, ds, c.description, w - 0.6f * ds).size());
+        specRows = std::max(specRows, c.specs.size());
+        for (const VehicleSpec& sp : c.specs) labelW = std::max(labelW, textWidth(m_heading, ls, sp.label.c_str(), 0.2f));
+    }
     const VehicleCard& c = cards[std::size_t(selected)];
-    const float ds = 0.021f * H;
-    dl->AddText(orDefault(m_body), ds, ImVec2(x + 0.004f * H, y), col(kWhite, 0.78f * alpha), c.description.c_str(), nullptr,
-                w - 0.008f * H);
-    y += 0.075f * H;
-    const float ls = 0.019f * H, vs = 0.023f * H, rowH = 0.032f * H;
+    if (dl) {
+        float ly = y;
+        for (const std::string& l : wrapText(m_body, ds, c.description, w - 0.6f * ds)) {
+            text(dl, m_body, ds, ImVec2(tx, ly), col(kWhite, 0.82f * alpha), l.c_str());
+            ly += 1.25f * ds;
+        }
+    }
+    y += float(descLines) * 1.25f * ds + 0.7f * ds;
+    const float valueX = tx + labelW + 1.2f * vs;
     for (const VehicleSpec& sp : c.specs) {
-        text(dl, m_heading, ls, ImVec2(x + 0.004f * H, y + (vs - ls) * 0.6f), col(kOrange, 0.9f * alpha), sp.label.c_str(), 0.25f);
-        text(dl, m_body, vs, ImVec2(x + 0.17f * H, y), col(kWhite, 0.92f * alpha), sp.value.c_str(), 0.03f);
-        dl->AddRectFilled(ImVec2(x, y + rowH - 0.004f * H), ImVec2(x + w, y + rowH - 0.004f * H + 1.0f),
-                          col(kWhite, 0.08f * alpha));
+        if (!dl) break;
+        text(dl, m_heading, ls, ImVec2(tx, y + (vs - ls) * 0.65f), col(kOrange, 0.95f * alpha), sp.label.c_str(), 0.2f);
+        const std::string v = fitText(m_body, vs, sp.value, x + w - valueX - 0.3f * vs, 0.02f);
+        text(dl, m_body, vs, ImVec2(valueX, y), col(kWhite, 0.95f * alpha), v.c_str(), 0.02f);
+        dl->AddRectFilled(ImVec2(x, y + rowH - 0.25f * vs), ImVec2(x + w, y + rowH - 0.25f * vs + 1.0f), col(kWhite, 0.1f * alpha));
         y += rowH;
     }
+    if (!dl) y += float(specRows) * rowH;
+    else y += float(specRows - c.specs.size()) * rowH;
+    return y - y0 + 0.4f * rowH;
 }
 
 int MenuUI::vehicleCardHit(float x, float y) const {
@@ -894,15 +1031,46 @@ bool MenuUI::vehicleCardRect(int index, float& x0, float& y0, float& x1, float& 
     return true;
 }
 
-void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) {
+float MenuUI::footerHeight() const {
+    const float hs = typeScale().hint, H = ImGui::GetIO().DisplaySize.y;
+    return std::max(0.035f * H, 16.0f) + 1.5f * hs + 0.025f * H;
+}
+
+void MenuUI::drawFooter(const std::vector<Hint>& hints, const char* version, float alpha) {
+    // Version bottom left; key caps with their action bottom right, all on one baseline. Hints that do not fit
+    // beside the version shrink a little, then the version gives way.
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
-    const float H = ds.y;
-    const float ts = 0.018f * H, pad = 0.006f * H, gap = 0.022f * H;
-    struct Hint {
-        const char* key;
-        const char* label;
+    const float W = ds.x, H = ds.y;
+    const float margin = std::max(0.035f * H, 16.0f);
+    const float xl = std::max(0.07f * W, 48.0f), xr = W - std::max(0.05f * W, 32.0f);
+    float ts = typeScale().hint;
+    const float vs = typeScale().small;
+    const auto widthAt = [&](float s) {
+        float w = 0.0f;
+        for (const Hint& h : hints)
+            w += textWidth(m_heading, s, h.key.c_str(), 0.05f) + 0.9f * s + 0.45f * s + textWidth(m_body, s, h.label.c_str(), 0.12f) + 1.3f * s;
+        return std::max(0.0f, w - 1.3f * s);
     };
+    const float versionW = textWidth(m_body, vs, version, 0.2f);
+    float room = xr - xl - versionW - 2.0f * ts;
+    if (widthAt(ts) > room) ts = std::max(ts * room / widthAt(ts), 0.82f * ts);
+    const bool showVersion = widthAt(ts) <= room;
+    const float boxH = 1.45f * ts, by = H - margin - boxH, ty = by + 0.5f * (boxH - ts) - 0.04f * ts;
+    if (showVersion) text(dl, m_body, vs, ImVec2(xl, by + 0.5f * (boxH - vs)), col(kWhite, 0.45f * alpha), version, 0.2f);
+    float x = std::max(xr - widthAt(ts), showVersion ? xl : 0.5f * (W - widthAt(ts)));
+    for (const Hint& h : hints) {
+        const float kw = textWidth(m_heading, ts, h.key.c_str(), 0.05f) + 0.9f * ts;
+        dl->AddRectFilled(ImVec2(x, by), ImVec2(x + kw, by + boxH), col(kDark, 0.45f * alpha), 0.18f * ts);
+        dl->AddRect(ImVec2(x, by), ImVec2(x + kw, by + boxH), col(kWhite, 0.65f * alpha), 0.18f * ts, 0, 1.0f);
+        text(dl, m_heading, ts, ImVec2(x + 0.45f * ts, ty), col(kWhite, 0.95f * alpha), h.key.c_str(), 0.05f);
+        x += kw + 0.45f * ts;
+        text(dl, m_body, ts, ImVec2(x, ty), col(kWhite, 0.8f * alpha), h.label.c_str(), 0.12f);
+        x += textWidth(m_body, ts, h.label.c_str(), 0.12f) + 1.3f * ts;
+    }
+}
+
+void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) {
     std::vector<Hint> hints;
     const bool adjustable = menuAdjustable(flow.current());
     if (view.gamepad) {
@@ -915,19 +1083,9 @@ void MenuUI::drawHints(const GameFlow& flow, const MenuView& view, float alpha) 
         hints.push_back({keyName(Key::Return, view.keyboard), "SELECT"});
         if (flow.depth() > 1 || flow.screen() == Screen::Paused) hints.push_back({keyName(Key::Escape, view.keyboard), "BACK"});
     }
-    float x = ds.x - std::max(0.05f * ds.x, 40.0f);
-    const float y = H - 0.055f * H;
-    for (auto it = hints.rbegin(); it != hints.rend(); ++it) {
-        const float lw = textWidth(m_body, ts, it->label, 0.15f);
-        x -= lw;
-        text(dl, m_body, ts, ImVec2(x, y), col(kWhite, 0.75f * alpha), it->label, 0.15f);
-        const float kw = textWidth(m_heading, ts, it->key, 0.05f) + 2.0f * pad;
-        x -= kw + 0.008f * H;
-        dl->AddRect(ImVec2(x, y - pad * 0.6f), ImVec2(x + kw, y + ts + pad * 0.3f), col(kWhite, 0.6f * alpha),
-                    3.0f, 0, 1.0f);
-        text(dl, m_heading, ts, ImVec2(x + pad, y), col(kWhite, 0.9f * alpha), it->key, 0.05f);
-        x -= gap;
-    }
+    char version[64];
+    std::snprintf(version, sizeof(version), "TRAILFORGE %s", view.version);
+    drawFooter(hints, version, alpha);
 }
 
 void MenuUI::updateScroll(float& scroll, float& target, float cursorY, float cursorH, float rowH, float contentH,
@@ -958,20 +1116,21 @@ void MenuUI::drawScrollMarks(float x0, float x1, float top, float bottom, float 
 }
 
 // "< BACK" above a page title (top left): menu pages and the garage. Records its hit box in m_backBox.
+float MenuUI::backButtonHeight() const { return 1.6f * typeScale().back; }
+
 void MenuUI::drawBackButton(ImDrawList* dl, float x0, float titleRuleY, bool selected, float alpha) {
     const float H = ImGui::GetIO().DisplaySize.y;
-    const float ts = 0.024f * H, h = 0.036f * H;
+    const float ts = typeScale().back, h = backButtonHeight();
     const float y1 = titleRuleY - 0.006f * H, y0 = y1 - h;
-    const float ah = ts * 0.30f, tx = x0 + 0.010f * H + 2.0f * ah;
-    const float x1 = tx + textWidth(m_body, ts, "BACK", 0.1f) + 0.014f * H;
-    const ImVec2 a(x0 - 0.008f * H, y0), b(x1, y1);
+    const float ah = ts * 0.30f, ax = x0 + 0.2f * ts + ah, tx = ax + ah + 0.45f * ts;
+    const float x1 = tx + textWidth(m_body, ts, "BACK", 0.1f) + 0.7f * ts;
+    const ImVec2 a(x0 - 0.4f * ts, y0), b(x1, y1);
     if (selected) {
         dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f * alpha), col(kWhite, 0.04f * alpha), col(kWhite, 0.04f * alpha),
                                     col(kWhite, 0.16f * alpha));
         dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, alpha));
     }
     const float cyy = 0.5f * (y0 + y1);
-    const float ax = x0 + 0.006f * H + ah;
     dl->AddTriangleFilled(ImVec2(ax - ah * 0.6f, cyy), ImVec2(ax + ah * 0.6f, cyy - ah), ImVec2(ax + ah * 0.6f, cyy + ah),
                           selected ? col(kOrange, alpha) : col(kWhite, 0.5f * alpha));
     text(dl, m_body, ts, ImVec2(tx, cyy - 0.55f * ts), col(kWhite, (selected ? 1.0f : 0.7f) * alpha), "BACK", 0.1f);
@@ -1012,31 +1171,92 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float W = ds.x, H = ds.y;
-    const float x0 = std::max(0.045f * W, 36.0f);
-    const float panelW = std::max(0.44f * W, 560.0f);
+    const TypeScale type = typeScale();
+    const float x0 = std::max(0.045f * W, 28.0f);
     const float dt = ImGui::GetIO().DeltaTime;
 
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(x0 + panelW * 1.35f, H), col(kDark, 0.78f), 0, 0, col(kDark, 0.78f));
-    dl->AddRectFilledMultiColor(ImVec2(0, H * 0.86f), ImVec2(W, H), 0, 0, col(kDark, 0.55f), col(kDark, 0.55f));
+    // Row text and the columns of the panel (label, slider bar, value), measured from every row's text so that
+    // nothing is squeezed: long labels shrink a little, then end in "...".
+    const float textSize = px(0.026f, 16.0f), rowH = 1.5f * textSize, headH = 2.0f * type.section;
+    const float tagSize = std::max(0.62f * textSize, 11.0f * uiDpi()), noteSize = std::max(0.78f * textSize, 12.0f * uiDpi());
+    const float tagW = textWidth(m_body, tagSize, "RESPAWN", 0.1f) + 0.9f * tagSize;
+    const auto& rows = g.rows();
+    const bool pinBack = !rows.empty() && rows.back().kind == GarageRowKind::Action && rows.back().action == GarageAction::Back;
+    const std::size_t listN = pinBack ? rows.size() - 1 : rows.size();
+    const auto rowLabel = [&](const GarageRow& r) {
+        switch (r.kind) {
+        case GarageRowKind::Vehicle: return std::string("VEHICLE");
+        case GarageRowKind::Setup: return std::string("SETUP");
+        case GarageRowKind::Kit: return std::string("KIT");
+        case GarageRowKind::Param: return upper(r.param->label);
+        case GarageRowKind::Action: return std::string(Garage::actionLabel(r.action));
+        }
+        return std::string();
+    };
+    float labelW = 0.0f, numberW = 0.0f, choiceW = 0.0f;
+    for (std::size_t i = 0; i < listN; ++i) {
+        const GarageRow& r = rows[i];
+        const bool tag = r.kind == GarageRowKind::Param && r.param->rebuild;
+        labelW = std::max(labelW, textWidth(m_body, textSize, rowLabel(r).c_str(), 0.05f) + (tag ? 0.5f * textSize + tagW : 0.0f));
+        if (r.kind == GarageRowKind::Action) continue;
+        const std::string v = g.valueText(r);
+        if (r.kind == GarageRowKind::Param && r.param->kind == SetupParamKind::Number) {
+            const std::string note = g.valueNote(r);
+            numberW = std::max(numberW, textWidth(m_body, textSize, v.c_str(), 0.04f) +
+                                            (note.empty() ? 0.0f : 0.4f * textSize + textWidth(m_body, noteSize, note.c_str(), 0.04f)));
+        } else {
+            choiceW = std::max(choiceW, textWidth(m_body, textSize, v.c_str(), 0.04f));
+        }
+    }
+    const float gapW = 1.2f * textSize;
+    float barW = std::max(7.0f * textSize, 0.11f * W);
+    numberW = std::max(numberW, 5.0f * textSize);
+    float labelCol = std::min(labelW, std::max(0.24f * W, 14.0f * textSize));
+    const auto widthOf = [&] { return 0.5f * textSize + labelCol + gapW + barW + gapW + numberW + 0.4f * textSize; };
+    // The panel keeps to the left half (the vehicle stands right of the centre) while its text fits there; the bar
+    // gives first, then the labels. Narrow windows let it grow to 64 %.
+    const float halfW = 0.5f * W - x0 - 0.012f * W;
+    const float minLabel = std::min(labelW, 12.0f * textSize), minBar = 5.0f * textSize;
+    float panelW = widthOf();
+    if (panelW > halfW) {
+        const float target = std::min(std::max(halfW, 0.5f * textSize + minLabel + 2.0f * gapW + minBar + numberW + 0.4f * textSize),
+                                      std::min(0.64f * W, W - 2.0f * x0));
+        const float barCut = std::min(panelW - target, barW - minBar);
+        barW -= barCut;
+        labelCol = std::max(std::min(minLabel, 8.0f * textSize), labelCol - (panelW - target - barCut));
+        panelW = widthOf();
+    }
+    const float labelX = x0 + 0.5f * textSize;
+    const float barX0 = labelX + labelCol + gapW, barX1 = barX0 + barW;
+    const float valueX = barX1 + gapW;                          // number values (left aligned after the bar)
+    const float choiceX = 0.5f * (barX0 + x0 + panelW);         // centre of choice values
+    const float arrowDx = std::max(0.5f * (x0 + panelW - barX0) - 0.6f * textSize, 0.5f * choiceW + 1.2f * textSize);
 
-    // Title, with room for BACK above it.
-    float y = 0.065f * H;
-    const float titleTop = y - 0.004f * H;
-    const float ts = 0.046f * H;
-    text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, 1.0f), "GARAGE", 0.22f);
-    const float tw = textWidth(m_heading, ts, "GARAGE", 0.22f);
-    const std::string sub = g.vehicle().name;
-    text(dl, m_body, 0.022f * H, ImVec2(x0 + tw + 0.02f * W, y + ts - 0.03f * H), col(kOrange, 1.0f), sub.c_str(), 0.12f);
-    y += ts + 0.012f * H;
+    {
+        columnShade(dl, std::min(W, x0 + 0.75f * panelW), 0.25f * panelW + 0.2f * W, H, 0.76f);
+        dl->AddRectFilledMultiColor(ImVec2(0, H * 0.84f), ImVec2(W, H), 0, 0, col(kDark, 0.6f), col(kDark, 0.6f));
+    }
+
+    // Title (BACK above it, like the menu pages), the vehicle name beside it.
+    float y = std::max(0.035f * H, 18.0f) + backButtonHeight() + 0.008f * H;
+    const float titleTop = y;
+    y += 0.012f * H;
+    const float ts = type.title;
+    text(dl, m_heading, ts, ImVec2(x0, y), col(kWhite, 1.0f), "GARAGE", 0.18f);
+    const float tw = textWidth(m_heading, ts, "GARAGE", 0.18f);
+    const float subS = px(0.024f, 15.0f);
+    const std::string sub = fitText(m_body, subS, upper(g.vehicle().name), x0 + panelW - (x0 + tw + 0.8f * ts), 0.1f);
+    text(dl, m_body, subS, ImVec2(x0 + tw + 0.8f * ts, y + ts - 1.15f * subS), col(kOrange, 1.0f), sub.c_str(), 0.1f);
+    y += ts + 0.014f * H;
     dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + panelW, y + 1.0f), col(kWhite, 0.35f));
 
     // List geometry: rows and section headings, then a scroll offset that keeps the cursor in view.
     // BACK (the last row) sits above the title like on the menu pages; Up from the first row reaches it.
-    const float textSize = 0.0235f * H, rowH = 0.034f * H, headH = 0.032f * H;
-    const auto& rows = g.rows();
-    const bool pinBack = !rows.empty() && rows.back().kind == GarageRowKind::Action && rows.back().action == GarageAction::Back;
-    const std::size_t listN = pinBack ? rows.size() - 1 : rows.size();
-    const float infoTop = 0.80f * H; // description, help and messages below the list
+    // Below the list: the description and help of the selected row (wrapped to the panel) and the last message.
+    constexpr std::size_t kInfoLines = 3;
+    const float infoS = px(0.019f, 13.0f), msgS = px(0.021f, 14.0f);
+    const float infoH = 0.6f * infoS + float(kInfoLines) * 1.25f * infoS + 0.2f * infoS + 1.3f * msgS;
+    const float infoTop = H - footerHeight() - infoH;
     const float listTop = y + 0.012f * H, listBottom = infoTop;
     std::vector<float> rowY(rows.size());
     float cy = 0.0f;
@@ -1056,14 +1276,10 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     if (fromBack) m_garageSelectAnim = cursorY;
     m_garageSelectAnim += (cursorY - m_garageSelectAnim) * std::min(1.0f, dt * 18.0f);
 
-    const float labelX = x0 + 0.006f * W;
-    const float barX0 = x0 + panelW * 0.50f, barX1 = x0 + panelW * 0.74f;
-    const float valueX = x0 + panelW * 0.77f;          // number values (left aligned after the bar)
-    const float choiceX = x0 + panelW * 0.66f;         // centre of choice values
-    const float arrowDx = panelW * 0.20f;
+    const float hx0 = x0 - 0.4f * textSize;
     const auto highlight = [&] {
         const float by = listTop + m_garageSelectAnim - m_garageScroll;
-        const ImVec2 a(x0 - 0.008f * W, by), b(x0 + panelW, by + rowH * 0.92f);
+        const ImVec2 a(hx0, by), b(x0 + panelW, by + rowH * 0.92f);
         dl->AddRectFilledMultiColor(a, b, col(kWhite, 0.16f), col(kWhite, 0.02f), col(kWhite, 0.02f), col(kWhite, 0.16f));
         dl->AddRectFilled(a, ImVec2(a.x + 3.0f, b.y), col(kOrange, 1.0f));
     };
@@ -1080,41 +1296,31 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         if (ry + rowH < listTop - headH || ry > listBottom) continue;
         const GarageRow& r = rows[i];
         const bool sel = int(i) == g.cursor();
-        if (const char* section = g.groupTitle(int(i))) {
-            const float ss = 0.017f * H;
-            const float sy = ry - headH + 0.008f * H;
-            text(dl, m_heading, ss, ImVec2(x0, sy), col(kOrange, 1.0f), section, 0.3f);
-            const float sw = textWidth(m_heading, ss, section, 0.3f);
-            dl->AddRectFilled(ImVec2(x0 + sw + 0.01f * W, sy + ss * 0.55f), ImVec2(x0 + panelW, sy + ss * 0.55f + 1.0f),
-                              col(kWhite, 0.18f));
-        }
+        if (const char* section = g.groupTitle(int(i)))
+            sectionHeading(dl, m_heading, type.section, x0, x0 + panelW, ry - headH + 0.5f * type.section, section, 1.0f);
         const float ty = ry + (rowH * 0.92f - textSize) * 0.5f;
-        const float alpha = sel ? 1.0f : 0.68f;
-        std::string label;
-        switch (r.kind) {
-        case GarageRowKind::Vehicle: label = "VEHICLE"; break;
-        case GarageRowKind::Setup: label = "SETUP"; break;
-        case GarageRowKind::Kit: label = "KIT"; break;
-        case GarageRowKind::Param: label = r.param->label; break;
-        case GarageRowKind::Action: label = Garage::actionLabel(r.action); break;
-        }
-        if (r.kind == GarageRowKind::Param)
-            for (char& c : label) c = char(std::toupper(static_cast<unsigned char>(c)));
-        // Long labels shrink to fit before the slider (the RESPAWN tag of rebuild parameters included).
+        const float alpha = sel ? 1.0f : 0.7f;
+        const std::string label = rowLabel(r);
+        // The RESPAWN tag of rebuild parameters is a small outlined pill after the label; a label longer than its
+        // column shrinks to 85 %, then ends in "...".
         const bool rebuildTag = r.kind == GarageRowKind::Param && r.param->rebuild;
-        const float tagW = rebuildTag ? textWidth(m_body, textSize * 0.6f, "RESPAWN", 0.1f) + 8.0f : 0.0f;
-        const float room = barX0 - labelX - 14.0f - tagW;
+        const float room = labelCol - (rebuildTag ? 0.5f * textSize + tagW : 0.0f);
         const float lw = textWidth(m_body, textSize, label.c_str(), 0.05f);
-        const float ls = lw > room ? textSize * room / lw : textSize;
-        text(dl, m_body, ls, ImVec2(labelX, ty + (textSize - ls) * 0.6f), col(kWhite, alpha), label.c_str(), 0.05f);
-        if (rebuildTag)
-            text(dl, m_body, textSize * 0.6f, ImVec2(labelX + std::min(lw, room) + 8.0f, ty + textSize * 0.3f),
-                 col(kOrange, 0.85f * alpha), "RESPAWN", 0.1f);
-        GarageHit hit{int(i), x0 - 0.008f * W, ry, x0 + panelW, ry + rowH * 0.92f};
+        const float ls = lw > room ? std::max(0.85f * textSize, textSize * room / lw) : textSize;
+        const std::string shown = fitText(m_body, ls, label, room, 0.05f);
+        text(dl, m_body, ls, ImVec2(labelX, ty + (textSize - ls) * 0.6f), col(kWhite, alpha), shown.c_str(), 0.05f);
+        if (rebuildTag) {
+            const float tx = labelX + textWidth(m_body, ls, shown.c_str(), 0.05f) + 0.5f * textSize;
+            const float th = 1.35f * tagSize, tyy = ty + 0.55f * textSize - 0.5f * th;
+            dl->AddRect(ImVec2(tx, tyy), ImVec2(tx + tagW, tyy + th), col(kOrange, 0.7f * alpha), 0.3f * th, 0, 1.0f);
+            text(dl, m_body, tagSize, ImVec2(tx + 0.45f * tagSize, tyy + 0.5f * (th - tagSize)), col(kOrange, 0.95f * alpha),
+                 "RESPAWN", 0.1f);
+        }
+        GarageHit hit{int(i), hx0, ry, x0 + panelW, ry + rowH * 0.92f};
         const bool number = r.kind == GarageRowKind::Param && r.param->kind == SetupParamKind::Number;
         if (number) {
             const float f = g.fraction(*r.param);
-            const float bh = 4.0f, byc = ty + textSize * 0.55f;
+            const float bh = std::max(4.0f, 0.18f * textSize), byc = ty + textSize * 0.55f;
             dl->AddRectFilled(ImVec2(barX0, byc - bh * 0.5f), ImVec2(barX1, byc + bh * 0.5f), col(kWhite, 0.18f), 2.0f);
             dl->AddRectFilled(ImVec2(barX0, byc - bh * 0.5f), ImVec2(barX0 + (barX1 - barX0) * f, byc + bh * 0.5f),
                               col(sel ? kOrange : kWhite, sel ? 1.0f : 0.5f), 2.0f);
@@ -1125,27 +1331,24 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
                 const float bx = barX0 + (barX1 - barX0) * std::clamp((bv - rg.min) / (rg.max - rg.min), 0.0f, 1.0f);
                 dl->AddRectFilled(ImVec2(bx - 1.0f, byc - 6.0f), ImVec2(bx + 1.0f, byc + 6.0f), col(kWhite, 0.55f));
             }
-            dl->AddCircleFilled(ImVec2(barX0 + (barX1 - barX0) * f, byc), sel ? 6.0f : 4.5f, col(kWhite, alpha));
+            dl->AddCircleFilled(ImVec2(barX0 + (barX1 - barX0) * f, byc), (sel ? 0.30f : 0.23f) * textSize, col(kWhite, alpha));
             const std::string v = g.valueText(r);
             text(dl, m_body, textSize, ImVec2(valueX, ty), col(kWhite, alpha), v.c_str(), 0.04f);
             if (const std::string note = g.valueNote(r); !note.empty()) {
-                const float ns = textSize * 0.72f;
-                text(dl, m_body, ns, ImVec2(valueX + textWidth(m_body, textSize, v.c_str(), 0.04f) + 0.4f * textSize,
-                                            ty + (textSize - ns) * 0.7f),
-                     col(kOrange, 0.85f * alpha), note.c_str(), 0.04f);
+                const float nx = valueX + textWidth(m_body, textSize, v.c_str(), 0.04f) + 0.4f * textSize;
+                const std::string n = fitText(m_body, noteSize, note, x0 + panelW - nx, 0.04f);
+                text(dl, m_body, noteSize, ImVec2(nx, ty + (textSize - noteSize) * 0.7f), col(kOrange, 0.95f * alpha), n.c_str(), 0.04f);
             }
             hit.bar0 = barX0 - 8.0f;
             hit.bar1 = barX1 + 8.0f;
         } else if (r.kind != GarageRowKind::Action) {
-            const std::string v = g.valueText(r);
+            const std::string v = fitText(m_body, textSize, g.valueText(r), 2.0f * arrowDx - 2.0f * textSize, 0.04f);
             const float vw = textWidth(m_body, textSize, v.c_str(), 0.04f);
             text(dl, m_body, textSize, ImVec2(choiceX - vw * 0.5f, ty), col(kWhite, (sel ? 1.0f : 0.8f)), v.c_str(), 0.04f);
             {
                 const float ah = textSize * 0.30f, acy = ty + textSize * 0.55f;
-                const ImU32 ac = sel ? col(kOrange, 1.0f) : col(kWhite, 0.25f);
                 const float lx = choiceX - arrowDx, rx = choiceX + arrowDx;
-                dl->AddTriangleFilled(ImVec2(lx - ah * 0.6f, acy), ImVec2(lx + ah * 0.6f, acy - ah), ImVec2(lx + ah * 0.6f, acy + ah), ac);
-                dl->AddTriangleFilled(ImVec2(rx + ah * 0.6f, acy), ImVec2(rx - ah * 0.6f, acy - ah), ImVec2(rx - ah * 0.6f, acy + ah), ac);
+                valueArrows(dl, lx, rx, acy, ah, sel ? col(kOrange, 1.0f) : col(kWhite, 0.3f));
                 hit.arrowL0 = lx - textSize;
                 hit.arrowL1 = lx + textSize;
                 hit.arrowR0 = rx - textSize;
@@ -1173,9 +1376,21 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
         } else if (r.kind == GarageRowKind::Setup) {
             d = g.dirty() ? "UNSAVED CHANGES (*)" : "SETUPS ARE SAVED PER VEHICLE";
         }
-        if (!d.empty()) text(dl, m_body, 0.018f * H, ImVec2(x0, infoTop + 0.012f * H), col(kWhite, 0.6f), d.c_str(), 0.08f);
-        if (const std::string help = g.helpText(r); !help.empty())
-            text(dl, m_body, 0.017f * H, ImVec2(x0, infoTop + 0.036f * H), col(kOrange, 0.8f), help.c_str(), 0.06f);
+        // Description (white) then help (orange), wrapped to the panel, kInfoLines lines at most.
+        std::vector<std::pair<std::string, ImU32>> lines;
+        for (const std::string& l : wrapText(m_body, infoS, d, panelW, 0.05f)) lines.emplace_back(l, col(kWhite, 0.72f));
+        for (const std::string& l : wrapText(m_body, infoS, g.helpText(r), panelW, 0.05f)) lines.emplace_back(l, col(kOrange, 0.92f));
+        if (lines.size() > kInfoLines) {
+            std::string rest = lines[kInfoLines - 1].first;
+            for (std::size_t k = kInfoLines; k < lines.size(); ++k) rest += " " + lines[k].first;
+            lines[kInfoLines - 1].first = fitText(m_body, infoS, rest, panelW, 0.05f);
+            lines.resize(kInfoLines);
+        }
+        float iy = infoTop + 0.6f * infoS;
+        for (const auto& [l, c] : lines) {
+            text(dl, m_body, infoS, ImVec2(x0, iy), c, l.c_str(), 0.05f);
+            iy += 1.25f * infoS;
+        }
     }
     // Last message (save, rename, refusals) for a few seconds.
     if (g.messageSerial() != m_garageMsgSerial) {
@@ -1184,26 +1399,17 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
     }
     if (!g.message().empty() && ImGui::GetTime() - m_garageMsgTime < 4.0) {
         const float a = float(std::clamp(4.0 - (ImGui::GetTime() - m_garageMsgTime), 0.0, 1.0));
-        text(dl, m_body, 0.021f * H, ImVec2(x0, infoTop + 0.064f * H), col(kOrange, a), g.message().c_str(), 0.06f);
+        const float my = infoTop + 0.6f * infoS + float(kInfoLines) * 1.25f * infoS + 0.2f * infoS;
+        text(dl, m_body, msgS, ImVec2(x0, my), col(kOrange, a), fitText(m_body, msgS, g.message(), panelW, 0.06f).c_str(), 0.06f);
     }
 
-    // Live numbers, bottom right: configuration and what the running vehicle does.
+    // Live numbers, bottom right: configuration and what the running vehicle does. Two columns sized from their
+    // text; in a narrow window the box shrinks its text to the room right of the panel.
     {
         const VehicleConfig& c = g.config();
-        const float bs = 0.019f * H;
-        const float bx = W - std::max(0.05f * W, 40.0f) - 0.25f * W;
-        const float boxH = bs * 1.5f + 6.0f * bs * 1.3f;
-        float by = 0.83f * H - boxH;
-        dl->AddRectFilled(ImVec2(bx - 0.012f * W, by - 0.012f * H),
-                          ImVec2(W - std::max(0.05f * W, 40.0f) + 0.012f * W, by + boxH + 0.006f * H), col(kDark, 0.55f), 4.0f);
-        text(dl, m_heading, bs * 0.95f, ImVec2(bx, by), col(kOrange, 1.0f), "LIVE", 0.3f);
-        by += bs * 1.5f;
+        std::vector<std::pair<std::string, std::string>> live;
         char line[160];
-        auto row = [&](const char* k, const char* v) {
-            text(dl, m_body, bs, ImVec2(bx, by), col(kWhite, 0.6f), k, 0.06f);
-            text(dl, m_body, bs, ImVec2(bx + 0.11f * W, by), col(kWhite, 0.95f), v, 0.04f);
-            by += bs * 1.3f;
-        };
+        const auto row = [&](const char* k, const char* v) { live.emplace_back(k, v); };
         const float front = 0.5f + c.comForward / c.wheelBase;
         std::snprintf(line, sizeof(line), "%.0f kg, %.0f %% front", double(c.mass), double(100.0f * front));
         row("MASS", line);
@@ -1233,23 +1439,54 @@ void MenuUI::drawGarage(const Garage& g, const VehicleTelemetry& t, const MenuVi
             std::snprintf(line, sizeof(line), "%.0f rpm, %.1f km/h", double(t.engineRPM), double(std::abs(t.forwardSpeed) * 3.6f));
             row("ENGINE NOW", line);
         }
+        const float xr = W - std::max(0.05f * W, 32.0f);
+        const float room = xr - (x0 + panelW + 0.03f * W);
+        float bs = px(0.020f, 13.0f);
+        const auto widthAt = [&](float s) {
+            float kw = 0.0f, vw = 0.0f;
+            for (const auto& [k, v] : live) {
+                kw = std::max(kw, textWidth(m_body, s, k.c_str(), 0.06f));
+                vw = std::max(vw, textWidth(m_body, s, v.c_str(), 0.03f));
+            }
+            return std::pair{kw, vw};
+        };
+        auto [kw, vw] = widthAt(bs);
+        const float pad = 0.8f * bs;
+        if (kw + 1.2f * bs + vw + 2.0f * pad > room) {
+            bs = std::max(0.75f * bs, bs * room / (kw + 1.2f * bs + vw + 2.0f * pad));
+            std::tie(kw, vw) = widthAt(bs);
+        }
+        const float boxW = kw + 1.2f * bs + vw + 2.0f * (0.8f * bs), lineH = 1.4f * bs;
+        const float boxH = 2.0f * (0.8f * bs) + 1.5f * bs + float(live.size()) * lineH;
+        const float bx1 = xr, bx0 = bx1 - boxW, by1 = H - footerHeight() - 0.01f * H, by0 = by1 - boxH;
+        dl->AddRectFilled(ImVec2(bx0, by0), ImVec2(bx1, by1), col(kDark, 0.62f), 4.0f);
+        dl->AddRect(ImVec2(bx0, by0), ImVec2(bx1, by1), col(kWhite, 0.12f), 4.0f, 0, 1.0f);
+        float by = by0 + 0.8f * bs;
+        text(dl, m_heading, bs, ImVec2(bx0 + 0.8f * bs, by), col(kOrange, 1.0f), "LIVE", 0.3f);
+        by += 1.5f * bs;
+        for (const auto& [k, v] : live) {
+            text(dl, m_body, bs, ImVec2(bx0 + 0.8f * bs, by), col(kWhite, 0.62f), k.c_str(), 0.06f);
+            text(dl, m_body, bs, ImVec2(bx0 + 0.8f * bs + kw + 1.2f * bs, by), col(kWhite, 0.95f), v.c_str(), 0.03f);
+            by += lineH;
+        }
     }
 
-    // Hints.
-    const float fs = 0.018f * H;
+    // Hints (key caps like the menu pages).
     const bool modal = g.modal() != GarageModal::None;
     const std::string south = padControlName(PadControl::South, view.padGlyphs);
     const std::string east = padControlName(PadControl::East, view.padGlyphs);
     const std::string ret = keyName(Key::Return, view.keyboard), esc = keyName(Key::Escape, view.keyboard);
-    const std::string hintText = modal ? (view.gamepad ? south + " CONFIRM   " + east + " CANCEL" : ret + " CONFIRM   " + esc + " CANCEL")
-                                 : view.gamepad ? "D-PAD CHANGE   " + south + " SELECT   " + east + " BACK"
-                                                : "ARROWS / W S A D CHANGE   " + ret + " SELECT   MOUSE CLICK / DRAG   " + esc + " BACK";
-    const char* hint = hintText.c_str();
-    text(dl, m_body, fs, ImVec2(W - std::max(0.05f * W, 40.0f) - textWidth(m_body, fs, hint, 0.15f), H - 0.055f * H),
-         col(kWhite, 0.75f), hint, 0.15f);
+    std::vector<Hint> hints;
+    if (modal) {
+        hints = {{view.gamepad ? south : ret, "CONFIRM"}, {view.gamepad ? east : esc, "CANCEL"}};
+    } else if (view.gamepad) {
+        hints = {{"D-PAD", "CHANGE"}, {south, "SELECT"}, {east, "BACK"}};
+    } else {
+        hints = {{"ARROWS / W S A D", "CHANGE"}, {ret, "SELECT"}, {"MOUSE", "CLICK / DRAG"}, {esc, "BACK"}};
+    }
     char version[64];
     std::snprintf(version, sizeof(version), "TRAILFORGE %s", view.version);
-    text(dl, m_body, fs, ImVec2(x0, H - 0.05f * H), col(kWhite, 0.4f), version, 0.2f);
+    drawFooter(hints, version, 1.0f);
 
     m_modalButtons.clear();
     if (!modal) return;
@@ -1291,22 +1528,31 @@ void MenuUI::drawModal(const ModalSpec& s) {
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float W = ds.x, H = ds.y;
     dl->AddRectFilled(ImVec2(0, 0), ds, col(kDark, 0.62f));
-    const float pw = std::clamp(0.40f * W, std::min(560.0f, 0.92f * W), 0.92f * W), pad = 0.028f * H;
-    const float ts = 0.034f * H, bs = 0.020f * H, fs = 0.027f * H, btnH = 0.050f * H;
-    float ph = pad + ts + 0.02f * H + bs * 1.6f + (s.textField ? fs * 1.9f + 0.012f * H : 0.0f) + bs * 1.5f + btnH +
-               (s.hint.empty() ? 0.0f : bs * 1.6f) + pad;
+    // Sizes from the type scale; message and hint wrap inside the panel, so the panel height follows the text.
+    const float ts = px(0.036f, 22.0f), bs = px(0.023f, 15.0f), hs = px(0.019f, 13.0f), fs = px(0.028f, 18.0f);
+    const float btnS = px(0.021f, 14.0f), btnH = 2.3f * btnS;
+    const float pw = std::min(std::max(0.42f * W, 30.0f * bs), 0.94f * W), pad = std::max(0.028f * H, 1.1f * bs);
+    const float innerW = pw - 2.0f * pad;
+    const std::vector<std::string> message = wrapText(m_body, bs, s.message, innerW, 0.05f);
+    const std::vector<std::string> hint = s.hint.empty() ? std::vector<std::string>{} : wrapText(m_body, hs, s.hint, innerW, 0.06f);
+    const float ph = pad + ts + 0.02f * H + float(message.size()) * 1.3f * bs + 0.3f * bs +
+                     (s.textField ? fs * 1.6f + 0.012f * H : 0.0f) + bs * 1.6f + btnH +
+                     (hint.empty() ? 0.0f : 0.7f * hs + float(hint.size()) * 1.3f * hs) + pad;
     const ImVec2 a(0.5f * (W - pw), 0.5f * (H - ph)), b(a.x + pw, a.y + ph);
     dl->AddRectFilled(a, b, col(kDark, 0.96f), 4.0f);
     dl->AddRect(a, b, col(kWhite, 0.22f), 4.0f, 0, 1.0f);
     dl->AddRectFilled(a, ImVec2(a.x + 0.22f * pw, a.y + 3.0f), col(kOrange, 1.0f));
     const float x = a.x + pad;
     float y = a.y + pad;
-    text(dl, m_heading, ts, ImVec2(x, y), col(kWhite, 1.0f), s.title, 0.22f);
+    text(dl, m_heading, ts, ImVec2(x, y), col(kWhite, 1.0f), fitText(m_heading, ts, s.title, innerW, 0.18f).c_str(), 0.18f);
     y += ts + 0.012f * H;
     dl->AddRectFilled(ImVec2(x, y), ImVec2(b.x - pad, y + 1.0f), col(kWhite, 0.25f));
     y += 0.008f * H;
-    text(dl, m_body, bs, ImVec2(x, y + 0.2f * bs), col(kWhite, 0.75f), s.message.c_str(), 0.06f);
-    y += bs * 1.6f;
+    for (const std::string& l : message) {
+        text(dl, m_body, bs, ImVec2(x, y + 0.2f * bs), col(kWhite, 0.8f), l.c_str(), 0.05f);
+        y += 1.3f * bs;
+    }
+    y += 0.3f * bs;
     if (s.textField) {
         y += 0.012f * H;
         const ImVec2 fa(x, y), fb(b.x - pad, y + fs * 1.6f);
@@ -1322,25 +1568,31 @@ void MenuUI::drawModal(const ModalSpec& s) {
         y = fb.y;
     }
     if (!s.error.empty())
-        text(dl, m_body, bs, ImVec2(x, y + 0.25f * bs), col(ImVec4(1.0f, 0.36f, 0.26f, 1.0f), 1.0f), s.error.c_str(), 0.06f);
-    y += bs * 1.5f;
-    // Buttons, right aligned: Confirm then Cancel.
+        text(dl, m_body, bs, ImVec2(x, y + 0.3f * bs), col(ImVec4(1.0f, 0.36f, 0.26f, 1.0f), 1.0f),
+             fitText(m_body, bs, s.error, innerW, 0.05f).c_str(), 0.05f);
+    y += bs * 1.6f;
+    // Buttons, right aligned: Confirm then Cancel, one width that fits both labels.
     const char* labels[2] = {s.confirm, "CANCEL"};
-    const float bw = std::max(0.16f * pw, textWidth(m_heading, bs, s.confirm, 0.2f) + 2.0f * pad);
-    float bx = b.x - pad - 2.0f * bw - 0.015f * W;
+    const float bgap = 0.8f * btnS;
+    const float bw = std::max({7.0f * btnS, textWidth(m_heading, btnS, s.confirm, 0.18f) + 2.5f * btnS,
+                               textWidth(m_heading, btnS, "CANCEL", 0.18f) + 2.5f * btnS});
+    float bx = b.x - pad - 2.0f * bw - bgap;
     for (int i = 0; i < 2; ++i) {
         const ImVec2 ba(bx, y), bb(bx + bw, y + btnH);
         const bool f = s.focus == i;
         if (f) dl->AddRectFilled(ba, bb, col(kOrange, 1.0f), 3.0f);
-        else dl->AddRect(ba, bb, col(kWhite, 0.45f), 3.0f, 0, 1.0f);
-        const float lw = textWidth(m_heading, bs, labels[i], 0.2f);
-        text(dl, m_heading, bs, ImVec2(bx + 0.5f * (bw - lw), y + 0.5f * (btnH - bs)), f ? col(kDark, 1.0f) : col(kWhite, 0.9f),
-             labels[i], 0.2f);
+        else dl->AddRect(ba, bb, col(kWhite, 0.5f), 3.0f, 0, 1.0f);
+        const float lw = textWidth(m_heading, btnS, labels[i], 0.18f);
+        text(dl, m_heading, btnS, ImVec2(bx + 0.5f * (bw - lw), y + 0.5f * (btnH - btnS)), f ? col(kDark, 1.0f) : col(kWhite, 0.92f),
+             labels[i], 0.18f);
         m_modalButtons.push_back({ba.x, ba.y, bb.x, bb.y});
-        bx += bw + 0.015f * W;
+        bx += bw + bgap;
     }
-    y += btnH;
-    if (!s.hint.empty()) text(dl, m_body, bs * 0.85f, ImVec2(x, y + 0.6f * bs), col(kWhite, 0.5f), s.hint.c_str(), 0.08f);
+    y += btnH + 0.7f * hs;
+    for (const std::string& l : hint) {
+        text(dl, m_body, hs, ImVec2(x, y), col(kWhite, 0.6f), l.c_str(), 0.06f);
+        y += 1.3f * hs;
+    }
 }
 
 int MenuUI::modalHitTest(float x, float y) const {
