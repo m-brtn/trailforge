@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
+# macOS deployment target (binary minos and Info.plist LSMinimumSystemVersion). Without it the toolchain defaults to
+# the SDK version, newer than many Macs the app runs on. 14.0 matches the metallib target (MSL 3.0 needs 13+).
+# iOS presets set their own target (26.0).
+if(CMAKE_HOST_APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 14.0 CACHE STRING "Minimum macOS version" FORCE)
+endif()
 project(TrailForge VERSION 0.30.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

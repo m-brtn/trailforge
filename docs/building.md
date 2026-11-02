@@ -91,7 +91,8 @@ and is not loaded at runtime.
 
 The build also produces `build/<preset>/TrailForge.app`, a self-contained bundle: a copy of the executable,
 `Info.plist` (version from `project(TrailForge VERSION …)` in `CMakeLists.txt`, `LSMinimumSystemVersion` = the
-deployment target, i.e. the SDK version 27.0 unless `CMAKE_OSX_DEPLOYMENT_TARGET` is set), `TrailForge.icns`
+deployment target `CMAKE_OSX_DEPLOYMENT_TARGET`, 14.0 by default in `CMakeLists.txt`, the same as the binary's
+minos and the metallib target; `package_macos.sh` fails if it is above the binary minos or the host macOS), `TrailForge.icns`
 (`sips` + `iconutil`, 16–1024 px) and the runtime assets in `Contents/Resources/assets/audio`. Shaders and the
 window icon are embedded in the binary, so the sounds are the only files read at runtime. They are looked up via
 `SDL_GetBasePath()` (SDL 3.4.18 on macOS: `Contents/Resources/` inside a bundle, the executable's directory

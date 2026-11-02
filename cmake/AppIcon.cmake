@@ -61,12 +61,11 @@ function(trailforge_add_macos_bundle target)
 
     set(_app ${CMAKE_BINARY_DIR}/TrailForge.app)
     # LSMinimumSystemVersion follows the deployment target the binary is actually built for.
-    if(CMAKE_OSX_DEPLOYMENT_TARGET)
-        set(TRAILFORGE_MIN_MACOS ${CMAKE_OSX_DEPLOYMENT_TARGET})
-    else()
-        execute_process(COMMAND xcrun --sdk macosx --show-sdk-version OUTPUT_VARIABLE TRAILFORGE_MIN_MACOS
-                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    # (`xcrun --sdk macosx --show-sdk-version` may name a newer SDK than the one the compiler links against.)
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        message(FATAL_ERROR "CMAKE_OSX_DEPLOYMENT_TARGET is empty: LSMinimumSystemVersion would not match the binary")
     endif()
+    set(TRAILFORGE_MIN_MACOS ${CMAKE_OSX_DEPLOYMENT_TARGET})
     configure_file(${CMAKE_SOURCE_DIR}/cmake/Info.plist.in ${_icon_gen}/Info.plist @ONLY)
     add_custom_command(
         OUTPUT ${_app}/Contents/MacOS/trailforge

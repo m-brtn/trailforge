@@ -51,7 +51,7 @@ set(TRAILFORGE_SHADER_ENTRIES
 
 set(_metal_ok OFF)
 set(_metal_sdk macosx)
-set(_metal_target -mmacosx-version-min=14.0)
+set(_metal_target -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET})
 set(_msl_platform macos)
 if(TRAILFORGE_IOS)
     set(_msl_platform ios)

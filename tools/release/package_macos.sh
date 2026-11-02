@@ -67,6 +67,16 @@ done
 [[ -f "$APP/Contents/Resources/TrailForge.icns" ]] || fail "icns missing in the bundle"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$VERSION" ]] ||
     fail "Info.plist version mismatch"
+# LaunchServices refuses to open the app ("You can't use this version of the application") when
+# LSMinimumSystemVersion is above the running macOS, even if the binary's minos would allow it.
+ver_le() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" == "$1" ]]; }
+MIN_PLIST="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")"
+MIN_BINARY="$(vtool -show-build "$APP/Contents/MacOS/trailforge" | awk '$1 == "minos" { print $2; exit }')"
+HOST_MACOS="$(sw_vers -productVersion)"
+echo "LSMinimumSystemVersion $MIN_PLIST, binary minos $MIN_BINARY, host macOS $HOST_MACOS"
+[[ -n "$MIN_PLIST" && -n "$MIN_BINARY" ]] || fail "cannot read LSMinimumSystemVersion or the binary minos"
+ver_le "$MIN_PLIST" "$MIN_BINARY" || fail "LSMinimumSystemVersion $MIN_PLIST is above the binary minos $MIN_BINARY"
+ver_le "$MIN_PLIST" "$HOST_MACOS" || fail "LSMinimumSystemVersion $MIN_PLIST is above this Mac's macOS $HOST_MACOS"
 cmp -s "$BUILD/trailforge" "$APP/Contents/MacOS/trailforge" || fail "bundle executable differs from the build"
 
 step "dynamic dependencies (only system libraries expected)"
