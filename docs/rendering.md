@@ -208,6 +208,15 @@ procedural materials.
   vehicle AO for the roughness and view angle (Lagarde 2014) instead of the constant 0.75, and reflections that
   point below the geometric surface fade out (horizon occlusion). The tire-mark shader keeps the constant. Cost on
   High +0.07 ms (`frame_avg`, ford view).
+- **Micro-shadows** (Graphics → "Ground micro-shadow steps", scenario `set micro_shadows N`; High 4, Ultra 8, Low /
+  Medium off): within 8 m of the camera (gone at 16 m), on flat-ish ground and with the sun above ~2°, a short march
+  from the parallax-shifted lookup toward the sun through the dominant layer's height (the parallax depth, 5 cm;
+  the dominant hex patch) darkens the direct light where a texel rises above the ray (softer further along it). A
+  low sun makes the ray long and flat, so the stones cast longer shadows. Trilinear lookups at the mip of the longer
+  screen axis (no anisotropic taps). Direct light only; the tire marks and the probe / reflection passes have none.
+  Cost +0.3–0.4 ms on High (`frame_avg`; 2 steps already cost +0.4 with anisotropic `SampleGrad` lookups).
+- **All five together** (tiling 2, detail, wet, specular, micro-shadows vs all off; 2880×1800, alternating A/B,
+  min `frame_avg`): High +1.06–1.39 ms (coast road near / far, ford, ford at low sun), Ultra (8 steps) +1.44–1.68 ms.
 - **Detail normals** (Graphics → "Ground detail normals", scenario `set ground_detail 0|1`; off on Low): within 4 m
   of the camera, fading out by 12 m, the dominant layer's own normal map is added a second time at 3.7× its
   frequency (whiteout style: the slopes add), through the same hex patches (no seams) or, with plain repeats,

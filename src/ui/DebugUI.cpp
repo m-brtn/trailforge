@@ -452,6 +452,7 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         edited |= ImGui::Checkbox("Ground detail normals", &s.groundDetail);
         edited |= ImGui::Checkbox("Wet ground near water", &s.groundWet);
         edited |= ImGui::Checkbox("Ground specular AA + occlusion", &s.groundSpecular);
+        edited |= ImGui::SliderInt("Ground micro-shadow steps", &s.microShadowSteps, 0, 24, s.microShadowSteps > 0 ? "%d" : "off");
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
         edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 250.0f, "%.0f");

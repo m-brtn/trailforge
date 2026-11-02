@@ -71,7 +71,9 @@ struct FrameUniforms {
     glm::vec4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
     glm::vec4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
     glm::vec4 parallax;         // level ground parallax: x steps (0 = off), y depth (m), z full until (m), w end (m)
-    glm::vec4 groundFx;         // level ground: x tiling (0 plain, 1 macro tone, 2 hex tiling + macro tone)
+    glm::vec4 groundFx;         // level ground: x tiling (0 plain, 1 macro tone, 2 hex tiling + macro tone), y detail
+                                // normals, z wet ground, w specular AA + occlusion (0/1)
+    glm::vec4 groundShadow;     // level ground micro-shadows: x steps (0 = off), y strength
 };
 
 struct DrawUniforms {

@@ -99,7 +99,9 @@ struct FrameUniforms {
     float4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
     float4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
     float4 parallax;         // level ground parallax: x steps (0 = off), y depth (m), z full until (m), w end (m)
-    float4 groundFx;         // level ground: x tiling (0 plain, 1 macro tone, 2 hex tiling + macro tone)
+    float4 groundFx;         // level ground: x tiling (0 plain, 1 macro tone, 2 hex tiling + macro tone), y detail
+                             // normals, z wet ground, w specular AA + occlusion (0/1)
+    float4 groundShadow;     // level ground micro-shadows: x steps (0 = off), y strength
 };
 
 struct DrawUniforms {
@@ -1505,6 +1507,33 @@ float2 parallaxShift(int layer, GroundCtx c, float3 V, float depthM, int steps) 
     return (cur - stepXZ * (1.0 - saturate(t))) - c.xz;
 }
 
+float layerHeightLod(int layer, GroundCtx c, float2 p, float k, float lod) {
+    const float2 uv = c.hex ? hexUV(c.h.d, p, k, layer) : p * k;
+    return layerAlbedo.SampleLevel(layerAlbedoSampler, float3(uv, float(layer)), lod).a;
+}
+
+// Micro self-shadowing (groundShadow.x steps): from the (parallax-shifted) lookup position, a short march toward
+// the sun through the dominant layer's height field (the same depth as the parallax); a texel above the ray shades
+// the point, softer the further along the ray. Low sun makes the ray long and flat, so the shadows grow.
+float microShadow(int layer, GroundCtx c, float3 L, float depthM, int steps) {
+    const float k = layerInvTile(layer);
+    // Trilinear at the mip of the longer screen axis (no anisotropic taps): the shadows are soft anyway.
+    float tw, th, tl;
+    layerAlbedo.GetDimensions(tw, th, tl);
+    const float lod = 0.5 * log2(max(max(dot(c.gx.xz, c.gx.xz), dot(c.gy.xz, c.gy.xz)) * k * k * tw * tw, 1.0));
+    const float h0 = layerHeightLod(layer, c, c.xz, k, lod);
+    const float span = 1.0 - h0;
+    if (span < 0.02) return 1.0;
+    const float2 dirXZ = L.xz / max(L.y, 0.15) * depthM;
+    float occl = 0.0;
+    [loop] for (int j = 1; j <= steps && occl < 1.0; ++j) {
+        const float t = span * float(j) / float(steps);
+        const float hs = layerHeightLod(layer, c, c.xz + dirXZ * t, k, lod);
+        occl = max(occl, (hs - (h0 + t)) * (1.0 - float(j - 1) / float(steps)) * 8.0);
+    }
+    return 1.0 - saturate(occl);
+}
+
 // Ground specular (groundFx.w): the roughness widens with the normal variance inside the pixel (Tokuyoshi and
 // Kaplanyan 2019, from the screen derivatives of the shading normal: detail normals, puddle edges and wet rock do not
 // sparkle; the mips are Toksvig-filtered offline as well), the environment reflection is occluded by the texture AO
@@ -1535,6 +1564,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.clearCoat = 0.0;
     s.specOcclusion = 0.75;
     s.ao = vehicleAO(P);
+    float micro = 1.0; // level ground self-shadowing (direct light only)
     if (tt.params.x < 0.5) {
         const GroundSurface g = terrainMaterial(vin.color, vin.localNormal.x, P, N, m, noiseTex, noiseSampler, far, tt.params.z);
         s.albedo = g.albedo;
@@ -1570,6 +1600,10 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         }
 
         gc.xz = Pt.xz;
+        const float microF = (1.0 - smoothstep(8.0, 16.0, dist)) * smoothstep(0.80, 0.92, N.y) *
+                             smoothstep(0.02, 0.08, f.sunDir.y);
+        if (f.groundShadow.x > 0.0 && microF > 0.0 && dom >= 0)
+            micro = lerp(1.0, microShadow(dom, gc, f.sunDir.xyz, f.parallax.y, int(f.groundShadow.x)), f.groundShadow.y * microF);
         // Full grass hides the soil whatever the heights (heightBlend(1, ...) == 1), so the soil is not sampled.
         LayerSample g;
         if (grass >= 1.0) {
@@ -1677,7 +1711,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.N = N;
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
-    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal)) * cloudShadow(P);
+    s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal)) * cloudShadow(P) * micro;
     if (f.groundFx.w > 0.5) groundSpecular(s, normalize(vin.normal));
     float3 direct, indirect;
     const float3 color = shadeSplit(s, direct, indirect);

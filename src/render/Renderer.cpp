@@ -360,6 +360,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.envProbe = s.envProbe <= 0 ? 0 : s.envProbe <= 32 ? 32 : s.envProbe <= 64 ? 64 : s.envProbe <= 128 ? 128 : 256;
     s.envProbeFaces = std::clamp(s.envProbeFaces, 1, 6);
     s.parallaxSteps = s.parallaxSteps <= 0 ? 0 : std::clamp(s.parallaxSteps, 4, 32);
+    s.microShadowSteps = s.microShadowSteps <= 0 ? 0 : std::clamp(s.microShadowSteps, 2, 24);
     s.groundTiling = std::clamp(s.groundTiling, 0, 2);
     s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
     s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
@@ -2156,6 +2157,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     fu.parallax = glm::vec4(float(s.parallaxSteps), kParallaxDepth, 15.0f, 25.0f);
     fu.groundFx = glm::vec4(float(s.groundTiling), s.groundDetail ? 1.0f : 0.0f, s.groundWet ? 1.0f : 0.0f,
                             s.groundSpecular ? 1.0f : 0.0f);
+    fu.groundShadow = glm::vec4(float(s.microShadowSteps), 0.85f, 0.0f, 0.0f);
     m_stats.reflectionRendered = reflVisible;
     glm::mat4 mirror(1.0f);
     mirror[1][1] = -1.0f;
@@ -2474,6 +2476,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ef.envProbe = glm::vec4(0.0f);
         ef.parallax = glm::vec4(0.0f);
         ef.groundFx = glm::vec4(std::min(fu.groundFx.x, 1.0f), 0.0f, 0.0f, 0.0f);
+        ef.groundShadow = glm::vec4(0.0f);
         // Face bases of the cube convention (+X, -X, +Y, -Y, +Z, -Z): forward, up; right = cross(up, forward).
         static const glm::vec3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         static const glm::vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
@@ -2631,6 +2634,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         rf.options.x = 0.0f;
         rf.parallax = glm::vec4(0.0f);
         rf.groundFx = glm::vec4(std::min(fu.groundFx.x, 1.0f), 0.0f, 0.0f, 0.0f);
+        rf.groundShadow = glm::vec4(0.0f);
 
         SDL_GPUColorTargetInfo ct{};
         ct.texture = m_reflColor.tex;
