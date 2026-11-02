@@ -2223,6 +2223,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "terrain_tex") s.terrainTextureSize = int(v);
         else if (k == "taa") s.taa = v != 0.0f;
         else if (k == "ao") s.ao = int(v);
+        else if (k == "contact_shadows") s.contactShadows = int(v);
         else if (k == "motion_blur") s.motionBlur = v;
         else if (k == "shafts") s.sunShafts = v;
         else if (k == "flare") s.lensFlare = v;
@@ -2793,6 +2794,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "msaa") return m_renderer->settings().msaa;
     if (n == "post_taa") return m_renderer->stats().taa ? 1.0 : 0.0;
     if (n == "post_ao") return m_renderer->stats().ao ? 1.0 : 0.0;
+    if (n == "post_contact") return m_renderer->stats().contactShadows ? 1.0 : 0.0;
     if (n == "post_motion_blur") return m_renderer->stats().motionBlur ? 1.0 : 0.0;
     if (n == "post_dof") return m_renderer->stats().dof ? 1.0 : 0.0;
     if (n == "post_shafts") return m_renderer->stats().shafts ? 1.0 : 0.0;

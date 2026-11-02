@@ -40,9 +40,9 @@ namespace {
 
 enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2, kLayoutModel = 3 };
 // kBlendCoverage: no blending, alpha to coverage (alpha-tested foliage on MSAA targets).
-// kBlendMultiply: dst * src (ambient occlusion onto the scene).
+// kBlendDecal: alpha blending of the colour only; the target keeps its alpha (the light split, see ao_blur_fs).
 enum BlendMode { kBlendNone = 0, kBlendAlpha = 1, kBlendPremultiplied = 2, kBlendAdd = 3, kBlendMax = 4, kBlendCoverage = 5,
-                 kBlendMultiply = 6 };
+                 kBlendDecal = 6 };
 // Shadow casters: positive slope bias, no depth clip. Decals: pulled toward the camera so they win against the
 // surface they lie on. The scene uses reversed depth (near 1, far 0, compare GREATER_OR_EQUAL) for precision over
 // kilometres; the shadow maps keep the standard 0..1 depth.
@@ -344,6 +344,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.treeDistance = std::clamp(s.treeDistance, s.treeDetailDistance, 6000.0f);
     s.flowerDensity = std::clamp(s.flowerDensity, 0.0f, 1.0f);
     s.ao = std::clamp(s.ao, 0, 2);
+    s.contactShadows = std::clamp(s.contactShadows, 0, 16);
     s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
     s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
     s.lensFlare = std::clamp(s.lensFlare, 0.0f, 2.0f);
@@ -363,6 +364,7 @@ void Renderer::setSettings(const RenderSettings& in) {
                          s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
                          s.reflections != m_settings.reflections || s.bloom != m_settings.bloom ||
                          s.taa != m_settings.taa || (s.ao > 0) != (m_settings.ao > 0) ||
+                         (s.contactShadows > 0) != (m_settings.contactShadows > 0) ||
                          s.waterRefraction != m_settings.waterRefraction ||
                          (s.motionBlur > 0.0f) != (m_settings.motionBlur > 0.0f) ||
                          (s.sunShafts > 0.0f) != (m_settings.sunShafts > 0.0f) ||
@@ -436,21 +438,17 @@ SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char
         b.enable_blend = true;
         b.color_blend_op = SDL_GPU_BLENDOP_ADD;
         b.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
-        if (blend == kBlendAlpha) {
+        if (blend == kBlendAlpha || blend == kBlendDecal) {
+            const bool keepAlpha = blend == kBlendDecal;
             b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            b.src_alpha_blendfactor = keepAlpha ? SDL_GPU_BLENDFACTOR_ZERO : SDL_GPU_BLENDFACTOR_ONE;
+            b.dst_alpha_blendfactor = keepAlpha ? SDL_GPU_BLENDFACTOR_ONE : SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
         } else if (blend == kBlendPremultiplied) {
             b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
             b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-        } else if (blend == kBlendMultiply) {
-            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
-            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_COLOR;
-            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
-            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
         } else {
             b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
             b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
@@ -546,8 +544,8 @@ void Renderer::createStaticPipelines() {
                               SDL_GPU_CULLMODE_NONE, ccw, blend);
     };
     m_linDepthPipe = post("lindepth_fs", 1, kLinDepthFormat);
-    m_gtaoPipe = post("gtao_fs", 1, kAoFormat);
-    m_aoBlurPipe = post("ao_blur_fs", 2, kHdrFormat, kBlendMultiply);
+    m_gtaoPipe = post("gtao_fs", 2, kAoFormat);
+    m_aoBlurPipe = post("ao_blur_fs", 3, kHdrFormat);
     m_velocityPipe = post("velocity_fs", 1, kVelocityFormat);
     m_velocityObjPipe = createPipeline("velocity_obj_vs", "velocity_obj_fs", 1, 0, 0, 0, 0, kLayoutLit, kVelocityFormat,
                                        s1, true, false, SDL_GPU_CULLMODE_BACK, ccw, kBlendNone,
@@ -571,7 +569,7 @@ void Renderer::createScenePipelines() {
     m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 4, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 3, 0, 6, 1, kLayoutNone, kHdrFormat, sc, true, false,
-                                SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
+                                SDL_GPU_CULLMODE_NONE, ccw, kBlendDecal, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
     m_sprayPipe = createPipeline("spray_vs", "spray_fs", 2, 1, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
     m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 6, 0, kLayoutLit, kHdrFormat, sc, true, false,
@@ -675,8 +673,10 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
         // Depth-based post effects (see drawFrame).
         m_linDepth = makeTexture(rw, rh, kLinDepthFormat, colorRT | sampled);
         m_velocity = makeTexture(rw, rh, kVelocityFormat, colorRT | sampled);
-        if (s.waterRefraction) m_sceneCopy = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
-        if (s.ao > 0) m_ao = makeTexture((rw + 1) / 2, (rh + 1) / 2, kAoFormat, colorRT | sampled);
+        // The AO pass writes the darkened scene into the copy and swaps it with m_hdr (see depthPasses).
+        const bool aoPass = s.ao > 0 || s.contactShadows > 0;
+        if (s.waterRefraction || aoPass) m_sceneCopy = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
+        if (aoPass) m_ao = makeTexture((rw + 1) / 2, (rh + 1) / 2, kAoFormat, colorRT | sampled);
         if (s.taa)
             for (Texture& t : m_taa) t = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
         if (s.motionBlur > 0.0f) m_fx[0] = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
@@ -2494,18 +2494,28 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         const SDL_GPUTextureSamplerBinding depthTex{m_depth.tex, m_pointSampler};
         fullscreen(m_linDepth.tex, SDL_GPU_LOADOP_DONT_CARE, m_linDepthPipe, u, &depthTex, 1, kBenchLinDepth);
         m_stats.ao = s.ao > 0 && m_ao.tex && s.aoStrength > 0.0f;
-        if (!m_stats.ao) return;
+        m_stats.contactShadows = s.contactShadows > 0 && m_ao.tex;
+        if (!m_stats.ao && !m_stats.contactShadows) return;
         u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_ao.w), 1.0f / float(m_ao.h));
         const bool high = s.ao >= 2;
-        u.params = glm::vec4(1.5f, high ? 3.0f : 2.0f, high ? 6.0f : 4.0f, 0.5f * float(m_ao.h) * proj[1][1]);
+        u.params = glm::vec4(1.5f, !m_stats.ao ? 0.0f : high ? 3.0f : 2.0f, high ? 6.0f : 4.0f,
+                             0.5f * float(m_ao.h) * proj[1][1]);
         u.params2 = glm::vec4(float(m_frameIndex % 64), 60.0f, 0, 0);
-        fullscreen(m_ao.tex, SDL_GPU_LOADOP_DONT_CARE, m_gtaoPipe, u, &linDepthTex, 1, kBenchGtao);
-        u.params = glm::vec4(s.aoStrength, 0.04f, 0, 0);
-        const SDL_GPUTextureSamplerBinding blurTex[2] = {{m_ao.tex, m_pointSampler}, linDepthTex};
-        fullscreen(m_hdr.tex, SDL_GPU_LOADOP_LOAD, m_aoBlurPipe, u, blurTex, 2, kBenchAoBlur);
+        // Contact shadows: direction to the shadow light in the screen view axes (x right, y down, z forward).
+        const glm::vec3 lv = glm::vec3(frame.view * glm::vec4(glm::vec3(fu.sunDir), 0.0f));
+        u.sun = glm::vec4(lv.x, -lv.y, -lv.z, 0.45f);
+        u.sunColor = glm::vec4(m_stats.contactShadows ? float(s.contactShadows) : 0.0f, 80.0f, 0, 0);
+        const SDL_GPUTextureSamplerBinding gtaoTex[2] = {linDepthTex, {m_hdr.tex, m_pointSampler}};
+        fullscreen(m_ao.tex, SDL_GPU_LOADOP_DONT_CARE, m_gtaoPipe, u, gtaoTex, 2, kBenchGtao);
+        // The scene is read and written to the copy, which then becomes the HDR target.
+        u.params = glm::vec4(m_stats.ao ? s.aoStrength : 0.0f, 0.04f, 0, 0);
+        const SDL_GPUTextureSamplerBinding blurTex[3] = {
+            {m_ao.tex, m_pointSampler}, linDepthTex, {m_hdr.tex, m_pointSampler}};
+        fullscreen(m_sceneCopy.tex, SDL_GPU_LOADOP_DONT_CARE, m_aoBlurPipe, u, blurTex, 3, kBenchAoBlur);
+        std::swap(m_hdr, m_sceneCopy);
     };
     m_stats.depthEffects = depthFx;
-    m_stats.ao = false;
+    m_stats.ao = m_stats.contactShadows = false;
 
     // ---- 3. Main HDR scene
     {

@@ -44,6 +44,7 @@ struct RenderSettings {
     // sample the depth buffer, which stays multisampled with MSAA.
     bool taa = true;               // temporal AA (jittered projection, reprojected history), replaces MSAA / FXAA
     int ao = 1;                    // ground-truth AO at half resolution: 0 off, 1: 2 slices x 4 steps, 2: 3 x 6
+    int contactShadows = 12;       // screen-space contact shadow steps toward the sun (half resolution), 0 = off
     float motionBlur = 0.5f;       // shutter as a share of the frame time (camera + vehicle parts), 0 = off
     float sunShafts = 0.6f;        // strength, 0 = off
     float lensFlare = 0.4f;        // ghosts of the bloom image (needs bloom), 0 = off
@@ -98,14 +99,14 @@ inline RenderSettings presetSettings(QualityPreset p) {
         s.shadowDistance = 40.0f; s.shadowFilter = 0; s.reflections = false; s.bloom = false; s.grassLevel = 1;
         s.grassDistance = 40.0f; s.flowerDensity = 0.5f; s.grassDetail = false; s.sprayMax = 600; s.sprayDust = false;
         s.terrainDetail = 1.2f; s.treeDetailDistance = 380.0f; s.treeDistance = 2000.0f; s.terrainTextureSize = 512;
-        s.taa = false; s.ao = 0; s.motionBlur = 0.0f; s.sunShafts = 0.0f; s.lensFlare = 0.0f; s.waterSsr = false;
+        s.taa = false; s.ao = 0; s.contactShadows = 0; s.motionBlur = 0.0f; s.sunShafts = 0.0f; s.lensFlare = 0.0f; s.waterSsr = false;
         break;
     case QualityPreset::Medium:
         s.renderScale = 0.85f; s.msaa = 1; s.fxaa = false; s.shadowCascades = 2; s.shadowMapSize = 1536;
         s.shadowDistance = 60.0f; s.shadowFilter = 1; s.reflections = true; s.reflectionScale = 0.35f; s.bloom = true;
         s.grassLevel = 2; s.grassDistance = 70.0f; s.flowerDensity = 0.8f; s.sprayMax = 1500; s.terrainDetail = 1.6f;
         s.treeDetailDistance = 500.0f; s.treeDistance = 3000.0f; s.terrainTextureSize = 1024;
-        s.motionBlur = 0.4f; s.sunShafts = 0.5f; s.lensFlare = 0.3f;
+        s.motionBlur = 0.4f; s.sunShafts = 0.5f; s.lensFlare = 0.3f; s.contactShadows = 8;
         break;
     case QualityPreset::High:
         break; // defaults above
@@ -114,6 +115,7 @@ inline RenderSettings presetSettings(QualityPreset p) {
         s.shadowDistance = 110.0f; s.shadowFilter = 2; s.reflections = true; s.reflectionScale = 0.75f; s.bloom = true;
         s.grassLevel = 4; s.grassDistance = 160.0f; s.sprayMax = 6000; s.terrainDetail = 2.6f;
         s.treeDetailDistance = 900.0f; s.treeDistance = 4500.0f; s.terrainTextureSize = 4096; s.ao = 2;
+        s.contactShadows = 16;
         break;
     default: break;
     }

@@ -464,6 +464,7 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         const char* aoNames[] = {"Off", "GTAO 2x4 (half res)", "GTAO 3x6 (half res)"};
         edited |= ImGui::Combo("Ambient occlusion", &s.ao, aoNames, 3);
         gfx.changed |= ImGui::SliderFloat("AO strength", &s.aoStrength, 0.0f, 3.0f, "%.2f");
+        edited |= ImGui::SliderInt("Contact shadow steps", &s.contactShadows, 0, 16);
         edited |= ImGui::SliderFloat("Motion blur (shutter)", &s.motionBlur, 0.0f, 1.0f, "%.2f");
         edited |= ImGui::SliderFloat("Sun shafts", &s.sunShafts, 0.0f, 2.0f, "%.2f");
         edited |= ImGui::SliderFloat("Lens flare", &s.lensFlare, 0.0f, 2.0f, "%.2f");

@@ -413,7 +413,8 @@ float ggxSpec(float NdotH, float NdotV, float NdotL, float rough) {
     return D * G / max(4.0 * NdotV * NdotL, 1e-4);
 }
 
-float3 shade(ShadeInput s) {
+// direct: sun (or moon) light, indirect: sky / bounce ambient and the environment reflection (see lightSplit).
+float3 shadeSplit(ShadeInput s, out float3 direct, out float3 indirect) {
     const float3 L = f.sunDir.xyz;
     const float3 N = s.N, V = s.V;
     const float3 H = normalize(L + V);
@@ -425,23 +426,48 @@ float3 shade(ShadeInput s) {
     const float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     const float3 spec = F * ggxSpec(NdotH, NdotV, NdotL, s.roughness);
     const float3 kd = (1.0 - F) * (1.0 - s.metallic);
-    float3 color = (kd * s.albedo / PI + spec) * f.sunColor.rgb * NdotL * s.shadow;
-    color += kd * s.albedo / PI * s.lamp;
+    direct = (kd * s.albedo / PI + spec) * f.sunColor.rgb * NdotL * s.shadow;
 
     // Ambient: sky hemisphere + ground bounce.
     const float3 amb = ambientLight(N.y);
-    color += amb * s.albedo * (1.0 - s.metallic) * s.ao;
+    indirect = amb * s.albedo * (1.0 - s.metallic) * s.ao;
     // Environment specular from the procedural sky (blurred toward the ambient with roughness).
     const float3 R = reflect(-V, N);
     float3 env = lerp(skyRadiance(R), amb, saturate(s.roughness * 1.2));
     env *= lerp(0.35, 1.0, s.shadow) * s.specOcclusion; // sun-shadowed areas see less of the bright sky
-    color += env * envBRDFApprox(F0, s.roughness, NdotV) * s.ao;
+    indirect += env * envBRDFApprox(F0, s.roughness, NdotV) * s.ao;
+    float3 color = direct + indirect + kd * s.albedo / PI * s.lamp;
     if (s.clearCoat > 0.0) {
         const float Fc = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
-        const float3 coatSpec = ggxSpec(NdotH, NdotV, NdotL, 0.06) * 0.04 * f.sunColor.rgb * NdotL * s.shadow;
-        color = color * (1.0 - Fc * s.clearCoat) + s.clearCoat * (coatSpec + skyRadiance(R) * Fc * s.specOcclusion * lerp(0.4, 1.0, s.shadow));
+        const float3 coatSpec = s.clearCoat * ggxSpec(NdotH, NdotV, NdotL, 0.06) * 0.04 * f.sunColor.rgb * NdotL * s.shadow;
+        const float3 coatEnv = s.clearCoat * skyRadiance(R) * Fc * s.specOcclusion * lerp(0.4, 1.0, s.shadow);
+        const float keep = 1.0 - Fc * s.clearCoat;
+        color = color * keep + coatSpec + coatEnv;
+        direct = direct * keep + coatSpec;
+        indirect = indirect * keep + coatEnv;
     }
     return color + s.emissive;
+}
+
+float3 shade(ShadeInput s) {
+    float3 direct, indirect;
+    return shadeSplit(s, direct, indirect);
+}
+
+// The opaque passes keep the split of their radiance in the alpha of the HDR target, for ao_blur_fs, which darkens
+// only the indirect light with the ambient occlusion and only the sun light with the contact shadows: the integer
+// part is the sun / moon share in 1/15 steps, the fraction the sky / bounce share (both after the fog). Headlights,
+// emissive surfaces and the fog keep their brightness. Grass blades store -1 - split (no contact shadows).
+float lightSplit(float3 color, float3 direct, float3 indirect, float fogA) {
+    const float k = (1.0 - fogA) / max(luminance(color), 1e-6);
+    return round(saturate(luminance(direct) * k) * 15.0) + min(saturate(luminance(indirect) * k), 0.99);
+}
+
+// Fog over a lit opaque surface, with the light split in alpha.
+float4 fogSplit(float3 lit, float3 direct, float3 indirect, float3 P) {
+    const float4 fog = fogAt(P, f.cameraPos.xyz);
+    const float3 color = lerp(lit, fog.rgb, fog.a);
+    return float4(color, lightSplit(color, direct, indirect, fog.a));
 }
 
 // Bump mapping from screen-space derivatives of a height function (Mikkelsen).
@@ -1003,9 +1029,9 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal) * (front ? 1.0 : -1.0)) * cloudShadow(P);
-    float3 color = shade(s);
-    color = applyFog(color, P, f.cameraPos.xyz);
-    return float4(color, 1.0);
+    float3 direct, indirect;
+    const float3 color = shadeSplit(s, direct, indirect);
+    return fogSplit(color, direct, indirect, P);
 }
 #endif
 
@@ -1291,9 +1317,9 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal)) * cloudShadow(P);
-    float3 color = shade(s);
-    color = applyFog(color, P, f.cameraPos.xyz);
-    return float4(color, 1.0);
+    float3 direct, indirect;
+    const float3 color = shadeSplit(s, direct, indirect);
+    return fogSplit(color, direct, indirect, P);
 }
 #endif
 
@@ -1532,7 +1558,8 @@ Texture2D<float4> modelNra : TEX(3);
 SamplerState modelNraSampler : SMP(3);
 
 // Foliage and bark share the lighting; leaves get a soft wrap and light through them when backlit.
-float3 shadeModel(float3 albedo, float rough, float ao, float3 N, float3 Ng, float3 P, bool foliage) {
+// Returns the fogged colour and the light split (lightSplit).
+float4 shadeModel(float3 albedo, float rough, float ao, float3 N, float3 Ng, float3 P, bool foliage) {
     const float3 V = normalize(f.cameraPos.xyz - P);
     ShadeInput s;
     s.albedo = albedo;
@@ -1546,11 +1573,14 @@ float3 shadeModel(float3 albedo, float rough, float ao, float3 N, float3 Ng, flo
     s.clearCoat = 0.0;
     s.lamp = headlightIrradiance(P, N);
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, Ng) * cloudShadow(P);
+    float3 through = (float3)0.0;
     if (foliage) {
         const float back = pow(saturate(dot(-V, f.sunDir.xyz)), 4.0);
-        s.emissive = albedo * f.sunColor.rgb * s.shadow * (0.05 + 0.35 * back) * ao;
+        through = albedo * f.sunColor.rgb * s.shadow * (0.05 + 0.35 * back) * ao;
     }
-    return applyFog(shade(s), P, f.cameraPos.xyz);
+    float3 direct, indirect;
+    const float3 color = shadeSplit(s, direct, indirect) + through;
+    return fogSplit(color, direct + through, indirect, P);
 }
 
 float3 modelHue(float3 albedo, float hue) {
@@ -1580,7 +1610,8 @@ float4 model_fs(ModelOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     const float3 N = normalize(T * inv * nxy.x + B * inv * nxy.y + Ng * sqrt(saturate(1.0 - dot(nxy, nxy))));
     const bool foliage = mm.params.y > 0.5;
     const float3 albedo = modelHue(a.rgb, vin.fadeHue.y);
-    return float4(shadeModel(albedo, nra.b, nra.a, N, Ng, vin.worldPos, foliage), coverage);
+    const float4 lit = shadeModel(albedo, nra.b, nra.a, N, Ng, vin.worldPos, foliage);
+    return float4(lit.rgb, mm.params.z > 0.5 ? coverage : lit.a); // alpha to coverage only with MSAA (no AO there)
 }
 #endif
 
@@ -1603,7 +1634,8 @@ float4 impostor_fs(ModelOut vin) : SV_Target0 {
     const float2 nxy = nra.rg * 2.0 - 1.0;
     const float3 N = normalize(right * nxy.x + float3(0, nxy.y, 0) + toCam * sqrt(saturate(1.0 - dot(nxy, nxy))));
     const float3 albedo = modelHue(a.rgb, vin.fadeHue.y);
-    return float4(shadeModel(albedo, nra.b, nra.a, N, toCam, vin.worldPos, true), coverage);
+    const float4 lit = shadeModel(albedo, nra.b, nra.a, N, toCam, vin.worldPos, true);
+    return float4(lit.rgb, mm.params.z > 0.5 ? coverage : lit.a);
 }
 #endif
 
@@ -1813,7 +1845,7 @@ float4 sky_fs(FullscreenOut vin) : SV_Target0 {
         const float4 m = mountains(dir);
         col = lerp(col, m.rgb, m.a);
     }
-    return float4(col, 1.0);
+    return float4(col, 0.0); // light split: nothing for AO or contact shadows
 }
 #endif
 
@@ -2517,18 +2549,21 @@ float4 grass_fs(GrassOut vin) : SV_Target0 {
     // Root occlusion: the base of a dense clump sees little sky and little sun.
     const float rootAO = lerp(1.0 - 0.75 * vin.ao, 1.0, smoothstep(0.0, 0.7, min(t, 1.0)));
     const float vao = vehicleAO(P);
-    float3 c = albedo * ((f.sunColor.rgb * NdotL * shadow * lerp(0.5, 1.0, rootAO) + headlightIrradiance(P, Nl)) / PI +
-                         ambientLight(Nl.y) * rootAO * vao);
+    const float3 indirect = albedo * ambientLight(Nl.y) * rootAO * vao;
+    float3 direct = albedo * f.sunColor.rgb * NdotL * shadow * lerp(0.5, 1.0, rootAO) / PI;
     // Translucency: sunlight through the blades when looking toward the sun or at their shaded side (warm at sunset).
     const float toward = pow(saturate(dot(-V, L)), 3.0);
     const float through = saturate(-dot(N, L));
     const float trans = (toward * 0.9 + through * 0.4) * shadow * thin * smoothstep(0.05, 0.6, min(t, 1.0));
-    c += albedo * float3(1.05, 1.1, 0.55) * f.sunColor.rgb * trans * 0.75 / PI;
+    direct += albedo * float3(1.05, 1.1, 0.55) * f.sunColor.rgb * trans * 0.75 / PI;
     // Sheen on the tips (glossy buttercups and clover).
     const float3 H = normalize(L + V);
-    c += f.sunColor.rgb * (0.015 + 0.06 * gloss) * pow(saturate(dot(N, H)), 24.0 + 40.0 * gloss) * shadow * min(t, 1.0);
-    c = applyFog(c, P, f.cameraPos.xyz);
-    return float4(c, 1.0);
+    direct += f.sunColor.rgb * (0.015 + 0.06 * gloss) * pow(saturate(dot(N, H)), 24.0 + 40.0 * gloss) * shadow * min(t, 1.0);
+    const float3 c = direct + indirect + albedo * headlightIrradiance(P, Nl) / PI;
+    // Blades neither cast nor receive contact shadows (negative split): in the depth buffer every blade would shadow
+    // its neighbours and the ground between them into a dark speckle.
+    const float4 o = fogSplit(c, (float3)0.0, indirect, P);
+    return float4(o.rgb, -1.0 - o.a);
 }
 #endif
 
@@ -2922,6 +2957,7 @@ float4 mark_fs(MarkOut vin) : SV_Target0 {
     s.emissive = ((float3)(0.0));
     s.clearCoat = 0.0;
     s.lamp = headlightIrradiance(P, N);
+    // cover only blends the colour: the target keeps the ground's light split (lightSplit) in alpha.
     const float3 color = applyFog(shade(s), P, f.cameraPos.xyz);
     return float4(color, cover);
 }
@@ -3414,6 +3450,8 @@ float4 lindepth_fs(FullscreenOut vin) : SV_Target0 {
 #if defined(TF_ENTRY_gtao_fs)
 Texture2D<float4> depthLin : TEX(0);
 SamplerState pts : SMP(0);
+Texture2D<float4> sceneTex : TEX(1); // opaque scene, light split in alpha (grass blades < 0)
+SamplerState sps : SMP(1);
 
 // Snapped to a full-resolution texel centre: the depth and the position it is reconstructed at must belong to the same
 // texel (half-resolution centres sit on texel corners, where point sampling rounds either way and fakes steps on
@@ -3424,14 +3462,52 @@ float3 aoPos(float2 uv) {
     return viewPosSS(c, depthLin.SampleLevel(pts, c, 0).r);
 }
 
-// Ground-truth ambient occlusion (Jimenez 2016, after XeGTAO) at half resolution: params x: radius (m), y: slices,
-// z: steps per side, w: half-res pixels per metre at 1 m; params2 x: frame index (noise rotation), y: fade start (m).
-// Output r: visibility, g: view distance (for the bilateral upsample).
+float2 uvFromViewSS(float3 Q) {
+    const float2 ndc = float2(Q.x * px.proj.x / Q.z - px.proj.z, -Q.y * px.proj.y / Q.z - px.proj.w);
+    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+// Screen-space contact shadow: a short march from the surface toward the shadow light against the linear depth
+// (sun: x y z in view axes, w: ray length (m); sunColor x: steps, y: fade distance (m)). Catches what the shadow
+// cascades are too coarse for (wheels and rocks on the ground, small bumps) and the ground beyond the last cascade.
+float contactShadow(float3 P, float2 uv, float2 pix) {
+    const float steps = px.sunColor.x;
+    if (steps < 0.5 || P.z > px.sunColor.y) return 1.0;
+    // Only where sun light reaches the surface (light split >= 1: a sun share; grass blades are < 0).
+    if (sceneTex.SampleLevel(sps, uv, 0).a < 1.0) return 1.0;
+    const float len = px.sun.w * (1.0 + P.z * 0.02);
+    const float3 dir = px.sun.xyz * len;
+    const float bias = 0.015 + P.z * 0.0025;
+    const float thick = 0.25 + P.z * 0.012;
+    const float jitter = ign(pix + px.params2.x * float2(3.7, 1.3));
+    float occl = 0.0;
+    for (int i = 0; i < 16; ++i) {
+        if (float(i) >= steps) break;
+        const float k = (float(i) + jitter) / steps;
+        const float3 Q = P + dir * (0.04 + 0.96 * k);
+        if (Q.z < 0.1) break;
+        const float2 quv = uvFromViewSS(Q);
+        if (any(quv < 0.0) || any(quv > 1.0)) break;
+        const float d = Q.z - depthLin.SampleLevel(pts, quv, 0).r;
+        if (d > bias && d < thick && sceneTex.SampleLevel(sps, quv, 0).a > -0.5) {
+            occl = 1.0 - k * k; // softer toward the end of the ray
+            break;
+        }
+    }
+    return 1.0 - occl * (1.0 - smoothstep(px.sunColor.y * 0.6, px.sunColor.y, P.z));
+}
+
+// Ground-truth ambient occlusion (Jimenez 2016, after XeGTAO) at half resolution: params x: radius (m), y: slices
+// (0 = contact shadows only), z: steps per side, w: half-res pixels per metre at 1 m; params2 x: frame index (noise
+// rotation), y: fade start (m). Output r: visibility, g: view distance (for the bilateral upsample), b: contact
+// shadow (1 = lit).
 float4 gtao_fs(FullscreenOut vin) : SV_Target0 {
     const float2 uv = aoTexel(vin.uv);
     const float z = depthLin.SampleLevel(pts, uv, 0).r;
-    if (z > px.depthParams.w * 0.5) return float4(1.0, z, 0.0, 1.0);
+    if (z > px.depthParams.w * 0.5) return float4(1.0, z, 1.0, 1.0);
     const float3 P = viewPosSS(uv, z);
+    const float cs = contactShadow(P, uv, vin.position.xy);
+    if (px.params.y < 0.5) return float4(1.0, z, cs, 1.0);
     const float2 t = px.texel.xy;
     const float3 pl = aoPos(uv - float2(t.x, 0)), pr = aoPos(uv + float2(t.x, 0));
     const float3 pu = aoPos(uv - float2(0, t.y)), pd = aoPos(uv + float2(0, t.y));
@@ -3442,7 +3518,7 @@ float4 gtao_fs(FullscreenOut vin) : SV_Target0 {
     if (dot(N, V) < 0.0) N = -N;
     const float radius = px.params.x, slices = px.params.y, steps = px.params.z;
     const float screenRadius = min(radius * px.params.w / z, 80.0);
-    if (screenRadius < 1.5) return float4(1.0, z, 0.0, 1.0);
+    if (screenRadius < 1.5) return float4(1.0, z, cs, 1.0);
     // No samples closer than 0.3 m: the terrain's height-grid steps on steep walls are not occluders worth showing.
     const float minPx = max(1.0, 0.3 * px.params.w / z);
     const float falloffRange = 0.6 * radius;
@@ -3481,7 +3557,7 @@ float4 gtao_fs(FullscreenOut vin) : SV_Target0 {
     }
     vis = saturate(vis / slices);
     vis = lerp(vis, 1.0, smoothstep(px.params2.y, px.params2.y * 2.0, z));
-    return float4(vis, z, 0.0, 1.0);
+    return float4(vis, z, cs, 1.0);
 }
 #endif
 
@@ -3491,22 +3567,42 @@ SamplerState aps : SMP(0);
 Texture2D<float4> depthLin : TEX(1);
 SamplerState dls : SMP(1);
 
-// Full-resolution bilateral 4 x 4 gather of the half-resolution AO (covers its noise pattern), multiplied onto the
-// opaque scene by the blend state (dst * src). params x: strength (exponent), y: depth tolerance.
+Texture2D<float4> sceneTex : TEX(2);
+SamplerState sps : SMP(2);
+
+// Jimenez et al. 2016: visibility with the light of further bounces between surfaces of this albedo.
+float3 multiBounce(float v, float3 albedo) {
+    const float3 a = 2.0404 * albedo - 0.3324;
+    const float3 b = -4.7951 * albedo + 0.6417;
+    const float3 c = 2.7552 * albedo + 0.6903;
+    return max((float3)v, ((v * a + b) * v + c) * v);
+}
+
+// Full-resolution bilateral 4 x 4 gather of the half-resolution AO and contact shadows (covers their noise pattern),
+// applied to the opaque scene by its light split (lightSplit in alpha): the AO darkens the indirect share, the
+// contact shadow the sun share. params x: AO strength (exponent, 0 = no AO), y: depth tolerance.
 float4 ao_blur_fs(FullscreenOut vin) : SV_Target0 {
+    const float4 scene = sceneTex.SampleLevel(sps, vin.uv, 0);
     const float z = depthLin.SampleLevel(dls, vin.uv, 0).r;
     const float2 t = px.texel.zw; // 1 / AO size
-    float sum = 0.0, wsum = 0.0;
+    float2 sum = (float2)0.0;
+    float wsum = 0.0;
     for (int y = -2; y < 2; ++y) {
         for (int x = -2; x < 2; ++x) {
-            const float2 a = aoTex.SampleLevel(aps, vin.uv + (float2(x, y) + 0.5) * t, 0).rg;
+            const float3 a = aoTex.SampleLevel(aps, vin.uv + (float2(x, y) + 0.5) * t, 0).rgb;
             const float w = exp(-abs(a.y - z) / max(z * px.params.y, 1e-3));
-            sum += a.x * w;
+            sum += a.xz * w;
             wsum += w;
         }
     }
-    const float ao = wsum > 1e-4 ? sum / wsum : 1.0;
-    return float4((float3)pow(saturate(ao), px.params.x), 1.0);
+    const float2 v = wsum > 1e-4 ? sum / wsum : (float2)1.0;
+    const float split = scene.a < 0.0 ? -1.0 - scene.a : scene.a;
+    const float direct = floor(split) / 15.0, indirect = frac(split);
+    // The albedo is not stored: the hue of the pixel stands in for it (bounce light between green grass is green).
+    const float3 albedo = saturate(scene.rgb / max(max(scene.r, max(scene.g, scene.b)), 1e-5)) * 0.45;
+    const float3 ao = px.params.x > 0.0 ? multiBounce(pow(saturate(v.x), px.params.x), albedo) : (float3)1.0;
+    const float3 m = 1.0 - indirect * (1.0 - ao) - direct * (1.0 - saturate(v.y));
+    return float4(scene.rgb * max(m, 0.0), 1.0);
 }
 #endif
 

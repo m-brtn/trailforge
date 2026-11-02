@@ -19,8 +19,9 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
 4. Main HDR pass (RGBA16F, optional MSAA 2×/4×): PBR (GGX + Lambert, sky/ground ambient), triplanar procedural
    rock/concrete/dirt, mask-blended grass/mud/wet ground, tire marks (one instanced draw), instanced grass (2.4 m
    chunks, 3 LOD levels, see "Grass, flowers and wheat"), scattering sky with drifting clouds, height and valley fog.
-   Without MSAA the pass is split after the opaque part: linear depth, GTAO at half resolution (multiplied onto the
-   scene), a copy of the opaque scene for the water, then water, waterfalls, spray and debug lines.
+   Without MSAA the pass is split after the opaque part: linear depth, GTAO and contact shadows at half resolution
+   (applied to the indirect and the sun light of the scene, see "Ambient occlusion and contact shadows"), a copy of the
+   opaque scene for the water, then water, waterfalls, spray and debug lines.
 5. Post effects without MSAA (see [Post effects](#post-effects)): camera + per-object velocity, TAA, motion blur,
    depth of field, sun shafts, eye adaptation.
 6. Bloom (5-level downsample/upsample chain).
@@ -40,7 +41,8 @@ view, measured by repeating the pass with `post_bench`, M-series Mac).
 | Effect | Low | Medium | High | Ultra | `set` key | Cost (ms) |
 |---|---|---|---|---|---|---|
 | TAA (Halton jitter, YCoCg variance clip, Catmull-Rom history) + sharpening | off (FXAA) | on | on | on | `taa`, `sharpen` | 0.95 |
-| GTAO (half res, bilateral upsample) | off | 2×4 | 2×4 | 3×6 | `ao`, `ao_strength` | 0.68 + 0.46 |
+| GTAO (half res, bilateral upsample, indirect light only) | off | 2×4 | 2×4 | 3×6 | `ao`, `ao_strength` | 0.68 + 0.46 |
+| Contact shadows (half res, steps toward the sun) | off | 8 | 12 | 16 | `contact_shadows` | 0.38 (12 steps) |
 | Motion blur (camera + vehicle body / wheels velocity) | off | 0.4 | 0.5 | 0.5 | `motion_blur` | 0.22 + 0.16 velocity |
 | Depth of field (menus, garage; optional far blur while driving) | on | on | on | on | `dof`, `dof_driving` | 3.3 (24 taps, now 16) |
 | Sun shafts (radial blur of the sky around the sun, half res) | off | 0.5 | 0.6 | 0.6 | `shafts` | 0.06 |
@@ -49,6 +51,24 @@ view, measured by repeating the pass with `post_bench`, M-series Mac).
 | Bloom | off | on | on | on | `bloom` | 0.41 |
 | Tonemap AgX / ACES + grade LUT (32³) + vignette, grain, chromatic aberration | all | all | all | all | `tonemap`, `grade`, `vignette`, `grain`, `chromatic` | 0.64 |
 | Water refraction + screen-space reflections | refraction | both | both | both | `water_refraction`, `water_ssr` | see devlog |
+
+#### Ambient occlusion and contact shadows
+
+The opaque shaders (`lit_fs`, `terrain_fs`, `model_fs`, `impostor_fs`, `grass_fs`) store how their radiance splits in
+the alpha of the HDR target (`lightSplit`): the share of sun / moon light in 1/15 steps in the integer part, the share
+of sky / bounce ambient and environment reflection in the fraction, both after the fog; the sky stores 0, tire marks
+blend only their colour (the ground's split stays). `gtao_fs` writes the AO visibility and a contact shadow per
+half-resolution pixel; `ao_blur_fs` gathers both bilaterally and writes `scene × (1 − indirect × (1 − AO) − sun ×
+(1 − contact))` into the scene copy, which then becomes the HDR target (no extra copy). So AO no longer darkens sunlit
+surfaces, and it is tinted by a multi-bounce fit (Jimenez 2016) with the pixel's hue standing in for the albedo, which
+is not stored.
+
+Contact shadows march 0.45 m (growing 2 % per metre of distance) from the surface toward the shadow light against the
+linear depth (8 / 12 / 16 steps, jittered, first hit wins, fading out from 48 to 80 m), only from pixels with a sun
+share. Grass blades store a negative split: they neither cast nor receive contact shadows (every blade would shadow its
+neighbours into a dark speckle). The box `vehicleAO` under the vehicle stays: it is ambient occlusion of the
+underbody, which the camera never sees, so neither GTAO nor the contact shadows (sun only) can replace it. Cost:
+0.38 ms per pass at High (12 steps, 2880 × 1800, measured with `post_bench gtao 21` and contact shadows off / on).
 
 The grade LUT is built on the CPU (cool shadows, warm highlights, a gentle S-curve and vibrance toward the
 `Banner.png` key-art mood). Chromatic aberration is off by default.

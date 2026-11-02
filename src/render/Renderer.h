@@ -287,6 +287,7 @@ struct RenderStats {
     int modelDraws = 0;                         // draw calls (main view)
     bool depthEffects = false;                  // single-sample scene: TAA, AO, motion blur, shafts, DOF available
     bool taa = false, ao = false, motionBlur = false, shafts = false, dof = false, autoExposure = false;
+    bool contactShadows = false;
     int velocityObjects = 0;                    // moving meshes drawn into the velocity buffer
     float flareSun = 0.0f;                      // sun weight feeding the lens flare ghosts (0: no ghosts)
     float sceneLogLum = 0.0f;                   // adapted log2 mean scene luminance (after the base exposure)
@@ -494,7 +495,7 @@ private:
     // Post effects (single-sample scene only).
     static constexpr SDL_GPUTextureFormat kLinDepthFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
     static constexpr SDL_GPUTextureFormat kVelocityFormat = SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT;
-    static constexpr SDL_GPUTextureFormat kAoFormat = SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT;
+    static constexpr SDL_GPUTextureFormat kAoFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
     Texture m_linDepth, m_velocity, m_ao, m_sceneCopy;
     std::array<Texture, 2> m_taa; // history ping-pong
     std::array<Texture, 2> m_fx;  // motion blur / DOF outputs
