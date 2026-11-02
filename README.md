@@ -8,15 +8,15 @@ ImGui (diagnostics), GLM and miniaudio (device and WAV I/O; the mixer is our own
 open world, a circuit with lap timing, a handling track with drift scoring, and tire sets with temperature. The focus
 is believable vehicle behavior: mass, suspension travel, wheelspin, grip at the limit, wheel lift, rocks and climbs.
 
-![Start menu over Exploration Peaks](docs/menu.jpg)
+![Expedition at speed through detailed forest with morning sun shafts](docs/forest.jpg)
 
 | | |
 |---|---|
-| ![SUV at the Valley Road ford over Glacier Creek at golden hour](docs/ford.jpg) | ![SUV in the Alpine Lake meadow on a misty morning](docs/meadow.jpg) |
+| ![Expedition crossing wildflowers in morning light](docs/meadow.jpg) | ![Start menu over Exploration Peaks](docs/menu.jpg) |
 
 ## Features
 
-- **Vehicles:** a gasoline SUV, a dual-motor electric SUV and a tube-frame desert patrol buggy, defined as data
+- **Vehicles:** two gasoline SUVs (including Expedition), a dual-motor electric SUV and a tube-frame desert patrol buggy, defined as data
   (`assets/vehicles/<id>/vehicle.json`); RWD / FWD / AWD / part-time / on-demand drivetrains, low range, diff locks,
   ABS and traction control, tire sets with tire temperature, and a garage for setups.
 - **Levels:** a procedural proving ground (surface lanes, ramps, a twister, a mini handling track), Exploration

@@ -1,0 +1,66 @@
+# Expedition action photography: actual driving on Exploration Peaks, detailed trees, morning light.
+# ./build/release/trailforge --script tools/scenarios/expedition_photos.txt --no-audio
+# Cosmetic dirt is deliberately staged; speed and motion blur come from the running simulation.
+# The third forest capture is the user-selected README image (about 74 km/h).
+# Convert with sips: JPEG quality 90, width 1600, -> docs/forest.jpg.
+controls pad_type none
+set ui 0
+set hud 0
+set auto_reverse 0
+set minimap 0
+set compass 0
+resize 1600 900
+level exploration_peaks
+until level == 1 20
+menu pause
+wait .2
+menu settings
+wait .2
+menu select tree_style
+wait .2
+tap Right
+wait .5
+expect setting_tree_style == 1
+until level == 1 30
+menu back
+wait .1
+menu resume
+wait 1
+set ui 0
+set hud 0
+vehicle trailforge_expedition
+quality Ultra
+set flowers 1
+set grass_dist 160
+set motion_blur 1
+set shafts .6
+set flare .08
+set fog .65
+set valley_fog .9
+set headlights 0
+time 7.2
+set sun_heading 208
+set mud .35
+set body_mud .55
+place -340 -150 270
+down S
+wait 2
+up S
+camera follow
+orbit -200 -30
+wheel 2
+wait .5
+tap V
+down W
+wait 9
+log forest_approach
+capture /tmp/trailforge_photo_forest_a.png
+wait 1
+log forest_edge
+capture /tmp/trailforge_photo_forest_b.png
+wait 1
+log forest_rays
+capture /tmp/trailforge_photo_forest_c.png
+wait .3
+up W
+quit
