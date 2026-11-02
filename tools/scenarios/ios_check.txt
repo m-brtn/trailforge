@@ -1,0 +1,94 @@
+# iOS check, gamepad only (the iOS build has no touch controls): start menu -> START and the vehicle page with A,
+# drive with the right trigger and the left stick, Start pauses and resumes, Exploration Peaks spawn and drive, frame times on the Low
+# preset. Runs on macOS as well; on iOS it is passed to the Simulator app (tools/ios/run_simulator.sh):
+#   tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/ios_check.txt --no-audio
+# The pad is SDL's virtual gamepad (`gamepad attach`): it exercises the game's gamepad input path, not Apple's
+# GameController framework, so a real MFi / Xbox / DualSense pad stays unverified by this script.
+# Captures /tmp/trailforge_ios_*.png (the Simulator app writes to the host's /tmp).
+
+controls pad_type none
+set ui 0
+quality Low
+gamepad attach
+gamepad axis lt 0                    # SDL takes an axis' first report as its rest value: release the triggers first
+gamepad axis rt 0
+wait 0.3
+
+# ---------------------------------------------------------------- start menu: A on START opens the vehicle page, A drives
+menu main
+wait 1.0
+expect menu_screen == 1
+capture /tmp/trailforge_ios_01_menu.png
+wait 0.1
+gamepad button south 1
+wait 0.1
+gamepad button south 0
+wait 0.5
+expect menu_screen == 1
+expect menu_page == 4                # vehicle page
+capture /tmp/trailforge_ios_02_vehicles.png
+wait 0.1
+gamepad button south 1
+wait 0.1
+gamepad button south 0
+wait 0.5
+expect menu_screen == 2
+until level == 0 30                  # scenarios start on the proving ground
+wait 1.0
+
+# ---------------------------------------------------------------- drive: right trigger, left stick
+gamepad axis rt 0.6
+until speed_kmh > 25 15
+gamepad axis leftx -0.5
+wait 2.0
+log pad_drive
+expect speed_kmh > 15
+capture /tmp/trailforge_ios_03_drive.png
+wait 0.1
+gamepad axis leftx 0
+gamepad axis rt 0
+gamepad axis lt 1
+until speed_kmh < 2 15
+gamepad axis lt 0
+
+# ---------------------------------------------------------------- Start pauses (ticks frozen), Start resumes
+gamepad button start 1
+wait 0.1
+gamepad button start 0
+wait 0.3
+expect menu_screen == 3
+mark ticks
+wait 0.5
+expect d_ticks == 0
+capture /tmp/trailforge_ios_04_pause.png
+wait 0.1
+gamepad button start 1
+wait 0.1
+gamepad button start 0
+wait 0.3
+expect menu_screen == 2
+
+# ---------------------------------------------------------------- frame times, proving ground (real time, Low)
+perf_begin ios_proving_ground_low
+wait 4.0
+perf_end
+
+# ---------------------------------------------------------------- Exploration Peaks: spawn, drive, frame times
+level exploration_peaks
+until level == 1 30
+wait 2.0
+gamepad axis rt 0.5
+until speed_kmh > 20 20
+wait 2.0
+log peaks_drive
+capture /tmp/trailforge_ios_05_peaks_drive.png
+wait 0.1
+perf_begin ios_peaks_low
+wait 4.0
+perf_end
+gamepad axis rt 0
+gamepad axis lt 1
+until speed_kmh < 2 15
+gamepad axis lt 0
+gamepad detach
+wait 0.2
