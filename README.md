@@ -12,7 +12,7 @@ is believable vehicle behavior: mass, suspension travel, wheelspin, grip at the 
 
 | | |
 |---|---|
-| ![Expedition crossing wildflowers in morning light](docs/meadow.jpg) | ![Start menu over Exploration Peaks](docs/menu.jpg) |
+| ![Expedition at Alpine Lake with mountains in the morning](docs/lake.jpg) | ![Start menu over Exploration Peaks](docs/menu.jpg) |
 
 ## Features
 

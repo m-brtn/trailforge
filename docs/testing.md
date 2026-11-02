@@ -165,10 +165,11 @@ proving ground and on Suncoast Raceway; `/tmp/trailforge_drift_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
 `tools/scenarios/tree_style.txt` (Exploration Peaks with STYLIZED and DETAILED trees, meadow, high and ford views,
 `/tmp/trailforge_trees_*.png`),
-`tools/scenarios/readme_shots.txt` (the README start menu over Exploration Peaks, Ultra,
-`/tmp/trailforge_readme_01_menu.png`; the header has the `sips` line that makes
-`docs/menu.jpg`; `expedition_photos.txt` and `expedition_meadow_photos.txt` capture the morning
-Expedition action views in `docs/forest.jpg` and `docs/meadow.jpg`),
+`tools/scenarios/readme_shots.txt` (Expedition with detailed trees: current start menu and a front three-quarter
+Alpine Lake portrait, morning light, Ultra; captures `/tmp/trailforge_readme_01_menu.png` and
+`/tmp/trailforge_readme_lake_final.png` become `docs/menu.jpg` and `docs/lake.jpg`),
+`tools/scenarios/expedition_photos.txt` (the approved morning forest action view, about 74 km/h, detailed trees,
+cosmetic dirt and motion blur; third capture becomes `docs/forest.jpg`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
 streaming numbers, a ford, the deep-water recovery, the play-limit warning, all 13 POI teleports, the map, the EV
