@@ -17,6 +17,8 @@ FetchContent_Declare(SDL3
     URL https://github.com/libsdl-org/SDL/archive/829a65d769d935c4852f8159e964312c0957260a.tar.gz
     URL_HASH SHA256=48e15cf1a6928453d77afa955d1fdfbbca9169e2bc3d76d111acb9b8bb076d66
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    # iOS Simulator only (TARGET_OS_SIMULATOR): accept the Simulator's Metal device in SDL GPU.
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patches/SdlIosSimulator.cmake
     EXCLUDE_FROM_ALL)
 
 # ---------------------------------------------------------------- Jolt Physics
@@ -54,7 +56,9 @@ FetchContent_Declare(JoltPhysics
 FetchContent_Declare(imgui
     URL https://github.com/ocornut/imgui/archive/f1cc2ae15e53a861a874c3034aae6798fde194ab.tar.gz
     URL_HASH SHA256=f30be7f3e2136615b1848a9afb72f6dfd8a60820ddf1c1a85997bf3b722e7cfc
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    # iOS only (TARGET_OS_IPHONE): the SDL GPU backend uses its MSL shaders instead of the macOS metallibs.
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patches/ImguiIos.cmake)
 
 # ---------------------------------------------------------------- GLM
 # 1.0.3 (used header-only)
@@ -110,6 +114,12 @@ if(TRAILFORGE_BUILD_APP)
     endif()
     if(UNIX AND NOT APPLE)
         target_link_libraries(miniaudio_lib PUBLIC ${CMAKE_DL_LIBS} pthread m)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # The iOS backend uses AVAudioSession (Objective-C) and links Core Audio directly.
+        set_source_files_properties(${miniaudio_SOURCE_DIR}/miniaudio.c PROPERTIES LANGUAGE OBJC)
+        target_link_libraries(miniaudio_lib PUBLIC "-framework AVFoundation" "-framework AudioToolbox"
+                                                   "-framework CoreAudio" "-framework Foundation")
     endif()
 
     add_library(imgui STATIC

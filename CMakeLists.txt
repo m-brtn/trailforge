@@ -16,6 +16,15 @@ if(APPLE)
     enable_language(OBJC)
 endif()
 
+# iOS (presets ios-sim-release / ios-device-release, docs/building.md "iOS"): only the app is built; the tests, the
+# probe and the asset tools stay on the host, and the shaders are compiled by a host trailforge_shaderc.
+set(TRAILFORGE_IOS OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(TRAILFORGE_IOS ON)
+    set(TRAILFORGE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(TRAILFORGE_PACKAGED ON CACHE BOOL "" FORCE)
+endif()
+
 # Jolt builds with the static MSVC runtime (USE_STATIC_MSVC_RUNTIME_LIBRARY); everything else must match. It also
 # means the Windows package needs no Visual C++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -107,17 +116,20 @@ endif()
 
 # Vehicle body converter (Blender glTF export -> body.glb, validation against the vehicle definition): the source
 # reader and LOD builder as a library for the tests, and the command-line tool.
-file(GLOB TF_MESHOPT_SOURCES ${meshoptimizer_SOURCE_DIR}/src/*.cpp)
-add_library(trailforge_bodyc STATIC tools/cars/BodySource.cpp ${TF_MESHOPT_SOURCES})
-target_include_directories(trailforge_bodyc PUBLIC tools/cars)
-target_include_directories(trailforge_bodyc SYSTEM PRIVATE ${cgltf_SOURCE_DIR} ${meshoptimizer_SOURCE_DIR}/src)
-target_link_libraries(trailforge_bodyc PUBLIC trailforge_sim)
-add_executable(trailforge_vehiclec tools/cars/vehiclec.cpp)
-target_link_libraries(trailforge_vehiclec PRIVATE trailforge_bodyc)
+if(NOT TRAILFORGE_IOS)
+    file(GLOB TF_MESHOPT_SOURCES ${meshoptimizer_SOURCE_DIR}/src/*.cpp)
+    add_library(trailforge_bodyc STATIC tools/cars/BodySource.cpp ${TF_MESHOPT_SOURCES})
+    target_include_directories(trailforge_bodyc PUBLIC tools/cars)
+    target_include_directories(trailforge_bodyc SYSTEM PRIVATE ${cgltf_SOURCE_DIR} ${meshoptimizer_SOURCE_DIR}/src)
+    target_link_libraries(trailforge_bodyc PUBLIC trailforge_sim)
 
-add_executable(trailforge_probe tools/SimProbe.cpp)
-target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
-target_compile_definitions(trailforge_probe PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    add_executable(trailforge_vehiclec tools/cars/vehiclec.cpp)
+    target_link_libraries(trailforge_vehiclec PRIVATE trailforge_bodyc)
+
+    add_executable(trailforge_probe tools/SimProbe.cpp)
+    target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
+    target_compile_definitions(trailforge_probe PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+endif()
 
 # ------------------------------------------------------------------ application
 if(TRAILFORGE_BUILD_APP)
@@ -154,6 +166,9 @@ if(TRAILFORGE_BUILD_APP)
         target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
         target_link_libraries(trailforge PRIVATE "-framework Metal")
     endif()
+    if(TRAILFORGE_IOS)
+        target_compile_definitions(trailforge PRIVATE TRAILFORGE_IOS=1)
+    endif()
     target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES} ${TRAILFORGE_ICON_DEFINES}
                                                   TRAILFORGE_VERSION="${PROJECT_VERSION}")
     if(TRAILFORGE_PACKAGED)
@@ -165,15 +180,22 @@ if(TRAILFORGE_BUILD_APP)
     # external_assets/images (PNGs elsewhere are git-ignored), so they are copied into the build tree here.
     configure_file(${CMAKE_SOURCE_DIR}/external_assets/images/Logo.png ${CMAKE_BINARY_DIR}/assets/images/logo.png
                    COPYONLY)
-    trailforge_add_macos_bundle(trailforge)
+    if(TRAILFORGE_IOS)
+        include(cmake/IosBundle.cmake)
+        trailforge_add_ios_bundle(trailforge)
+    else()
+        trailforge_add_macos_bundle(trailforge)
+    endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(trailforge PRIVATE -Wall -Wextra)
     endif()
 
-    # Vehicle model at rest as OBJ (CPU mesh only) for the silhouette comparison in tools/cars.
-    add_executable(trailforge_model_export tools/cars/ModelExport.cpp src/render/Mesh.cpp src/render/StyleKit.cpp
-                                           src/render/VehicleModel.cpp src/render/FieldMesh.cpp)
-    target_link_libraries(trailforge_model_export PRIVATE trailforge_sim glm_headers)
+    if(NOT TRAILFORGE_IOS)
+        # Vehicle model at rest as OBJ (CPU mesh only) for the silhouette comparison in tools/cars.
+        add_executable(trailforge_model_export tools/cars/ModelExport.cpp src/render/Mesh.cpp src/render/StyleKit.cpp
+                                               src/render/VehicleModel.cpp src/render/FieldMesh.cpp)
+        target_link_libraries(trailforge_model_export PRIVATE trailforge_sim glm_headers)
+    endif()
 endif()
 
 # ------------------------------------------------------------------ tests
