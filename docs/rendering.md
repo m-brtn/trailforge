@@ -167,6 +167,16 @@ procedural materials.
   sample at 0.29× frequency breaks up the repeats; from 60 to 250 m every layer fades to its mean colour (its 1×1
   mip) so the tiles do not line up into a pattern seen from far away. The mud, wet-ground, wheat and distant grass
   canopy colours of the procedural material are kept on top.
+- **Parallax** (High 8 steps, Ultra 16, Low / Medium off; Graphics → "Ground parallax steps", scenario
+  `set parallax N`): within 15 m of the camera (fading out by 25 m) on slopes up to 23 deg (gone at 37), one parallax
+  occlusion ray march through the height map of the dominant layer (the one with the largest weight) treats the
+  ground as a height field pushed down by up to 5 cm along the projection axis, and the resulting shift moves the
+  lookups of every layer; masks, shadows and lighting stay at the real surface. Grazing views take more steps and
+  less depth (stair steps between slices), the march stops at the first slice below the surface and interpolates.
+  Only a visual shift: the geometry, its collision and the silhouette are unchanged, the parallax casts no self
+  shadow, tire marks are drawn on the undisplaced surface, and the proving ground (procedural ground) has none. No
+  ruts from the tire marks. Cost (2880 × 1800, road and soil filling the lower screen next to the car, same process
+  off / on alternating three times, minimum frame time): High 11.05 → 11.73 ms, Ultra 16.01 → 17.21 ms.
 - **Cost** (2880 × 1800, Metal, vsync off, village view, same process textured vs Off; `terrain_textures.txt`): GPU
   ms per frame Low 4.78 vs 4.45, Medium 6.79 vs 5.89, High 9.73 vs 8.99, Ultra 13.78 vs 13.16; FPS Low 207.6 vs
   215.1, Medium 171.5 vs 190.7, High 128.3 vs 136.0, Ultra 97.9 vs 99.5.

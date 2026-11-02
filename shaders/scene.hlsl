@@ -98,6 +98,7 @@ struct FrameUniforms {
     float4x4 farShadowViewProj;
     float4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
     float4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
+    float4 parallax;         // level ground parallax: x steps (0 = off), y depth (m), z full until (m), w end (m)
 };
 
 struct DrawUniforms {
@@ -1234,6 +1235,32 @@ void blendLayer(inout LayerSample g, LayerSample l, float t) {
 
 #if defined(TF_ENTRY_terrain_fs)
 
+// Parallax occlusion of the dominant layer's height (albedo alpha) near the camera: the ground is a height field
+// pushed down by up to depthM along the projection axis (world y). Returns the world xz shift for every layer's
+// lookup. dxz / dyz: screen derivatives of P.xz (the loop samples with explicit gradients).
+float2 parallaxShift(int layer, float2 xz, float3 V, float depthM, int steps, float2 dxz, float2 dyz) {
+    const float k = layerInvTile(layer);
+    const float2 gx = dxz * k, gy = dyz * k;
+    const float2 stepXZ = -V.xz / max(V.y, 0.35) * (depthM / float(steps));
+    const float dStep = 1.0 / float(steps);
+    float2 cur = xz;
+    float depth = 0.0;
+    float prevGap = 0.0;
+    float gap = 1.0 - layerAlbedo.SampleGrad(layerAlbedoSampler, float3(cur * k, float(layer)), gx, gy).a;
+    int i = 0;
+    [loop] for (; i < steps && gap > depth; ++i) {
+        prevGap = gap - depth;
+        cur += stepXZ;
+        depth += dStep;
+        gap = 1.0 - layerAlbedo.SampleGrad(layerAlbedoSampler, float3(cur * k, float(layer)), gx, gy).a;
+    }
+    if (i == 0) return float2(0.0, 0.0);
+    // Linear refinement between the last step above the surface and the first below it.
+    const float after = gap - depth;
+    const float t = prevGap / max(prevGap - after, 1e-4);
+    return (cur - stepXZ * (1.0 - saturate(t))) - xz;
+}
+
 float4 terrain_fs(LitOut vin) : SV_Target0 {
     float3 N = normalize(vin.normal);
     const float3 V = normalize(f.cameraPos.xyz - vin.worldPos);
@@ -1267,24 +1294,45 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         const float rock = saturate((w.x - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, w.x);
         const float sand = saturate((w.y - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, w.y);
         const float snow = saturate((w.z - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, w.z);
+        const bool asphalt = tt.params.z > 0.5;
+
+        // Parallax near the camera on flat-ish ground: one ray march in the dominant layer shifts every layer's
+        // lookup (Pt); masks, shadows and lighting stay at P.
+        float3 Pt = P;
+        const float2 dxz = ddx(P.xz), dyz = ddy(P.xz);
+        const float pom = f.parallax.x * (1.0 - smoothstep(f.parallax.z, f.parallax.w, dist)) * smoothstep(0.80, 0.92, N.y);
+        if (pom > 0.0) {
+            int dom = grass >= 0.5 ? LAYER_GRASS : LAYER_SOIL;
+            float best = max(grass, 1.0 - grass);
+            if (road > best) { dom = LAYER_ROAD; best = road; }
+            if (sand > best) { dom = LAYER_SAND; best = sand; }
+            if (rock > best) { dom = LAYER_ROCK; best = rock; }
+            if (snow > best && !asphalt) { dom = LAYER_SNOW; best = snow; }
+            if (!(snow > best && asphalt)) {
+                // Grazing views take the most steps and the least depth (stair steps between the slices).
+                const float depthM = f.parallax.y * saturate(pom / f.parallax.x) * smoothstep(0.10, 0.45, V.y);
+                const int steps = int(lerp(f.parallax.x, max(4.0, f.parallax.x * 0.5), saturate(V.y)));
+                Pt.xz += parallaxShift(dom, P.xz, V, depthM, steps, dxz, dyz);
+            }
+        }
 
         // Full grass hides the soil whatever the heights (heightBlend(1, ...) == 1), so the soil is not sampled.
         LayerSample g;
         if (grass >= 1.0) {
-            g = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+            g = sampleLayer(LAYER_GRASS, Pt, farTex, fadeTex);
         } else {
-            g = sampleLayer(LAYER_SOIL, P, farTex, fadeTex);
+            g = sampleLayer(LAYER_SOIL, Pt, farTex, fadeTex);
             if (grass > 0.001) {
-                const LayerSample l = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+                const LayerSample l = sampleLayer(LAYER_GRASS, Pt, farTex, fadeTex);
                 blendLayer(g, l, heightBlend(grass, l.height, g.height));
             }
         }
         if (road > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_ROAD, P, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_ROAD, Pt, farTex, fadeTex);
             blendLayer(g, l, heightBlend(road, l.height, g.height));
         }
         if (sand > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_SAND, P, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_SAND, Pt, farTex, fadeTex);
             blendLayer(g, l, heightBlend(sand, l.height, g.height));
         }
         if (rock > 0.001) {
@@ -1292,7 +1340,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             // regular vertical stripes, then sedimentary beds and large tone patches that stay at any distance.
             const float steepF = smoothstep(0.25, 0.65, 1.0 - N.y);
             const float2 warp = (noiseTex.Sample(noiseSampler, P.xz * 0.021 + P.y * 0.013).rg - 0.5) * 3.0 * steepF;
-            LayerSample l = sampleRock(P, N, warp, farTex, fadeTex);
+            LayerSample l = sampleRock(Pt, N, warp, farTex, fadeTex);
             if (steepF > 0.0) {
                 // Gently dipping beds (the dip turns with a large-scale noise), bent by smaller folds.
                 const float2 dip = (noiseTex.Sample(noiseSampler, P.xz * 0.0011).rg - 0.5) * 0.16;
@@ -1315,10 +1363,9 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             }
             blendLayer(g, l, heightBlend(rock, l.height, g.height));
         }
-        const bool asphalt = tt.params.z > 0.5;
         if (snow > 0.001 && asphalt) {
             // Asphalt: the road layer's grain at 4x the frequency for the aggregate, desaturated and dark, flat.
-            LayerSample l = sampleProjection(LAYER_ROAD, P.xz * layerInvTile(LAYER_ROAD) * 4.0, float3(1, 0, 0),
+            LayerSample l = sampleProjection(LAYER_ROAD, Pt.xz * layerInvTile(LAYER_ROAD) * 4.0, float3(1, 0, 0),
                                              float3(0, 0, 1), farTex, fadeTex);
             const float grain = dot(l.albedo, float3(0.3, 0.55, 0.15));
             l.albedo = asphaltAlbedo(P, saturate(grain * 2.2));
@@ -1327,7 +1374,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             l.height = 0.5;
             blendLayer(g, l, saturate((w.z - 0.5) * 6.0 + 0.5) * step(0.01, w.z));
         } else if (snow > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_SNOW, P, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_SNOW, Pt, farTex, fadeTex);
             blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
         }
         // Large-scale tone variation so the repeats do not line up over hundreds of meters.

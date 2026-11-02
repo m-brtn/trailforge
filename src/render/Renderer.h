@@ -70,6 +70,7 @@ struct FrameUniforms {
     glm::mat4 farShadowViewProj;
     glm::vec4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
     glm::vec4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
+    glm::vec4 parallax;         // level ground parallax: x steps (0 = off), y depth (m), z full until (m), w end (m)
 };
 
 struct DrawUniforms {

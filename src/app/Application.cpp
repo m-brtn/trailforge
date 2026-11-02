@@ -2207,6 +2207,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "far_shadows") s.farShadows = v != 0.0f;
         else if (k == "env_probe") s.envProbe = int(v);
         else if (k == "env_probe_faces") s.envProbeFaces = int(v);
+        else if (k == "parallax") s.parallaxSteps = int(v);
         else if (k == "reflections") s.reflections = v != 0.0f;
         else if (k == "refl_scale") s.reflectionScale = v;
         else if (k == "bloom") s.bloom = v != 0.0f;

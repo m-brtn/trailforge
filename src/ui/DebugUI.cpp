@@ -442,6 +442,7 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
             ImGui::SetNextItemWidth(100.0f);
             edited |= ImGui::SliderInt("##probefaces", &s.envProbeFaces, 1, 6, "%d faces/frame");
         }
+        edited |= ImGui::SliderInt("Ground parallax steps", &s.parallaxSteps, 0, 32, s.parallaxSteps > 0 ? "%d" : "off");
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
         edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 250.0f, "%.0f");

@@ -56,6 +56,7 @@ constexpr float kTrampleWindow = 204.8f;   // m: side of the trample window on l
 constexpr int kTerrainPatch = 64;          // cells per terrain chunk side
 constexpr int kTerrainLevels = 4;          // steps 8, 4, 2, 1
 constexpr float kEnvProbeRadius = 70.0f;   // m: trees and level models drawn into the vehicle probe
+constexpr float kParallaxDepth = 0.05f;    // m: level ground height range of the parallax (texture height 0..1)
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
 constexpr int kGrassSegs[3] = {4, 2, 1};
 // Outer edges of the two dense grass LODs: a longer grass distance only adds sparse far-LOD rings.
@@ -358,6 +359,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.contactShadows = std::clamp(s.contactShadows, 0, 16);
     s.envProbe = s.envProbe <= 0 ? 0 : s.envProbe <= 32 ? 32 : s.envProbe <= 64 ? 64 : s.envProbe <= 128 ? 128 : 256;
     s.envProbeFaces = std::clamp(s.envProbeFaces, 1, 6);
+    s.parallaxSteps = s.parallaxSteps <= 0 ? 0 : std::clamp(s.parallaxSteps, 4, 32);
     s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
     s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
     s.lensFlare = std::clamp(s.lensFlare, 0.0f, 2.0f);
@@ -2149,6 +2151,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     }
     fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
     fu.screenFx = glm::vec4(sceneCopy ? 1.0f : 0.0f, sceneCopy && s.waterSsr ? 1.0f : 0.0f, 0.0f, 0.0f);
+    fu.parallax = glm::vec4(float(s.parallaxSteps), kParallaxDepth, 15.0f, 25.0f);
     m_stats.reflectionRendered = reflVisible;
     glm::mat4 mirror(1.0f);
     mirror[1][1] = -1.0f;
@@ -2465,6 +2468,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ef.sunDisc = glm::vec4(0.0f, 0.0f, 0.0f, fu.sunDisc.w);
         ef.screenFx = glm::vec4(0.0f);
         ef.envProbe = glm::vec4(0.0f);
+        ef.parallax = glm::vec4(0.0f);
         // Face bases of the cube convention (+X, -X, +Y, -Y, +Z, -Z): forward, up; right = cross(up, forward).
         static const glm::vec3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         static const glm::vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
@@ -2620,6 +2624,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         rf.clipPlane = glm::vec4(0, 1, 0, -(m_waterLevel - 0.03f));
         rf.waterParams.y = 0.0f;
         rf.options.x = 0.0f;
+        rf.parallax = glm::vec4(0.0f);
 
         SDL_GPUColorTargetInfo ct{};
         ct.texture = m_reflColor.tex;
