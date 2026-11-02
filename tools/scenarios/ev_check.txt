@@ -11,36 +11,37 @@ menu select start
 tap Return
 wait 0.4
 expect menu_page == 4
-expect vehicle_cards == 5
+expect vehicle_cards == 3               # SUV, EV, desert patrol buggy
 expect vehicle_choice == 0
 tap Right                               # catalog order: trailforge_suv first, then by folder name
 wait 0.3
 tap Right
 wait 0.3
-tap Right
+expect vehicle_choice == 2
+tap Left
 wait 1.0
-expect vehicle_choice == 3
-expect vehicle_index == 3               # the preview is the live vehicle
+expect vehicle_choice == 1
+expect vehicle_index == 1               # the preview is the live vehicle
 expect electric == 1
 expect mass > 2600
 capture /tmp/trailforge_ev_01_vehicle_page.png
 wait 0.3
 wheel 1                                 # wheel up = previous vehicle
 wait 0.8
-expect vehicle_choice == 2
+expect vehicle_choice == 0
 expect electric == 0
 wheel -1
 wait 0.8
-expect vehicle_choice == 3
+expect vehicle_choice == 1
 expect electric == 1
 click vehicle_card:0
 wait 0.8
 expect vehicle_choice == 0
-click vehicle_card:3
+click vehicle_card:1
 wait 0.8
-expect vehicle_choice == 3
+expect vehicle_choice == 1
 expect menu_page == 4
-click vehicle_card:3                    # clicking the selected card drives off
+click vehicle_card:1                    # clicking the selected card drives off
 wait 0.5
 expect menu_screen == 2
 expect electric == 1
