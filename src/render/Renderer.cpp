@@ -2154,7 +2154,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
     fu.screenFx = glm::vec4(sceneCopy ? 1.0f : 0.0f, sceneCopy && s.waterSsr ? 1.0f : 0.0f, 0.0f, 0.0f);
     fu.parallax = glm::vec4(float(s.parallaxSteps), kParallaxDepth, 15.0f, 25.0f);
-    fu.groundFx = glm::vec4(float(s.groundTiling), s.groundDetail ? 1.0f : 0.0f, 0.0f, 0.0f);
+    fu.groundFx = glm::vec4(float(s.groundTiling), s.groundDetail ? 1.0f : 0.0f, s.groundWet ? 1.0f : 0.0f, 0.0f);
     m_stats.reflectionRendered = reflVisible;
     glm::mat4 mirror(1.0f);
     mirror[1][1] = -1.0f;

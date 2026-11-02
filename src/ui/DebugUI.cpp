@@ -450,6 +450,7 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         const char* tiling[] = {"Plain repeats", "Macro tone", "Hex tiling + macro tone"};
         edited |= ImGui::Combo("Ground texture tiling", &s.groundTiling, tiling, 3);
         edited |= ImGui::Checkbox("Ground detail normals", &s.groundDetail);
+        edited |= ImGui::Checkbox("Wet ground near water", &s.groundWet);
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
         edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 250.0f, "%.0f");

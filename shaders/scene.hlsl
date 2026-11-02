@@ -1400,6 +1400,35 @@ void blendLayer(inout LayerSample g, LayerSample l, float t) {
     g.ao = lerp(g.ao, l.ao, t);
 }
 
+// Wet ground near the water (mask B: 1 under water, ~0.55 next to it; rock takes half). Render-only: grip and the
+// surface type do not change. groundFx.z 0: one darkening and gloss for every layer. 1: porous layers (soil, sand)
+// darken and saturate more, dense ones (rock) get a glossier film; the low parts of the texture height fill with
+// water as the wetness rises toward the water edge (puddles: flat, smooth, mirror the sky through the environment
+// lookup of the shading). h: the blended layer height, nzv: 0..1 noise breaking up the water line.
+void groundWet(float wetMask, float rock, float road, float sand, float h, float Ny, float nzv, inout float3 albedo,
+               inout float rough, inout float flat) {
+    const float wetG = wetMask * lerp(1.0, 0.5, rock);
+    if (f.groundFx.z < 0.5) {
+        albedo *= lerp(1.0, 0.6, wetG);
+        rough = lerp(rough, 0.38, wetG * 0.8);
+        flat *= 1.0 - 0.5 * wetG;
+        return;
+    }
+    if (wetG <= 0.0) return;
+    const float por = lerp(lerp(lerp(0.85, 0.65, road), 0.80, sand), 0.20, rock);
+    const float d = wetG * por;
+    albedo *= lerp(1.0, 0.40, d);
+    const float l = luminance(albedo);
+    albedo = max(lerp((float3)l, albedo, 1.0 + 0.3 * d), 0.0);
+    rough = lerp(rough, lerp(0.12, 0.34, por), saturate(wetG * 1.1));
+    flat *= 1.0 - 0.4 * wetG;
+    const float level = saturate((wetG - 0.25) * 2.0) * 0.6 + (nzv - 0.5) * 0.25;
+    const float puddle = smoothstep(0.0, 0.06, level - h) * smoothstep(0.88, 0.96, Ny) * (1.0 - rock);
+    albedo *= lerp(1.0, 0.8, puddle);
+    rough = lerp(rough, 0.04, puddle);
+    flat *= 1.0 - puddle;
+}
+
 // The layer with the largest weight (parallax, detail normals); -1 where the asphalt wins (no layer of its own).
 int groundDominant(float grass, float road, float sand, float rock, float snow, bool asphalt) {
     int dom = grass >= 0.5 ? LAYER_GRASS : LAYER_SOIL;
@@ -1607,10 +1636,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         // Far from the camera the ground under the grass takes the blade canopy colour (the blades thin out).
         albedo = lerp(albedo, grassCanopyAlbedo(zones, m.a), max(grass * (1.0 - max(road, max(rock, snow))), m.a) * far);
         // Wet ground near the water (dark, glossy, flatter).
-        const float wetG = m.b * lerp(1.0, 0.5, rock);
-        albedo *= lerp(1.0, 0.6, wetG);
-        rough = lerp(rough, 0.38, wetG * 0.8);
-        flat *= 1.0 - 0.5 * wetG;
+        groundWet(m.b, rock, road, sand, g.height, N.y, nz.g, albedo, rough, flat);
 
         // Under the crowns: needle and leaf litter (dark, brown-olive, broken up by noise) and less sky light.
         const float canopy = smoothstep(0.05, 0.6, vin.localNormal.y) * (1.0 - road) * (1.0 - snow);
@@ -3115,10 +3141,7 @@ MarkGround levelGround(float3 P, float3 N, float4 m) {
         rough = lerp(rough, lerp(0.85, 0.40, wet), mudBlend);
         flat = lerp(1.0, 0.5, mudBlend * wet);
     }
-    const float wetG = m.b * lerp(1.0, 0.5, rock);
-    albedo *= lerp(1.0, 0.6, wetG);
-    rough = lerp(rough, 0.38, wetG * 0.8);
-    flat *= 1.0 - 0.5 * wetG;
+    groundWet(m.b, rock, road, sand, g.height, N.y, nz.g, albedo, rough, flat);
     const float canopy = smoothstep(0.05, 0.6, sp.a) * (1.0 - road) * (1.0 - snow);
     if (canopy > 0.0) {
         const float litterN = noiseTex.Sample(ns, P.xz * 0.37).r;

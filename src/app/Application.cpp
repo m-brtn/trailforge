@@ -2284,6 +2284,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "parallax") s.parallaxSteps = int(v);
         else if (k == "ground_tiling") s.groundTiling = int(v);
         else if (k == "ground_detail") s.groundDetail = v != 0.0;
+        else if (k == "ground_wet") s.groundWet = v != 0.0;
         else if (k == "reflections") s.reflections = v != 0.0f;
         else if (k == "refl_scale") s.reflectionScale = v;
         else if (k == "bloom") s.bloom = v != 0.0f;

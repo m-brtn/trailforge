@@ -190,6 +190,15 @@ procedural materials.
   rotated against the layer. Top-down projection only, so steep ground (rock walls) gets none; tire marks add the
   same detail to the ground under them. No new texture. Cost on High +0.1–0.15 ms (`frame_avg`, chase views at the
   coast road and the ford).
+- **Wet ground** (Graphics → "Wet ground near water", scenario `set ground_wet 0|1`; Low uses the old single
+  darkening): **render-only, the grip and the surface type under the tires do not change** (the physics reads the
+  baked surface map, not the look). The wetness is the level mask's blue channel (1 under water, ~0.55 in the few
+  samples next to it, so the wet band is 1–3 m wide; rock takes half). A porosity from the layer weights (soil 0.85,
+  grass 0.85, gravel road 0.65, sand 0.8, rock 0.2) sets how much the albedo darkens (to 0.4× for soaked soil) and
+  saturates, and how glossy the film gets (roughness toward 0.12 on rock, 0.34 on soil). Puddles: the low parts of
+  the blended layer height fill with water up to a level that rises with the wetness (a noise breaks up the water
+  line); there the normal is flat and the roughness 0.04, so the ground mirrors the sky through the environment
+  lookup of the shading. Wet tire ruts are drawn by the mark shader (mud). No measurable cost (High, ford view).
 - **Detail normals** (Graphics → "Ground detail normals", scenario `set ground_detail 0|1`; off on Low): within 4 m
   of the camera, fading out by 12 m, the dominant layer's own normal map is added a second time at 3.7× its
   frequency (whiteout style: the slopes add), through the same hex patches (no seams) or, with plain repeats,
