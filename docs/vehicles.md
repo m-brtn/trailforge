@@ -385,7 +385,8 @@ specific production unit.
   (otherwise Jolt would hold it locked). An integrating controller cuts the engine throttle (down to 0.05 On, 0.10
   Off-road; cut 4 /s per unit error, at most 8 /s; recovery 0.6 /s) when even the slowest wheel spins above the
   threshold, or when the driven tires' load-weighted combined slip (√((slip / peak)² + (slip angle / peak)²), 1 = the
-  peak of the friction ellipse) exceeds `tcGripThreshold` (0.85 On, 1.2 Off-road; the patrol 0.70 On): a rear tire
+  peak of the friction ellipse) exceeds `tcGripThreshold` (0.85 On, 1.2 Off-road; the patrol 0.60 On, 0.80
+  Off-road with a 0.05 throttle floor: at 1.2 its locked rear spun to 59° of rear slip angle on gravel): a rear tire
   at its cornering limit has no grip left for drive, so a 2H car turned at the limit stepped out under throttle before
   its wheels spun up. While the vehicle rolls back against the selected direction faster than 0.3 m/s the throttle
   recovers instead of being cut. The electric SUV's per-axle TC uses the same combined-slip signal per axle.

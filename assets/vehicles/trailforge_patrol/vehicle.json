@@ -91,7 +91,7 @@
   "aids": {
     "absEnabled": false,
     "traction": "off",
-    "tcGripThreshold": 0.70,
+    "tcGripThreshold": 0.60, "tcOffRoadGripThreshold": 0.80,
     "absReleaseSlip": 0.18,
     "absApplySlip": 0.08,
     "absReleaseRate": 40,
@@ -109,7 +109,7 @@
     "tcCutRate": 4,
     "tcRecoverRate": 2.5,
     "tcMinThrottle": 0.05,
-    "tcOffRoadMinThrottle": 0.1,
+    "tcOffRoadMinThrottle": 0.05,
     "tcSpinSpeed": 0.3,
     "tcRollbackSpeed": 0.3
   },
