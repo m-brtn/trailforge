@@ -184,6 +184,18 @@ procedural materials.
   of 3–4 windows, 2026-11-02): mode 2 vs 0 on High +0.1–0.5 ms (gravel road and ford views), on Ultra +0.6–0.7 ms;
   of that the macro tone is ~0.1 ms (`post_bench terrain 5`: mode 1 vs 0 +0.6 ms over five terrain draws, mode 2
   vs 0 +2.5 ms at the ford).
+- **Detail normals** (Graphics → "Ground detail normals", scenario `set ground_detail 0|1`; off on Low): within 4 m
+  of the camera, fading out by 12 m, the dominant layer's own normal map is added a second time at 3.7× its
+  frequency (whiteout style: the slopes add), through the same hex patches (no seams) or, with plain repeats,
+  rotated against the layer. Top-down projection only, so steep ground (rock walls) gets none; tire marks add the
+  same detail to the ground under them. No new texture. Cost on High +0.1–0.15 ms (`frame_avg`, chase views at the
+  coast road and the ford).
+- **Detail normals** (Graphics → "Ground detail normals", scenario `set ground_detail 0|1`; off on Low): within 4 m
+  of the camera, fading out by 12 m, the dominant layer's own normal map is added a second time at 3.7× its
+  frequency (whiteout style: the slopes add), through the same hex patches (no seams) or, with plain repeats,
+  rotated against the layer. Top-down projection only, so steep ground (rock walls) gets none; tire marks add the
+  same detail to the ground under them. No new texture. Cost on High +0.1–0.15 ms (`frame_avg`, chase views at the
+  coast road and the ford).
 - **Parallax** (High 8 steps, Ultra 16, Low / Medium off; Graphics → "Ground parallax steps", scenario
   `set parallax N`): within 15 m of the camera (fading out by 25 m) on slopes up to 23 deg (gone at 37), one parallax
   occlusion ray march through the height map of the dominant layer (the one with the largest weight) treats the

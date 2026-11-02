@@ -30,6 +30,7 @@ struct RenderSettings {
     int envProbeFaces = 1;         // probe faces re-rendered per frame (1..6)
     int parallaxSteps = 8;         // ray-march steps of the level ground parallax near the camera (0 = off)
     int groundTiling = 2;          // level ground textures: 0 plain repeats, 1 + macro tone variation, 2 + hex tiling
+    bool groundDetail = true;      // level ground: detail normals near the camera
     float reflectionScale = 0.5f;  // of the render resolution
     bool bloom = true;
     int grassLevel = 3;            // 0 = off, 1..4: density levels (fine cell 0.2 / 0.15 / 0.1 / 0.075 m)
@@ -101,7 +102,7 @@ inline RenderSettings presetSettings(QualityPreset p) {
     switch (p) {
     case QualityPreset::Low:
         s.renderScale = 0.67f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 1; s.shadowMapSize = 1024;
-        s.shadowDistance = 40.0f; s.shadowFilter = 0; s.farShadows = false; s.reflections = false; s.envProbe = 0; s.parallaxSteps = 0; s.groundTiling = 1; s.bloom = false; s.grassLevel = 1;
+        s.shadowDistance = 40.0f; s.shadowFilter = 0; s.farShadows = false; s.reflections = false; s.envProbe = 0; s.parallaxSteps = 0; s.groundTiling = 1; s.groundDetail = false; s.bloom = false; s.grassLevel = 1;
         s.grassDistance = 40.0f; s.flowerDensity = 0.5f; s.grassDetail = false; s.sprayMax = 600; s.sprayDust = false;
         s.terrainDetail = 1.2f; s.treeDetailDistance = 380.0f; s.treeDistance = 2000.0f; s.terrainTextureSize = 512;
         s.taa = false; s.ao = 0; s.contactShadows = 0; s.motionBlur = 0.0f; s.sunShafts = 0.0f; s.lensFlare = 0.0f; s.waterSsr = false;

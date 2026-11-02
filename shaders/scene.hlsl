@@ -1399,6 +1399,44 @@ void blendLayer(inout LayerSample g, LayerSample l, float t) {
     g.rough = lerp(g.rough, l.rough, t);
     g.ao = lerp(g.ao, l.ao, t);
 }
+
+// The layer with the largest weight (parallax, detail normals); -1 where the asphalt wins (no layer of its own).
+int groundDominant(float grass, float road, float sand, float rock, float snow, bool asphalt) {
+    int dom = grass >= 0.5 ? LAYER_GRASS : LAYER_SOIL;
+    float best = max(grass, 1.0 - grass);
+    if (road > best) { dom = LAYER_ROAD; best = road; }
+    if (sand > best) { dom = LAYER_SAND; best = sand; }
+    if (rock > best) { dom = LAYER_ROCK; best = rock; }
+    if (snow > best) dom = asphalt ? -1 : LAYER_SNOW;
+    return dom;
+}
+
+// Detail normals near the camera (groundFx.y): the dominant layer's own normal map at 3.7x its frequency through the
+// same hex patches (no seams), added to the layer normal (whiteout: the slopes add), fading out from 4 to 12 m.
+// Only the top-down projection: steep ground (rock walls) gets none.
+float3 groundDetailDn(int layer, GroundCtx c, float dist, float Ny) {
+    const float s = f.groundFx.y * (1.0 - smoothstep(4.0, 12.0, dist)) * smoothstep(0.65, 0.85, Ny);
+    if (s <= 0.0 || layer < 0) return (float3)0.0;
+    const float k = layerInvTile(layer) * 3.7;
+    float2 nxy = (float2)0.0;
+    if (c.hex) {
+        [unroll] for (int i = 0; i < 3; ++i) {
+            if (c.h.w[i] > 0.0) {
+                const HexTap t = c.h.t[i];
+                const float3 at = float3(hexUV(t, c.xz, k, layer) + 0.31, float(layer));
+                const float4 n = layerNra.SampleGrad(layerNraSampler, at, hexRot(t, c.gx.xz) * k, hexRot(t, c.gy.xz) * k);
+                nxy += hexUnrot(t, n.rg * 2.0 - 1.0) * c.h.w[i];
+            }
+        }
+    } else {
+        // Plain repeats: rotated against the layer so the two scales do not line up.
+        const float2x2 m = float2x2(0.80, -0.60, 0.60, 0.80);
+        const float4 n = layerNra.SampleGrad(layerNraSampler, float3(mul(m, c.xz) * k + 0.31, float(layer)),
+                                             mul(m, c.gx.xz) * k, mul(m, c.gy.xz) * k);
+        nxy = mul(n.rg * 2.0 - 1.0, m);
+    }
+    return float3(nxy.x, 0.0, nxy.y) * (tt.params.y * 0.6 * s);
+}
 #endif
 
 #if defined(TF_ENTRY_terrain_fs)
@@ -1477,19 +1515,12 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         // lookup (Pt); masks, shadows and lighting stay at P.
         float3 Pt = P;
         const float pom = f.parallax.x * (1.0 - smoothstep(f.parallax.z, f.parallax.w, dist)) * smoothstep(0.80, 0.92, N.y);
-        if (pom > 0.0) {
-            int dom = grass >= 0.5 ? LAYER_GRASS : LAYER_SOIL;
-            float best = max(grass, 1.0 - grass);
-            if (road > best) { dom = LAYER_ROAD; best = road; }
-            if (sand > best) { dom = LAYER_SAND; best = sand; }
-            if (rock > best) { dom = LAYER_ROCK; best = rock; }
-            if (snow > best && !asphalt) { dom = LAYER_SNOW; best = snow; }
-            if (!(snow > best && asphalt)) {
-                // Grazing views take the most steps and the least depth (stair steps between the slices).
-                const float depthM = f.parallax.y * saturate(pom / f.parallax.x) * smoothstep(0.10, 0.45, V.y);
-                const int steps = int(lerp(f.parallax.x, max(4.0, f.parallax.x * 0.5), saturate(V.y)));
-                Pt.xz += parallaxShift(dom, gc, V, depthM, steps);
-            }
+        const int dom = groundDominant(grass, road, sand, rock, snow, asphalt);
+        if (pom > 0.0 && dom >= 0) {
+            // Grazing views take the most steps and the least depth (stair steps between the slices).
+            const float depthM = f.parallax.y * saturate(pom / f.parallax.x) * smoothstep(0.10, 0.45, V.y);
+            const int steps = int(lerp(f.parallax.x, max(4.0, f.parallax.x * 0.5), saturate(V.y)));
+            Pt.xz += parallaxShift(dom, gc, V, depthM, steps);
         }
 
         gc.xz = Pt.xz;
@@ -1594,7 +1625,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         s.albedo = albedo;
         s.roughness = rough;
         s.ao *= lerp(1.0, g.ao, 0.8) * (1.0 - 0.35 * canopy);
-        N = normalize(N + g.dn * flat);
+        N = normalize(N + (g.dn + groundDetailDn(dom, gc, dist, N.y)) * flat);
     }
     if (f.options.x > 0.0) {
         const float2 cell = abs(frac(P.xz) - 0.5);
@@ -3102,7 +3133,7 @@ MarkGround levelGround(float3 P, float3 N, float4 m) {
     float soilRough = 0.0;
     macroTone(noiseTex, ns, P.xz, soilTone, soilRough);
     r.soil = soilTone;
-    r.dn = g.dn * flat;
+    r.dn = (g.dn + groundDetailDn(groundDominant(grass, road, sand, rock, snow, false), gc, dist, N.y)) * flat;
     r.rough = rough;
     r.ao = lerp(1.0, g.ao, 0.8) * (1.0 - 0.35 * canopy);
     return r;
