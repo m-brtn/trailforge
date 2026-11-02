@@ -45,7 +45,10 @@ EvOutput ElectricDrive::update(const ElectricConfig& c, const DrivingAidTuning& 
         }
         if (driving) {
             const float threshold = std::max(in.tcSlipThreshold, 1e-3f);
-            const float e = in.rollingBack ? -1.0f : (in.axles[std::size_t(a)].driveSlip - threshold) / threshold;
+            float e = (in.axles[std::size_t(a)].driveSlip - threshold) / threshold;
+            if (in.tcGripThreshold > 0.0f)
+                e = std::max(e, (in.axles[std::size_t(a)].gripUse - in.tcGripThreshold) / (0.25f * in.tcGripThreshold));
+            if (in.rollingBack) e = -1.0f;
             const float rate = e > 0.0f ? -aids.tcCutRate * std::min(e, 2.0f) : aids.tcRecoverRate * std::min(-e, 1.0f);
             f = std::clamp(f + rate * dt, in.tcMinFactor, 1.0f);
         } else {

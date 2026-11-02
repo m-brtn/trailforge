@@ -22,6 +22,10 @@ struct AidWheelInput {
     float groundSpeed = 0.0f;  // m/s, velocity of the ground under the wheel along the wheel's heading (body point
                                // velocity at the hub when the wheel is in the air), + = wheel forward
     float rollingSpeed = 0.0f; // m/s, w * r
+    float load = 0.0f;         // N
+    // Normalized combined slip of the tire, |(slip ratio / peak, slip angle / peak)|: 1 = at the peak of the friction
+    // ellipse, 0 when not evaluated (Vehicle::frictionEllipse).
+    float gripUse = 0.0f;
 };
 
 struct AidInput {

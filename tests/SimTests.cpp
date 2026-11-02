@@ -863,7 +863,8 @@ void suvMarksKeyboard() {
     CHECK(instant.maxSlip > 2.0f && instant.marks.maxSlip > 0.05f,
           "instant full throttle no longer spins the 2H rears (%.2f m/s, mark %.2f): update KeyboardPedals' notes",
           instant.maxSlip, instant.marks.maxSlip);
-    CHECK(keyW.maxPedal > 0.99f && keyW.maxSlip < 1.5f && keyW.marks.maxSlip < 0.05f,
+    // Slip limit 1.5 -> 2.0 m/s with the tire load sensitivity (the loaded rear tires lose ~3 % of mu at launch: 1.79).
+    CHECK(keyW.maxPedal > 0.99f && keyW.maxSlip < 2.0f && keyW.marks.maxSlip < 0.05f,
           "keyboard launch: pedal %.2f, slip %.2f m/s, mark %.2f", keyW.maxPedal, keyW.maxSlip, keyW.marks.maxSlip);
     CHECK(keyW.t30 > 0.0 && keyW.t30 <= instant.t30 + 0.2, "keyboard 0-30 km/h %.2f s vs instant %.2f s", keyW.t30,
           instant.t30);
@@ -961,7 +962,8 @@ void launchMarksProportional() {
         CHECK(r->ribbonMax < 0.05f && r->spotCover < 0.05f, "normal launch left rubber: %.2f / %.2f", r->ribbonMax,
               r->spotCover);
     CHECK(full.maxSlip > 3.0f, "the 2H full-pedal launch no longer spins (%.2f m/s): update the test", full.maxSlip);
-    CHECK(full.ribbonLength > 2.0 && full.ribbonMax > 0.05f && full.ribbonMax < 0.3f,
+    // Faint: below 0.4 (0.3 before the tire load sensitivity; 0.36 with it).
+    CHECK(full.ribbonLength > 2.0 && full.ribbonMax > 0.05f && full.ribbonMax < 0.4f,
           "2H full-pedal launch mark: %.1f m, max %.2f (want faint)", full.ribbonLength, full.ribbonMax);
     CHECK(full.ribbonWidth < 0.6f * tireWidth, "2H full-pedal launch mark %.2f m wide (tire %.2f m, want narrow)",
           full.ribbonWidth, tireWidth);

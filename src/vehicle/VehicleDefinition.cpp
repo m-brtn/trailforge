@@ -388,6 +388,8 @@ void readAids(Obj& a, DrivingAidTuning& g) {
     a.num("absMinSpeed", g.absMinSpeed, 0.0, 10.0, "m/s");
     a.num("tcSlipThreshold", g.tcSlipThreshold, 0.02, 2.0, "");
     a.num("tcOffRoadSlipThreshold", g.tcOffRoadSlipThreshold, 0.02, 2.0, "");
+    a.num("tcGripThreshold", g.tcGripThreshold, 0.0, 5.0, "", false);
+    a.num("tcOffRoadGripThreshold", g.tcOffRoadGripThreshold, 0.0, 5.0, "", false);
     a.num("tcMinSpeed", g.tcMinSpeed, 0.1, 10.0, "m/s");
     a.num("tcSlipFilterTime", g.tcSlipFilterTime, 0.0, 1.0, "s");
     a.num("tcBrakeGain", g.tcBrakeGain, 0.0, 50000.0, "N*m");
@@ -585,6 +587,12 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             ti.num("slipSpeedFloor", t.tireSlipSpeedFloor, 0.0, 5.0, "m/s");
             ti.boolean("frictionEllipse", t.tireFrictionEllipse);
             {
+                Obj ls(ti.member("loadSensitivity", false), "tires.loadSensitivity", source, errors);
+                ls.num("friction", t.tireLoadFriction, 0.0, 0.5, "(exponent)", false);
+                ls.num("corneringStiffness", t.tireLoadCornering, 0.0, 0.9, "(exponent)", false);
+                ls.num("referenceLoad", t.tireReferenceLoad, 0.0, 50000.0, "N", false);
+            }
+            {
                 // Tire set fitted by default (optional); the curve above is always the off-road set.
                 std::string set = tireSetKey(c.tireSet);
                 ti.str("set", set, false);
@@ -603,6 +611,9 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             s.num("rate", t.steerRate, 0.3, 20.0, "1/s");
             s.num("returnRate", t.steerReturnRate, 0.3, 20.0, "1/s");
             s.num("ackermann", t.ackermann, 0.0, 1.0, "(0 parallel .. 1 full Ackermann)");
+            Obj cs(s.member("compliance", false), "steering.compliance", source, errors);
+            cs.num("front", t.axles[kFrontAxle].complianceSteer, 0.0, 2.0, "deg/kN", false);
+            cs.num("rear", t.axles[kRearAxle].complianceSteer, 0.0, 2.0, "deg/kN", false);
         }
         {
             Obj e(root.member("engine"), "engine", source, errors);

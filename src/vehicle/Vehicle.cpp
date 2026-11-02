@@ -30,10 +30,29 @@ constexpr float kRadToDeg = 180.0f / 3.14159265358979f;
 // wheel angular velocities, exactly where Jolt adds the clutch torque. The tire contact solve, the suspension and
 // the friction brakes are Jolt's. The rotor inertia is reflected into the wheel inertia (reduction^2 x rotor,
 // half per wheel).
-class ElectricVehicleController final : public JPH::WheeledVehicleController {
+// Jolt's wheeled controller with compliance steer: Jolt sets every wheel to -steer input x max angle in PreCollide,
+// before the wheel casts build the contact directions from that angle; here each wheel's angle then gets the offset
+// Vehicle::updateCompliance computed from the tire side forces of the previous step (VehicleTuning::complianceSteer).
+class CompliantController : public JPH::WheeledVehicleController {
+public:
+    CompliantController(const JPH::WheeledVehicleControllerSettings& s, JPH::VehicleConstraint& c)
+        : WheeledVehicleController(s, c) {}
+
+    std::array<float, 4> steerOffset{}; // rad, + = left
+
+protected:
+    void PreCollide(float dt, JPH::PhysicsSystem& system) override {
+        WheeledVehicleController::PreCollide(dt, system);
+        JPH::Wheels& wheels = mConstraint.GetWheels();
+        for (std::size_t i = 0; i < wheels.size() && i < steerOffset.size(); ++i)
+            wheels[i]->SetSteerAngle(wheels[i]->GetSteerAngle() + steerOffset[i]);
+    }
+};
+
+class ElectricVehicleController final : public CompliantController {
 public:
     ElectricVehicleController(const JPH::WheeledVehicleControllerSettings& s, JPH::VehicleConstraint& c)
-        : WheeledVehicleController(s, c) {}
+        : CompliantController(s, c) {}
 
     // Set before the step (Vehicle::prePhysics).
     const ElectricConfig* config = nullptr;
@@ -120,6 +139,13 @@ class ElectricControllerSettings final : public JPH::WheeledVehicleControllerSet
 public:
     JPH::VehicleController* ConstructController(JPH::VehicleConstraint& c) const override {
         return new ElectricVehicleController(*this, c);
+    }
+};
+
+class CompliantControllerSettings final : public JPH::WheeledVehicleControllerSettings {
+public:
+    JPH::VehicleController* ConstructController(JPH::VehicleConstraint& c) const override {
+        return new CompliantController(*this, c);
     }
 };
 
@@ -254,7 +280,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     // PostCollide drives the axles with the motors).
     if (c.isElectric() != (c.layout == DriveLayout::DualMotor))
         throw std::runtime_error("Vehicle: the dual-motor layout and an electric power unit go together");
-    auto* cs = c.isElectric() ? new ElectricControllerSettings : new WheeledVehicleControllerSettings;
+    WheeledVehicleControllerSettings* cs = c.isElectric() ? static_cast<WheeledVehicleControllerSettings*>(new ElectricControllerSettings)
+                                                          : new CompliantControllerSettings;
     vs.mController = cs;
     cs->mEngine.mMaxTorque = c.tuning.engineMaxTorque;
     cs->mEngine.mMinRPM = c.engineMinRPM;
@@ -298,6 +325,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
 
     m_constraint = new VehicleConstraint(*m_body, vs);
     m_controller = static_cast<WheeledVehicleController*>(m_constraint->GetController());
+    m_compliant = static_cast<CompliantController*>(m_controller);
     if (c.isElectric()) {
         m_electric = static_cast<ElectricVehicleController*>(m_controller);
         m_battery.init(c.electric);
@@ -310,6 +338,8 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     m_constraint->SetVehicleCollisionTester(m_tester);
     m_constraint->SetPostCollideCallback(
         [this](VehicleConstraint&, const PhysicsStepListenerContext& context) { updateSuspension(context.mDeltaTime); });
+    m_constraint->SetPreStepCallback(
+        [this](VehicleConstraint&, const PhysicsStepListenerContext& context) { updateCompliance(context.mDeltaTime); });
     // Effective mass of each wheel's suspension constraint, as Jolt computes it for its FrequencyAndDamping mode
     // (VehicleConstraint::SetupVelocityConstraint: body mass and inertia at the force point at mid travel), so the
     // spring frequency and damping ratio keep Jolt's meaning when the rates are passed as N/m and N*s/m.
@@ -329,25 +359,32 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         [this](uint wheel, float& ioLong, float& ioLat, const Body& body, const SubShapeID& subShape) {
             const SurfaceId id = m_surfaces.lookup(body.GetShape()->GetMaterial(subShape));
             const SurfaceProperties& s = m_surfaces.get(id);
+            float tire = m_tireTuning.tireSurfaceGrip[std::size_t(id)];
             if (wheel < kWheelCount) {
+                const VehicleTuning& t = m_tireTuning;
+                // Load sensitivity (VehicleTuning::tireLoadFriction): lower peak friction and a stretched slip-angle
+                // axis on a heavily loaded tire, the opposite on a lightly loaded one.
+                const float r = tireLoadRatio(wheel);
+                tire *= std::pow(r, -t.tireLoadFriction) * m_tireGrip[wheel];
+                const float angleScale = std::pow(r, t.tireLoadCornering - t.tireLoadFriction);
                 // Loose surfaces stretch the slip axis of both curves (slip / scale is the slip on the tire's curve).
                 const float scale = std::max(s.peakSlipScale, 0.1f);
                 const float slip = curveSlip(wheel) / scale;
-                const VehicleTuning& t = m_tireTuning;
                 const float lon = looseCurve(m_wheelSettings[wheel]->mLongitudinalFriction.GetValue(slip), slip,
                                              t.tirePeakSlipRatio, t.tirePeakLongFriction, s.slideDrop);
                 ioLong = staticGripFriction(lon, slip);
-                if (scale != 1.0f || s.slideDrop != 1.0f) {
-                    const auto* w = static_cast<const WheelWV*>(m_constraint->GetWheel(wheel));
-                    const float angle = w->mLateralSlip * kRadToDeg / scale;
-                    ioLat = looseCurve(m_wheelSettings[wheel]->mLateralFriction.GetValue(angle), angle,
-                                       t.tirePeakSlipAngleDeg, t.tirePeakLatFriction, s.slideDrop);
-                }
+                const auto* w = static_cast<const WheelWV*>(m_constraint->GetWheel(wheel));
+                const float angle = w->mLateralSlip * kRadToDeg / (scale * angleScale);
+                ioLat = looseCurve(m_wheelSettings[wheel]->mLateralFriction.GetValue(angle), angle,
+                                   t.tirePeakSlipAngleDeg, t.tirePeakLatFriction, s.slideDrop);
                 m_contactSurface[wheel] = id;
-                updateEllipseSlip(wheel, slip, scale);
+                updateEllipseSlip(wheel, slip, scale * angleScale);
+                EllipseSlip& e = m_ellipseSlip[wheel];
+                e.longPeak = t.tirePeakLongFriction * s.longitudinalFriction * tire;
+                e.latPeak = t.tirePeakLatFriction * s.lateralFriction * tire;
+                e.slideDrop = s.slideDrop;
             }
-            // Tire set and temperature act only here, on the friction the controller uses (no other force).
-            const float tire = m_tireTuning.tireSurfaceGrip[std::size_t(id)] * (wheel < kWheelCount ? m_tireGrip[wheel] : 1.0f);
+            // Tire set, load and temperature act only here, on the friction the controller uses (no other force).
             ioLong *= s.longitudinalFriction * tire;
             ioLat *= s.lateralFriction * tire;
         });
@@ -356,7 +393,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
                                                    float longFriction, float latFriction, float, float, float) {
         outLong = longFriction * suspensionImpulse;
         outLat = latFriction * suspensionImpulse;
-        if (wheel < kWheelCount) frictionEllipse(wheel, outLong, outLat);
+        if (wheel < kWheelCount) frictionEllipse(wheel, outLong, outLat, suspensionImpulse);
     });
 
     world.system().AddConstraint(m_constraint);
@@ -418,6 +455,24 @@ float Vehicle::staticGripFriction(float curveFriction, float slip) const {
     return std::max(curveFriction, t.tirePeakLongFriction);
 }
 
+// Normalized combined slip of the last step (frictionEllipse), faded out at a crawl like the ellipse; 0 in the air.
+float Vehicle::tireGripUse(int wheel) const {
+    if (!m_telemetry.wheels[std::size_t(wheel)].contact) return 0.0f;
+    const EllipseSlip& e = m_ellipseSlip[std::size_t(wheel)];
+    return e.blend * std::sqrt(e.sx * e.sx + e.sy * e.sy);
+}
+
+// Wheel load of the previous tick over the tire's reference load (VehicleTuning::tireReferenceLoad, 0 = m g / 4). A
+// wheel without a load on the previous tick (just landed) reads 1.
+float Vehicle::tireLoadRatio(JPH::uint wheel) const {
+    const VehicleTuning& t = m_tireTuning;
+    if (t.tireLoadFriction == 0.0f && t.tireLoadCornering == 0.0f) return 1.0f;
+    const float load = m_telemetry.wheels[wheel].load;
+    if (load <= 0.0f) return 1.0f;
+    const float reference = t.tireReferenceLoad > 0.0f ? t.tireReferenceLoad : 0.25f * m_config.mass * 9.81f;
+    return std::clamp(load / std::max(reference, 1.0f), 0.1f, 4.0f);
+}
+
 // Slip ratio for the tire curve. Jolt divides the slip speed by max(|v|, 0.001 m/s), so near a standstill any wheel
 // rotation reads as a full slide (sliding mu) and a hill start can never stay at the peak. Here the denominator has
 // a floor of tireSlipSpeedFloor (a common low-speed treatment in tire models); above it this equals Jolt's value.
@@ -445,17 +500,35 @@ void Vehicle::updateEllipseSlip(JPH::uint wheel, float slip, float slipScale) {
     e.blend = std::clamp((v.Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
 }
 
-// Jolt limits the longitudinal and lateral tire impulses independently (a friction rectangle), so a locked wheel
-// keeps its full side grip and steers as well as a rolling one. Beyond the peak (normalized slip s > 1) each limit is
-// scaled by its share of the normalized slip (sx / s, sy / s): the force lies on an ellipse with the two limits as
-// semi-axes and points along the combined slip, like a sliding contact patch. Below the peak nothing changes.
-void Vehicle::frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const {
+// Jolt limits the longitudinal and lateral tire impulses independently (a friction rectangle): a driven rear tire
+// passed its full drive force and its full side force together, then lost both at once past the peak. With the
+// ellipse (normalized slips sx, sy; s = |(sx, sy)|):
+// - below the peak (s <= 1) the side force follows its curve and the longitudinal limit is what the ellipse leaves
+//   beside it, peak x sqrt(1 - sy^2): a tire near its cornering limit spins (or locks) under a small drive (brake)
+//   torque, as a real one does, and ABS / TC see that slip;
+// - beyond the peak the force points along the combined slip, peak x curve(s) x (sx / s, sy / s), each direction's
+//   curve taken at the combined normalized slip (sliding friction once the patch slides).
+// Both expressions meet at s = 1 (the lateral curve is linear up to its peak), so the limits change continuously.
+void Vehicle::frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse, float suspensionImpulse) const {
     if (!m_tireTuning.tireFrictionEllipse) return;
     const EllipseSlip& e = m_ellipseSlip[wheel];
+    const VehicleTuning& t = m_tireTuning;
     const float s = std::sqrt(e.sx * e.sx + e.sy * e.sy);
-    if (s <= 1.0f) return;
-    ioLongImpulse *= 1.0f + e.blend * (e.sx / s - 1.0f);
-    ioLatImpulse *= 1.0f + e.blend * (e.sy / s - 1.0f);
+    float lon = ioLongImpulse, lat = ioLatImpulse;
+    if (s <= 1.0f) {
+        lon *= std::sqrt(std::max(0.0f, 1.0f - e.sy * e.sy));
+    } else {
+        const JPH::WheelSettingsWV& w = *m_wheelSettings[wheel];
+        const float slipX = s * t.tirePeakSlipRatio, slipY = s * t.tirePeakSlipAngleDeg;
+        const float fx = looseCurve(w.mLongitudinalFriction.GetValue(slipX), slipX, t.tirePeakSlipRatio, t.tirePeakLongFriction, e.slideDrop) /
+                         std::max(t.tirePeakLongFriction, 1e-3f);
+        const float fy = looseCurve(w.mLateralFriction.GetValue(slipY), slipY, t.tirePeakSlipAngleDeg, t.tirePeakLatFriction, e.slideDrop) /
+                         std::max(t.tirePeakLatFriction, 1e-3f);
+        lon = e.longPeak * fx * (e.sx / s) * suspensionImpulse;
+        lat = e.latPeak * fy * (e.sy / s) * suspensionImpulse;
+    }
+    ioLongImpulse += e.blend * (lon - ioLongImpulse);
+    ioLatImpulse += e.blend * (lat - ioLatImpulse);
 }
 
 void Vehicle::applyTuning(const VehicleTuning& t) {
@@ -539,6 +612,30 @@ void Vehicle::updateSuspension(float dt) {
         // A solid suspension has no damper travel left: only the tire's own (small) damping, taken as 5 % of critical.
         spring.mDamping = tire > 0.0f ? 0.1f * std::sqrt(ac.tireStiffness * mass)
                                       : 2.0f * mass * suspensionDampingRatio(a, speed) * omega;
+    }
+}
+
+// Compliance steer (AxleTuning::complianceSteer) from the tire side forces of the previous step, summed per axle
+// along the body's left axis: the front wheels steer against the force, the rear wheels with it. The deflection
+// follows the force with a first-order lag (kComplianceLag, the bushings' damping, which also keeps the loop
+// force -> steer -> force from ringing) and fades in between 1 and 3 m/s, where Jolt's slip angles become defined.
+void Vehicle::updateCompliance(float dt) {
+    constexpr float kComplianceLag = 0.03f; // s
+    const VehicleTuning& t = m_config.tuning;
+    const JPH::Vec3 left = m_body->GetRotation() * JPH::Vec3::sAxisX();
+    const float fade = std::clamp((m_body->GetLinearVelocity().Length() - 1.0f) / 2.0f, 0.0f, 1.0f);
+    const float a = dt > 0.0f ? std::min(1.0f, dt / kComplianceLag) : 0.0f;
+    for (int axle = 0; axle < 2; ++axle) {
+        float force = 0.0f;
+        for (int k = 0; k < 2; ++k) {
+            const JPH::Wheel* w = m_constraint->GetWheel(uint(2 * axle + k));
+            if (w->HasContact() && dt > 0.0f) force += w->GetLateralLambda() / dt * w->GetContactLateral().Dot(left);
+        }
+        const float sign = axle == kFrontAxle ? -1.0f : 1.0f;
+        const float target = sign * t.axles[std::size_t(axle)].complianceSteer * kDegToRad * force * 0.001f * fade;
+        m_complianceSteer[std::size_t(axle)] += (target - m_complianceSteer[std::size_t(axle)]) * a;
+        m_compliant->steerOffset[std::size_t(2 * axle)] = m_complianceSteer[std::size_t(axle)];
+        m_compliant->steerOffset[std::size_t(2 * axle + 1)] = m_complianceSteer[std::size_t(axle)];
     }
 }
 
@@ -739,6 +836,7 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
     const bool offRoadTc = m_controls.traction == TractionMode::OffRoad;
     ev.tcSlipThreshold = offRoadTc ? at.tcOffRoadSlipThreshold : at.tcSlipThreshold;
     ev.tcMinFactor = offRoadTc ? at.tcOffRoadMinThrottle : at.tcMinThrottle;
+    ev.tcGripThreshold = offRoadTc ? at.tcOffRoadGripThreshold : at.tcGripThreshold;
     float groundSum = 0.0f;
     int inContact = 0;
     for (int a = 0; a < 2; ++a) {
@@ -746,11 +844,13 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
         s.motorOmega = m_electric->motorOmega[std::size_t(a)];
         s.wheelRadius = m_config.axles[std::size_t(a)].wheelRadius;
         s.frictionBrakeTorque = vt.axles[std::size_t(a)].brakeTorque;
-        float minSlip = 1e9f;
+        float minSlip = 1e9f, useSum = 0.0f, loadSum = 0.0f;
         for (int k = 0; k < 2; ++k) {
             const int i = 2 * a + k;
             const WheelTelemetry& w = m_telemetry.wheels[std::size_t(i)];
             if (w.contact) {
+                useSum += tireGripUse(i) * w.load;
+                loadSum += w.load;
                 minSlip = std::min(minSlip, m_aidOut.driveSlip[std::size_t(i)]);
                 groundSum += w.groundSpeed;
                 ++inContact;
@@ -763,6 +863,7 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
             if (m_aidOut.absPressure[std::size_t(i)] < 0.999f) s.absModulating = true;
         }
         s.driveSlip = minSlip > 1e8f ? 0.0f : minSlip;
+        s.gripUse = loadSum > 0.0f ? useSum / loadSum : 0.0f;
     }
     ev.rollingBack = inContact > 0 && driveSign * groundSum / float(inContact) < -at.tcRollbackSpeed;
     ev.dt = dt;
@@ -775,7 +876,7 @@ void Vehicle::prePhysicsElectric(const DriverCommand& cmd, float dt) {
     for (int i = 0; i < kWheelCount; ++i) {
         const WheelTelemetry& w = m_telemetry.wheels[i];
         const int axle = i < 2 ? kFrontAxle : kRearAxle;
-        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed};
+        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed, w.load, tireGripUse(i)};
         in.maxBrakeTorque[i] = vt.axles[axle].brakeTorque * m_evOut.frictionScale[std::size_t(axle)];
         in.driven[i] = true;
     }
@@ -826,7 +927,7 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     AidInput in;
     for (int i = 0; i < kWheelCount; ++i) {
         const WheelTelemetry& w = m_telemetry.wheels[i];
-        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed};
+        in.wheels[i] = {w.contact, w.groundSpeed, w.rollingSpeed, w.load, tireGripUse(i)};
         in.maxBrakeTorque[i] = m_config.tuning.axles[i < 2 ? kFrontAxle : kRearAxle].brakeTorque;
         in.driven[i] = i < 2 ? m_telemetry.frontDriven : m_telemetry.rearDriven;
     }
@@ -1010,6 +1111,7 @@ void Vehicle::postPhysics(float dt) {
         if (i < 2) steerSum += wt.steerAngleDeg;
     }
     t.steerAngleDeg = 0.5f * steerSum;
+    for (int a = 0; a < 2; ++a) t.complianceSteerDeg[std::size_t(a)] = m_complianceSteer[std::size_t(a)] * kRadToDeg;
     updateTireThermal(m_tickDt > 0.0f ? m_tickDt : dt);
 }
 

@@ -82,11 +82,25 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
     // roll back faster, so the throttle cut recovers instead.
     const bool rollingBack = inContact > 0 && in.driveSign * groundSum / float(inContact) < -t.tcRollbackSpeed;
     if (minSlip > 1e8f) minSlip = 0.0f; // all wheels in the air
+    // Load-weighted combined slip of the driven tires in contact (tcGripThreshold).
+    float useSum = 0.0f, loadSum = 0.0f;
+    for (int i = 0; i < kAidWheels; ++i) {
+        const AidWheelInput& w = in.wheels[i];
+        if (!w.contact || !in.driven[i]) continue;
+        useSum += w.gripUse * w.load;
+        loadSum += w.load;
+    }
+    const float gripUse = loadSum > 0.0f ? useSum / loadSum : 0.0f;
+    const float gripThreshold = offRoad ? t.tcOffRoadGripThreshold : t.tcGripThreshold;
     // Brake a wheel that spins faster than the slowest driven wheel in contact: through the open differentials the brake
-    // reaction drives the other wheels. Uniform spin of all wheels is the throttle's job.
+    // reaction drives the other wheels. That only helps while the slowest wheel has grip to spare: in a corner the
+    // unloaded inner wheel spins first, and braking it sent its torque to the loaded outer tire already at its limit
+    // (a driven rear axle stepped out with TC on). The brake therefore fades out as the slowest wheel's slip approaches
+    // the threshold; uniform spin of all wheels is the throttle's job.
+    const float spare = std::clamp(1.0f - minSlip / std::max(threshold, 1e-3f), 0.0f, 1.0f);
     for (int i = 0; i < kAidWheels; ++i) {
         const float excess = std::min(m_slip[i] - threshold, m_slip[i] - minSlip - threshold);
-        const float target = driving ? std::clamp(t.tcBrakeGain * excess, 0.0f, t.tcMaxBrakeTorque) : 0.0f;
+        const float target = driving ? std::clamp(t.tcBrakeGain * excess * spare, 0.0f, t.tcMaxBrakeTorque) : 0.0f;
         float& b = m_tcBrake[i];
         const float step = t.tcBrakeRate * dt;
         b = driving ? b + std::clamp(target - b, -step, step) : 0.0f;
@@ -98,7 +112,10 @@ AidOutput DrivingAids::update(const DrivingAidTuning& t, const AidControls& cont
     // Throttle: integral control of the slowest wheel's slip toward the threshold (error normalized by the threshold;
     // a faster cut than recovery).
     if (driving) {
-        const float e = rollingBack ? -1.0f : (minSlip - threshold) / threshold;
+        float e = (minSlip - threshold) / threshold;
+        // Combined slip: an error of one at a quarter beyond the threshold.
+        if (gripThreshold > 0.0f) e = std::max(e, (gripUse - gripThreshold) / (0.25f * gripThreshold));
+        if (rollingBack) e = -1.0f;
         const float rate = e > 0.0f ? -t.tcCutRate * std::min(e, 2.0f) : t.tcRecoverRate * std::min(-e, 1.0f);
         m_throttleFactor = std::clamp(m_throttleFactor + rate * dt, offRoad ? t.tcOffRoadMinThrottle : t.tcMinThrottle, 1.0f);
     } else {

@@ -537,9 +537,13 @@ void suvDefinitionMatchesBuiltin() {
     // v0.24: front-biased brakes (4200 / 2200 N*m per wheel; 3000 / 3000 left the front axle short of its grip).
     expected.tuning.axles[0].brakeTorque = 4200.0f;
     expected.tuning.axles[1].brakeTorque = 2200.0f;
+    // Compliance steer, deg/kN (hand-set; the built-in configuration is rigid).
+    expected.tuning.axles[0].complianceSteer = 0.15f;
+    expected.tuning.axles[1].complianceSteer = 0.12f;
     std::printf("    comForward %.9g vs %.9g, layout %s, drag area %.2f m^2\n", def.config.comForward,
                 expected.comForward, driveLayoutName(def.config.layout), double(def.config.tuning.dragArea));
-    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires, final drive and brakes");
+    CHECK(def.config == expected, "vehicle.json differs from the built-in configuration beyond layout, drag, tires, final drive, brakes and "
+          "compliance steer");
 }
 
 

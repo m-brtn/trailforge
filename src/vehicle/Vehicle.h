@@ -123,7 +123,8 @@ struct VehicleTelemetry {
     float throttleFactor = 1.0f; // TC throttle factor (1 = no cut)
     float engineThrottle = 0.0f; // throttle passed to Jolt after the TC cut
     DiffMode frontDiff = DiffMode::Open, rearDiff = DiffMode::Open, centerDiff = DiffMode::Open; // effective modes
-    float steerAngleDeg = 0.0f; // average front wheel angle, degrees
+    float steerAngleDeg = 0.0f; // average front wheel angle, degrees (compliance steer included)
+    std::array<float, 2> complianceSteerDeg{}; // compliance steer per axle, degrees, + is left
     float upDot = 1.0f;         // cosine of the angle between the body Y axis and vertical
     TireSet tireSet = TireSet::Offroad;
     float ambientC = kDefaultAmbientC; // air and ground temperature used by the tire thermal model
@@ -132,6 +133,7 @@ struct VehicleTelemetry {
 };
 
 class ElectricVehicleController;
+class CompliantController;
 
 // Four-wheeled vehicle based on Jolt VehicleConstraint + WheeledVehicleController; the drive layout comes from the
 // configuration (VehicleConfig::layout).
@@ -204,14 +206,17 @@ private:
     void buildTireCurves(const VehicleTuning& t);
     float staticGripFriction(float curveFriction, float slip) const;
     float curveSlip(JPH::uint wheel) const;
+    float tireLoadRatio(JPH::uint wheel) const;
+    float tireGripUse(int wheel) const;
     static float looseCurve(float curve, float slip, float peakSlip, float peak, float slideDrop);
     void updateEllipseSlip(JPH::uint wheel, float slip, float slipScale);
-    void frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse) const;
+    void frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse, float suspensionImpulse) const;
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
     float clutchStrength(float throttle) const;
     void applyDifferentials();
     void updateSuspension(float dt); // compression / rebound damping, damper curve, bump stops (inside the step)
     void applyAckermann(float steer);
+    void updateCompliance(float dt); // compliance steer offsets for the next step (inside the step)
     void applyDrag();
     void applyRollingResistance();
     void prePhysicsElectric(const DriverCommand& cmd, float dt);
@@ -233,6 +238,8 @@ private:
     JPH::Ref<JPH::VehicleConstraint> m_constraint;
     JPH::WheeledVehicleController* m_controller = nullptr;
     ElectricVehicleController* m_electric = nullptr; // same object as m_controller for electric vehicles
+    CompliantController* m_compliant = nullptr;       // same object as m_controller
+    std::array<float, 2> m_complianceSteer{};         // rad per axle, + = left
     ElectricDrive m_evDrive;
     EvOutput m_evOut;
     EvDriveMode m_evMode = EvDriveMode::Normal;
@@ -242,9 +249,11 @@ private:
     // Written from CombineFriction (inside the physics step), read after the step.
     std::array<SurfaceId, kWheelCount> m_contactSurface{};
     // Friction ellipse input per wheel, written in CombineFriction and read by the tire max impulse callback of the
-    // same step: normalized slip ratio, normalized slip angle, low-speed blend (0..1).
+    // same step: normalized slip ratio, normalized slip angle, low-speed blend (0..1), peak friction of each direction
+    // on this surface (tire set and temperature included) and the surface's slide drop.
     struct EllipseSlip {
         float sx = 0.0f, sy = 0.0f, blend = 0.0f;
+        float longPeak = 0.0f, latPeak = 0.0f, slideDrop = 1.0f;
     };
     std::array<EllipseSlip, kWheelCount> m_ellipseSlip{};
 

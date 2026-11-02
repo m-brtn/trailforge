@@ -24,6 +24,7 @@ float motorBaseRPM(const MotorConfig& m);
 struct EvAxleState {
     float motorOmega = 0.0f;   // rad/s, reduction x average wheel speed of the axle (+ = forward rotation)
     float driveSlip = 0.0f;    // low-passed drive slip of the axle's slower wheel in contact (DrivingAids definition)
+    float gripUse = 0.0f;      // load-weighted normalized combined slip of the axle's wheels in contact (AidWheelInput)
     float brakeSlip = 0.0f;    // max braking slip (v - w*r) / v of the axle's wheels, 0 below absMinSpeed
     bool absModulating = false; // ABS released pressure on a wheel of this axle on the last tick
     float wheelRadius = 0.4f;  // m
@@ -40,6 +41,7 @@ struct EvInput {
     float frontShare = 0.5f; // split at part throttle (drive mode)
     bool traction = false;   // traction control on (On or OffRoad)
     float tcSlipThreshold = 0.2f; // of the TC mode
+    float tcGripThreshold = 0.0f; // of the TC mode (DrivingAidTuning::tcGripThreshold), 0 = off
     float tcMinFactor = 0.05f;    // of the TC mode
     bool rollingBack = false;     // rolling against the selected direction: the factors recover instead
     std::array<EvAxleState, 2> axles{};

@@ -94,14 +94,19 @@ struct DrivingAidTuning {
     float absMinSpeed = 1.5f;     // m/s, below this the pedal acts directly (a real ABS also drops out near a stop)
 
     // Traction control. Drive slip = (w*r - v) / max(v, tcMinSpeed), also for a wheel in the air.
-    float tcSlipThreshold = 0.20f;        // On
+    float tcSlipThreshold = 0.12f;        // On (the tire curves peak at a slip ratio of 0.10)
     float tcOffRoadSlipThreshold = 0.35f; // OffRoad
+    // Throttle cut also on the driven tires' combined slip (load-weighted DrivingAids AidWheelInput::gripUse): a tire
+    // at its cornering limit has no grip left for drive force, so the rear axle of a car turned at the limit steps
+    // out under throttle long before its wheels spin up. 1 = the peak of the friction ellipse. 0 = off.
+    float tcGripThreshold = 0.85f;        // On
+    float tcOffRoadGripThreshold = 1.2f;  // OffRoad
     float tcMinSpeed = 2.0f;              // m/s, slip denominator floor (slip is undefined at a standstill)
     float tcSlipFilterTime = 0.05f;       // s, low-pass time constant of the measured slip
     float tcBrakeGain = 3000.0f;          // N*m of brake per unit of slip above the threshold
     float tcMaxBrakeTorque = 1500.0f;     // N*m per wheel
     float tcBrakeRate = 8000.0f;          // N*m/s, rate limit of the TC brake torque (both directions)
-    float tcCutRate = 1.5f;               // 1/s, throttle factor drop rate at an error of one threshold
+    float tcCutRate = 4.0f;               // 1/s, throttle factor drop rate at an error of one threshold
     float tcRecoverRate = 0.6f;           // 1/s, throttle factor recovery rate at zero slip
     float tcMinThrottle = 0.05f;          // throttle factor floor, On
     float tcOffRoadMinThrottle = 0.10f;   // throttle factor floor, OffRoad
@@ -140,6 +145,12 @@ struct AxleTuning {
     float bumpStopRange = 0.06f;
     float bumpStopFrequencyScale = 4.0f;
     float bumpStopHysteresis = 0.5f;
+    // Compliance steer, deg of wheel steer per kN of side force on this axle (steering rack and arm bushings, the
+    // tires' aligning torque through the steering): the front wheels turn away from the corner, the rear wheels with
+    // it, both toward understeer. Measured on a 2003 Ford Expedition: steering compliance 0.34 + aligning torque 0.28
+    // + lateral-force compliance steer 1.02 = 1.6 deg/g (Ohio State University MSc thesis on its handling model,
+    // 2003). 0 = rigid.
+    float complianceSteer = 0.0f;
     // Brakes, N*m per wheel of this axle
     float brakeTorque = 3000.0f;
     float handBrakeTorque = 0.0f;
@@ -174,6 +185,13 @@ struct VehicleTuning {
     // peak, slip angle / peak). A locked or spinning wheel then has little side grip. false = Jolt's independent
     // limits (a locked wheel keeps full side grip and steers).
     bool tireFrictionEllipse = true;
+    // Load sensitivity: at r = load / reference load the peak friction is mu x r^-tireLoadFriction and the cornering
+    // stiffness (initial slope of the side force) grows as load^(1 - tireLoadCornering), so the peak slip angle moves
+    // to angle x r^(tireLoadCornering - tireLoadFriction). The reference is the tire's nominal load; 0 = the vehicle's
+    // mean static wheel load (m g / 4). Both exponents 0 = no load sensitivity (force proportional to load).
+    float tireLoadFriction = 0.12f;
+    float tireLoadCornering = 0.40f;
+    float tireReferenceLoad = 0.0f; // N
 
     // Steering rate toward the target (keyboard) and return-to-center rate, 1/s of full lock. The analog stick uses
     // twice these rates.

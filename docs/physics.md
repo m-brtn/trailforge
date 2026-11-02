@@ -9,7 +9,22 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   The drawn arms and coil-overs (including the buggy's frame-mounted shock towers) only follow the Jolt hub; their
   geometry does not change camber, motion ratio or travel.
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
-  No Pacejka model or sidewall deformation.
+  No Pacejka model or sidewall deformation. No relaxation length: the slip angle acts on the next step.
+- Load sensitivity (`tires.loadSensitivity`, default friction 0.12 and cornering stiffness 0.40): with r = load /
+  reference load (default a quarter of the vehicle weight, r clamped to 0.1–4) the tire's μ is scaled by r^-0.12 and
+  its lateral curve is stretched along the slip-angle axis by r^0.28, so the cornering stiffness grows as load^0.6
+  and the peak force as load^0.88 (published passenger tire values: stiffness exponent ~0.5–0.8, μ falling ~10 % per
+  doubled load). Weight transfer and anti-roll bars therefore move the balance, but through the force limit Jolt
+  applies per step, not a tire model: measured on the SUV at 0.4 g, a +20000 N/m front bar raises the understeer
+  gradient by 0.04 deg/g and a rear one lowers it by 0.05 deg/g; on the patrol the front bar lowers the limit from
+  0.82 to 0.72 g (`trailforge_probe handling arb`). The direction is right; the size in the linear range is small.
+- Compliance steer (`steering.compliance`, deg per kN of axle side force): stands in for steering-system, bushing and
+  roll-steer compliance that is not modelled. The front wheels steer out of the turn and the rear wheels steer into it
+  by the configured angle per kN of the axle's lateral force from the previous step (30 ms lag, faded in between 1
+  and 3 m/s), added to Jolt's steer angle before the wheel casts. It applies no force. Values are hand-set (SUV
+  0.15 / 0.12, EV 0.10 / 0.10, patrol 0.25 / 0.20 deg/kN), not measured; a published Ford Expedition breakdown has
+  ~1.6 deg/g of compliance understeer. Understeer gradient at 60 km/h on asphalt (commanded road-wheel angle, steer
+  ramp, `trailforge_probe handling ramp`): SUV 2.94, EV 2.63, patrol 1.69 deg/g (published: cars 2–3, SUVs 3–5).
 - Grip levels (SUV on its all-terrain set; `trailforge_probe tires brake` and a 50 km/h steer ramp): 60-0 km/h with
   ABS 0.90 g on asphalt, 0.60–0.63 g on gravel and dirt, 0.47 g on grass; 0.91 g lateral on asphalt, 0.64 g on dirt,
   0.53 g on gravel and 0.46 g on grass. These match published ranges for these surfaces; most of Exploration Peaks is grass
@@ -85,12 +100,14 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   start without TC gets 11.5–12.6 m up the 16 m to the plateau or reaches it in 14–15 s (`trailforge_probe tcmud`)
   where it used to stay at the foot.
 - Friction ellipse (combined slip): Jolt's longitudinal and lateral limits are independent (a friction rectangle), so a
-  locked wheel kept steering. With `tireFrictionEllipse` (on by default, Tuning → Tires) the max tire impulses from
-  `WheeledVehicleController::SetTireMaxImpulseCallback` are scaled once the normalized slips (slip ratio / peak, slip
-  angle / peak) add up to more than one: each axis keeps its share of the friction budget, so the force lies on an
-  ellipse with the longitudinal and lateral limits as semi-axes (blended in between 1 and 3 m/s of contact-patch
-  speed). Below the peak nothing changes. This is an approximation on top of two μ(slip) curves, not a combined-slip
-  tire model; measurements with and without it are under [Driver aids](vehicles.md#driver-aids).
+  locked wheel kept steering and a driven rear tire carried full drive and full side force at once. With
+  `tireFrictionEllipse` (on by default, Tuning → Tires) the max tire impulses from
+  `WheeledVehicleController::SetTireMaxImpulseCallback` are reshaped with the normalized slips sx = slip ratio / peak
+  and sy = slip angle / peak (s = √(sx² + sy²)): below the peak (s ≤ 1) the longitudinal limit is scaled by
+  √(1 − sy²) (Jolt's lateral constraint is solved first, so the side force keeps priority); beyond it both limits
+  follow the curves at the combined slip s, split along (sx, sy) / s. The two meet at s = 1 because the lateral curve
+  is linear up to its peak. Blended in between 1 and 3 m/s of contact-patch speed. An approximation on top of two
+  μ(slip) curves, not a combined-slip tire model.
 - Tire marks, ruts and flattened or torn grass are visual only: they never change friction, ground height or
   collision, and their relief exists only in the shading normal. The trample mask has 0.1 m texels and refreshes
   every 0.5 s while marks fade. The "Fill to cap" ribbons are synthetic (not driven). Soil in the tread and its

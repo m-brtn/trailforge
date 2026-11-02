@@ -377,12 +377,18 @@ specific production unit.
   9–15 Hz per wheel on straight stops (`trailforge_probe abs`, 120 Hz). At 60 Hz the controller also runs at 60 Hz
   and is coarser: a few short locks, and on dirt the straight stop is up to ~7 % longer than with locked wheels.
 - **Traction control** (On / Off-road): drive slip = (ωr − v) / max(|v|, 2 m/s), low-pass filtered (50 ms, at least
-  6 ticks). A wheel that spins more than the slowest wheel in contact by the threshold (0.20 On, 0.35 Off-road) gets
-  a brake torque (gain 3000 N·m per unit slip, max 1500 N·m) — that is how an open differential's torque gets back to
-  the wheel with grip; the TC brake is released at once when the wheel stops spinning ahead of the ground (otherwise
-  Jolt would hold it locked). When even the slowest wheel spins above the threshold, an integrating controller cuts
-  the engine throttle (down to 0.05 On, 0.10 Off-road; cut 1.5 /s, recovery 0.6 /s); while the vehicle rolls back
-  against the selected direction faster than 0.3 m/s the throttle recovers instead of being cut.
+  6 ticks). A wheel that spins more than the slowest wheel in contact by the threshold (0.12 On — the tire curves peak
+  at 0.10 —, 0.35 Off-road) gets a brake torque (gain 3000 N·m per unit slip, max 1500 N·m) — that is how an open
+  differential's torque gets back to the wheel with grip. The brake fades out as the slowest wheel's own slip nears the
+  threshold: in a corner the unloaded inner rear spins first, and braking it sent the torque to the loaded outer tire
+  that was already at its limit. The TC brake is released at once when the wheel stops spinning ahead of the ground
+  (otherwise Jolt would hold it locked). An integrating controller cuts the engine throttle (down to 0.05 On, 0.10
+  Off-road; cut 4 /s per unit error, at most 8 /s; recovery 0.6 /s) when even the slowest wheel spins above the
+  threshold, or when the driven tires' load-weighted combined slip (√((slip / peak)² + (slip angle / peak)²), 1 = the
+  peak of the friction ellipse) exceeds `tcGripThreshold` (0.85 On, 1.2 Off-road; the patrol 0.70 On): a rear tire
+  at its cornering limit has no grip left for drive, so a 2H car turned at the limit stepped out under throttle before
+  its wheels spun up. While the vehicle rolls back against the selected direction faster than 0.3 m/s the throttle
+  recovers instead of being cut. The electric SUV's per-axle TC uses the same combined-slip signal per axle.
 - **Differentials.** Jolt's differentials split torque; they have no kinematic link between the two sides. Open =
   fixed 50/50 split. LSD = Jolt's limited-slip ratio (max/min side speed, 1.4 by default; above it the torque shifts
   to the slower side). **Locked** is the same Jolt LSD with ratio 1.05: almost all torque goes to the slower side as
