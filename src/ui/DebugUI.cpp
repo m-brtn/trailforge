@@ -431,6 +431,17 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100.0f);
         edited |= ImGui::SliderFloat("##reflscale", &s.reflectionScale, 0.25f, 1.0f, "%.2fx res");
+        {
+            const char* probe[] = {"Sky only", "64 px", "128 px", "256 px"};
+            int p = s.envProbe <= 0 ? 0 : s.envProbe <= 64 ? 1 : s.envProbe <= 128 ? 2 : 3;
+            if (ImGui::Combo("Vehicle reflections", &p, probe, 4)) {
+                s.envProbe = p == 0 ? 0 : 32 << p;
+                edited = true;
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100.0f);
+            edited |= ImGui::SliderInt("##probefaces", &s.envProbeFaces, 1, 6, "%d faces/frame");
+        }
         const char* grass[] = {"Off", "Sparse", "Medium", "Dense", "Very dense"};
         edited |= ImGui::Combo("Grass", &s.grassLevel, grass, 5);
         edited |= ImGui::SliderFloat("Grass distance [m]", &s.grassDistance, 10.0f, 250.0f, "%.0f");

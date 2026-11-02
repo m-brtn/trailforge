@@ -55,6 +55,7 @@ constexpr int kGrassBucket = 32;           // chunks per bucket side (76.8 m)
 constexpr float kTrampleWindow = 204.8f;   // m: side of the trample window on large ground maps
 constexpr int kTerrainPatch = 64;          // cells per terrain chunk side
 constexpr int kTerrainLevels = 4;          // steps 8, 4, 2, 1
+constexpr float kEnvProbeRadius = 70.0f;   // m: trees and level models drawn into the vehicle probe
 constexpr float kGrassCells[4] = {0.2f, 0.15f, 0.1f, 0.075f};
 constexpr int kGrassSegs[3] = {4, 2, 1};
 // Outer edges of the two dense grass LODs: a longer grass distance only adds sparse far-LOD rings.
@@ -218,7 +219,13 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         pi.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
         pi.address_mode_u = pi.address_mode_v = pi.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         m_pointSampler = SDL_CreateGPUSampler(m_device, &pi);
-        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler || !m_pointSampler)
+        SDL_GPUSamplerCreateInfo ei{};
+        ei.min_filter = ei.mag_filter = SDL_GPU_FILTER_LINEAR;
+        ei.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
+        ei.address_mode_u = ei.address_mode_v = ei.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        ei.max_lod = 16.0f;
+        m_envSampler = SDL_CreateGPUSampler(m_device, &ei);
+        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler || !m_pointSampler || !m_envSampler)
             fail("samplers");
     }
 
@@ -257,6 +264,9 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
         const float far = 1e9f;
         m_farDepth = makeTexture(1, 1, kLinDepthFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         uploadTexture(m_farDepth.tex, &far, 1, 1, 4);
+        // Bound in the vehicle probe's slot while the probe is off or being rendered (never sampled then).
+        m_envDummy = makeTexture(1, 1, kHdrFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, 6, 1,
+                                 SDL_GPU_TEXTURETYPE_CUBE);
     }
     buildGradeLut();
 
@@ -278,10 +288,11 @@ Renderer::~Renderer() {
                                        m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe,
                                        m_modelShadowPipe, m_linDepthPipe, m_gtaoPipe, m_aoBlurPipe, m_velocityPipe,
                                        m_velocityObjPipe, m_taaPipe, m_motionBlurPipe, m_dofBlurPipe, m_dofPipe,
-                                       m_lumPipe, m_adaptPipe, m_shaftsPipe})
+                                       m_lumPipe, m_adaptPipe, m_shaftsPipe, m_envTerrainPipe, m_envModelPipe})
         if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
     releaseTexture(m_lut);
     releaseTexture(m_farDepth);
+    releaseTexture(m_envDummy);
     if (m_adaptReadback) SDL_ReleaseGPUTransferBuffer(m_device, m_adaptReadback);
     for (GpuMesh& m : m_treeMeshes) m.release();
     releaseModels();
@@ -300,7 +311,7 @@ Renderer::~Renderer() {
     releaseTexture(m_noise);
     releaseTexture(m_mask);
     releaseTexture(m_height);
-    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler, m_pointSampler})
+    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler, m_pointSampler, m_envSampler})
         if (s) SDL_ReleaseGPUSampler(m_device, s);
     if (m_grassBuffer) SDL_ReleaseGPUBuffer(m_device, m_grassBuffer);
     if (m_grassTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_grassTransfer);
@@ -345,6 +356,8 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.flowerDensity = std::clamp(s.flowerDensity, 0.0f, 1.0f);
     s.ao = std::clamp(s.ao, 0, 2);
     s.contactShadows = std::clamp(s.contactShadows, 0, 16);
+    s.envProbe = s.envProbe <= 0 ? 0 : s.envProbe <= 32 ? 32 : s.envProbe <= 64 ? 64 : s.envProbe <= 128 ? 128 : 256;
+    s.envProbeFaces = std::clamp(s.envProbeFaces, 1, 6);
     s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
     s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
     s.lensFlare = std::clamp(s.lensFlare, 0.0f, 2.0f);
@@ -361,7 +374,8 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.sunHeadingDeg = std::fmod(std::fmod(s.sunHeadingDeg, 360.0f) + 360.0f, 360.0f);
     const bool targets = s.renderScale != m_settings.renderScale || s.msaa != m_settings.msaa ||
                          s.shadowCascades != m_settings.shadowCascades || s.shadowMapSize != m_settings.shadowMapSize ||
-                         s.farShadows != m_settings.farShadows || s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
+                         s.farShadows != m_settings.farShadows || s.envProbe != m_settings.envProbe ||
+                         s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
                          s.reflections != m_settings.reflections || s.bloom != m_settings.bloom ||
                          s.taa != m_settings.taa || (s.ao > 0) != (m_settings.ao > 0) ||
                          (s.contactShadows > 0) != (m_settings.contactShadows > 0) ||
@@ -509,7 +523,7 @@ void Renderer::createStaticPipelines() {
     m_shadowPipe = createPipeline("shadow_vs", "shadow_fs", 2, 0, 0, 0, 0, kLayoutLit, none, s1, true, true,
                                   SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
     // Mirrored view: the winding flips, so front faces are clockwise.
-    m_reflLitPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, s1, true, true,
+    m_reflLitPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, s1, true, true,
                                    SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
     m_reflSkyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, true, false,
                                    SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
@@ -523,7 +537,7 @@ void Renderer::createStaticPipelines() {
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
     m_treeShadowPipe = createPipeline("tree_shadow_vs", "shadow_fs", 2, 0, 0, 0, 1, kLayoutLit, none, s1, true, true,
                                       SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
-    m_reflTreePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, s1, true, true,
+    m_reflTreePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 4, 1, kLayoutLit, kHdrFormat, s1, true, true,
                                     SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
     m_tramplePipe = createPipeline("mark_mask_vs", "mark_mask_fs", 2, 0, 0, 0, 1, kLayoutNone, kTrampleFormat, s1,
                                    false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendMax);
@@ -539,6 +553,11 @@ void Renderer::createStaticPipelines() {
     m_modelShadowPipe = createPipeline("model_shadow_vs", "model_shadow_fs", 2, 2, 0, 1, 1, kLayoutModel, none, s1, true,
                                        true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
                                        kBiasShadow);
+    // Vehicle probe faces: the cube's face basis is mirrored like the puddle reflection (front faces clockwise).
+    m_envTerrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, s1, true, true,
+                                      SDL_GPU_CULLMODE_NONE, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
+    m_envModelPipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, s1, true, true,
+                                    SDL_GPU_CULLMODE_NONE, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
     auto post = [&](const char* fs, std::uint32_t samplers, SDL_GPUTextureFormat fmt, int blend = kBlendNone) {
         return createPipeline("fullscreen_vs", fs, 0, 1, 0, samplers, 0, kLayoutNone, fmt, s1, false, false,
                               SDL_GPU_CULLMODE_NONE, ccw, blend);
@@ -562,7 +581,7 @@ void Renderer::createStaticPipelines() {
 void Renderer::createScenePipelines() {
     const SDL_GPUSampleCount sc = sampleCount(m_settings.msaa);
     const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-    m_litPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 3, 0, kLayoutLit, kHdrFormat, sc, true, true,
+    m_litPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, true,
                                SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, sc, true, false,
                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
@@ -580,7 +599,7 @@ void Renderer::createScenePipelines() {
                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
     m_lineOnTopPipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, false, false,
                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
-    m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 3, 1, kLayoutLit, kHdrFormat, sc, true, true,
+    m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 4, 1, kLayoutLit, kHdrFormat, sc, true, true,
                                 SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
     // Skirts hang down from both sides of a chunk edge, so the terrain is drawn without culling.
     m_terrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, sc, true, true,
@@ -638,6 +657,8 @@ void Renderer::releaseTargets() {
     releaseTexture(m_reflColor);
     releaseTexture(m_reflDepth);
     releaseTexture(m_shadow);
+    releaseTexture(m_envCube);
+    releaseTexture(m_envDepth);
     for (Texture& t : m_bloom) releaseTexture(t);
     m_bloom.clear();
     releaseTexture(m_ldr);
@@ -699,6 +720,13 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
                            std::uint32_t(std::max(1, s.shadowCascades + (s.farShadows ? 1 : 0))), 1,
                            SDL_GPU_TEXTURETYPE_2D_ARRAY);
     m_farShadowValid = false;
+    if (s.envProbe > 0) {
+        const std::uint32_t e = std::uint32_t(s.envProbe);
+        m_envCube = makeTexture(e, e, kHdrFormat, colorRT | sampled, SDL_GPU_SAMPLECOUNT_1, 6,
+                                std::uint32_t(std::bit_width(e)), SDL_GPU_TEXTURETYPE_CUBE);
+        m_envDepth = makeTexture(e, e, kDepthFormat, depthRT);
+    }
+    m_envValid = false;
     if (s.bloom) {
         std::uint32_t bw = rw, bh = rh;
         for (int i = 0; i < kBloomLevels; ++i) {
@@ -1058,8 +1086,8 @@ void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const Tre
     if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
     m_treeBuffer = nullptr;
     m_treeTransfer = nullptr;
-    // Main view (twice: LOD cross-fade copies), reflection and shadow lists can each hold every tree.
-    m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 4);
+    // Main view (twice: LOD cross-fade copies), reflection, shadow and probe lists can each hold every tree.
+    m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 5);
     SDL_GPUBufferCreateInfo bi{};
     bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
     bi.size = m_treeCapacity * sizeof(TreeInstance);
@@ -1381,9 +1409,11 @@ Renderer::ModelRange Renderer::modelRange(const GpuModel& m) const {
     return r;
 }
 
-std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj) {
+std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj,
+                                   const glm::vec3* envCenter) {
     m_modelScratch.clear();
     m_modelDraws.clear();
+    m_modelEnvDraws.clear();
     for (auto& d : m_modelShadowDraws) d.clear();
     m_stats.modelInstances = m_stats.modelImpostors = m_stats.modelShadowInstances = m_stats.modelDraws = 0;
     m_stats.modelTriangles = m_stats.modelShadowTriangles = 0;
@@ -1391,7 +1421,8 @@ std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& view
     constexpr int kSlots = 5; // mesh LODs 0..3, impostor
     const std::size_t nm = m_models.size();
     const int cascades = std::min(m_settings.shadowCascades, 4);
-    m_modelBins.resize(nm * kSlots * std::size_t(1 + cascades));
+    const int envView = 1 + cascades; // bins after the cascades: models around the vehicle probe
+    m_modelBins.resize(nm * kSlots * std::size_t(2 + cascades));
     for (auto& b : m_modelBins) b.clear();
     auto bin = [&](int view, int model, int slot) -> std::vector<ModelInstance>& {
         return m_modelBins[(std::size_t(view) * nm + std::size_t(model)) * kSlots + std::size_t(slot)];
@@ -1417,12 +1448,15 @@ std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& view
         const glm::vec2 nxz(nearest.x - cam.x, nearest.z - cam.z);
         const bool inShadow = cascades > 0 && glm::length(nxz) < shadowR;
         const bool inView = nd < maxRange && fr.box(b.bmin, b.bmax);
-        if (!inView && !inShadow) continue;
+        const bool inEnv = envCenter && glm::length(glm::clamp(*envCenter, b.bmin, b.bmax) - *envCenter) < kEnvProbeRadius;
+        if (!inView && !inShadow && !inEnv) continue;
         for (std::uint32_t i = b.first; i < b.first + b.count; ++i) {
             const ModelObject& o = m_modelObjects[i];
             const ModelRange& r = ranges[std::size_t(o.model)];
             const int nl = std::min<int>(int(m_models[std::size_t(o.model)].lods.size()), 4);
             const ModelInstance base{glm::vec4(o.position, 0.0f), glm::vec4(o.scale, o.yaw), glm::vec4(o.pitch, 0.0f, 0.0f, 0.0f)};
+            if (inEnv && nl > 0 && glm::length(o.center - *envCenter) < kEnvProbeRadius + o.radius)
+                bin(envView, o.model, nl - 1).push_back(base);
             const float d = glm::length(o.center - cam);
             if (inView && d < r.maxDistance && fr.sphere(o.center, o.radius)) {
                 int l = 0;
@@ -1468,7 +1502,7 @@ std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& view
                 if (view == 0) {
                     (slot == 4 ? m_stats.modelImpostors : m_stats.modelInstances) += int(v.size());
                     m_stats.modelTriangles += tris * v.size();
-                } else {
+                } else if (view <= cascades) {
                     m_stats.modelShadowInstances += int(v.size());
                     m_stats.modelShadowTriangles += tris * v.size();
                 }
@@ -1476,6 +1510,7 @@ std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& view
     };
     collect(0, m_modelDraws);
     for (int c = 0; c < cascades; ++c) collect(1 + c, m_modelShadowDraws[std::size_t(c)]);
+    collect(envView, m_modelEnvDraws);
 
     const std::uint32_t total = std::uint32_t(m_modelScratch.size());
     if (total > m_modelCapacity) {
@@ -1657,7 +1692,7 @@ void Renderer::fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& ex
 }
 
 std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* reflViewProj,
-                                  TreeLists& lists) {
+                                  const glm::vec3* envCenter, TreeLists& lists) {
     lists = {};
     m_treeScratch.clear();
     if (m_trees.empty()) return 0;
@@ -1718,6 +1753,14 @@ std::uint32_t Renderer::cullTrees(const FrameDesc& frame, const glm::mat4& viewP
             if (glm::dot(dxz, dxz) < r * r) m_treeScratch.push_back(t);
         }
         lists.shadowCount = std::uint32_t(m_treeScratch.size()) - lists.shadowFirst;
+    }
+    if (envCenter) {
+        lists.envFirst = std::uint32_t(m_treeScratch.size());
+        for (const TreeInstance& t : m_trees) {
+            const glm::vec2 dxz(t.baseHeight.x - envCenter->x, t.baseHeight.z - envCenter->z);
+            if (glm::dot(dxz, dxz) < kEnvProbeRadius * kEnvProbeRadius) m_treeScratch.push_back(t);
+        }
+        lists.envCount = std::uint32_t(m_treeScratch.size()) - lists.envFirst;
     }
     if (m_treeScratch.size() > m_treeCapacity) m_treeScratch.resize(m_treeCapacity);
     return std::uint32_t(m_treeScratch.size());
@@ -2117,9 +2160,13 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const std::uint32_t lineBytes = std::uint32_t(frame.lines.size_bytes());
     std::array<std::uint32_t, 3> grassCounts{};
     const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
+    // Vehicle environment probe around the body origin, a little above it.
+    const bool envOn = s.envProbe > 0 && m_envCube.tex;
+    const glm::vec3 envCenter = glm::vec3(frame.vehicleModel[3]) + glm::vec3(0.0f, 0.4f, 0.0f);
     TreeLists trees;
-    const std::uint32_t treeTotal = cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, trees);
-    const std::uint32_t modelTotal = cullModels(frame, viewProj, lightViewProj);
+    const std::uint32_t treeTotal =
+        cullTrees(frame, viewProj, reflVisible ? &reflViewProj : nullptr, envOn ? &envCenter : nullptr, trees);
+    const std::uint32_t modelTotal = cullModels(frame, viewProj, lightViewProj, envOn ? &envCenter : nullptr);
     for (int l = 0; l < 4; ++l) m_stats.trees[l] = int(trees.count[l]);
     m_stats.shadowTrees = int(trees.shadowCount);
     const TireMarks* marks = frame.tireMarks;
@@ -2200,7 +2247,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         du.tint = d.tint;
         du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, d.soilWetness, d.wheelRadius);
         du.soil = d.soil;
-        du.soilExtra = glm::vec4(d.soilFlecks, d.soilStick, 0.0f, 0.0f);
+        du.soilExtra = glm::vec4(d.soilFlecks, d.soilStick, d.vehicle && envOn ? 1.0f : 0.0f, 0.0f);
         SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
         SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
         SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
@@ -2400,9 +2447,120 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_EndGPURenderPass(pass);
     }
 
+    // ---- 1b. Vehicle environment probe: a few cube faces per frame around the vehicle, without it (terrain, track
+    // and scenery meshes, the coarsest level model LODs and tree meshes within kEnvProbeRadius, sky without the sun
+    // disc, which the sun specular already draws), then box-filtered mips for the rougher materials.
+    m_stats.envProbeFaces = m_stats.envProbeDraws = 0;
+    const SDL_GPUTextureSamplerBinding envDummy{m_envDummy.tex, m_envSampler};
+    if (envOn) {
+        // A jump (teleport, reset, vehicle change) renders every face at once.
+        const bool all = !m_envValid || glm::length(envCenter - m_envCenter) > 8.0f;
+        const int faces = all ? 6 : s.envProbeFaces;
+        m_envCenter = envCenter;
+        FrameUniforms ef = fu;
+        ef.cameraPos = glm::vec4(envCenter, frame.time);
+        ef.clipPlane = glm::vec4(0, 0, 0, 1);
+        ef.waterParams.y = 0.0f;
+        ef.options.x = 0.0f;
+        ef.sunDisc = glm::vec4(0.0f, 0.0f, 0.0f, fu.sunDisc.w);
+        ef.screenFx = glm::vec4(0.0f);
+        ef.envProbe = glm::vec4(0.0f);
+        // Face bases of the cube convention (+X, -X, +Y, -Y, +Z, -Z): forward, up; right = cross(up, forward).
+        static const glm::vec3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        static const glm::vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+        const glm::mat4 eproj = reverse * glm::perspective(glm::half_pi<float>(), 1.0f, 0.05f, 6000.0f);
+        const SDL_GPUTextureSamplerBinding envLitTex[4] = {
+            {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler}, envDummy};
+        for (int k = 0; k < faces; ++k) {
+            const int face = (m_envFace + k) % 6;
+            const glm::vec3 F = kFwd[face], U = kUp[face], R = glm::cross(U, F);
+            glm::mat4 view(1.0f);
+            for (int i = 0; i < 3; ++i) {
+                view[i][0] = R[i];
+                view[i][1] = U[i];
+                view[i][2] = -F[i];
+            }
+            view[3] = glm::vec4(-glm::dot(R, envCenter), -glm::dot(U, envCenter), glm::dot(F, envCenter), 1.0f);
+            ef.viewProj = eproj * view;
+            ef.invViewProj = glm::inverse(ef.viewProj);
+
+            SDL_GPUColorTargetInfo ct{};
+            ct.texture = m_envCube.tex;
+            ct.layer_or_depth_plane = std::uint32_t(face);
+            ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            ct.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPUDepthStencilTargetInfo dt{};
+            dt.texture = m_envDepth.tex;
+            dt.clear_depth = 0.0f;
+            dt.load_op = SDL_GPU_LOADOP_CLEAR;
+            dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
+            dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+            dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+            int draws = 0;
+            selectTerrain(envCenter, &ef.viewProj, 1e9f, 0.3f, m_envTerrainScratch);
+            if (!m_envTerrainScratch.empty()) {
+                SDL_BindGPUGraphicsPipeline(pass, m_envTerrainPipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
+                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+                m_terrainTexUniforms.params.z = m_terrainAsphalt ? 1.0f : 0.0f;
+                SDL_PushGPUFragmentUniformData(cmd, 1, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
+                const SDL_GPUTextureSamplerBinding terrainTex[5] = {envLitTex[0], envLitTex[1], envLitTex[2],
+                                                                    {m_terrainAlbedo.tex, m_terrainSampler},
+                                                                    {m_terrainNra.tex, m_terrainSampler}};
+                SDL_BindGPUFragmentSamplers(pass, 0, terrainTex, 5);
+                draws += drawTerrain(pass, m_envTerrainScratch, 2, nullptr);
+            }
+            SDL_BindGPUGraphicsPipeline(pass, m_reflLitPipe);
+            SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
+            SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+            SDL_BindGPUFragmentSamplers(pass, 0, envLitTex, 4);
+            const Frustum fr(ef.viewProj);
+            for (const DrawItem& d : frame.draws) {
+                if (!d.mesh || d.mesh->vertexCount() == 0 || d.vehicle) continue;
+                glm::vec3 center;
+                float radius;
+                drawSphere(d, center, radius);
+                if (!fr.sphere(center, radius)) continue;
+                drawLit(pass, d);
+                ++draws;
+            }
+            if (!m_modelEnvDraws.empty()) {
+                SDL_BindGPUGraphicsPipeline(pass, m_envModelPipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
+                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+                draws += drawModels(pass, m_modelEnvDraws, false, false);
+                draws += drawModels(pass, m_modelEnvDraws, true, false);
+            }
+            if (trees.envCount > 0) {
+                SDL_BindGPUGraphicsPipeline(pass, m_reflTreePipe);
+                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
+                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+                SDL_BindGPUFragmentSamplers(pass, 0, envLitTex, 4);
+                drawTrees(pass, m_treeMeshes[2], trees.envFirst, trees.envCount);
+                ++draws;
+            }
+            SDL_BindGPUGraphicsPipeline(pass, m_reflSkyPipe);
+            SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+            const SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+            SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
+            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(pass);
+            m_stats.envProbeDraws += draws + 1;
+        }
+        m_envFace = (m_envFace + faces) % 6;
+        SDL_GenerateMipmapsForGPUTexture(cmd, m_envCube.tex);
+        m_envValid = true;
+        m_stats.envProbeFaces = faces;
+        const float levels = float(std::bit_width(unsigned(s.envProbe)));
+        fu.envProbe = glm::vec4(1.0f, levels - 1.5f, levels - 2.0f, 0.0f);
+    }
+    m_stats.envProbe = envOn;
+
     // Shared fragment resources of the lit pipelines.
-    SDL_GPUTextureSamplerBinding litTex[3] = {
-        {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler}};
+    const SDL_GPUTextureSamplerBinding litTex[4] = {
+        {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler},
+        envOn ? SDL_GPUTextureSamplerBinding{m_envCube.tex, m_envSampler} : envDummy};
 
     MarkUniforms mu{};
     if (marks) {
@@ -2480,7 +2638,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_BindGPUGraphicsPipeline(pass, m_reflLitPipe);
         SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
         SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
-        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
         const Frustum fr(rf.viewProj);
         for (const DrawItem& d : frame.draws) {
             if (!d.mesh || d.mesh->vertexCount() == 0 || !d.inReflection) continue;
@@ -2495,7 +2653,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_reflTreePipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
             SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
             drawTrees(pass, m_treeMeshes[1], trees.reflFirst, trees.reflCount);
             ++m_stats.drawCalls;
         }
@@ -2616,7 +2774,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         SDL_BindGPUGraphicsPipeline(pass, m_litPipe);
         SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
         SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
         const Frustum fr(viewProj);
         for (const DrawItem& d : frame.draws) {
             if (!d.mesh || d.mesh->vertexCount() == 0) continue;
@@ -2651,7 +2809,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             SDL_BindGPUGraphicsPipeline(pass, m_treePipe);
             SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
             SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
+            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
             for (int l = 0; l < 4; ++l) {
                 if (trees.count[l] == 0) continue;
                 drawTrees(pass, m_treeMeshes[l], trees.first[l], trees.count[l]);

@@ -69,6 +69,7 @@ struct FrameUniforms {
     glm::vec4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
     glm::mat4 farShadowViewProj;
     glm::vec4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
+    glm::vec4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
 };
 
 struct DrawUniforms {
@@ -201,6 +202,7 @@ struct DrawItem {
     float wheelRadius = 0.0f;
     bool castsShadow = true;
     bool inReflection = true;  // drawn into the puddle reflection
+    bool vehicle = false;      // part of the player vehicle: lit by its local environment probe, not drawn into it
 };
 
 struct FrameDesc {
@@ -292,6 +294,9 @@ struct RenderStats {
     bool contactShadows = false;
     bool farShadows = false;                    // far terrain shadow layer in use
     int farShadowUpdates = 0;                   // times the far terrain shadow was rendered (since start)
+    bool envProbe = false;                      // vehicle environment probe valid and used this frame
+    int envProbeFaces = 0;                      // probe faces rendered this frame
+    int envProbeDraws = 0;                      // draw calls into the probe this frame
     int velocityObjects = 0;                    // moving meshes drawn into the velocity buffer
     float flareSun = 0.0f;                      // sun weight feeding the lens flare ghosts (0: no ghosts)
     float sceneLogLum = 0.0f;                   // adapted log2 mean scene luminance (after the base exposure)
@@ -415,10 +420,10 @@ private:
     // Fills m_treeScratch: main view LOD 0/1/2, puddle reflection, shadow casters. Returns the total instance count.
     struct TreeLists {
         std::array<std::uint32_t, 4> first{}, count{};
-        std::uint32_t reflFirst = 0, reflCount = 0, shadowFirst = 0, shadowCount = 0;
+        std::uint32_t reflFirst = 0, reflCount = 0, shadowFirst = 0, shadowCount = 0, envFirst = 0, envCount = 0;
     };
     std::uint32_t cullTrees(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* reflViewProj,
-                            TreeLists& lists);
+                            const glm::vec3* envCenter, TreeLists& lists);
     struct TerrainChunk {
         int i0, j0, step;
     };
@@ -550,6 +555,15 @@ private:
     glm::mat4 m_farShadowViewProj{1.0f};
     float m_farShadowTexel = 0.0f;
     std::vector<TerrainChunk> m_farShadowChunks;
+    // Vehicle environment probe: a small HDR cube around the vehicle (without it), a few faces per frame.
+    Texture m_envCube, m_envDepth, m_envDummy;
+    SDL_GPUSampler* m_envSampler = nullptr;
+    SDL_GPUGraphicsPipeline* m_envTerrainPipe = nullptr;
+    SDL_GPUGraphicsPipeline* m_envModelPipe = nullptr;
+    bool m_envValid = false;
+    int m_envFace = 0;
+    glm::vec3 m_envCenter{0.0f};
+    std::vector<TerrainChunk> m_envTerrainScratch;
     // Terrain material textures (BC7 arrays, one layer per material) or 1 x 1 placeholders.
     void updateTerrainTextures();
     Texture m_terrainAlbedo, m_terrainNra;
@@ -633,8 +647,9 @@ private:
     ModelRange modelRange(const GpuModel& m) const;
     int loadModelTexture(const std::string& path, bool srgb, std::uint64_t& bytes);
     void releaseModels();
-    // Fills m_modelScratch and the draw lists. Returns the total instance count.
-    std::uint32_t cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj);
+    // Fills m_modelScratch and the draw lists (envCenter: models around the vehicle probe). Returns the instance count.
+    std::uint32_t cullModels(const FrameDesc& frame, const glm::mat4& viewProj, const glm::mat4* lightViewProj,
+                             const glm::vec3* envCenter);
     std::vector<GpuModel> m_models;
     std::vector<Texture> m_modelTextures;
     std::vector<ModelObject> m_modelObjects;
@@ -643,6 +658,7 @@ private:
     std::vector<std::vector<ModelInstance>> m_modelBins; // per (model, LOD slot) while culling
     std::vector<ModelDraw> m_modelDraws;
     std::array<std::vector<ModelDraw>, 4> m_modelShadowDraws;
+    std::vector<ModelDraw> m_modelEnvDraws;
     SDL_GPUBuffer* m_modelBuffer = nullptr;
     SDL_GPUTransferBuffer* m_modelTransfer = nullptr;
     std::uint32_t m_modelCapacity = 0; // instances

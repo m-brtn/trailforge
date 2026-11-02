@@ -1393,16 +1393,19 @@ void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4,
     }
 
     m_draws.clear();
+    bool vehiclePart = false;
     auto add = [&](const GpuMesh& mesh, const glm::mat4& model, bool castsShadow = true, bool inReflection = true) {
         DrawItem d;
         d.mesh = &mesh;
         d.model = model;
         d.castsShadow = castsShadow;
         d.inReflection = inReflection;
+        d.vehicle = vehiclePart;
         m_draws.push_back(d);
     };
     add(m_trackMesh, glm::mat4(1.0f));
     add(m_sceneryMesh, glm::mat4(1.0f), !m_sim.level(), !m_sim.level()); // the level horizon casts no shadows
+    vehiclePart = true;
     add(m_bodyMesh, bodyM);
     for (const SpareMount& spare : m_vehicleVisual.spares) {
         add(m_rearWheelMesh,
@@ -2202,6 +2205,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "shadow_dist") s.shadowDistance = v;
         else if (k == "shadow_filter") s.shadowFilter = int(v);
         else if (k == "far_shadows") s.farShadows = v != 0.0f;
+        else if (k == "env_probe") s.envProbe = int(v);
+        else if (k == "env_probe_faces") s.envProbeFaces = int(v);
         else if (k == "reflections") s.reflections = v != 0.0f;
         else if (k == "refl_scale") s.reflectionScale = v;
         else if (k == "bloom") s.bloom = v != 0.0f;
@@ -2798,6 +2803,8 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "post_contact") return m_renderer->stats().contactShadows ? 1.0 : 0.0;
     if (n == "far_shadows") return m_renderer->stats().farShadows ? 1.0 : 0.0;
     if (n == "far_shadow_updates") return m_renderer->stats().farShadowUpdates;
+    if (n == "env_probe") return m_renderer->stats().envProbe ? 1.0 : 0.0;
+    if (n == "env_probe_faces") return m_renderer->stats().envProbeFaces;
     if (n == "post_motion_blur") return m_renderer->stats().motionBlur ? 1.0 : 0.0;
     if (n == "post_dof") return m_renderer->stats().dof ? 1.0 : 0.0;
     if (n == "post_shafts") return m_renderer->stats().shafts ? 1.0 : 0.0;

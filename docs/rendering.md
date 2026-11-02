@@ -21,6 +21,19 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
    Only the terrain casts there: trees, rocks and buildings beyond the cascades still cast nothing. Cost at
    2880×1800 on a full-screen far view (alternating A/B, minimum frame time): High +0.18 ms static, +0.29 ms with
    the light turning every frame (time-lapse); Ultra +0.13 / +0.39 ms.
+   Vehicle environment probe (Medium 64², High 128², Ultra 128² with two faces per frame; `env_probe` = face size,
+   0 = off, `env_probe_faces`; F2 "Vehicle reflections"): an RGBA16F cube centred 0.4 m above the vehicle origin,
+   one face re-rendered per frame (all six after a jump of more than 8 m) with the vehicle left out: terrain at a
+   coarse LOD, the track and scenery meshes, the coarsest mesh LOD of level models and the middle tree LOD within
+   70 m, and the sky without the sun disc (the sun's GGX lobe already draws it). Mips are box-filtered
+   (`SDL_GenerateMipmapsForGPUTexture`, not a GGX prefilter). Only `lit_fs` draws flagged as vehicle parts
+   (`DrawItem::vehicle`) use it: specular along R from mip `sqrt(roughness) × (levels − 2)`, the clear coat from
+   mip 0.5 and the diffuse ambient from mip `levels − 1.5` along N (the mean of a cube face, an approximation of the
+   irradiance, not spherical harmonics), instead of the procedural sky and the sky / ground ambient palette. So
+   paint reflects the ground, berms, trees and houses around it instead of sky everywhere. Without grass blades,
+   water surfaces, spray or tire marks in the probe; faces rendered at different frames come from slightly
+   different centres while driving. Cost at 2880×1800 (car close-up in the village, alternating A/B, minimum frame
+   time): High +0.15 ms, Ultra +0.13 ms (CPU +0.3 ms for two faces).
 2. Grass trample mask (RG8, 0.1 m texels over the ground) rendered from the tire mark segments, only when marks were
    added or removed and every 0.5 s while they fade.
 3. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.

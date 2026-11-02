@@ -97,6 +97,7 @@ struct FrameUniforms {
     float4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
     float4x4 farShadowViewProj;
     float4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
+    float4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
 };
 
 struct DrawUniforms {
@@ -105,7 +106,7 @@ struct DrawUniforms {
     float4 tint;            // rgb multiplier
     float4 params;          // x: mud scale, y: mud mapping (0 body, 1 wheel), z: tread soil wetness, w: wheel radius
     float4 soil;            // wheels: soil in the tread, rgb linear colour, a amount 0..1
-    float4 soilExtra;       // wheels: x grass flecks in the tread, y soil adhesion (dry sand dusts, mud cakes)
+    float4 soilExtra;       // wheels: x grass flecks in the tread, y soil adhesion (dry sand dusts, mud cakes); z: vehicle probe (0/1)
 };
 
 // The frame uniforms are uniform slot 0 of almost every entry point. The entry points whose slot 0 holds other
@@ -434,8 +435,24 @@ float ggxSpec(float NdotH, float NdotV, float NdotL, float rough) {
     return D * G / max(4.0 * NdotV * NdotL, 1e-4);
 }
 
+// Indirect light seen by a surface: diffuse irradiance (as radiance of a uniform surround) along N, the environment
+// along R blurred for the surface roughness, and sharp along R for the clear coat.
+struct EnvLight {
+    float3 ambient;
+    float3 specular;
+    float3 coat;
+};
+
+EnvLight skyEnv(float3 N, float3 R, float roughness) {
+    EnvLight e;
+    e.ambient = ambientLight(N.y);
+    e.coat = skyRadiance(R);
+    e.specular = lerp(e.coat, e.ambient, saturate(roughness * 1.2));
+    return e;
+}
+
 // direct: sun (or moon) light, indirect: sky / bounce ambient and the environment reflection (see lightSplit).
-float3 shadeSplit(ShadeInput s, out float3 direct, out float3 indirect) {
+float3 shadeSplitEnv(ShadeInput s, EnvLight e, out float3 direct, out float3 indirect) {
     const float3 L = f.sunDir.xyz;
     const float3 N = s.N, V = s.V;
     const float3 H = normalize(L + V);
@@ -449,25 +466,26 @@ float3 shadeSplit(ShadeInput s, out float3 direct, out float3 indirect) {
     const float3 kd = (1.0 - F) * (1.0 - s.metallic);
     direct = (kd * s.albedo / PI + spec) * f.sunColor.rgb * NdotL * s.shadow;
 
-    // Ambient: sky hemisphere + ground bounce.
-    const float3 amb = ambientLight(N.y);
-    indirect = amb * s.albedo * (1.0 - s.metallic) * s.ao;
-    // Environment specular from the procedural sky (blurred toward the ambient with roughness).
-    const float3 R = reflect(-V, N);
-    float3 env = lerp(skyRadiance(R), amb, saturate(s.roughness * 1.2));
-    env *= lerp(0.35, 1.0, s.shadow) * s.specOcclusion; // sun-shadowed areas see less of the bright sky
+    // Ambient: sky hemisphere + ground bounce (or the local probe).
+    indirect = e.ambient * s.albedo * (1.0 - s.metallic) * s.ao;
+    // Environment specular (blurred toward the ambient with roughness).
+    float3 env = e.specular * lerp(0.35, 1.0, s.shadow) * s.specOcclusion; // sun-shadowed areas see less of the bright sky
     indirect += env * envBRDFApprox(F0, s.roughness, NdotV) * s.ao;
     float3 color = direct + indirect + kd * s.albedo / PI * s.lamp;
     if (s.clearCoat > 0.0) {
         const float Fc = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
         const float3 coatSpec = s.clearCoat * ggxSpec(NdotH, NdotV, NdotL, 0.06) * 0.04 * f.sunColor.rgb * NdotL * s.shadow;
-        const float3 coatEnv = s.clearCoat * skyRadiance(R) * Fc * s.specOcclusion * lerp(0.4, 1.0, s.shadow);
+        const float3 coatEnv = s.clearCoat * e.coat * Fc * s.specOcclusion * lerp(0.4, 1.0, s.shadow);
         const float keep = 1.0 - Fc * s.clearCoat;
         color = color * keep + coatSpec + coatEnv;
         direct = direct * keep + coatSpec;
         indirect = indirect * keep + coatEnv;
     }
     return color + s.emissive;
+}
+
+float3 shadeSplit(ShadeInput s, out float3 direct, out float3 indirect) {
+    return shadeSplitEnv(s, skyEnv(s.N, reflect(-s.V, s.N), s.roughness), direct, indirect);
 }
 
 float3 shade(ShadeInput s) {
@@ -521,7 +539,7 @@ struct LitOut {
     [[vk::location(6)]] nointerpolation float mudMode : TEXCOORD6; // DrawUniforms.params.y
     [[vk::location(7)]] nointerpolation float4 soil : TEXCOORD7;
     [[vk::location(8)]] nointerpolation float2 soilParams : TEXCOORD8; // x: wetness, y: wheel radius
-    [[vk::location(9)]] nointerpolation float2 soilExtra : TEXCOORD9; // x: grass flecks, y: adhesion
+    [[vk::location(9)]] nointerpolation float3 soilExtra : TEXCOORD9; // x: grass flecks, y: adhesion, z: local probe
 };
 
 #if defined(TF_ENTRY_lit_vs) || defined(TF_ENTRY_shadow_vs)
@@ -542,7 +560,7 @@ LitOut lit_vs(LitIn vin) {
     vout.mudMode = draw.params.y;
     vout.soil = draw.soil;
     vout.soilParams = draw.params.zw;
-    vout.soilExtra = draw.soilExtra.xy;
+    vout.soilExtra = draw.soilExtra.xyz;
     return vout;
 }
 #endif
@@ -867,6 +885,18 @@ Texture2D<float4> noiseTex : TEX(1);
 SamplerState noiseSampler : SMP(1);
 Texture2D<float4> mask : TEX(2);
 SamplerState maskSampler : SMP(2);
+TextureCube<float4> envProbe : TEX(3);
+SamplerState envProbeSampler : SMP(3);
+
+// The vehicle's local environment probe (a cube rendered around it without the vehicle, plain box-filtered mips):
+// diffuse from the two coarsest mips along N, specular from the mip that matches the roughness along R.
+EnvLight probeEnv(float3 N, float3 R, float roughness) {
+    EnvLight e;
+    e.ambient = envProbe.SampleLevel(envProbeSampler, N, f.envProbe.y).rgb;
+    e.coat = envProbe.SampleLevel(envProbeSampler, R, 0.5).rgb;
+    e.specular = envProbe.SampleLevel(envProbeSampler, R, sqrt(saturate(roughness)) * f.envProbe.z).rgb;
+    return e;
+}
 
 float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     if (dot(f.clipPlane.xyz, vin.worldPos) + f.clipPlane.w < 0.0) discard;
@@ -1050,8 +1080,12 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal) * (front ? 1.0 : -1.0)) * cloudShadow(P);
+    const float3 R = reflect(-V, N);
+    EnvLight e;
+    if (vin.soilExtra.z > 0.5 && f.envProbe.x > 0.5) e = probeEnv(N, R, s.roughness);
+    else e = skyEnv(N, R, s.roughness);
     float3 direct, indirect;
-    const float3 color = shadeSplit(s, direct, indirect);
+    const float3 color = shadeSplitEnv(s, e, direct, indirect);
     return fogSplit(color, direct, indirect, P);
 }
 #endif
@@ -1411,7 +1445,7 @@ LitOut tree_vs(LitIn vin, uint iid : SV_InstanceID) {
     vout.mudMode = -t.params.w;
     vout.soil = ((float4)(0.0));
     vout.soilParams = ((float2)(0.0));
-    vout.soilExtra = ((float2)(0.0));
+    vout.soilExtra = ((float3)(0.0));
     return vout;
 }
 #endif
@@ -1711,7 +1745,7 @@ LitOut terrain_vs(LitIn vin) {
     vout.mudMode = 0.0;
     vout.soil = ((float4)(0.0));
     vout.soilParams = ((float2)(0.0));
-    vout.soilExtra = ((float2)(0.0));
+    vout.soilExtra = ((float3)(0.0));
     return vout;
 }
 #endif
