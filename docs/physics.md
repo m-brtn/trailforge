@@ -9,15 +9,11 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   The drawn arms and coil-overs (including the buggy's frame-mounted shock towers) only follow the Jolt hub; their
   geometry does not change camber, motion ratio or travel.
 - The tire is two μ(slip) curves (longitudinal and lateral) plus Jolt's friction combining.
-  No Pacejka model or sidewall deformation. No load sensitivity: the force limit is μ × load, so weight transfer and
-  anti-roll bars do not change an axle's grip (only a lifted wheel does), and the balance comes from the static
-  weight split, the curves and the drive force. No relaxation length: the slip angle acts on the next step.
+  No Pacejka model or sidewall deformation.
 - Grip levels (SUV on its all-terrain set; `trailforge_probe tires brake` and a 50 km/h steer ramp): 60-0 km/h with
   ABS 0.90 g on asphalt, 0.60–0.63 g on gravel and dirt, 0.47 g on grass; 0.91 g lateral on asphalt, 0.64 g on dirt,
   0.53 g on gravel and 0.46 g on grass. These match published ranges for these surfaces; most of Exploration Peaks is grass
-  (54 % of the bake), sand (21 %) and snow (10 %), so most driving there is at μ 0.3–0.55 by design. Keyboard
-  steering has a speed- and grip-dependent range (a driver-input model, [Controls](controls.md)); at full lock at every
-  speed a held key at 60 km/h slid the front tires at 30–37° of slip angle and the car turned at 72–76 % of its grip.
+  (54 % of the bake), sand (21 %) and snow (10 %), so most driving there is at μ 0.3–0.55 by design.
 - Tire sets and temperature ("Tire sets and temperature"): a set only scales the off-road curves (peak slip, sliding
   μ, μ per surface); the per-surface and window values are hand-tuned within published ranges. Temperature is a
   2-node lumped model (tread surface layer, core) per wheel; it changes grip only through one factor on μ, at the

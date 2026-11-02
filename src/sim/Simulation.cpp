@@ -144,8 +144,6 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
     else if (m_track->layout() == TrackLayout::ProvingGround) route = TestTrack::attractRoute();
     m_autopilot.setRoute(route, config.wheelBase, config.axles[kFrontAxle].maxSteerAngleDeg * 0.0174532925f);
     m_smoothed = {};
-    m_keySteer = 0.0f;
-    m_keyGripValid = false;
     m_autoReverseHold = 0.0f;
     m_brakeLatch = false;
     TireMarkSettings marks = m_tireMarks.settings();
@@ -390,71 +388,11 @@ void Simulation::smoothInput(float dt) {
     m_smoothed.brake = pedal(m_smoothed.brake, in.brake, s.brakeRise);
     m_smoothed.handBrake = pedal(m_smoothed.handBrake, in.handBrake, s.pedalRise);
     const float target = std::clamp(in.steer, -1.0f, 1.0f);
-    updateKeyboardGrip(dt);
-    const float range = keyboardSteerRange();
-    // The analog stick sets the angle directly, but with a steering rate limit (faster than the keyboard). A held
-    // steering key moves the wheel toward the keyboard range of the current speed, at the same rate in key units.
-    const float current = in.analog ? m_smoothed.steer : m_keySteer;
-    const bool returning = std::abs(target) < std::abs(current) || target * current < 0.0f;
+    const bool returning = std::abs(target) < std::abs(m_smoothed.steer) || target * m_smoothed.steer < 0.0f;
+    // The analog stick sets the angle directly, but with a steering rate limit (faster than the keyboard).
     const VehicleTuning& vt = m_vehicle->config().tuning;
     const float rate = (returning ? vt.steerReturnRate : vt.steerRate) * (in.analog ? 2.0f : 1.0f);
-    if (in.analog) {
-        m_smoothed.steer = approach(m_smoothed.steer, target, rate, dt);
-        m_keySteer = std::clamp(m_smoothed.steer / range, -1.0f, 1.0f);
-    } else {
-        m_keySteer = approach(m_keySteer, target, rate, dt);
-        m_smoothed.steer = m_keySteer * range;
-    }
-}
-
-// The grip the driver feels through the wheel: the front tires' peak lateral friction (tire curve x surface x tire
-// set x temperature) and peak slip angle (stretched on loose surfaces), averaged over the front wheels in contact and
-// smoothed over keyboardGripTime so a patchwork of surfaces does not make the range jitter. Held while both fronts are
-// in the air.
-void Simulation::updateKeyboardGrip(float dt) {
-    const VehicleTuning& t = m_vehicle->effectiveTireTuning();
-    float mu = 0.0f, slip = 0.0f;
-    int n = 0;
-    for (int i = 0; i < 2; ++i) {
-        const WheelTelemetry& w = m_vehicle->telemetry().wheels[std::size_t(i)];
-        if (!w.contact) continue;
-        const SurfaceProperties& p = m_surfaces.get(w.surface);
-        mu += t.tirePeakLatFriction * p.lateralFriction * t.tireSurfaceGrip[std::size_t(w.surface)] * w.tireGrip;
-        slip += t.tirePeakSlipAngleDeg * p.peakSlipScale;
-        ++n;
-    }
-    if (n == 0) return;
-    mu /= float(n);
-    slip /= float(n);
-    if (!m_keyGripValid) {
-        m_keyGripMu = mu;
-        m_keyGripSlipDeg = slip;
-        m_keyGripValid = true;
-        return;
-    }
-    const float a = std::min(dt / std::max(m_settings.smoothing.keyboardGripTime, 1e-3f), 1.0f);
-    m_keyGripMu += (mu - m_keyGripMu) * a;
-    m_keyGripSlipDeg += (slip - m_keyGripSlipDeg) * a;
-}
-
-// A steering key is on or off. At full lock at any speed, a held key at 60 km/h turned the SUV's front wheels to
-// 35 deg while its tires peak at about 9 deg of steer on asphalt (5.5 deg on grass): the front tires slid at 30-38 deg
-// of slip angle and the car pushed wide at 72-76 % of its grip. A driver turns the wheel less the faster the car goes
-// and the less grip it feels: the keyboard range is the steer angle of a corner at the front tires' peak friction
-// (Ackermann angle atan(wheelBase / R), R = v^2 / (mu g)) plus keyboardSteerSlip x their peak slip angle, at most full
-// lock (updateKeyboardGrip). Like KeyboardPedals this models the driver's hands: it applies no force, and the stick
-// and the autopilot (analog) are not limited.
-float Simulation::keyboardSteerRange() const {
-    const float k = m_settings.smoothing.keyboardSteerSlip;
-    const VehicleConfig& c = m_vehicle->config();
-    const float maxDeg = c.axles[kFrontAxle].maxSteerAngleDeg;
-    if (k < 0.0f || maxDeg <= 0.0f) return 1.0f;
-    const VehicleTuning& t = m_vehicle->effectiveTireTuning();
-    const float mu = m_keyGripValid ? m_keyGripMu : t.tirePeakLatFriction;
-    const float slip = m_keyGripValid ? m_keyGripSlipDeg : t.tirePeakSlipAngleDeg;
-    const float v = std::max(m_vehicle->telemetry().speed, 0.1f);
-    const float cornerDeg = std::atan(c.wheelBase * mu * 9.81f / (v * v)) * 57.2958f;
-    return std::clamp((cornerDeg + k * slip) / maxDeg, 0.0f, 1.0f);
+    m_smoothed.steer = approach(m_smoothed.steer, target, rate, dt);
 }
 
 void Simulation::runAutopilot(float dt) {
