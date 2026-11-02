@@ -609,8 +609,8 @@ void Vehicle::updateSuspension(float dt) {
         auto& spring = m_wheelSettings[i]->mSuspensionSpring;
         spring.mMode = JPH::ESpringMode::StiffnessAndDamping;
         spring.mStiffness = compression > 1e-3f ? force / compression : k;
-        // A solid suspension has no damper travel left: only the tire's own (small) damping, taken as 5 % of critical.
-        spring.mDamping = tire > 0.0f ? 0.1f * std::sqrt(ac.tireStiffness * mass)
+        // A solid suspension has no damper travel left: the tire stage has its own damping (AxleConfig::tireDamping).
+        spring.mDamping = tire > 0.0f ? 2.0f * ac.tireDamping * std::sqrt(ac.tireStiffness * mass)
                                       : 2.0f * mass * suspensionDampingRatio(a, speed) * omega;
     }
 }

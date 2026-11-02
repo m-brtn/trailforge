@@ -34,6 +34,10 @@
 //   trailforge_probe handling [ramp|step|sine|straight|arb|slope|user30|all] - steer ramp (beta, slip angles,
 //                                       understeer gradient), step / sine steer, straight line, anti-roll bar balance,
 //                                       cross-slope launch, keyboard turn at 30 km/h (tools/HandlingProbe.cpp)
+//   trailforge_probe hill all [hold|cruise|coast|full] | hill H L KMH [driver] [trace] - straight runs over a cosine
+//                                       hill (0.5x8, 0.9x13, 1x12, 1x15, 1.5x20 m at 80 / 100 km/h): takeoff vertical
+//                                       speed and pitch rate, airtime, landing, rollovers
+//   trailforge_probe drop [H] [pitchDeg] - body lifted H (default 1.5 m) and released on the flat pad: rebound share
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -3232,6 +3236,219 @@ void bumpProbe(int argc, char** argv) {
     }
 }
 
+// ---- hill / drop: hill-crest launches and drop rebound (the tire-stage damping, AxleConfig::tireDamping).
+std::vector<std::pair<std::string, VehicleConfig>> probeVehicles() {
+    std::vector<std::pair<std::string, VehicleConfig>> out;
+    std::vector<std::string> paths;
+    if (const char* env = std::getenv("TRAILFORGE_VEHICLE")) {
+        paths.push_back(env);
+    } else {
+        for (const char* id : {"trailforge_suv", "trailforge_ev", "trailforge_patrol"})
+            paths.push_back(std::string(TRAILFORGE_SOURCE_DIR "/assets/vehicles/") + id + "/vehicle.json");
+    }
+    for (const std::string& path : paths) {
+        if (path == "builtin") {
+            out.push_back({"builtin", VehicleConfig{}});
+            continue;
+        }
+        VehicleDefinition def;
+        std::vector<std::string> errors;
+        if (!loadVehicleDefinition(path, def, errors)) {
+            for (const auto& e : errors) std::fprintf(stderr, "%s\n", e.c_str());
+            continue;
+        }
+        out.push_back({def.id, def.config});
+    }
+    return out;
+}
+
+struct HillOutcome {
+    float entry = 0, gain = 0, air = 0, takeoffVy = 0, takeoffRate = 0, maxRate = 0, minPitch = 0, maxPitch = 0,
+          landRate = 0, peakLoad = 0;
+    int stops = 0, rims = 0;
+    bool rolled = false;
+};
+
+// Straight run over a cosine hill (height H, length L, across the whole width) on the flat pad, speed held by a
+// throttle controller up to 2 m before the hill; then the driver holds that throttle (hold), keeps the controller
+// (cruise), coasts or floors it.
+HillOutcome hillRun(const VehicleConfig& cfg, float H, float L, float kmh, const std::string& drv, bool trace) {
+    SimulationSettings s;
+    s.layout = TrackLayout::Flat;
+    s.vehicle = cfg;
+    Simulation sim(s);
+    const float zc = 150.0f, zIn = zc - 0.5f * L;
+    JPH::TriangleList tris;
+    const int n = 64;
+    const float x0 = -40.0f, x1 = 40.0f;
+    auto yAt = [&](int k) { return 0.5f * H * (1.0f - std::cos(2.0f * 3.14159265f * float(k) / float(n))); };
+    for (int k = 0; k < n; ++k) {
+        const float za = zIn + L * float(k) / float(n), zb = za + L / float(n);
+        const JPH::Float3 a(x0, yAt(k), za), b(x1, yAt(k), za), c(x1, yAt(k + 1), zb), d(x0, yAt(k + 1), zb);
+        tris.emplace_back(a, d, c, 0u);
+        tris.emplace_back(a, c, b, 0u);
+    }
+    JPH::PhysicsMaterialList mats;
+    mats.push_back(sim.surfaces().material(SurfaceId::Concrete));
+    auto& bi = sim.world().bodies();
+    bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(), JPH::RVec3::sZero(),
+                                                  JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::Static),
+                        JPH::EActivation::DontActivate);
+    const JPH::BodyID vid = sim.vehicle().bodyId();
+    const double dt = sim.fixedStep();
+    const float target = kmh / 3.6f;
+    HillOutcome o;
+    float cruise = -1.0f, rest = 0.0f, airRun = 0.0f;
+    bool measuring = false, airborne = false;
+    bool prevStop[kWheelCount] = {}, prevRim[kWheelCount] = {};
+    double restSum = 0.0;
+    int restN = 0;
+    for (int i = 0; i < int(40.0 / dt); ++i) {
+        const auto& t = sim.vehicle().telemetry();
+        const float frontZ = float(sim.currentSnapshot().wheels[0].position.GetZ());
+        DriverIntent in;
+        const float err = target - t.forwardSpeed;
+        in.throttle = std::clamp(0.15f + 0.5f * err, 0.0f, 1.0f);
+        if (frontZ < zIn - 10.0f && err < -1.0f) in.brake = std::clamp(-0.2f * err, 0.0f, 0.5f);
+        if (frontZ > zIn - 2.0f && drv != "cruise") {
+            if (cruise < 0.0f) cruise = in.throttle;
+            in.throttle = drv == "coast" ? 0.0f : drv == "full" ? 1.0f : cruise;
+        }
+        sim.setIntent(in);
+        sim.tick();
+        const auto& tw = sim.vehicle().telemetry();
+        const JPH::RVec3 com = bi.GetCenterOfMassPosition(vid);
+        const JPH::Quat q = bi.GetRotation(vid);
+        const JPH::Vec3 up = q.RotateAxisY(), left = q.RotateAxisX(), fwd = q.RotateAxisZ();
+        const JPH::Vec3 w = bi.GetAngularVelocity(vid), v = bi.GetLinearVelocity(vid);
+        const float rate = w.Dot(left) * 57.2958f;                       // + = nose down
+        const float pitch = std::atan2(fwd.GetY(), up.GetY()) * 57.2958f; // + = nose up
+        if (frontZ > zIn - 30.0f && frontZ < zIn - 10.0f) {
+            restSum += com.GetY();
+            ++restN;
+        }
+        if (!measuring && frontZ > zIn - 1.5f) {
+            measuring = true;
+            rest = restN ? float(restSum / restN) : float(com.GetY());
+            o.entry = tw.forwardSpeed * 3.6f;
+        }
+        if (!measuring) continue;
+        int contacts = 0;
+        for (int k = 0; k < kWheelCount; ++k) {
+            const auto& wt = tw.wheels[std::size_t(k)];
+            contacts += wt.contact;
+            if (wt.bumpStop && !prevStop[k]) ++o.stops;
+            if (wt.rimHit && !prevRim[k]) ++o.rims;
+            prevStop[k] = wt.bumpStop;
+            prevRim[k] = wt.rimHit;
+            o.peakLoad = std::max(o.peakLoad, wt.load);
+        }
+        if (contacts == 0 && !airborne) {
+            airborne = true;
+            o.takeoffRate = rate;
+            o.takeoffVy = v.GetY();
+        }
+        if (contacts > 0 && airborne && airRun > 0.0f && o.landRate == 0.0f) o.landRate = rate;
+        airRun = contacts == 0 ? airRun + float(dt) : 0.0f;
+        o.air = std::max(o.air, airRun);
+        o.maxRate = std::max(o.maxRate, std::abs(rate));
+        o.maxPitch = std::max(o.maxPitch, pitch);
+        o.minPitch = std::min(o.minPitch, pitch);
+        o.gain = std::max(o.gain, float(com.GetY()) - rest);
+        o.rolled = o.rolled || up.GetY() < 0.0f;
+        if (trace && i % 3 == 0)
+            std::printf("  t=%5.2f z=%6.2f y=%+.2f vy=%+5.2f pitch=%+6.1f rate=%+6.1f v=%5.1f | L %.3f %.3f %.3f %.3f | "
+                        "F %5.1f %5.1f %5.1f %5.1f kN\n",
+                        i * dt, frontZ, float(com.GetY()) - rest, v.GetY(), pitch, rate, tw.forwardSpeed * 3.6f,
+                        tw.wheels[0].suspensionLength, tw.wheels[1].suspensionLength, tw.wheels[2].suspensionLength,
+                        tw.wheels[3].suspensionLength, tw.wheels[0].load / 1000, tw.wheels[1].load / 1000,
+                        tw.wheels[2].load / 1000, tw.wheels[3].load / 1000);
+        if (frontZ > zc + 0.5f * L + 60.0f) break;
+    }
+    o.rolled = o.rolled || bi.GetRotation(vid).RotateAxisY().GetY() < 0.5f;
+    return o;
+}
+
+// hill all [driver] | hill H L kmh [driver] [trace]
+void hillProbe(int argc, char** argv) {
+    const bool all = argc > 2 && std::string(argv[2]) == "all";
+    const std::string drv = all ? (argc > 3 ? argv[3] : "hold") : (argc > 5 ? argv[5] : "hold");
+    struct Hill {
+        float h, l;
+    };
+    std::vector<Hill> hills = {{0.5f, 8.0f}, {0.9f, 13.0f}, {1.0f, 12.0f}, {1.0f, 15.0f}, {1.5f, 20.0f}};
+    std::vector<float> speeds = {80.0f, 100.0f};
+    if (!all) {
+        hills = {{argc > 2 ? float(std::atof(argv[2])) : 1.0f, argc > 3 ? float(std::atof(argv[3])) : 15.0f}};
+        speeds = {argc > 4 ? float(std::atof(argv[4])) : 80.0f};
+    }
+    for (const auto& [id, cfg] : probeVehicles()) {
+        int rolls = 0, runs = 0;
+        for (const Hill& h : hills)
+            for (float kmh : speeds) {
+                const HillOutcome o = hillRun(cfg, h.h, h.l, kmh, drv, !all && argc > 6);
+                rolls += o.rolled;
+                ++runs;
+                std::printf("hill %-18s H %.2f L %4.1f %-6s %3.0f km/h entry %5.1f | gain %.2f m air %.2f s | takeoff vy %+.2f "
+                            "rate %+6.1f deg/s | max |rate| %6.1f pitch %+5.1f / %+5.1f | land rate %+6.1f | solid %d rim %d "
+                            "peak %.1f kN %s\n",
+                            id.c_str(), h.h, h.l, drv.c_str(), kmh, o.entry, o.gain, o.air, o.takeoffVy, o.takeoffRate,
+                            o.maxRate, o.minPitch, o.maxPitch, o.landRate, o.stops, o.rims, o.peakLoad / 1000.0f,
+                            o.rolled ? "ROLLED" : "");
+            }
+        if (all) std::printf("hill RESULT %-18s %-6s %d of %d runs rolled over\n", id.c_str(), drv.c_str(), rolls, runs);
+    }
+}
+
+// drop H [pitchDeg]: settle on the flat pad, lift the body by H (the wheels hang at full droop) and release; rebound
+// = the highest COM rise after the first landing, above rest, as a share of the drop.
+void dropProbe(int argc, char** argv) {
+    const float H = argc > 2 ? float(std::atof(argv[2])) : 1.5f;
+    const float pitchDeg = argc > 3 ? float(std::atof(argv[3])) : 0.0f;
+    for (const auto& [id, cfg] : probeVehicles()) {
+        SimulationSettings s;
+        s.layout = TrackLayout::Flat;
+        s.vehicle = cfg;
+        Simulation sim(s);
+        auto& bi = sim.world().bodies();
+        const JPH::BodyID vid = sim.vehicle().bodyId();
+        for (int i = 0; i < int(5.0 / sim.fixedStep()); ++i) {
+            sim.setIntent(DriverIntent{});
+            sim.tick();
+        }
+        const float rest = float(bi.GetCenterOfMassPosition(vid).GetY());
+        bi.SetPositionAndRotation(vid, bi.GetPosition(vid) + JPH::Vec3(0, H, 0),
+                                  JPH::Quat::sRotation(JPH::Vec3::sAxisX(), -pitchDeg / 57.2958f), JPH::EActivation::Activate);
+        bi.SetLinearAndAngularVelocity(vid, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        const float y0 = float(bi.GetCenterOfMassPosition(vid).GetY());
+        bool landed = false, rising = false;
+        float minY = 1e9f, maxAfter = -1e9f, peakLoad = 0.0f;
+        int solid = 0;
+        bool prevStop[kWheelCount] = {};
+        for (int i = 0; i < int(4.0 / sim.fixedStep()); ++i) {
+            sim.setIntent(DriverIntent{});
+            sim.tick();
+            const auto& t = sim.vehicle().telemetry();
+            const float y = float(bi.GetCenterOfMassPosition(vid).GetY());
+            int c = 0;
+            for (int k = 0; k < kWheelCount; ++k) {
+                c += t.wheels[std::size_t(k)].contact;
+                peakLoad = std::max(peakLoad, t.wheels[std::size_t(k)].load);
+                if (t.wheels[std::size_t(k)].bumpStop && !prevStop[k]) ++solid;
+                prevStop[k] = t.wheels[std::size_t(k)].bumpStop;
+            }
+            if (c > 0) landed = true;
+            if (landed) minY = std::min(minY, y);
+            if (landed && bi.GetLinearVelocity(vid).GetY() > 0.0f) rising = true;
+            if (rising) maxAfter = std::max(maxAfter, y);
+        }
+        std::printf("drop %-18s H %.2f pitch %+.0f: fall %.2f m (%.2f m/s) | lowest %+.3f m vs rest | rebound %+.3f m "
+                    "(%.0f %% of the drop) | solid %d peak %.1f kN\n",
+                    id.c_str(), H, pitchDeg, y0 - rest, std::sqrt(2.0f * 9.81f * std::max(0.0f, y0 - rest)), minY - rest,
+                    maxAfter - rest, 100.0f * (maxAfter - rest) / std::max(y0 - rest, 1e-3f), solid, peakLoad / 1000.0f);
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "bench";
     if (mode == "levelprofile" && argc > 6) {
@@ -3297,6 +3514,8 @@ int main(int argc, char** argv) {
     else if (mode == "drift") driftProbe(argc, argv);
     else if (mode == "tires") tiresProbe(argc, argv);
     else if (mode == "bump") bumpProbe(argc, argv);
+    else if (mode == "hill") hillProbe(argc, argv);
+    else if (mode == "drop") dropProbe(argc, argv);
     else if (mode == "handling") handlingProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);

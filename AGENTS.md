@@ -83,7 +83,7 @@ Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforg
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `drift` (scripted drift attempts on the mini track's 32 m corner), `lap` (autopilot laps of a circuit level), `tires` (tire sets: braking per
 surface cold / warm, mini track and Suncoast laps with tire temperatures, `circle` limit circle, `limit` limit-driver
-laps with grip use, `cooldown` slow lap), `bump` (rollovers over single 0.20–0.40 m bumps per shipped vehicle and driver), `handling` (steer ramp / understeer gradient, step and sine steer, anti-roll bar balance, cross-slope launch, `user30` keyboard turn at 30 km/h; `tools/HandlingProbe.cpp`); they drive the vehicle of
+laps with grip use, `cooldown` slow lap), `bump` (rollovers over single 0.20–0.40 m bumps per shipped vehicle and driver), `handling` (steer ramp / understeer gradient, step and sine steer, anti-roll bar balance, cross-slope launch, `user30` keyboard turn at 30 km/h; `tools/HandlingProbe.cpp`), `hill` (straight runs over 1 m class cosine hills, `hill all` = 10 runs per vehicle with a rollover count), `drop` (rebound after a flat drop); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any

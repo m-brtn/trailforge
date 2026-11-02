@@ -137,6 +137,7 @@ void readAxle(Obj& axles, const char* key, AxleConfig& a, AxleTuning& t, bool fr
             Obj v(vertical, w.child("vertical"), source, errors);
             v.num("stiffness", a.tireStiffness, 20000.0, 2000000.0, "N/m");
             v.num("maxDeflection", a.tireDeflection, 0.0, 0.5 * a.wheelRadius, "m (at most half the radius)");
+            v.num("damping", a.tireDamping, 0.0, 2.0, "(fraction of critical)", false);
         }
         w.num("rimRatio", a.rimRatio, 0.35, 0.85, "(rim / tire diameter, visual)", false);
         w.str("tread", a.tread, false);

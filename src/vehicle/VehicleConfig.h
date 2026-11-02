@@ -127,10 +127,12 @@ struct AxleTuning {
     float compressionDamping = 0.35f;
     float reboundDamping = 0.55f;
     // Digressive damper curve (blow-off valving, Dixon): above damperKneeSpeed (m/s of suspension speed at the wheel)
-    // the force grows with the high-speed slope x the low-speed slope. 0 = linear damper at every speed.
+    // the force grows with the high-speed slope x the low-speed slope. 1 = linear damper at every speed. 0.75 (was 0.5):
+    // at 0.5 a hill crest landing at 2-4 m/s had half the damping, and the SUV / EV / patrol flipped over 0 / 1 / 3 of
+    // 10 cosine hills at 80-100 km/h (`trailforge_probe hill all`); at 0.75 0 / 1 / 1, drop rebound 6 -> 4 %.
     float damperKneeSpeed = 0.25f;
-    float compressionHighSpeedSlope = 0.5f;
-    float reboundHighSpeedSlope = 0.5f;
+    float compressionHighSpeedSlope = 0.75f;
+    float reboundHighSpeedSlope = 0.75f;
     // Anti-roll bar rate at the wheel: N of extra load on the more compressed wheel (and less on the other) per m of
     // hub height difference across the axle; a wheel in the air counts at full droop (0 = none; maximum
     // articulation for an off-roader).
@@ -250,6 +252,11 @@ struct AxleConfig {
     // deflection to the rim is taken as about 60 % of the sidewall height.
     float tireStiffness = 250000.0f; // N/m
     float tireDeflection = 0.10f;    // m
+    // Damping while the tire deflects (fraction of critical for tireStiffness and the wheel's suspension mass). It stands
+    // for the losses of a bottoming that are not modelled: the unsprung mass's impact (the wheel is massless in Jolt),
+    // the tire's carcass damping and the bump stop's hysteresis on the way out. The suspension damper is off in this
+    // phase (no travel left); at 5 % of critical ~85 % of the bottoming energy went back into the body.
+    float tireDamping = 1.0f;
     // Suspension travel: length from the attachment point to the wheel center
     float suspensionMinLength = 0.15f; // m, full compression (Jolt hard point)
     float suspensionMaxLength = 0.55f; // m, full droop (0.40 m travel)

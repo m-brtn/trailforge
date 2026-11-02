@@ -23,7 +23,7 @@
         "frequency": 1.35, "compressionDamping": 0.35, "reboundDamping": 0.55,
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
         "bumpStop": {"range": 0.06, "frequencyScale": 4.0, "hysteresis": 0.5},
-        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.5, "reboundSlope": 0.5}
+        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.75, "reboundSlope": 0.75}
       },
       "brakeTorque": 4200,
       "handBrakeTorque": 0
@@ -35,7 +35,7 @@
         "frequency": 1.35, "compressionDamping": 0.35, "reboundDamping": 0.55,
         "preload": 0.0, "minLength": 0.15, "maxLength": 0.55, "antiRoll": 0,
         "bumpStop": {"range": 0.06, "frequencyScale": 4.0, "hysteresis": 0.5},
-        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.5, "reboundSlope": 0.5}
+        "damperCurve": {"kneeSpeed": 0.25, "compressionSlope": 0.75, "reboundSlope": 0.75}
       },
       "brakeTorque": 2200,
       "handBrakeTorque": 3500

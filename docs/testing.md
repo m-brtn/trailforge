@@ -23,6 +23,12 @@
   60 / 90 km/h, straight line with lift-off, anti-roll bar balance, 2° cross-slope launch, and `user30`: the steering
   key held 4 s at ~30 km/h with the keyboard throttle per TC mode and lock setting (max rear slip angle against the
   tire peak, `HANDLING_TRACE=1` per-wheel trace);
+- `hill H L KMH [hold|cruise|coast|full] [trace]` — one straight run over a cosine hill H m high and L m long (flat
+  concrete pad, driver from 4 m before the hill): height gain, airtime, takeoff vertical speed, pitch rate, solid
+  suspension and rim hits, peak wheel load, `ROLLED`; `hill all [driver]` runs 0.5×8, 0.9×13, 1×12, 1×15 and 1.5×20 m
+  at 80 and 100 km/h per vehicle (`TRAILFORGE_VEHICLE` or the three shipped ones) and prints a `RESULT` rollover count;
+- `drop [H] [pitch]` — drop from H m (default 1.5) onto the flat pad: lowest point, rebound height as % of the drop,
+  solid suspension count and peak wheel load;
 - `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,
   climbs on dirt 20° and mud 15° per drive mode, the twister, steady-speed energy (electric only);
 - `minitrack [vehicle.json ...]` — scripted laps of the mini handling track for the SUV, the EV, `builtin` and

@@ -14,6 +14,9 @@
 #include "vehicle/VehicleDefinition.h"
 #include "core/Json.h"
 
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+
 #include <algorithm>
 #include <array>
 #include <span>
@@ -1872,6 +1875,88 @@ void miniTrackDrift() {
     run(sim, 0.1);
     CHECK(!sim.drift().running(), "reset aborts");
 }
+
+// Bottoming and hill crests with the shipped SUV: a 1.5 m drop onto the flat pad rebounds less than 8 % of its height,
+// and straight runs over 1 m high cosine hills (15 m at 80 and 100 km/h, 12 m at 80 km/h) land on the wheels. With the
+// tire stage at 5 % of critical and the 0.5 damper slope (ee67b63 to v0.30) ~85 % of the bottoming energy went back
+// into the body: rebound 15 %, and the SUV flipped over the 12 m hill at 80 and the 15 m hill at 100 km/h.
+void hillCrestLanding() {
+    VehicleDefinition def;
+    std::vector<std::string> errors;
+    CHECK(loadVehicleDefinition(TRAILFORGE_SOURCE_DIR "/assets/vehicles/trailforge_suv/vehicle.json", def, errors),
+          "SUV definition: %s", errors.empty() ? "?" : errors.front().c_str());
+    {
+        SimulationSettings st = settingsFor(TrackLayout::Flat);
+        st.vehicle = def.config;
+        Simulation sim(st);
+        auto& bi = sim.world().bodies();
+        const JPH::BodyID vid = sim.vehicle().bodyId();
+        run(sim, 5.0);
+        const float rest = float(bi.GetCenterOfMassPosition(vid).GetY());
+        bi.SetPositionAndRotation(vid, bi.GetPosition(vid) + JPH::Vec3(0, 1.5f, 0), JPH::Quat::sIdentity(),
+                                  JPH::EActivation::Activate);
+        bi.SetLinearAndAngularVelocity(vid, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        bool landed = false, rising = false;
+        float rebound = -1e9f;
+        for (int i = 0; i < 4 * 120; ++i) {
+            run(sim, 1.0 / 120.0);
+            int contacts = 0;
+            for (const auto& w : sim.vehicle().telemetry().wheels) contacts += w.contact;
+            landed = landed || contacts > 0;
+            rising = rising || (landed && bi.GetLinearVelocity(vid).GetY() > 0.0f);
+            if (rising) rebound = std::max(rebound, float(bi.GetCenterOfMassPosition(vid).GetY()) - rest);
+        }
+        std::printf("    1.5 m drop: rebound %.3f m (%.1f %%)\n", double(rebound), double(100.0f * rebound / 1.5f));
+        CHECK(landed && rebound < 0.08f * 1.5f, "1.5 m drop rebounds %.3f m", double(rebound));
+    }
+    struct Hill {
+        float length, kmh;
+    };
+    for (const Hill hill : {Hill{15.0f, 80.0f}, Hill{12.0f, 80.0f}, Hill{15.0f, 100.0f}}) {
+        SimulationSettings st = settingsFor(TrackLayout::Flat);
+        st.vehicle = def.config;
+        Simulation sim(st);
+        const float H = 1.0f, L = hill.length, zIn = 150.0f - 0.5f * L;
+        JPH::TriangleList tris;
+        const int n = 64;
+        auto yAt = [&](int k) { return 0.5f * H * (1.0f - std::cos(2.0f * 3.14159265f * float(k) / float(n))); };
+        for (int k = 0; k < n; ++k) {
+            const float za = zIn + L * float(k) / float(n), zb = za + L / float(n);
+            const JPH::Float3 a(-40, yAt(k), za), b(40, yAt(k), za), c(40, yAt(k + 1), zb), d(-40, yAt(k + 1), zb);
+            tris.emplace_back(a, d, c, 0u);
+            tris.emplace_back(a, c, b, 0u);
+        }
+        JPH::PhysicsMaterialList mats;
+        mats.push_back(sim.surfaces().material(SurfaceId::Concrete));
+        auto& bi = sim.world().bodies();
+        bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(),
+                                                      JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
+                                                      JPH::EMotionType::Static, Layers::Static),
+                            JPH::EActivation::DontActivate);
+        const JPH::BodyID vid = sim.vehicle().bodyId();
+        const float target = hill.kmh / 3.6f;
+        float hold = -1.0f, takeoffVy = 0.0f, minUp = 1.0f;
+        for (int i = 0; i < 30 * 120; ++i) {
+            const float z = float(bi.GetCenterOfMassPosition(vid).GetZ());
+            if (z > 150.0f + 0.5f * L + 50.0f) break;
+            DriverIntent in;
+            in.throttle = std::clamp(0.15f + 0.5f * (target - sim.vehicle().telemetry().forwardSpeed), 0.0f, 1.0f);
+            if (z > zIn - 4.0f) {
+                if (hold < 0.0f) hold = in.throttle;
+                in.throttle = hold;
+            }
+            run(sim, 1.0 / 120.0, in);
+            int contacts = 0;
+            for (const auto& w : sim.vehicle().telemetry().wheels) contacts += w.contact;
+            if (z > zIn && contacts == 0 && takeoffVy == 0.0f) takeoffVy = bi.GetLinearVelocity(vid).GetY();
+            minUp = std::min(minUp, bi.GetRotation(vid).RotateAxisY().GetY());
+        }
+        std::printf("    1 m x %.0f m hill at %.0f km/h: takeoff vy %.2f m/s, min up %.2f\n", double(L), double(hill.kmh),
+                    double(takeoffVy), double(minUp));
+        CHECK(minUp > 0.5f, "flipped over the 1 m x %.0f m hill at %.0f km/h (min up %.2f, takeoff vy %.2f m/s)",
+              double(L), double(hill.kmh), double(minUp), double(takeoffVy));
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1889,6 +1974,7 @@ int main(int argc, char** argv) {
         {"surface_launch_grip", surfaceLaunchGrip},
         {"skid_mark_profile", skidMarkProfile},
         {"suv_marks_keyboard", suvMarksKeyboard},
+        {"hill_crest_landing", hillCrestLanding},
         {"launch_marks_proportional", launchMarksProportional},
         {"tire_marks_boundary", tireMarksBoundary},
         {"wheel_spray", wheelSpray},

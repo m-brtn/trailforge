@@ -133,10 +133,15 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
 - Bump stops: an additive progressive force (zero at `bumpStop.range` before full compression, tangent rate
   `frequencyScale` × the spring rate at full compression), scaled by 1 − `hysteresis` while the suspension extends
   to stand for the rubber's energy loss (the 0.5 default is an assumption, not a measured elastomer).
-- Tire compliance: the tire acts as a vertical spring (`wheel.vertical`, damped at 5 % of critical) only once the
-  suspension is solid; then the wheel can push `maxDeflection` further up to the rim, where Jolt's hard stop is. The
-  tire does not deflect in series with the spring otherwise, and the contact patch has no relaxation length or load
-  sensitivity.
+- Tire compliance: the tire acts as a vertical spring (`wheel.vertical`) only once the suspension is solid; then the
+  wheel can push `maxDeflection` further up to the rim, where Jolt's hard stop is. The tire does not deflect in series
+  with the spring otherwise, and the contact patch has no relaxation length. The damper has no travel left in that
+  phase, and Jolt's wheel is massless, so the losses of a real bottoming (unsprung-mass impact, carcass damping, bump
+  stop hysteresis) are one damping coefficient, `wheel.vertical.damping` (fraction of critical for the tire rate and
+  the wheel's suspension mass, default 1.0). It was 5 % of critical (ee67b63 to v0.30): ~85 % of the bottoming energy
+  went back into the body, a 1.5 m drop rebounded 15 % of its height and the SUV / EV / patrol flipped over 5 / 8 / 9
+  of 10 cosine hills (0.5 × 8 to 1.5 × 20 m at 80 / 100 km/h, `trailforge_probe hill all`); with 1.0 and the 0.75
+  damper slope: rebound 4 %, 0 / 1 / 1 of 10. The value is chosen to remove the rebound, not measured on a tire.
 - Anti-roll bars are applied as suspension forces (N/m at the wheel on the left-right hub height difference, an
   airborne wheel counting at full droop), not with Jolt's `VehicleAntiRollBar`, whose impulse enters the
   constraint as a velocity bias, so its effective rate depends on the damping and the step and it added load noise.
