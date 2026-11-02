@@ -2,6 +2,18 @@
 
 The shipped vehicles, the style kit, tire sets, drivetrain layouts, the garage and the driver aids. All documentation: [index](README.md).
 
+## Expedition body
+
+`trailforge_expedition` is a separate selectable vehicle using the SUV drivetrain, wheel dimensions,
+steering and an authored Blender body at the reviewed design-study placement. Expedition has its own
+0.34-0.55 m suspension limits (about 60-70 mm compression travel at rest), a 35 mm bump-stop zone,
+and a raise-only 0-80 mm garage range. Spring frequency, damping and wheel dimensions retain the SUV values. It has 438 visual parts,
+178,216 LOD0 triangles, seven convex collision pieces and two engine-generated spare tires.
+Mass and center of mass retain the SUV configuration; equipment masses are not simulated separately.
+The body asset is about 9.99 MB. Scalar PBR materials are exported; Blender procedural noise is not.
+Wheelhouse interiors use matte-black `liner` material with full mud receptivity.
+Run `tools/scenarios/expedition.txt` for load, view, lamp, driving and wheel-spray dirt checks.
+
 ## Vehicle
 
 The vehicle comes from `assets/vehicles/trailforge_suv/vehicle.json` (format below); the C++ defaults of

@@ -1,0 +1,65 @@
+# Authored Expedition body, engine-owned wheels and suspension.
+controls pad_type none
+set ui 0
+set hud 0
+set minimap 0
+set compass 0
+quality High
+time Noon
+vehicle trailforge_expedition
+teleport 0
+wait 2.5
+expect body_glb == 1
+expect body_hulls == 7
+expect body_triangles > 100000
+expect speed_kmh < 1
+camera local 4 2 6 0 .6 0 40
+wait 0.5
+capture /tmp/trailforge_expedition_front.png
+wait 0.3
+camera local -4 2 -6 0 .6 0 40
+wait 0.5
+capture /tmp/trailforge_expedition_rear.png
+wait 0.3
+camera local 8 .8 0 0 .6 0 40
+wait 0.5
+capture /tmp/trailforge_expedition_side.png
+wait 0.3
+time Night
+set headlights 1
+camera local 4 2 6 0 .6 0 40
+wait 0.5
+capture /tmp/trailforge_expedition_night.png
+wait 0.3
+time Noon
+camera follow
+down W
+wait 4
+up W
+expect speed_kmh > 5
+down S
+wait 4
+up S
+expect body_glb == 1
+
+# Real wheel spray deposits cosmetic mud on the black wheelhouse liners.
+teleport 12
+wait 1.5
+tap V
+wait 0.1
+expect transfer == 1
+set mud 0
+set auto_mud 1
+set body_mud_clear 1
+down W
+wait 2.5
+up W
+expect body_mud_arch_rear_rl > 0.5
+expect body_mud_behind_fl > 0.2
+down S
+until speed_kmh < 0.5 8
+up S
+camera local 5 .5 -2 0 0 0 40
+wait .5
+capture /tmp/trailforge_expedition_dirty.png
+wait .3
