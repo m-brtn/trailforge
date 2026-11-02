@@ -21,6 +21,15 @@ camera -190.0 112.0 -360.0 -205.0 99.5 -333.0
 wait 2.0
 capture /tmp/trailforge_water_02_ford_high.png
 wait 0.3
+# Along the road across the ford, low behind the vehicle (the user's 2026-11-02 screenshot).
+place -220 -334.5 90
+wait 1.5
+camera -224.0 103.4 -331.0 -203.0 99.6 -335.5
+wait 2.0
+capture /tmp/trailforge_water_06_ford_road.png
+wait 0.3
+place -222 -334 100
+wait 1.5
 
 # ---------------------------------------------------------------- creek mouth at Alpine Lake, steep reach above it
 camera -222.0 108.0 -332.0 -202.0 86.0 -298.0

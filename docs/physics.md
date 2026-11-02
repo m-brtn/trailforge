@@ -62,7 +62,8 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;
   the river surface is a level per sample (smoothed along the river, thinning out toward the edge of its reach where
-  the banks lie lower), not a flow simulation. Waves, shore foam, refraction and
+  the banks lie lower), not a flow simulation. At fords the road's fill shoulders are kept 0.1 m under the river
+  surface inside the channel; that lowered ground is the collision terrain too. Waves, shore foam, refraction and
   reflections are shading only: the water surface the physics sees stays flat, and the waves do not follow wind,
   fetch or the river current. Clouds, their ground shadows and the valley fog are render-only too (cloud shadows dim
   only the rendered sunlight).

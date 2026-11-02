@@ -1393,6 +1393,21 @@ void LevelBaker::bakeRoads() {
                 m_h[g] = lerp(h0[g], sumWY[k] / sumW[k], maxW[k]);
             }
     });
+    // Fords: the fill shoulders of a road across a river would dam the channel where the surface falls below the
+    // deck downstream, a dry sill across the river. Inside the wet channel the shoulders stay 0.1 m under the
+    // surface (fading out toward the waterline, where the road climbs out on its embankment).
+    if (!m_baked)
+        parallelFor(m_n, m_threads, [&](int j) {
+            for (int i = 0; i < m_n; ++i) {
+                const std::size_t g = idx(i, j);
+                if (m_riverD[g] >= m_riverReach[g] || m_roadEdge[g] <= 0.0f || m_h[g] <= h0[g] ||
+                    m_h[g] > m_riverY[g] + 1.0f) // bridge approaches stand high above the water
+                    continue;
+                const float cap = std::max(h0[g], m_riverY[g] - 0.1f);
+                if (m_h[g] <= cap) continue;
+                m_h[g] = lerp(m_h[g], cap, smoothstep(0.0f, 0.3f, m_riverY[g] - h0[g]));
+            }
+        });
 
     // Bridges: the deck ramps meet the carved road 3 m into the banks, and no terrain reaches above the deck surface
     // (a bank hump through the deck would be a bump the wheels hit on the deck).
@@ -1468,7 +1483,17 @@ void LevelBaker::bakeWater() {
         for (int i = 0; i < m_n; ++i) {
             const std::size_t k = idx(i, j);
             const float h = m_h[k];
-            if (m_riverD[k] < m_riverReach[k] && h < m_riverY[k]) {
+            const float reachLeft = m_riverReach[k] - m_riverD[k];
+            const float film = 0.12f * clamp01(1.0f - m_roadEdge[k]) * clamp01(0.5f * reachLeft);
+            if (reachLeft > 0.0f && film > 0.01f && h < m_riverY[k] + 0.4f &&
+                h + film > std::min(m_riverY[k], h + 0.5f * reachLeft)) {
+                // Ford: the road deck is flat across the channel while the surface falls along it, so its downstream
+                // part would stand dry in the middle of the river; the water runs over the deck as a film of up to
+                // 0.12 m that thins out to nothing across the first metre of the shoulders and toward the edge of
+                // the river's reach (no sheet edge on the ground).
+                L.m_water[k] = std::max(std::min(m_riverY[k], h + 0.5f * reachLeft), h + film);
+                L.m_waterKind[k] = WaterKind::River;
+            } else if (m_riverD[k] < m_riverReach[k] && h < m_riverY[k]) {
                 // Toward the edge of the river's reach the water thins out (at most 0.5 m per m from it): where the
                 // banks of a steep stretch lie below the local surface it meets the ground instead of ending in a wall.
                 L.m_water[k] = std::min(m_riverY[k], h + 0.5f * (m_riverReach[k] - m_riverD[k]));

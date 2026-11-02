@@ -267,6 +267,10 @@ model shader).
   its own ground, so the surface meets the bank inside the cell instead of ending in a wall along the cell edge, and
   the shoreline fades over the last 6 cm of depth (height map) and, with the scene copy, the last 0.25 m of view path
   to the ground behind (depth buffer). Only cells next to a waterfall are left out where the surface steps.
+- **Fords:** the road deck is flat across the channel while the river surface falls along it, so the bake runs the
+  water over the deck as a film of up to 0.12 m that thins out over the first metre of the shoulders and toward the
+  edge of the river's reach (no sheet edge on the road); the road's fill shoulders inside the wet channel stay 0.1 m
+  under the surface (fading toward the waterline), so they do not dam the channel into a dry sill.
 
 ### Grass, flowers and wheat
 
