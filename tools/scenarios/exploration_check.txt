@@ -88,8 +88,9 @@ pedal brake 1
 until speed_kmh < 1 10
 pedal brake 0
 # Canyon Road bridge (688, -125) -> (807, -118), 119 m over the canyon. Started at the foot of the ramp on the deck
-# axis: no steering, so the heading must hold for 122 m, and a standing start on the 2 deg gravel cross-slope before
-# the ramp turns the SUV 3.7 deg (into the left railing past x 710); it holds within 0.2 deg launched on the deck.
+# axis: no steering, so the heading must hold for 122 m. A standing 2H start on the gravel road before the ramp (grade
+# 2.6 %, camber twisting from 1.1 to 0.4 % in the first 8 m) turns the SUV 3.7 deg (into the left railing past x 710):
+# the twist starts a yaw that the driven rear on gravel amplifies (none in 4H); it holds within 0.2 deg on the deck.
 place 685 -125.2 86.6
 wait 1.5
 wait 1.5
