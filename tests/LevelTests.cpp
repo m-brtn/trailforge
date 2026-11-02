@@ -1599,6 +1599,38 @@ std::vector<std::string> bakeDifferences(const Level& a, const Level& b) {
 
 // The shipped Blender-authored level: no layout issues, the model library, the circuit and its gates, the surface
 // classes, the heights exactly the 16-bit heightmap, the physics tiles on the same grid, a deterministic bake.
+// Settings > TREES: STYLIZED bakes every tree as a procedural pine (no tree models in the library) while rocks, logs,
+// ground cover and cliffs stay models; DETAILED (the default of Level::load) uses the tree models.
+void levelTreeStyle() {
+    const Level& detailed = *level();
+    std::string err;
+    const auto stylizedLevel = Level::load(kLevel, &err, 0, false);
+    CHECK(stylizedLevel, "stylized bake: %s", err.c_str());
+    if (!stylizedLevel) return;
+    const Level& stylized = *stylizedLevel;
+    const auto count = [](const Level& L, const char* kind) {
+        return std::count_if(L.models().begin(), L.models().end(), [&](const LevelModel& m) { return m.kind == kind; });
+    };
+    const auto modelTrees = [](const Level& L) {
+        return std::count_if(L.trees().begin(), L.trees().end(), [](const LevelTree& t) { return t.model >= 0; });
+    };
+    const auto modelRocks = [](const Level& L) {
+        return std::count_if(L.rocks().begin(), L.rocks().end(), [](const LevelRock& r) { return r.model >= 0; });
+    };
+    std::printf("  detailed: %zu trees (%td models), %zu rocks (%td models), %td tree / %td rock models in the library\n",
+                detailed.trees().size(), modelTrees(detailed), detailed.rocks().size(), modelRocks(detailed),
+                count(detailed, "tree"), count(detailed, "rock"));
+    std::printf("  stylized: %zu trees (%td models), %zu rocks (%td models), %td tree / %td rock models in the library, "
+                "error '%s'\n", stylized.trees().size(), modelTrees(stylized), stylized.rocks().size(),
+                modelRocks(stylized), count(stylized, "tree"), count(stylized, "rock"), stylized.modelError().c_str());
+    CHECK(count(detailed, "tree") > 0 && modelTrees(detailed) > 1000, "detailed: tree models in use");
+    CHECK(count(stylized, "tree") == 0 && modelTrees(stylized) == 0, "stylized: no tree models");
+    CHECK(stylized.modelError().empty(), "stylized: model error '%s'", stylized.modelError().c_str());
+    CHECK(count(stylized, "rock") == count(detailed, "rock") && modelRocks(stylized) > 50,
+          "stylized: rocks stay models (%td)", modelRocks(stylized));
+    CHECK(stylized.trees().size() > 1000, "stylized: %zu trees", stylized.trees().size());
+}
+
 void levelBakedLayout() {
     const Level& lv = *circuitLevel();
     CHECK(lv.baked() && lv.asphaltLayer(), "baked %d, asphaltLayer %d", int(lv.baked()), int(lv.asphaltLayer()));
@@ -1894,6 +1926,7 @@ int main(int argc, char** argv) {
         {"building_kit_materials", buildingKitMaterials},
         {"level_buildings", levelBuildings},
         {"level_poi_buildings", levelPoiBuildings},
+        {"level_tree_style", levelTreeStyle},
         {"level_baked_layout", levelBakedLayout},
         {"lap_timer_gates", lapTimerGates},
         {"level_baked_track_smooth", levelBakedTrackSmooth},

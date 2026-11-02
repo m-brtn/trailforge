@@ -23,7 +23,7 @@ enum class MenuPage { Main, Pause, Settings, Controls, Vehicle };
 enum class MenuItem {
     Start, LevelChoice, Garage, Settings, Quit,  // main
     Resume, Map, Restart, QuitToMenu, QuitGame,  // pause (+ Garage, Settings)
-    Quality, RenderScale, GrassDistance, TreeDistance, VSync, // settings: graphics
+    Quality, RenderScale, GrassDistance, TreeDistance, VSync, TreeStyle, // settings: graphics
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
     Minimap, MinimapSize, MinimapNorthUp, Compass, // map

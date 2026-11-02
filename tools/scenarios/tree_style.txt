@@ -1,0 +1,69 @@
+# Settings > TREES on Exploration Peaks: STYLIZED (procedural tiered firs, the default) and DETAILED (CC0 tree
+# models); the row re-bakes the level. Same chase and high views of each, no HUD:
+#   ./build/release/trailforge --script tools/scenarios/tree_style.txt --no-audio
+# Captures /tmp/trailforge_trees_*.png.
+set ui 0
+set hud 0
+set headlights 0
+level exploration_peaks
+until level == 1 10
+expect setting_tree_style == 0  # stylized by default
+time 9
+
+# ---------------------------------------------------------------- stylized
+place -170 62 160
+wait 2
+camera local 1.8 2.2 -7.5 0 0.9 8 55
+wait 2
+capture /tmp/trailforge_trees_stylized_meadow.png
+wait 0.3
+camera local 0 45 -90 0 0 160 55
+wait 2
+capture /tmp/trailforge_trees_stylized_far.png
+wait 0.3
+place -222 -334 100
+time 17.9
+wait 2
+camera local 2.2 2.3 -7.5 0 0.9 8 55
+wait 2
+capture /tmp/trailforge_trees_stylized_ford.png
+wait 0.3
+camera follow
+
+# ---------------------------------------------------------------- detailed: the Settings row re-bakes the level
+menu pause
+wait 0.2
+menu settings
+wait 0.2
+menu select tree_style
+wait 0.3
+tap Right
+wait 0.5
+expect setting_tree_style == 1
+until level == 1 30
+menu back
+wait 0.1
+menu resume
+wait 1.0
+set ui 0
+set hud 0
+time 9
+place -170 62 160
+wait 2
+camera local 1.8 2.2 -7.5 0 0.9 8 55
+wait 2
+capture /tmp/trailforge_trees_detailed_meadow.png
+wait 0.3
+camera local 0 45 -90 0 0 160 55
+wait 2
+capture /tmp/trailforge_trees_detailed_far.png
+wait 0.3
+place -222 -334 100
+time 17.9
+wait 2
+camera local 2.2 2.3 -7.5 0 0.9 8 55
+wait 2
+capture /tmp/trailforge_trees_detailed_ford.png
+wait 0.3
+camera follow
+quit

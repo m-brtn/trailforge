@@ -52,7 +52,7 @@ const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
     static const std::vector<MenuItem> kPause = {M::Resume, M::Map, M::Restart, M::Garage, M::Settings, M::QuitToMenu,
                                                  M::QuitGame};
     static const std::vector<MenuItem> kSettings = {M::Quality,       M::RenderScale, M::GrassDistance, M::TreeDistance,
-                                                    M::VSync,         M::MasterVolume,
+                                                    M::VSync,         M::TreeStyle,   M::MasterVolume,
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Minimap,
                                                     M::MinimapSize,   M::MinimapNorthUp, M::Compass, M::TimeOfDay,
@@ -320,6 +320,7 @@ const char* menuLabel(MenuItem item) {
     case M::GrassDistance: return "GRASS DISTANCE";
     case M::TreeDistance: return "TREE DETAIL DISTANCE";
     case M::VSync: return "VSYNC";
+    case M::TreeStyle: return "TREES";
     case M::MasterVolume: return "MASTER VOLUME";
     case M::MusicVolume: return "MUSIC";
     case M::EffectsVolume: return "EFFECTS";
@@ -402,6 +403,7 @@ std::string menuValue(MenuItem item, const GameSettings& s, const std::string& d
         return s.treeDistance > 0.0f ? std::to_string(int(v)) + " M" : "PRESET (" + std::to_string(int(v)) + " M)";
     }
     case M::VSync: return s.vsync ? "ON" : "OFF";
+    case M::TreeStyle: return s.stylizedTrees ? "STYLIZED" : "DETAILED";
     case M::MasterVolume: return percent(s.masterVolume);
     case M::MusicVolume: return percent(s.musicVolume);
     case M::EffectsVolume: return percent(s.effectsVolume);
@@ -463,6 +465,7 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
     case M::GrassDistance: s.grassDistance = step(kGrassSteps, int(std::size(kGrassSteps)), s.grassDistance, dir); break;
     case M::TreeDistance: s.treeDistance = step(kTreeSteps, int(std::size(kTreeSteps)), s.treeDistance, dir); break;
     case M::VSync: s.vsync = !s.vsync; break;
+    case M::TreeStyle: s.stylizedTrees = !s.stylizedTrees; break;
     case M::MasterVolume: stepVolume(s.masterVolume, dir); break;
     case M::MusicVolume: stepVolume(s.musicVolume, dir); break;
     case M::EffectsVolume: stepVolume(s.effectsVolume, dir); break;

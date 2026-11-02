@@ -198,11 +198,15 @@ public:
     static constexpr float kNoWater = -1.0e30f;
 
     // Loads and bakes. Returns nullptr and an error message on failure. threads <= 0: hardware concurrency.
-    static std::shared_ptr<const Level> load(const std::string& path, std::string* error = nullptr, int threads = 0);
+    // modelTrees false (Settings > TREES: STYLIZED): the conifer, sapling and broadleaf models of "vegetation" are
+    // not loaded and every tree is a procedural pine; bushes, ferns, rocks, logs, cliffs and statics stay models.
+    static std::shared_ptr<const Level> load(const std::string& path, std::string* error = nullptr, int threads = 0,
+                                             bool modelTrees = true);
     // baseDir: folder of the level file (resolves the model library of "vegetation"; empty: procedural trees and
     // rocks only).
     static std::shared_ptr<const Level> fromJsonText(const std::string& text, std::string* error = nullptr,
-                                                     int threads = 0, const std::string& baseDir = {});
+                                                     int threads = 0, const std::string& baseDir = {},
+                                                     bool modelTrees = true);
 
     const std::string& id() const { return m_id; }
     const std::string& name() const { return m_name; }
@@ -246,7 +250,8 @@ public:
     const std::vector<LevelTree>& trees() const { return m_trees; }
     const std::vector<LevelRock>& rocks() const { return m_rocks; }
     const std::vector<LevelScatter>& scatter() const { return m_scatter; }
-    // Model library of the level (empty when the level has none or a model failed to load, see modelError()).
+    // Model library of the level (empty when the level has none or no model could be loaded; models that failed
+    // are skipped and named in modelError()).
     const std::vector<LevelModel>& models() const { return m_models; }
     const std::string& modelError() const { return m_modelError; }
     const LevelProps& props() const { return m_props; }

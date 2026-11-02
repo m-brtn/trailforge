@@ -102,6 +102,7 @@ void settingsRoundtrip() {
     s.timeOfDay = 17.123456f; // a clock that ran: the file keeps every bit
     s.timeFlow = 2;
     s.debugWindows = true;
+    s.stylizedTrees = false;
     s.vehicle = "trailforge_ev";
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
@@ -147,6 +148,12 @@ void settingsRoundtrip() {
     CHECK(clock.timeOfDay == 23.0f && clock.timeFlow == 2, "time wrapped %.2f, flow clamped %d", double(clock.timeOfDay),
           clock.timeFlow);
     CHECK(parseSettings("time_of_day = 24\n").timeOfDay == 0.0f, "24:00 is midnight");
+    CHECK(defaults.stylizedTrees && serializeSettings(defaults).find("tree_style = stylized") != std::string::npos,
+          "trees default to the stylized firs");
+    int badTrees = 0;
+    CHECK(!parseSettings("tree_style = models\n").stylizedTrees &&
+              parseSettings("tree_style = fancy\n", &badTrees).stylizedTrees && badTrees == 1,
+          "tree_style models / unknown value skipped");
     const GameSettings far = parseSettings("grass_distance = 900\ntree_distance = 5\n");
     CHECK(far.grassDistance == 250.0f && far.treeDistance == 0.0f, "distances clamped: grass %.0f tree %.0f",
           double(far.grassDistance), double(far.treeDistance));
@@ -318,6 +325,15 @@ void menuNavigation() {
     flow.handle(key(&MenuInput::left), settings);
     CHECK(!settings.debugWindows, "left toggles back");
     settings.timeOfDay = 9.0f;
+    flow.select(MenuItem::TreeStyle);
+    CHECK(menuValue(MenuItem::TreeStyle, settings) == "STYLIZED", "trees row '%s'",
+          menuValue(MenuItem::TreeStyle, settings).c_str());
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::SettingsChanged && !settings.stylizedTrees &&
+              menuValue(MenuItem::TreeStyle, settings) == "DETAILED",
+          "right switches to the detailed trees");
+    flow.handle(key(&MenuInput::accept), settings);
+    CHECK(settings.stylizedTrees, "accept switches back");
     flow.select(MenuItem::Controls);
     flow.handle(key(&MenuInput::accept), settings);
     CHECK(flow.page() == MenuPage::Controls && flow.depth() == 3, "controls page");

@@ -23,6 +23,9 @@ struct GameSettings {
     float grassDistance = 0.0f; // m; 0: the preset's own, otherwise 20..250
     float treeDistance = 0.0f;  // m, tree detail (mesh LOD) distance; 0: the preset's own, otherwise 150..2000
     bool vsync = true;
+    // Level trees: true = the procedural tiered firs (the default look), false = the CC0 tree models. Applied when a
+    // level is baked (a change re-bakes the current level).
+    bool stylizedTrees = true;
     // Audio (linear gains 0..1)
     float masterVolume = 0.8f;
     float musicVolume = 0.8f;

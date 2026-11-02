@@ -110,7 +110,7 @@ One command per line, `#` starts a comment:
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `camera local X Y Z TX TY TZ [FOV]` | free camera with position and target in the vehicle frame (+X left, +Y up, +Z forward, m; FOV default 60 deg) for close-ups of body details |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
-| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `time_of_day`, `time_preset`, `time_flow`, `debug_windows`, `back` |
+| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `tree_style`, `time_of_day`, `time_preset`, `time_flow`, `debug_windows`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
@@ -161,6 +161,8 @@ marks after a locked-wheel stop on the mini track, gravel spray and displaced-gr
 scoring on the mini track: rwd_test handbrake entry into the 32 m corner, a judged run, the `drift` switch on the
 proving ground and on Suncoast Raceway; `/tmp/trailforge_drift_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
+`tools/scenarios/tree_style.txt` (Exploration Peaks with STYLIZED and DETAILED trees, meadow, high and ford views,
+`/tmp/trailforge_trees_*.png`),
 `tools/scenarios/readme_shots.txt` (the README screenshots: the start menu over Exploration Peaks and two chase views
 from behind the SUV, Ultra, no HUD, `/tmp/trailforge_readme_*.png`; the header has the `sips` line that makes
 `docs/menu.jpg`, `docs/ford.jpg` and `docs/meadow.jpg`),
@@ -245,7 +247,7 @@ wheel mesh), `wheel_fit_err` (largest mesh vs physics radius / width difference 
 2 slick), `ambient` (air temperature, C), `tire_surface_<w>` / `tire_core_<w>` (C), `tire_grip_<w>` (temperature
 grip factor), `tire_kpa_<w>` (gauge pressure) with `w` = fl/fr/rl/rr, `tire_surface_max` / `tire_surface_min`,
 `tire_hud` / `tire_temps` (1 while the HUD widget / the telemetry grid is drawn), `debug_hud` (1 while the top-left
-read-out is drawn), `setting_time_of_day` / `setting_time_flow` / `setting_debug_windows`,
+read-out is drawn), `setting_time_of_day` / `setting_time_flow` / `setting_debug_windows` / `setting_tree_style` (0 stylized, 1 detailed),
 levels: `level` (1 on an open-world level, 0 on the proving ground), `level_choice` (index of the remembered
 choice in the level list), `submersion` (m below the water surface), `recoveries`,
 `water_depth` (render-only water over the ground at the vehicle), `above_grid` (body height over the level's height

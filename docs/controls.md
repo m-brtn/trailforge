@@ -83,7 +83,8 @@ select, Left / Right (A / D, D-pad, stick) change a setting, Esc / Backspace / g
 clicks rows (clicking the arrows of a setting steps it down / up). Every page below the start / pause menu has a
 ◀ BACK button at the top left above the page title: clickable, reached with Up from the first row (Down returns to
 it), never the default focus. Esc during play opens the pause menu. Settings
-(shared by both menus): graphics preset, resolution scale, grass distance, tree detail distance, VSync, master / music / effects / UI volume, the driver
+(shared by both menus): graphics preset, resolution scale, grass distance, tree detail distance, VSync, trees (stylized / detailed, see
+[levels](levels.md)), master / music / effects / UI volume, the driver
 aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse), the MAP rows (minimap on /
 off, minimap size small / medium / large, minimap orientation turns with the vehicle / north up, compass bar on / off), the
 TIME OF DAY rows (TIME in half-hour steps that wrap at midnight, PRESET dawn 05:45 / morning 09:00 / noon / golden hour
@@ -94,7 +95,7 @@ The TC default "VEHICLE DEFAULT" (the default setting) uses each vehicle's `aids
 off for the gasoline SUV; OFF / ON / OFF-ROAD force one mode for every vehicle.
 They are saved to `settings.cfg` (keys include `grass_distance` / `tree_distance` in m, 0 = the preset's value, `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
 `drive_keys` 0 / 1, `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation, `minimap` / `minimap_north_up` / `compass` 0 / 1 and
-`minimap_size` 0..2, `time_of_day` in hours, `time_flow` 0 off / 1 real time / 2 fast, `debug_windows` 0 / 1; an old
+`minimap_size` 0..2, `time_of_day` in hours, `time_flow` 0 off / 1 real time / 2 fast, `debug_windows` 0 / 1, `tree_style` stylized / models; an old
 `traction = 0` line reads as the vehicle default)
 in the user data directory (`trailforge --paths`) when a Settings page is closed and
 loaded on start; unknown keys and bad values are ignored. With DEBUG WINDOWS on, the F1–F3 debug panels work in

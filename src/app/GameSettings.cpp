@@ -93,6 +93,7 @@ std::string serializeSettings(const GameSettings& in) {
     std::string out = buf;
     if (!s.vehicle.empty()) out += "vehicle = " + s.vehicle + "\n";
     if (!s.level.empty()) out += "level = " + s.level + "\n";
+    out += std::string("tree_style = ") + (s.stylizedTrees ? "stylized" : "models") + "\n";
     return out;
 }
 
@@ -121,6 +122,12 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
                 s.level.clear();
                 ++bad;
             }
+            continue;
+        }
+        if (eq != std::string::npos && trim(line.substr(0, eq)) == "tree_style") {
+            const std::string v = trim(line.substr(eq + 1));
+            if (v == "stylized" || v == "models") s.stylizedTrees = v == "stylized";
+            else ++bad;
             continue;
         }
         double v = 0.0;

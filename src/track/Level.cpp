@@ -333,9 +333,9 @@ std::vector<float> gradeLimitedProfile(const std::vector<float>& target, const s
 // ------------------------------------------------------------------------------------------------------------------
 class LevelBaker {
 public:
-    LevelBaker(Level& out, int threads, std::string baseDir)
+    LevelBaker(Level& out, int threads, std::string baseDir, bool modelTrees)
         : L(out), m_threads(threads > 0 ? threads : int(std::max(1u, std::thread::hardware_concurrency()))),
-          m_baseDir(std::move(baseDir)) {}
+          m_baseDir(std::move(baseDir)), m_modelTrees(modelTrees) {}
 
     bool parse(const json::Value& doc, std::string& err);
     void bake();
@@ -490,6 +490,7 @@ private:
     std::vector<std::uint8_t> m_nearWater;     // 0..255: water within ~3 m
     std::vector<float> m_forest;               // per cell forest density
     std::string m_baseDir;
+    bool m_modelTrees = true; // false: no tree models (procedural pines), the rest of the library as usual
     std::vector<int> m_conifers, m_saplings, m_broadleaf, m_bushes, m_ferns, m_debris, m_rockModels, m_logs, m_cliffModels,
         m_staticModels;
     std::vector<float> m_waterDist;            // 8 m grid
@@ -758,6 +759,8 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
         {"cliffs", &m_cliffModels}, {"statics", &m_staticModels}};
     std::string warning;
     for (const auto& [key, list] : roles) {
+        const bool treeRole = list == &m_conifers || list == &m_saplings || list == &m_broadleaf;
+        if (treeRole && !m_modelTrees) continue;
         for (const json::Value& v : veg[key].array) {
             if (v.type != json::Value::Type::String) {
                 err = std::string("level: vegetation.") + key + " entries must be model paths";
@@ -768,8 +771,8 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
             ModelAsset a;
             std::string e;
             if (!a.load(m.path, false, &e)) {
-                warning = e;
-                break;
+                warning += (warning.empty() ? "" : "; ") + e;
+                continue;
             }
             m.id = a.id;
             m.kind = a.kind;
@@ -781,8 +784,8 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
             m.boundsMax = Float3(a.boundsMax[0], a.boundsMax[1], a.boundsMax[2]);
             if (m.kind == "rock" || m.kind == "log" || m.kind == "cliff") {
                 if (a.collisionIndices.empty() || a.collisionLod < 0 || std::size_t(a.collisionLod) >= a.lodError.size()) {
-                    warning = m.path + ": no collision mesh";
-                    break;
+                    warning += (warning.empty() ? "" : "; ") + m.path + ": no collision mesh";
+                    continue;
                 }
                 for (std::uint32_t i : a.collisionIndices)
                     m.collision.push_back(Float3(a.collisionPositions[3 * i], a.collisionPositions[3 * i + 1],
@@ -813,12 +816,12 @@ bool LevelBaker::loadModels(const json::Value& veg, std::string& err) {
             m_modelByRef[v.string] = int(L.m_models.size());
             L.m_models.push_back(std::move(m));
         }
-        if (!warning.empty()) break;
     }
-    if (!warning.empty() || (m_conifers.empty() && m_staticModels.empty())) {
-        // Missing library (for example Git LFS objects not pulled): the procedural trees and rocks stand in.
-        L.m_modelError = warning.empty() ? "vegetation: no conifers" : warning;
-        L.m_models.clear();
+    // A model that failed is skipped (its role falls back to the procedural trees / rocks when it ends up empty);
+    // a library without a single model (for example Git LFS objects not pulled) is no library.
+    L.m_modelError = warning;
+    if (L.m_models.empty() && warning.empty() && m_modelTrees && m_staticModels.empty()) L.m_modelError = "vegetation: no conifers";
+    if (L.m_models.empty()) {
         for (const auto& [key, list] : roles) list->clear();
         m_modelByRef.clear();
     }
@@ -3195,7 +3198,8 @@ void LevelBaker::placeBaked() {
                          : std::find(m_saplings.begin(), m_saplings.end(), id) != m_saplings.end() ? TreeKind::Sapling
                                                                                                     : TreeKind::Conifer;
             } else {
-                if (library) L.m_layoutIssues.push_back("tree model '" + p.model + "' is not in the vegetation library");
+                if (library && m_modelTrees)
+                    L.m_layoutIssues.push_back("tree model '" + p.model + "' is not in the vegetation library");
                 t.height = 12.0f * p.scale; // procedural pine
             }
             L.m_trees.push_back(t);
@@ -3518,7 +3522,7 @@ void addLevelTrunk(TrackGeometry& g, const LevelTree& t, const std::vector<Level
 }
 
 std::shared_ptr<const Level> Level::fromJsonText(const std::string& text, std::string* error, int threads,
-                                                 const std::string& baseDir) {
+                                                 const std::string& baseDir, bool modelTrees) {
     json::Value doc;
     std::string err;
     if (!json::parse(text, doc, &err)) {
@@ -3526,7 +3530,7 @@ std::shared_ptr<const Level> Level::fromJsonText(const std::string& text, std::s
         return nullptr;
     }
     std::shared_ptr<Level> level(new Level());
-    LevelBaker baker(*level, threads, baseDir);
+    LevelBaker baker(*level, threads, baseDir, modelTrees);
     if (!baker.parse(doc, err)) {
         if (error) *error = err;
         return nullptr;
@@ -3606,7 +3610,7 @@ bool LevelBaker::buildAttractRoute(std::string& err) {
     return true;
 }
 
-std::shared_ptr<const Level> Level::load(const std::string& path, std::string* error, int threads) {
+std::shared_ptr<const Level> Level::load(const std::string& path, std::string* error, int threads, bool modelTrees) {
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         if (error) *error = "level: cannot open " + path;
@@ -3615,7 +3619,8 @@ std::shared_ptr<const Level> Level::load(const std::string& path, std::string* e
     std::stringstream ss;
     ss << f.rdbuf();
     const std::size_t slash = path.find_last_of("/\\");
-    return fromJsonText(ss.str(), error, threads, slash == std::string::npos ? std::string(".") : path.substr(0, slash));
+    return fromJsonText(ss.str(), error, threads, slash == std::string::npos ? std::string(".") : path.substr(0, slash),
+                        modelTrees);
 }
 
 float Level::heightAt(float x, float z) const {

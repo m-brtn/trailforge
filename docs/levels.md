@@ -137,6 +137,13 @@ the development level and is what scenarios and `--demo` start on.
   mud on wet banks and in dirt road ruts, snow above a noisy snow line), render masks, ~22.1k trees (thinning out over the last ~200 m before the bake edge), ~1.2k rocks, logs, cliff faces and scree
   boulders, and the POI buildings
   ([Buildings](rendering.md#buildings)).
+- **Tree style:** Settings → TREES. STYLIZED (the default) bakes every tree as the procedural tiered fir
+  (`buildPineMeshes`, the same pines that stand in when the model library is missing; trunks collide as procedural
+  prisms in the terrain tiles); DETAILED uses the CC0 conifer, sapling and broadleaf models of `vegetation`. Bushes,
+  ferns, debris, rocks, logs, cliffs and statics are models in both. A change bakes the current level again (the
+  vehicle returns to the spawn). A model that fails to load is skipped and named in the log
+  (`Level::modelError()`); only a library with no loadable model falls back to procedural trees and rocks.
+  `tools/scenarios/tree_style.txt` captures both on Exploration Peaks; CTest `level_tree_style`.
 - **Steep ground:** no straight walls from the bake itself. A lake whose surroundings are lower than its water keeps
   a 12 m lip that falls away as an uneven 15–27° embankment; inside the outline the bed shelves down at most ~27°,
   and gorge walls rise from it at most ~63°. Steep river banks (`bankSlope` ≥ 1.5, the canyon) have a scree apron of

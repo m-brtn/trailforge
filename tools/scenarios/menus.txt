@@ -110,6 +110,17 @@ wait 0.1
 expect setting_grass_distance == 0
 expect grass_dist == 110
 
+# trees: stylized by default; the row switches (on the proving ground nothing is baked)
+expect setting_tree_style == 0
+menu select tree_style
+wait 0.3
+tap Right
+wait 0.1
+expect setting_tree_style == 1
+tap Return
+wait 0.1
+expect setting_tree_style == 0
+
 # time of day from the start menu: stored for gameplay, the start-menu sunset stays
 expect setting_time_of_day == 9
 menu select time_preset
@@ -166,7 +177,7 @@ menu select quality
 wait 0.5
 tap Up                          # BACK sits above the page title (top left): Up from the first row
 wait 0.5
-expect menu_cursor == 22
+expect menu_cursor == 23
 expect menu_scroll == 0         # outside the scrolling list
 capture /tmp/trailforge_menu_05c_settings_back.png
 wait 0.1

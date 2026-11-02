@@ -107,7 +107,7 @@ constexpr NamedItem kItemNames[] = {
     {"resume", MenuItem::Resume},       {"restart", MenuItem::Restart},       {"quit_to_menu", MenuItem::QuitToMenu},
     {"garage", MenuItem::Garage},       {"quit_game", MenuItem::QuitGame},  {"quality", MenuItem::Quality},       {"render_scale", MenuItem::RenderScale},
     {"grass_distance", MenuItem::GrassDistance}, {"tree_distance", MenuItem::TreeDistance},
-    {"vsync", MenuItem::VSync},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
+    {"vsync", MenuItem::VSync}, {"tree_style", MenuItem::TreeStyle},         {"master", MenuItem::MasterVolume},   {"music", MenuItem::MusicVolume},
     {"effects", MenuItem::EffectsVolume}, {"ui", MenuItem::UiVolume},         {"abs", MenuItem::Abs},
     {"tc", MenuItem::Traction},         {"diff", MenuItem::DiffLocks},        {"auto_reverse", MenuItem::AutoReverse},
     {"controls", MenuItem::Controls},   {"back", MenuItem::Back},             {"drive_keys", MenuItem::DriveKeys},
@@ -673,6 +673,13 @@ void Application::applySettings(bool force) {
         }
     }
     if (force || s.vsync != m_applied.vsync) m_renderer->setVSync(s.vsync);
+    if (!force && s.stylizedTrees != m_applied.stylizedTrees && m_sim.level()) {
+        // The tree style is part of the bake: the current level is baked again (as a level change; the vehicle
+        // goes back to the spawn).
+        const std::string id = currentLevelId();
+        m_levelCache.clear(); // every cached level was baked with the other style
+        if (!selectLevel(id)) std::printf("Levels: cannot load '%s'\n", id.c_str());
+    }
     AudioSettings& a = m_audioPanel.settings;
     a.master = s.masterVolume;
     a.music = s.musicVolume;
@@ -780,7 +787,7 @@ std::shared_ptr<const Level> Application::loadLevel(const std::string& id) {
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) continue;
         std::string error;
-        std::shared_ptr<const Level> level = Level::load(path, &error);
+        std::shared_ptr<const Level> level = Level::load(path, &error, 0, !m_settings.stylizedTrees);
         if (!level) {
             std::printf("Levels: %s\n", error.c_str());
             return nullptr;
@@ -2605,6 +2612,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (k == "grass_distance") return g.grassDistance;
         if (k == "tree_distance") return g.treeDistance;
         if (k == "vsync") return g.vsync ? 1.0 : 0.0;
+        if (k == "tree_style") return g.stylizedTrees ? 0.0 : 1.0; // 0 stylized, 1 detailed
         if (k == "master") return g.masterVolume;
         if (k == "music") return g.musicVolume;
         if (k == "effects") return g.effectsVolume;

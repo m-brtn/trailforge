@@ -299,6 +299,7 @@ if(TRAILFORGE_BUILD_TESTS)
             building_kit_materials
             level_buildings
             level_poi_buildings
+            level_tree_style
             level_baked_layout
             lap_timer_gates
             level_baked_track_smooth
