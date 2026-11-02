@@ -149,7 +149,7 @@ Command-line options:
 
 First port (v0.29.0 tree): **iOS Simulator only, game controller only, untested on a real iPhone or iPad.** There are
 no touch controls yet: without a controller the start menu can only be looked at. Minimum iOS 26.0 (iPhone and iPad,
-landscape only, arm64).
+landscape only, arm64). For a real iPhone / iPad use the Xcode project ("iOS device: Xcode project" below).
 
 Prerequisites: Xcode with the iOS SDK and an iOS Simulator runtime (checked with Xcode 27.2, iOS SDK 27.2 and the
 iOS 27.0 runtime; there was no iOS 26 runtime on the test Mac, so iOS 26 itself was not run), the Metal toolchain for
@@ -223,17 +223,59 @@ Known limitations:
   TrailForge not running, so the resume path is unverified.
 - Scenario checks other than `ios_check.txt` were not run on iOS.
 
-Running on a real iPhone or iPad (not done yet):
+### iOS device: Xcode project
 
-1. Xcode → Settings → Accounts: add an Apple ID (a free personal team works for 7-day development builds), enable
-   Developer Mode on the device (Settings → Privacy & Security) and connect it once with Xcode.
-2. Create a development provisioning profile for the bundle id (e.g. an empty Xcode iOS app project with
-   `com.<you>.trailforge` and the same team builds one), then configure with that id, the identity and the profile:
-   `cmake --preset ios-device-release -DTRAILFORGE_IOS_BUNDLE_ID=com.<you>.trailforge
-   -DTRAILFORGE_IOS_SIGN_IDENTITY="Apple Development: <name> (<id>)"
-   -DTRAILFORGE_IOS_PROVISIONING_PROFILE=<profile>.mobileprovision -DTRAILFORGE_IOS_ENTITLEMENTS=<entitlements>.plist`
-   (the entitlements need `application-identifier` and `com.apple.developer.team-identifier` from the profile;
-   `security cms -D -i <profile>` prints them).
-3. Install and launch: `xcrun devicectl device install app --device <id> build/ios-device-release/TrailForge.app`,
-   `xcrun devicectl device process launch --device <id> com.<you>.trailforge`.
-4. Check the BC7 support and the real controller, then measure the Low / Medium presets on the device.
+Preset `ios-xcode` generates `build/ios-xcode/TrailForge.xcodeproj` (Xcode generator, iOS device only, arm64,
+iOS 26.0+) with Xcode's **Automatic** signing. The project has the app target `trailforge` (product `TrailForge.app`),
+its libraries (`trailforge_sim`, `trailforge_audio`, `trailforge_flow`, Jolt, SDL3, ImGui, miniaudio) and one shared
+scheme, `trailforge`, whose Run action uses the Release configuration (Debug Jolt is too slow to drive). Not run on a
+real iPhone or iPad yet.
+
+```sh
+cmake --preset host-tools && cmake --build --preset host-tools   # once: macOS trailforge_shaderc
+cmake --preset ios-xcode -DTRAILFORGE_IOS_TEAM=<team id>         # team optional, see below
+open build/ios-xcode/TrailForge.xcodeproj
+```
+
+The first configure downloads and configures the dependencies (about 5.5 min here); later ones take seconds.
+In Xcode:
+
+1. Xcode → Settings → Accounts: an Apple ID must be signed in (a free Personal Team is enough; its builds expire
+   after 7 days).
+2. Connect the iPhone / iPad by cable, unlock it and tap "Trust". On the device enable Settings → Privacy & Security
+   → Developer Mode (the device restarts) if Xcode asks for it.
+3. Scheme `trailforge` (top bar); destination: the device (not "Any iOS Device"; Simulators are not offered).
+4. Without `TRAILFORGE_IOS_TEAM`: select the project in the navigator → target `trailforge` → Signing & Capabilities
+   → Team. Leave "Automatically manage signing" on. Xcode registers the device and creates the profile.
+5. Run (⌘R). The first launch of an app from a free team is blocked on the device: Settings → General → VPN & Device
+   Management → the developer app → Trust, then Run again.
+
+Details:
+
+- `TRAILFORGE_IOS_TEAM` (cache variable, default empty) is written to `DEVELOPMENT_TEAM`. A team picked in the Xcode
+  UI is stored in the generated project only and is lost when CMake regenerates it (any configure, or Xcode's
+  `ZERO_CHECK` after a CMake file changed), so set the cache variable once. Team ids: Xcode → Settings → Accounts, or
+  `defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier`.
+- `TRAILFORGE_IOS_BUNDLE_ID` defaults to `com.trailforge.app.<user>` (login name) for the Xcode project: bundle ids
+  are unique per Apple developer account, and a free team cannot register one that another team owns. The Ninja
+  presets keep `com.trailforge.app`. `Info.plist` comes from `cmake/Info.ios.plist.in` with
+  `$(PRODUCT_BUNDLE_IDENTIFIER)`.
+- Resources: `assets/` is a folder reference in the Resources phase (copied recursively to `TrailForge.app/assets`),
+  the logo from the build tree has its own copy phase into `assets/images`, and the app icon is an asset catalog
+  generated at configure time (`build/ios-xcode/generated/ios/Assets.xcassets`) that Xcode compiles.
+- Shaders: the metallibs are built with `xcrun -sdk iphoneos metal`, so the project is device only
+  (`SUPPORTED_PLATFORMS = iphoneos`); the Simulator stays on `ios-sim-release` and `tools/ios/run_simulator.sh`.
+- Command line: `cmake --build --preset ios-xcode` (Release, `-allowProvisioningUpdates`) builds a signed app when a
+  team is set; without signing, to check compile and link:
+  `xcodebuild -project build/ios-xcode/TrailForge.xcodeproj -scheme trailforge -configuration Release
+  -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO build`. The app is
+  `build/ios-xcode/Release-iphoneos/TrailForge.app`. Install and launch without Xcode:
+  `devicectl device install app --device <udid> build/ios-xcode/Release-iphoneos/TrailForge.app`, then
+  `devicectl device process launch --device <udid> com.trailforge.app.<user>`. On the test Mac `xcrun devicectl`
+  hangs in `xcodebuild -runFirstLaunch` like `xcrun simctl`; CoreDevice's own binary works:
+  `/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl`.
+- The Ninja preset `ios-device-release` still builds an ad-hoc bundle; signing it by hand needs
+  `TRAILFORGE_IOS_SIGN_IDENTITY`, `TRAILFORGE_IOS_PROVISIONING_PROFILE` and `TRAILFORGE_IOS_ENTITLEMENTS`
+  (`cmake/IosBundle.cmake`). The Xcode project is the simpler path.
+
+On the device, still to check: BC7 support, a real controller, and the Low / Medium presets.

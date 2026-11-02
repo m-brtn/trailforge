@@ -3,8 +3,20 @@
 # external_assets/images/Icon.png, and the runtime assets copied to TrailForge.app/assets (SDL_GetBasePath() is the
 # bundle root on iOS). The bundle is signed with TRAILFORGE_IOS_SIGN_IDENTITY ("-" = ad-hoc, enough for the
 # Simulator; a real device needs a development identity and a provisioning profile, docs/building.md "iOS").
+#
+# With the Xcode generator (preset ios-xcode, device only) Xcode does the bundling and signing instead: Automatic
+# signing with TRAILFORGE_IOS_TEAM (empty = pick the team in Xcode), the icon as an asset catalog, assets/ as a folder
+# reference in the Resources phase, and a shared `trailforge` scheme that launches the Release configuration.
 
-set(TRAILFORGE_IOS_BUNDLE_ID "com.trailforge.app" CACHE STRING "iOS bundle identifier")
+if(CMAKE_GENERATOR STREQUAL "Xcode")
+    # Bundle ids are global per Apple developer account: a free Personal Team cannot reuse one registered elsewhere.
+    string(REGEX REPLACE "[^A-Za-z0-9-]" "-" _user_id "$ENV{USER}")
+    set(_default_bundle_id "com.trailforge.app.${_user_id}")
+else()
+    set(_default_bundle_id "com.trailforge.app")
+endif()
+set(TRAILFORGE_IOS_BUNDLE_ID "${_default_bundle_id}" CACHE STRING "iOS bundle identifier")
+set(TRAILFORGE_IOS_TEAM "" CACHE STRING "Apple development team id for Xcode Automatic signing (empty = set in Xcode)")
 set(TRAILFORGE_IOS_SIGN_IDENTITY "-" CACHE STRING "codesign identity for the iOS bundle (- = ad-hoc)")
 set(TRAILFORGE_IOS_PROVISIONING_PROFILE "" CACHE FILEPATH
     "Provisioning profile copied into the bundle as embedded.mobileprovision (device builds)")
@@ -20,6 +32,10 @@ function(trailforge_add_ios_bundle target)
     endif()
     set(_gen ${CMAKE_BINARY_DIR}/generated/ios)
     file(MAKE_DIRECTORY ${_gen})
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+        trailforge_add_ios_xcode_bundle(${target})
+        return()
+    endif()
     configure_file(${CMAKE_SOURCE_DIR}/cmake/Info.ios.plist.in ${_gen}/Info.plist @ONLY)
 
     set_target_properties(${target} PROPERTIES
@@ -82,4 +98,62 @@ function(trailforge_add_ios_bundle target)
         COMMENT "Signing TrailForge.app (${TRAILFORGE_IOS_SIGN_IDENTITY})"
         VERBATIM)
     add_dependencies(${target}_ios_sign ${target}_ios_assets)
+endfunction()
+
+# Xcode generator path of trailforge_add_ios_bundle (called from it; _gen and the platform variables come from there).
+function(trailforge_add_ios_xcode_bundle target)
+    if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        message(FATAL_ERROR "TrailForge: the Xcode project is device only (the metallibs are built for one SDK); "
+                            "use the ios-sim-release preset for the Simulator")
+    endif()
+    set(_bundle_id ${TRAILFORGE_IOS_BUNDLE_ID})
+    set(TRAILFORGE_IOS_BUNDLE_ID "$(PRODUCT_BUNDLE_IDENTIFIER)")
+    configure_file(${CMAKE_SOURCE_DIR}/cmake/Info.ios.plist.in ${_gen}/Info.plist @ONLY)
+
+    # Xcode compiles the asset catalog (actool) in the Resources phase; the 1024 px icon is made at configure time.
+    set(_icon_png ${CMAKE_SOURCE_DIR}/external_assets/images/Icon.png)
+    set(_xcassets ${_gen}/Assets.xcassets)
+    file(WRITE ${_xcassets}/Contents.json "{\"info\":{\"author\":\"xcode\",\"version\":1}}\n")
+    file(WRITE ${_xcassets}/AppIcon.appiconset/Contents.json
+         "{\"images\":[{\"filename\":\"icon_1024.png\",\"idiom\":\"universal\",\"platform\":\"ios\","
+         "\"size\":\"1024x1024\"}],\"info\":{\"author\":\"xcode\",\"version\":1}}\n")
+    set(_icon_out ${_xcassets}/AppIcon.appiconset/icon_1024.png)
+    if(NOT EXISTS ${_icon_out} OR ${_icon_png} IS_NEWER_THAN ${_icon_out})
+        execute_process(COMMAND sips -s format png -z 1024 1024 ${_icon_png} --out ${_icon_out}
+                        OUTPUT_QUIET RESULT_VARIABLE _sips_res)
+        if(NOT _sips_res EQUAL 0)
+            message(FATAL_ERROR "TrailForge: sips could not convert ${_icon_png}")
+        endif()
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_icon_png})
+
+    # A directory source becomes a folder reference: Xcode copies assets/ recursively to the bundle root
+    # (SDL_GetBasePath() on iOS). The logo lives in the build tree and gets its own copy phase into assets/images.
+    set(_assets ${CMAKE_SOURCE_DIR}/assets)
+    set(_logo ${CMAKE_BINARY_DIR}/assets/images/logo.png)
+    target_sources(${target} PRIVATE ${_assets} ${_xcassets} ${_logo})
+    set_source_files_properties(${_assets} ${_xcassets} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_source_files_properties(${_logo} PROPERTIES MACOSX_PACKAGE_LOCATION assets/images)
+    source_group("Resources" FILES ${_assets} ${_xcassets} ${_logo})
+
+    set_target_properties(${target} PROPERTIES
+        MACOSX_BUNDLE ON
+        OUTPUT_NAME TrailForge
+        MACOSX_BUNDLE_INFO_PLIST ${_gen}/Info.plist
+        RESOURCE "${_assets};${_xcassets}"
+        XCODE_GENERATE_SCHEME ON
+        XCODE_SCHEME_LAUNCH_CONFIGURATION Release
+        XCODE_ATTRIBUTE_PRODUCT_NAME TrailForge
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${_bundle_id}"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${TRAILFORGE_IOS_TEAM}"
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS iphoneos
+        XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST NO
+        XCODE_ATTRIBUTE_SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD NO
+        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon
+        XCODE_ATTRIBUTE_ENABLE_BITCODE NO
+        XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
 endfunction()

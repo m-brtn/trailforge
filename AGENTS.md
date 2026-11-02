@@ -60,6 +60,8 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 cmake --preset host-tools && cmake --build --preset host-tools
 cmake --preset ios-sim-release && cmake --build --preset ios-sim-release
 tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/ios_check.txt --no-audio
+# iOS device: Xcode project build/ios-xcode/TrailForge.xcodeproj (device only, Automatic signing, scheme trailforge)
+cmake --preset ios-xcode -DTRAILFORGE_IOS_TEAM=<team id> && open build/ios-xcode/TrailForge.xcodeproj
 
 # Windows (x64 Native Tools prompt: MSVC cl + Ninja) and Linux (Ninja, gcc/clang); shown only on their host
 cmake --preset windows-release && cmake --build --preset windows-release && ctest --preset windows-release

@@ -66,6 +66,17 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "CMAKE_OSX_SYSROOT": "iphoneos" }
     },
     {
+      "name": "ios-xcode",
+      "displayName": "iOS device Xcode project (build/ios-xcode/TrailForge.xcodeproj, Automatic signing, run build/host-tools first)",
+      "inherits": "ios-base",
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "CMAKE_XCODE_GENERATE_SCHEME": "OFF"
+      }
+    },
+    {
       "name": "windows-base",
       "hidden": true,
       "inherits": "base",
@@ -111,6 +122,13 @@
     { "name": "host-tools", "configurePreset": "host-tools", "targets": ["trailforge_shaderc"] },
     { "name": "ios-sim-release", "configurePreset": "ios-sim-release" },
     { "name": "ios-device-release", "configurePreset": "ios-device-release" },
+    {
+      "name": "ios-xcode",
+      "configurePreset": "ios-xcode",
+      "configuration": "Release",
+      "targets": ["trailforge"],
+      "nativeToolOptions": ["-allowProvisioningUpdates"]
+    },
     { "name": "windows-debug", "configurePreset": "windows-debug" },
     { "name": "windows-release", "configurePreset": "windows-release" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
