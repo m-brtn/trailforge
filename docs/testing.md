@@ -125,6 +125,7 @@ One command per line, `#` starts a comment:
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
 | `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 | `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
+| `touch menu:ROW` / `touchdrag [menu:ROW] DX DY [STEPS]` | a finger as SDL reports it on iOS (mouse events from `SDL_TOUCH_MOUSEID`): tap on a menu row's label; drag by DX DY points over STEPS frames (default 8), from a row's label or a quarter across / half way down the window |
 | `drift on\|off\|level` | force drift scoring on / off for the session, or back to the level's `"drift"` setting (same as F1 → Simulation → Drift scoring) |
 | `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
@@ -141,8 +142,8 @@ Scenarios start in gameplay (no intro, no menu) and never read or write the sett
 
 Other scenarios: `tools/scenarios/ios_check.txt` (gamepad only through SDL's virtual pad: A on START opens the vehicle
 page, A again drives, right trigger / left stick / left trigger, Start pauses with frozen ticks and resumes,
-Exploration Peaks spawn and drive, `perf_begin` on the Low preset; written for the iOS build, which has no touch
-controls, and run in the iOS Simulator as well as on macOS, see [iOS](building.md#ios); `/tmp/trailforge_ios_*.png`),
+Settings scrolls with the selection and a finger drag moves the list, Exploration Peaks spawn and drive,
+`perf_begin` on the Low preset; written for the iOS build, which has touch in the menus only, and run in the iOS Simulator as well as on macOS, see [iOS](building.md#ios); `/tmp/trailforge_ios_*.png`),
 `tools/scenarios/bump_check.txt` (every shipped vehicle accelerated to 30 km/h on the proving
 ground's bump strip, teleport 16, coasting over a 0.35 m, 2.5 m long mound under both wheel tracks and then one under
 the left wheels; no

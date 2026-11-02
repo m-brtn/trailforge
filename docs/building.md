@@ -147,8 +147,9 @@ Command-line options:
 
 ## iOS
 
-First port (v0.29.0 tree): **iOS Simulator only, game controller only, untested on a real iPhone or iPad.** There are
-no touch controls yet: without a controller the start menu can only be looked at. Minimum iOS 26.0 (iPhone and iPad,
+First port (v0.29.0 tree): **iOS Simulator only, game controller only, untested on a real iPhone or iPad.** Touch
+works in the menus only (tap a row or a value arrow, drag a list to scroll it, a flick coasts); there are no touch
+driving controls, so driving needs a controller. Minimum iOS 26.0 (iPhone and iPad,
 landscape only, arm64). For a real iPhone / iPad use the Xcode project ("iOS device: Xcode project" below).
 
 Prerequisites: Xcode with the iOS SDK and an iOS Simulator runtime (checked with Xcode 27.2, iOS SDK 27.2 and the
@@ -215,7 +216,9 @@ Known limitations:
 - Controller input was verified only with SDL's virtual gamepad (`gamepad attach` in `tools/scenarios/ios_check.txt`),
   which goes through the game's gamepad code but not through Apple's GameController framework. The Simulator does not
   pass a physical controller through here; MFi / Xbox / DualSense pads are untested.
-- No touch controls, no on-screen keyboard; the HUD still shows the keyboard help line. UI layout ignores the safe
+- Touch in the menus only (SDL's touch -> mouse events: a tap acts when the finger lifts, a drag past 10 points
+  scrolls the list and activates nothing, garage sliders are set by tapping the bar); no touch driving controls, no
+  on-screen keyboard; the HUD still shows the keyboard help line. UI layout ignores the safe
   area (the Dynamic Island can cover the left edge of the HUD in landscape).
 - Background and return: the lifecycle events arrive and the app stops rendering and audio (log lines `App: entered
   the background`, `Audio: device stopped`). Returning crashed once because the Simulator's own GPU host process

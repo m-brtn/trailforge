@@ -113,6 +113,11 @@ compass bar). On: also the top-left read-out (wheel compression, key hints, FPS 
 tuning (shown on the first frame unless `--no-ui`), F2 graphics, F3 audio and the physics debug lines of the tuning
 window; F1–F3 do nothing while it is off. Scenario runs start with it on (their checks read those windows).
 
+**Touch (menus only).** On a touch screen (iOS) a tap on a menu or garage row, a value arrow or a vehicle card acts
+like a click when the finger lifts; dragging a list (Settings, Controls, vehicle page, garage) scrolls it, coasts
+briefly after a flick and activates nothing. A keyboard / gamepad move still scrolls the selected row into view.
+There are no touch driving controls.
+
 **Vehicle page.** With more than one vehicle in the catalog, Start opens SELECT VEHICLE: a strip of cards (name and
 GASOLINE / ELECTRIC), the description and a spec list (mass, peak power, torque, drivetrain, battery, tires), with
 the live vehicle as the preview under the garage orbit camera. Left / Right (A / D, D-pad, stick), the mouse wheel
