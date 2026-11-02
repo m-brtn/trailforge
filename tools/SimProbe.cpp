@@ -31,6 +31,9 @@
 //                                       0.4 m at 20 / 30 / 40 km/h (quick: 0.30 / 0.35 / 0.40 m at 30 km/h): CoM rise,
 //                                       airtime, roll / pitch, suspension speed, hard stop hits, rollovers; per
 //                                       vehicle the suspension numbers Jolt uses (effective mass, rates, ratios)
+//   trailforge_probe handling [ramp|step|sine|straight|arb|slope|user30|all] - steer ramp (beta, slip angles,
+//                                       understeer gradient), step / sine steer, straight line, anti-roll bar balance,
+//                                       cross-slope launch, keyboard turn at 30 km/h (tools/HandlingProbe.cpp)
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -61,6 +64,8 @@
 #include <string>
 
 using namespace tf;
+
+void handlingProbe(int argc, char** argv); // tools/HandlingProbe.cpp
 
 namespace {
 
@@ -3292,6 +3297,7 @@ int main(int argc, char** argv) {
     else if (mode == "drift") driftProbe(argc, argv);
     else if (mode == "tires") tiresProbe(argc, argv);
     else if (mode == "bump") bumpProbe(argc, argv);
+    else if (mode == "handling") handlingProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
     else bench();

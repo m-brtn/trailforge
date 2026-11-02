@@ -132,7 +132,7 @@ if(NOT TRAILFORGE_IOS)
     add_executable(trailforge_vehiclec tools/cars/vehiclec.cpp)
     target_link_libraries(trailforge_vehiclec PRIVATE trailforge_bodyc)
 
-    add_executable(trailforge_probe tools/SimProbe.cpp)
+    add_executable(trailforge_probe tools/SimProbe.cpp tools/HandlingProbe.cpp)
     target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
     target_compile_definitions(trailforge_probe PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()

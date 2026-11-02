@@ -17,6 +17,12 @@
   bump the driver holds the speed, freezes the throttle, coasts or floors it; prints CoM rise, airtime, roll / pitch,
   suspension speed, hard stop and rim hits, body hits and rollovers per run and a `RESULT` line;
   `bump trace OFFSET H KMH DRIVER SHAPE` prints one run per tick;
+- `handling [ramp|step|sine|straight|arb|slope|user30|all]` — flat-pad handling (`tools/HandlingProbe.cpp`; surface
+  `HANDLING_SURFACE`, vehicle `TRAILFORGE_VEHICLE` or the three shipped ones): 60 km/h steer ramp (body and axle slip
+  angles, axle cornering stiffness, understeer gradient on the commanded road-wheel angle), step and sine steer at
+  60 / 90 km/h, straight line with lift-off, anti-roll bar balance, 2° cross-slope launch, and `user30`: the steering
+  key held 4 s at ~30 km/h with the keyboard throttle per TC mode and lock setting (max rear slip angle against the
+  tire peak, `HANDLING_TRACE=1` per-wheel trace);
 - `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,
   climbs on dirt 20° and mud 15° per drive mode, the twister, steady-speed energy (electric only);
 - `minitrack [vehicle.json ...]` — scripted laps of the mini handling track for the SUV, the EV, `builtin` and
