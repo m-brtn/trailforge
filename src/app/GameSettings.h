@@ -2,13 +2,23 @@
 
 #include <string>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace tf {
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+constexpr int kDefaultQuality = 0; // iOS: Low until the port has been measured on a real device
+#else
+constexpr int kDefaultQuality = 2; // High
+#endif
 
 // Player settings edited in the Settings screen and stored as `settings.cfg` in the user data directory.
 // Plain values only (no SDL, no renderer), so the file format is testable headless.
 struct GameSettings {
     // Graphics
-    int quality = 2;           // QualityPreset Low (0) .. Ultra (3)
+    int quality = kDefaultQuality; // QualityPreset Low (0) .. Ultra (3)
     float renderScale = 0.0f;  // 0: the preset's own scale, otherwise 0.5..1 of the window pixels
     float grassDistance = 0.0f; // m; 0: the preset's own, otherwise 20..250
     float treeDistance = 0.0f;  // m, tree detail (mesh LOD) distance; 0: the preset's own, otherwise 150..2000

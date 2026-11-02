@@ -294,9 +294,11 @@ Application::Application(const AppOptions& options)
     applySettings(true);
     m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
     if (m_flow.menuActive()) enterMenuWorld(false);
+    SDL_AddEventWatch(&Application::onAppLifecycle, this);
 }
 
 Application::~Application() {
+    SDL_RemoveEventWatch(&Application::onAppLifecycle, this);
     m_audio.reset(); // stop the audio thread first
     if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
     if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
@@ -380,6 +382,33 @@ void Application::processEvents() {
         intent.steer = m_time < 3.0 ? 0.0f : -0.45f;
     }
     m_sim.setIntent(intent);
+}
+
+// App lifecycle (iOS): an event watch sees the events while the OS waits in its callback, before the next frame.
+// Losing focus opens the pause menu; in the background nothing is rendered (iOS ends apps that use the GPU there),
+// the simulation does not tick and the audio device is stopped.
+bool SDLCALL Application::onAppLifecycle(void* app, SDL_Event* event) {
+    Application& a = *static_cast<Application*>(app);
+    switch (event->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        if (!a.m_scenario) a.m_flow.pause();
+        break;
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+        if (a.m_inBackground) break;
+        a.m_inBackground = true;
+        if (a.m_audio) a.m_audio->setSuspended(true);
+        std::printf("App: entered the background (rendering, simulation and audio stopped)\n");
+        break;
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+        if (!a.m_inBackground) break;
+        a.m_inBackground = false;
+        a.m_clock.reset();
+        if (a.m_audio) a.m_audio->setSuspended(false);
+        std::printf("App: back in the foreground\n");
+        break;
+    default: break;
+    }
+    return true;
 }
 
 void Application::setPaused(bool paused) {
@@ -2942,7 +2971,7 @@ int Application::run() {
 
         m_flow.update(std::min(frameTime, 0.1));
         processEvents();
-        if (SDL_GetWindowFlags(m_window.get()) & SDL_WINDOW_MINIMIZED) {
+        if (m_inBackground || (SDL_GetWindowFlags(m_window.get()) & SDL_WINDOW_MINIMIZED)) {
             m_clock.reset();
             SDL_Delay(16);
             continue;

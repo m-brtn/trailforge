@@ -34,6 +34,8 @@ public:
     void publish(const AudioFrame& frame, const std::vector<AudioEvent>& events);
     // UI sounds for the pause menu: queued and sent with the next publish.
     void playUi(UiSound s);
+    // Stops / restarts the playback device (the app is in the background on iOS). No effect without a device.
+    void setSuspended(bool suspended);
     // Capture mode: render `seconds` of audio (fractional frames carried over) and append them to the WAV.
     void captureAdvance(double seconds);
     double capturedSeconds() const;

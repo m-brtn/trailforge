@@ -257,6 +257,12 @@ void AudioSystem::publish(const AudioFrame& frame, const std::vector<AudioEvent>
     }
 }
 
+void AudioSystem::setSuspended(bool suspended) {
+    if (!m_device) return;
+    const ma_result r = suspended ? ma_device_stop(&m_device->device) : ma_device_start(&m_device->device);
+    std::printf("Audio: device %s (%s)\n", suspended ? "stopped" : "restarted", ma_result_description(r));
+}
+
 void AudioSystem::playUi(UiSound s) {
     AudioEvent e;
     e.type = AudioEventType::Ui;

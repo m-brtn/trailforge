@@ -21,6 +21,7 @@
 #include "ui/MenuUI.h"
 #include "vehicle/VehicleDefinition.h"
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
 
 #include <array>
@@ -116,6 +117,7 @@ private:
     MapPlayer mapPlayer() const;
     MapHints mapHints() const;
     void drawMapHud(); // minimap and compass bar in gameplay
+    static bool SDLCALL onAppLifecycle(void* app, SDL_Event* event);
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
     void publishAudio();
@@ -233,6 +235,7 @@ private:
 
     bool m_running = true;
     bool m_paused = false;   // debug freeze (P / Pause button in F1), independent of the pause menu
+    bool m_inBackground = false; // iOS: between DID_ENTER_BACKGROUND and WILL_ENTER_FOREGROUND (no GPU, no audio)
     bool m_stepOnce = false;
     bool m_captured = false;
     int m_stepsThisFrame = 0;
