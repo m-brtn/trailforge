@@ -1505,6 +1505,23 @@ float2 parallaxShift(int layer, GroundCtx c, float3 V, float depthM, int steps) 
     return (cur - stepXZ * (1.0 - saturate(t))) - c.xz;
 }
 
+// Ground specular (groundFx.w): the roughness widens with the normal variance inside the pixel (Tokuyoshi and
+// Kaplanyan 2019, from the screen derivatives of the shading normal: detail normals, puddle edges and wet rock do not
+// sparkle; the mips are Toksvig-filtered offline as well), the environment reflection is occluded by the texture AO
+// for the roughness and view angle (Lagarde 2014) instead of a constant, and reflections that point below the
+// geometric surface (normal-mapped grazing views) fade out.
+void groundSpecular(inout ShadeInput s, float3 Ngeo) {
+    const float3 dx = ddx(s.N), dy = ddy(s.N);
+    const float variance = 0.25 * (dot(dx, dx) + dot(dy, dy));
+    const float a = s.roughness * s.roughness;
+    s.roughness = sqrt(sqrt(saturate(a * a + min(2.0 * variance, 0.18))));
+    const float NdotV = saturate(dot(s.N, s.V));
+    const float ao = max(s.ao, 1e-3);
+    const float so = saturate(pow(NdotV + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao) / ao;
+    const float horizon = saturate(1.0 + 1.1 * dot(reflect(-s.V, s.N), Ngeo));
+    s.specOcclusion = so * horizon * horizon;
+}
+
 float4 terrain_fs(LitOut vin) : SV_Target0 {
     float3 N = normalize(vin.normal);
     const float3 V = normalize(f.cameraPos.xyz - vin.worldPos);
@@ -1661,6 +1678,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
     s.V = V;
     s.lamp = headlightIrradiance(P, N);
     s.shadow = shadowFactor(shadowMap, shadowSampler, P, normalize(vin.normal)) * cloudShadow(P);
+    if (f.groundFx.w > 0.5) groundSpecular(s, normalize(vin.normal));
     float3 direct, indirect;
     const float3 color = shadeSplit(s, direct, indirect);
     return fogSplit(color, direct, indirect, P);

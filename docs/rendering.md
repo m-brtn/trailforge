@@ -199,6 +199,15 @@ procedural materials.
   the blended layer height fill with water up to a level that rises with the wetness (a noise breaks up the water
   line); there the normal is flat and the roughness 0.04, so the ground mirrors the sky through the environment
   lookup of the shading. Wet tire ruts are drawn by the mark shader (mud). No measurable cost (High, ford view).
+- **Ground specular** (Graphics → "Ground specular AA + occlusion", scenario `set ground_spec 0|1`; off on Low;
+  every terrain draw, also the proving ground): the sun specular keeps Schlick Fresnel per light and the
+  environment reflection the split-sum approximation (`envBRDFApprox`), so smooth surfaces (asphalt, wet rock,
+  puddles) brighten toward grazing angles. On top: the roughness widens with the variance of the shading normal
+  inside the pixel (Tokuyoshi and Kaplanyan 2019, from the screen derivatives of N, capped at +0.18 in α²; the
+  normal-map mips are Toksvig-filtered offline, see above), the environment reflection is occluded by the texture /
+  vehicle AO for the roughness and view angle (Lagarde 2014) instead of the constant 0.75, and reflections that
+  point below the geometric surface fade out (horizon occlusion). The tire-mark shader keeps the constant. Cost on
+  High +0.07 ms (`frame_avg`, ford view).
 - **Detail normals** (Graphics → "Ground detail normals", scenario `set ground_detail 0|1`; off on Low): within 4 m
   of the camera, fading out by 12 m, the dominant layer's own normal map is added a second time at 3.7× its
   frequency (whiteout style: the slopes add), through the same hex patches (no seams) or, with plain repeats,
