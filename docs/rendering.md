@@ -305,9 +305,19 @@ vertex shader decides everything per blade from hashes, the ground maps and a ti
   Mie with 1.2 km, Kasten-Young air mass along the view and toward the sun, an ozone term against green low-sun
   skies), scaled to the palette's zenith brightness and mixed with the palette, which carries night and twilight
   (`atmosphere` 0..1). Fog takes the sky colour just above the horizon in each direction (aerial perspective), and on
-  open levels a thin valley fog layer sits above the sea level (`valley_fog`, thicker in the morning). Clouds are a
-  value-noise layer on a plane 2 km up that drifts with the wind (9 m/s) with self-shadowing toward the sun; the
-  same layer casts soft moving shadows on the terrain, models, grass and water. Large stylized sun disc (bigger near
+  open levels a thin valley fog layer sits above the sea level (`valley_fog`, thicker in the morning). Clouds are
+  two layers on planes that drift with the wind. Cumulus 2 km up (9 m/s): two value-noise octaves give the large
+  shapes, two samples of the tileable noise texture add the edge detail (zero-mean, so the sky stays in step with
+  the ground shadows, which use the two octaves alone). Lighting is a cheap single-layer model: optical depth from
+  the core thickness plus the cover 300 m toward the sun, Beer transmittance with a powder term (thin parts scatter
+  less back toward a viewer looking away from the sun), a dual-lobe Henyey-Greenstein phase whose forward lobe only
+  passes thin parts (silver lining at the edges around the sun), and multiple scattering that the depth attenuates
+  less. Cirrus 8 km up (14 m/s) are thin stretched streaks from three texture samples in large patches, lit by the
+  sun and the sky, with no ground shadow. Cost (2880x1800, clouds on minus off, sky-filled view): about 0.3 ms on
+  High and 0.6 ms on Ultra, the same as the old single-layer ALU clouds within the measurement noise, so every
+  preset uses it. There is no raymarched volume: clouds are flat layers, they have no parallax, the camera never
+  enters them, and lightning by the sun from below the layer is not modelled. The cumulus layer casts soft moving
+  shadows on the terrain, models, grass and water. Large stylized sun disc (bigger near
   the horizon), sunset-lit cloud undersides. Four layers of faceted distant mountains are drawn in the sky pass at infinity (render-only, no
   collision) with aerial perspective toward a violet haze; a valley opens where the sun sets.
 - **Backdrop:** flat-shaded terrain beyond the walls with a lower view corridor toward the sunset; ~900 instanced

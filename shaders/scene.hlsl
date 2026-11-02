@@ -238,27 +238,35 @@ float valueNoise(float2 p) {
     return lerp(lerp(hash12(i), hash12(i + float2(1, 0)), w.x), lerp(hash12(i + float2(0, 1)), hash12(i + float2(1, 1)), w.x), w.y);
 }
 
-// octaves: 4 in the sky, 2 for ground shadows (their soft edges hide the missing detail).
-float cloudCover(float2 xz, int octaves) {
+// Large shapes of the cumulus layer: two value-noise octaves (the ground shadows use exactly these; the sky adds
+// texture detail on top, see skyClouds).
+float cloudShape(float2 xz) {
     const float t = f.cameraPos.w;
     float2 p = (xz + float2(9.0, 4.0) * t) * float2(1.0 / 2400.0, 1.0 / 1100.0);
-    float n = 0.0, amp = 0.5, norm = 0.0;
-    for (int o = 0; o < octaves; ++o) {
-        n += valueNoise(p) * amp;
-        norm += amp;
-        amp *= 0.5;
-        p = float2(p.x * 1.6 - p.y * 1.2, p.x * 1.2 + p.y * 1.6) + 7.3;
-    }
-    n /= norm;
+    float n = valueNoise(p) * 0.5;
+    p = float2(p.x * 1.6 - p.y * 1.2, p.x * 1.2 + p.y * 1.6) + 7.3;
+    n += valueNoise(p) * 0.25;
+    return n / 0.75;
+}
+
+float cloudCoverOf(float n) {
     const float cover = f.fogParams.w;
     return smoothstep(1.0 - cover, 1.0 - cover + 0.22, n);
+}
+
+float cloudCover(float2 xz) { return cloudCoverOf(cloudShape(xz)); }
+
+// Henyey-Greenstein phase times 4 pi (1 = isotropic).
+float phaseHG(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5);
 }
 
 float cloudShadow(float3 P) {
     if (f.options.w < 0.5 || f.skySun.y < 0.05) return 1.0;
     const float3 L = f.skySun.xyz;
     const float2 q = P.xz + L.xz * ((kCloudHeight - P.y) / L.y);
-    return 1.0 - 0.55 * cloudCover(q, 2) * smoothstep(0.05, 0.25, L.y);
+    return 1.0 - 0.55 * cloudCover(q) * smoothstep(0.05, 0.25, L.y);
 }
 
 // Low-beam headlights: two unshadowed spot lights on the vehicle (render-only). Returns irradiance.
@@ -1877,21 +1885,48 @@ float4 sky_fs(FullscreenOut vin) : SV_Target0 {
         col = lerp(col, float3(0.80, 0.84, 0.95) * (0.9 + 0.4 * maria) * 1.4, disc * f.sunDisc.w);
         col += float3(0.10, 0.12, 0.18) * pow(saturate(muMoon), 400.0) * f.sunDisc.w * 0.6;
     }
-    // Clouds on the drifting plane 2 km up (the same layer whose shadow crosses the ground), stretched into streaks.
+    // Two cloud layers: thin cirrus streaks 8 km up behind the cumulus layer 2 km up (the layer whose shadow crosses
+    // the ground). Detail comes from the tileable noise texture, the large cumulus shapes from cloudShape.
     if (f.options.w > 0.5 && dir.y > 0.01) {
+        const float muL = dot(dir, f.sunDir.xyz);
+        const float t = f.cameraPos.w;
+        const float horizonFade = smoothstep(0.01, 0.20, dir.y);
+        {
+            const float2 q = f.cameraPos.xz + dir.xz * ((8000.0 - f.cameraPos.y) / dir.y) + float2(14.0, 3.0) * t;
+            const float2 r = float2(q.x * 0.8 - q.y * 0.6, q.x * 0.6 + q.y * 0.8);
+            const float patch = smoothstep(0.50, 0.75, noiseTex.Sample(ns, q * (1.0 / 70000.0)).r);
+            const float streak = noiseTex.Sample(ns, r * float2(1.0 / 30000.0, 1.0 / 5000.0)).r;
+            const float wisp = noiseTex.Sample(ns, r * float2(1.0 / 12000.0, 1.0 / 2600.0) + 0.37).g;
+            const float ci = smoothstep(0.50, 0.85, streak * 0.8 + wisp * 0.35) * patch * horizonFade;
+            const float3 ciCol = f.sunColor.rgb * 0.10 * (0.6 + phaseHG(muL, 0.6) * 0.5) + f.skyZenith.rgb * 0.55 +
+                                 f.skySunGlow.rgb * 0.30;
+            col = lerp(col, ciCol, ci * 0.35);
+        }
         const float dist = (kCloudHeight - f.cameraPos.y) / dir.y;
         const float2 q = f.cameraPos.xz + dir.xz * dist;
-        const float c = cloudCover(q, 4) * smoothstep(0.01, 0.20, dir.y);
-        // Self-shadowing: cover 300 m toward the sun darkens the side facing away from it.
-        const float2 toSun = normalize(f.skySun.xz + 1e-4) * 300.0;
-        const float occl = cloudCover(q + toSun, 3);
-        const float thick = saturate(occl * 0.8 + c * 0.3);
-        const float muL = dot(dir, f.sunDir.xyz);
-        float3 cloudLit = f.sunColor.rgb * 0.15 * (0.75 + 0.6 * pow(saturate(muL), 4.0)) + f.skyZenith.rgb * 0.45 +
-                          f.skyHorizon.rgb * 0.25;
+        const float2 drift = float2(9.0, 4.0) * t;
+        // Zero-mean texture detail on the shared shapes keeps the sky in step with the ground shadows.
+        const float2 uv = (q + drift) * float2(1.0 / 4800.0, 1.0 / 2200.0);
+        const float detail = noiseTex.Sample(ns, uv).r * 0.65 + noiseTex.Sample(ns, uv * 3.7 + 0.21).g * 0.35;
+        const float n = cloudShape(q) + (detail - 0.5) * 0.36;
+        const float c = cloudCoverOf(n) * horizonFade;
+        // Optical depth: thin at the edges, thick in the cores and where the layer continues toward the sun.
+        const float cover = f.fogParams.w;
+        const float dens = smoothstep(1.0 - cover + 0.05, 1.0 - cover + 0.45, n);
+        const float2 toSun = normalize(f.sunDir.xz + 1e-4) * 300.0;
+        const float occl = cloudCover(q + toSun);
+        const float tauSun = 1.6 * occl + 1.6 * dens;
+        const float sunT = exp(-tauSun);
+        // Beer-powder: thin parts scatter less back toward a viewer looking away from the sun.
+        const float powder = lerp(1.0 - exp(-2.0 * (tauSun + 0.35)), 1.0, saturate(muL * 0.5 + 0.5));
+        // Forward lobe only through thin parts (silver lining), backward lobe on single scattering, and multiple
+        // scattering that the optical depth attenuates less.
+        const float forward = 0.6 * phaseHG(muL, 0.6) * exp(-5.0 * dens);
+        const float back = 0.4 * phaseHG(muL, -0.25) * powder;
+        float3 cloudLit = f.sunColor.rgb * 0.5 * (sunT * (forward + back) + 0.45 * exp(-0.3 * tauSun));
+        cloudLit += f.skyZenith.rgb * (0.30 + 0.20 * (1.0 - dens)) + f.skyHorizon.rgb * 0.25;
         cloudLit += f.skySunGlow.rgb * (0.06 + 0.25 * pow(saturate(mu), 3.0)); // sunset-lit undersides
-        const float3 cloudCol = lerp(cloudLit, cloudLit * 0.7 + f.skyHorizon.rgb * 0.15, thick);
-        col = lerp(col, cloudCol, c * 0.9);
+        col = lerp(col, cloudLit, c * (0.75 + 0.2 * dens));
     }
     // Horizon haze matches the fog color.
     const float haze = pow(1.0 - saturate(abs(dir.y)), 6.0) * 0.6;
