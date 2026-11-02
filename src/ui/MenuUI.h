@@ -86,6 +86,12 @@ public:
     // Mouse wheel / trackpad steps (+ = up) for the list drawn next (menu page or garage). Keyboard / gamepad cursor
     // moves still scroll the selected row into view; a cursor set by the pointer (notePointerCursor) does not.
     void scroll(float steps) { m_wheel += steps; }
+    // Finger drag (points, + = down) for the list drawn next; held: the finger is still down. The list follows the
+    // finger and coasts briefly after it lifts.
+    void drag(float dy, bool held) {
+        m_dragPx += dy;
+        m_dragHeld = held;
+    }
     void notePointerCursor() { m_pointerCursor = true; }
     float menuScroll() const { return m_menuScrollTarget; }   // px, list offset of the menu page
     float garageScroll() const { return m_garageScrollTarget; } // px, list offset of the garage
@@ -161,6 +167,10 @@ private:
     int m_lastCursor = -1;
     float m_menuScroll = 0.0f, m_menuScrollTarget = 0.0f; // menu page list offset (px), eased / target
     float m_wheel = 0.0f;               // pending wheel steps
+    float m_dragPx = 0.0f;              // pending finger drag (px)
+    bool m_dragHeld = false, m_wasDragging = false;
+    float m_dragVelocity = 0.0f;        // px/s, smoothed while the finger moves
+    float m_fling = 0.0f;               // px/s after the finger lifted, decaying
     bool m_pointerCursor = false;       // the cursor of this frame was set by the mouse
     std::vector<Box> m_callouts, m_obstacles;
     std::vector<Box> m_cards; // vehicle page cards of the last frame (catalog order)

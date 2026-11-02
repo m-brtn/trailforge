@@ -129,6 +129,8 @@ void Input::beginFrame() {
     m_menu.mouseDown = m_mouseDown;
     m_menu.mouseX = m_mouseX;
     m_menu.mouseY = m_mouseY;
+    m_menu.touch = m_touchDown;
+    m_menu.dragging = m_touchDrag;
     m_mouseDelta = glm::vec2(0.0f);
     m_wheel = 0.0f;
 }
@@ -197,6 +199,12 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
                 m_menu.mouseDown = m_mouseDown = true;
                 m_menu.mouseX = m_mouseX = e.button.x;
                 m_menu.mouseY = m_mouseY = e.button.y;
+                if (e.button.which == SDL_TOUCH_MOUSEID) {
+                    m_menu.touch = m_touchDown = true;
+                    m_touchDrag = false;
+                    m_touchX0 = e.button.x;
+                    m_touchY0 = e.button.y;
+                }
             }
         }
         break;
@@ -205,12 +213,29 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         if (e.button.button == SDL_BUTTON_LEFT) {
             if (m_mouseDown) m_menu.release = true;
             m_menu.mouseDown = m_mouseDown = false;
+            if (m_touchDown) {
+                m_menu.tap = !m_touchDrag;
+                m_menu.dragging = false;
+                m_menu.mouseX = m_mouseX = e.button.x;
+                m_menu.mouseY = m_mouseY = e.button.y;
+                m_touchDown = m_touchDrag = false;
+            }
         }
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (m_rmb && !uiWantsMouse) m_mouseDelta += glm::vec2(e.motion.xrel, e.motion.yrel);
         m_menu.mouseX = m_mouseX = e.motion.x;
         m_menu.mouseY = m_mouseY = e.motion.y;
+        if (m_touchDown && e.motion.which == SDL_TOUCH_MOUSEID) {
+            // A held finger scrolls; it does not hover other rows on the way.
+            if (!m_touchDrag && std::hypot(e.motion.x - m_touchX0, e.motion.y - m_touchY0) > kTouchSlop) {
+                m_touchDrag = m_menu.dragging = true;
+                m_menu.dragY += e.motion.y - m_touchY0; // the list catches up with the finger
+            } else if (m_touchDrag) {
+                m_menu.dragY += e.motion.yrel;
+            }
+            break;
+        }
         m_menu.mouseMoved = !uiWantsMouse;
         break;
     case SDL_EVENT_TEXT_INPUT:

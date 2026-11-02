@@ -452,6 +452,7 @@ void MenuUI::drawMenu(const GameFlow& flow, const GameSettings& settings, const 
         m_selectAnim = float(cursor);
         m_lastPage = int(page);
         m_menuScroll = m_menuScrollTarget = 0.0f;
+        m_fling = 0.0f;
     }
     m_selectAnim += (float(cursor) - m_selectAnim) * std::min(1.0f, ImGui::GetIO().DeltaTime * 18.0f);
 
@@ -1098,10 +1099,32 @@ void MenuUI::updateScroll(float& scroll, float& target, float cursorY, float cur
         if (cursorY + cursorH + margin > target + viewH) target = cursorY + cursorH + margin - viewH;
     }
     target -= m_wheel * 2.0f * rowH;
+    // A finger drag moves the list with the finger; when it lifts while moving, the list coasts and slows down.
+    const float dt = ImGui::GetIO().DeltaTime;
+    if (follow || m_wheel != 0.0f) m_fling = 0.0f;
+    if (m_dragHeld || m_dragPx != 0.0f) {
+        target -= m_dragPx;
+        if (dt > 0.0f) m_dragVelocity += (m_dragPx / dt - m_dragVelocity) * std::min(1.0f, dt * 20.0f);
+        m_fling = 0.0f;
+        m_wasDragging = true;
+    }
+    if (!m_dragHeld && m_wasDragging) {
+        m_fling = std::abs(m_dragVelocity) > 150.0f ? m_dragVelocity : 0.0f;
+        m_dragVelocity = 0.0f;
+        m_wasDragging = false;
+    } else if (m_fling != 0.0f) {
+        target -= m_fling * dt;
+        m_fling *= std::exp(-5.0f * dt);
+        if (std::abs(m_fling) < 30.0f) m_fling = 0.0f;
+    }
     m_wheel = 0.0f;
+    m_dragPx = 0.0f;
     m_pointerCursor = false;
-    target = std::clamp(target, 0.0f, std::max(0.0f, contentH - viewH));
-    scroll += (target - scroll) * std::min(1.0f, ImGui::GetIO().DeltaTime * 14.0f);
+    const float maxScroll = std::max(0.0f, contentH - viewH);
+    if (target < 0.0f || target > maxScroll) m_fling = 0.0f;
+    target = std::clamp(target, 0.0f, maxScroll);
+    if (m_dragHeld) scroll = target;
+    scroll += (target - scroll) * std::min(1.0f, dt * 14.0f);
     if (std::abs(target - scroll) < 0.5f) scroll = target;
 }
 

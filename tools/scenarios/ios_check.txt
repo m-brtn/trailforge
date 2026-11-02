@@ -1,6 +1,7 @@
-# iOS check, gamepad only (the iOS build has no touch controls): start menu -> START and the vehicle page with A,
-# drive with the right trigger and the left stick, Start pauses and resumes, Exploration Peaks spawn and drive, frame times on the Low
-# preset. Runs on macOS as well; on iOS it is passed to the Simulator app (tools/ios/run_simulator.sh):
+# iOS check, gamepad first (touch works in the menus only, there are no touch driving controls): start menu -> START
+# and the vehicle page with A, drive with the right trigger and the left stick, Start pauses, Settings follows the
+# selection with its scroll and a finger drags the list, Start resumes, Exploration Peaks spawn and drive, frame times
+# on the Low preset. Runs on macOS as well; on iOS it is passed to the Simulator app (tools/ios/run_simulator.sh):
 #   tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/ios_check.txt --no-audio
 # The pad is SDL's virtual gamepad (`gamepad attach`): it exercises the game's gamepad input path, not Apple's
 # GameController framework, so a real MFi / Xbox / DualSense pad stays unverified by this script.
@@ -62,6 +63,48 @@ wait 0.5
 expect d_ticks == 0
 capture /tmp/trailforge_ios_04_pause.png
 wait 0.1
+
+# ---------------------------------------------------------------- Settings: the selection keeps its row on screen, a finger drags the list
+menu settings
+wait 0.5
+expect menu_page == 2
+expect menu_scroll == 0
+capture /tmp/trailforge_ios_04b_settings_top.png
+wait 0.1
+expect menu_cursor == 0
+gamepad axis lefty -1                # up, up from the first row: BACK, then the last row
+wait 0.1
+gamepad axis lefty 0
+wait 0.1
+gamepad axis lefty -1
+wait 0.1
+gamepad axis lefty 0
+wait 0.8
+expect menu_cursor > 15
+expect menu_scroll > 300             # the list followed: the bottom is on screen
+capture /tmp/trailforge_ios_04c_settings_bottom.png
+wait 0.1
+mark menu_scroll
+touchdrag 0 250 60                   # a finger pulls the list down slowly (SDL's touch mouse, as on the device)
+wait 0.8
+expect menu_page == 2                # the drag opened nothing
+expect d_menu_scroll < -240
+capture /tmp/trailforge_ios_04d_settings_touch.png
+wait 0.1
+menu select quality                  # the first row, then the stick held down: the selection steps down
+wait 0.8
+expect menu_scroll == 0
+gamepad axis lefty 1
+wait 1.6
+gamepad axis lefty 0
+wait 0.6
+expect menu_cursor > 6
+expect menu_scroll > 50              # the list followed the selection
+gamepad button east 1
+wait 0.1
+gamepad button east 0
+wait 0.3
+expect menu_screen == 3
 gamepad button start 1
 wait 0.1
 gamepad button start 0

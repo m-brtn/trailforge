@@ -173,6 +173,29 @@ wait 0.5
 expect menu_scroll > 20
 capture /tmp/trailforge_menu_05b_settings_rows.png
 wait 0.1
+# finger (SDL's touch mouse, as on iOS): a drag scrolls the rows and opens none of them, a flick coasts, a tap opens
+menu select controls            # the bottom of the list
+wait 0.6
+expect menu_scroll > 300
+mark menu_scroll
+touchdrag menu:controls 0 200 60 # finger down on CONTROLS, pulled down slowly over 0.5 s
+wait 0.8
+expect menu_page == 2           # the drag did not open Controls
+expect d_menu_scroll < -190     # the list followed the finger (a little coasting at the end)
+expect d_menu_scroll > -320
+capture /tmp/trailforge_menu_05e_touch_drag.png
+wait 0.1
+mark menu_scroll
+touchdrag 0 -150 3              # a quick flick up: the list goes on after the finger lifts
+wait 1.2
+expect menu_page == 2
+expect d_menu_scroll > 200
+touch menu:controls             # a tap still opens the row
+wait 0.4
+expect menu_page == 3
+tap Escape
+wait 0.1
+expect menu_page == 2
 menu select quality
 wait 0.5
 tap Up                          # BACK sits above the page title (top left): Up from the first row

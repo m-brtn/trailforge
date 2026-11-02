@@ -29,7 +29,15 @@ struct MenuKeys {
     bool release = false; // left mouse button released after a press that reached the game
     float wheel = 0.0f;   // mouse wheel / trackpad scroll this frame (not over an ImGui window), + = up
     float mouseX = 0.0f, mouseY = 0.0f; // window coordinates (the same as ImGui's)
+    // Finger (SDL's mouse events synthesized from touch): click and release still report the press, but the menus
+    // act on `tap` (lifted without moving past kTouchSlop) so that a drag never activates the row it started on.
+    bool touch = false;    // the press of this frame (held or just released) is a finger
+    bool tap = false;      // a finger lifted this frame without dragging
+    bool dragging = false; // a finger is held and has moved past kTouchSlop
+    float dragY = 0.0f;    // finger movement of this frame while dragging (points, + = down)
 };
+
+constexpr float kTouchSlop = 10.0f; // points a finger may move and still tap
 
 // Keyboard, mouse and gamepad state. When ImGui captures the keyboard/mouse,
 // the corresponding commands are not passed to the vehicle and the camera.
@@ -106,6 +114,8 @@ private:
     bool m_rmb = false;
     bool m_modal = false, m_modalText = false;
     bool m_mouseDown = false;
+    bool m_touchDown = false, m_touchDrag = false;
+    float m_touchX0 = 0.0f, m_touchY0 = 0.0f;
     SDL_Gamepad* m_gamepad = nullptr;
     MenuKeys m_menu;
     float m_mouseX = 0.0f, m_mouseY = 0.0f;

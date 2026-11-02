@@ -441,13 +441,15 @@ void Application::handleMenu() {
     in.any = k.any;
     if (m_flow.menuActive() && m_flow.screen() != Screen::Intro) {
         int dir = 0;
+        const bool click = k.touch ? k.tap : k.click;
         if (k.mouseMoved) in.hover = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
-        if (k.click) {
+        if (click) {
             in.click = m_menu.hitTest(k.mouseX, k.mouseY, &dir);
             in.clickDir = dir;
         }
+        m_menu.drag(k.dragY, k.dragging);
         if (m_flow.page() == MenuPage::Vehicle) {
-            if (k.click) in.pick = m_menu.vehicleCardHit(k.mouseX, k.mouseY);
+            if (click) in.pick = m_menu.vehicleCardHit(k.mouseX, k.mouseY);
             if (in.pick >= 0) in.click = -1;
             m_vehicleWheel += k.wheel;
             if (std::abs(m_vehicleWheel) >= 1.0f) {
@@ -585,11 +587,13 @@ void Application::handleGarage() {
     } else {
         int dir = 0;
         float fraction = -1.0f;
+        // A finger taps rows and scrolls the list (no slider drags); the mouse also drags sliders.
+        const bool click = k.touch ? k.tap : k.click;
         if (k.mouseMoved && !k.mouseDown) in.hover = m_menu.garageHitTest(k.mouseX, k.mouseY, &dir, &fraction);
-        if (k.click || (k.mouseDown && k.mouseMoved)) {
+        if (click || (k.mouseDown && k.mouseMoved)) {
             const int row = m_menu.garageHitTest(k.mouseX, k.mouseY, &dir, &fraction);
             // Dragging only moves sliders; a plain move with the button held does not activate rows.
-            if (k.click || (fraction >= 0.0f && row == m_garage->cursor())) {
+            if (click || (fraction >= 0.0f && row == m_garage->cursor())) {
                 in.click = row;
                 in.clickDir = dir;
                 in.clickFraction = fraction;
@@ -597,6 +601,7 @@ void Application::handleGarage() {
         }
         if (in.hover >= 0 || in.click >= 0) m_menu.notePointerCursor();
         if (k.wheel != 0.0f) m_menu.scroll(k.wheel);
+        m_menu.drag(k.dragY, k.dragging);
     }
     const bool wasRenaming = m_garage->renaming();
     const GarageResult r = m_garage->handle(in);
@@ -1601,6 +1606,40 @@ void Application::queueEvent(const SDL_Event& e, int framesFromNow) {
     m_queuedEvents.push_back({framesFromNow, e});
 }
 
+void Application::queueTouch(float x, float y, float dx, float dy, int steps) {
+    const SDL_WindowID win = SDL_GetWindowID(m_window.get());
+    SDL_Event motion{};
+    motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.windowID = win;
+    motion.motion.which = SDL_TOUCH_MOUSEID;
+    motion.motion.x = x;
+    motion.motion.y = y;
+    queueEvent(motion, 0);
+    SDL_Event down{};
+    down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    down.button.windowID = win;
+    down.button.which = SDL_TOUCH_MOUSEID;
+    down.button.button = SDL_BUTTON_LEFT;
+    down.button.down = true;
+    down.button.clicks = 1;
+    down.button.x = x;
+    down.button.y = y;
+    queueEvent(down, 0);
+    for (int i = 1; i <= steps; ++i) {
+        motion.motion.x = x + dx * float(i) / float(steps);
+        motion.motion.y = y + dy * float(i) / float(steps);
+        motion.motion.xrel = dx / float(steps);
+        motion.motion.yrel = dy / float(steps);
+        queueEvent(motion, i);
+    }
+    SDL_Event up = down;
+    up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    up.button.down = false;
+    up.button.x = x + dx;
+    up.button.y = y + dy;
+    queueEvent(up, steps + 1);
+}
+
 void Application::queueClick(float x, float y, bool textInput) {
     const SDL_WindowID win = SDL_GetWindowID(m_window.get());
     SDL_Event motion{};
@@ -2019,6 +2058,40 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             return Exec::Failed;
         }
         queueClick(0.5f * (x0 + x1), 0.5f * (y0 + y1), false);
+        return Exec::Done;
+    }
+    if (c.op == "touch" && arg.rfind("menu:", 0) == 0) {
+        // touch menu:ROW: a finger tap on a menu row (SDL's touch mouse), in the middle of its label.
+        const auto item = itemByName(arg.substr(5));
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        if (!item || !m_menu.itemRect(*item, x0, y0, x1, y1)) {
+            std::printf("SCENARIO: menu row '%s' is not on screen\n", arg.c_str());
+            return Exec::Failed;
+        }
+        queueTouch(x0 + 0.15f * (x1 - x0), 0.5f * (y0 + y1), 0.0f, 0.0f, 0);
+        return Exec::Done;
+    }
+    if (c.op == "touchdrag") {
+        // touchdrag [menu:ROW] DX DY [STEPS]: a finger drag by (DX, DY) points in STEPS frames (default 8), starting on
+        // the label of a menu row, else over the menu lists (a quarter across, half way down the window).
+        std::vector<std::string> a = c.args;
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(m_window.get(), &ww, &wh);
+        float x = 0.25f * float(ww), y = 0.5f * float(wh);
+        if (!a.empty() && a[0].rfind("menu:", 0) == 0) {
+            const auto item = itemByName(a[0].substr(5));
+            float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            if (!item || !m_menu.itemRect(*item, x0, y0, x1, y1)) {
+                std::printf("SCENARIO: menu row '%s' is not on screen\n", a[0].c_str());
+                return Exec::Failed;
+            }
+            x = x0 + 0.15f * (x1 - x0);
+            y = 0.5f * (y0 + y1);
+            a.erase(a.begin());
+        }
+        if (a.size() < 2) return Exec::Failed;
+        const int steps = a.size() >= 3 ? std::max(1, std::atoi(a[2].c_str())) : 8;
+        queueTouch(x, y, float(std::atof(a[0].c_str())), float(std::atof(a[1].c_str())), steps);
         return Exec::Done;
     }
     if (c.op == "click" && arg.rfind("menu:", 0) == 0) {

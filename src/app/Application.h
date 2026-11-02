@@ -133,6 +133,9 @@ private:
     std::optional<double> scenarioValue(const std::string& name) const;
     void queueEvent(const SDL_Event& e, int framesFromNow);
     void queueClick(float x, float y, bool textInput);
+    // A finger as SDL reports it (mouse events from SDL_TOUCH_MOUSEID): down at (x, y), `steps` moves over one frame
+    // each to (x + dx, y + dy), up. steps 0: a tap.
+    void queueTouch(float x, float y, float dx, float dy, int steps);
 
     AppOptions m_options;
     // Member order = construction order; destruction is the reverse.
