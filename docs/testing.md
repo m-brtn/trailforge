@@ -140,6 +140,9 @@ marks after a locked-wheel stop on the mini track, gravel spray and displaced-gr
 scoring on the mini track: rwd_test handbrake entry into the 32 m corner, a judged run, the `drift` switch on the
 proving ground and on Suncoast Raceway; `/tmp/trailforge_drift_*.png`),
 `tools/scenarios/time_of_day.txt` (Dawn/Noon/Sunset/Night and a banner-like sunset view, `/tmp/trailforge_tod_*.png`),
+`tools/scenarios/readme_shots.txt` (the README screenshots: the start menu over Exploration Peaks and two chase views
+from behind the SUV, Ultra, no HUD, `/tmp/trailforge_readme_*.png`; the header has the `sips` line that makes
+`docs/menu.jpg`, `docs/ford.jpg` and `docs/meadow.jpg`),
 `tools/scenarios/perf_presets.txt` (frame times per quality preset),
 `tools/scenarios/exploration_check.txt` (Exploration Peaks: spawn, a coast-road drive across a tile border with the
 streaming numbers, a ford, the deep-water recovery, the play-limit warning, all 13 POI teleports, the map, the EV

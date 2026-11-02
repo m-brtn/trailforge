@@ -8,14 +8,11 @@ ImGui (diagnostics), GLM and miniaudio (device and WAV I/O; the mixer is our own
 open world, a circuit with lap timing, a handling track with drift scoring, and tire sets with temperature. The focus
 is believable vehicle behavior: mass, suspension travel, wheelspin, grip at the limit, wheel lift, rocks and climbs.
 
-<!-- README screenshots: one of the start menu and two of Exploration Peaks with the vehicle seen from behind
-     will replace the three images below. -->
-
-![Showcase](docs/showcase.jpg)
+![Start menu over Exploration Peaks](docs/menu.jpg)
 
 | | |
 |---|---|
-| ![Sunset over the mud and puddles meadow](docs/sunset.jpg) | ![SUV on the diagonal twister with a wheel in the air](docs/twister.jpg) |
+| ![SUV at the Valley Road ford over Glacier Creek at golden hour](docs/ford.jpg) | ![SUV in the Alpine Lake meadow on a misty morning](docs/meadow.jpg) |
 
 ## Features
 

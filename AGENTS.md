@@ -87,6 +87,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/garage.txt        # garage setups, live / rebuild values, /tmp/trailforge_garage_*.png
 ./build/release/trailforge --script tools/scenarios/visual_tour.txt    # showcase captures to /tmp/trailforge_vis_*.png
 ./build/release/trailforge --script tools/scenarios/time_of_day.txt    # time-of-day captures to /tmp/trailforge_tod_*.png
+./build/release/trailforge --script tools/scenarios/readme_shots.txt   # README screenshots (start menu, two Exploration Peaks chase views), /tmp/trailforge_readme_*.png -> docs/*.jpg
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
 ./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
