@@ -211,7 +211,11 @@ model shader).
   shallows, plus scrolling noise ripples; detail fades with distance. Without MSAA the water samples a copy of the
   opaque scene: the bed is refracted by the wave normal and absorbed per colour channel along the view path through
   the water (Beer-Lambert, coefficients from the water body colour), and reflections are traced in screen space
-  against the linear depth (falling back to the sky). Shore foam bands run up the beach in the last half metre.
+  against the linear depth (falling back to the sky). Shore foam bands run up the lake and sea beaches in the last
+  half metre (rivers have none). The water mesh is the 1 m sample grid: a dry corner of a shore cell sits just under
+  its own ground, so the surface meets the bank inside the cell instead of ending in a wall along the cell edge, and
+  the shoreline fades over the last 6 cm of depth (height map) and, with the scene copy, the last 0.25 m of view path
+  to the ground behind (depth buffer). Only cells next to a waterfall are left out where the surface steps.
 
 ### Grass, flowers and wheat
 

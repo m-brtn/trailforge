@@ -1935,10 +1935,18 @@ float4 water_fs(LitOut vin) : SV_Target0 {
     // which it turns opaque, material.z = opacity; see-through at the very edge.
     const float3 skyUp = lerp(f.skyHorizon.rgb, f.skyZenith.rgb, 0.5);
     const float3 body = vin.color * (skyUp + f.sunColor.rgb * 0.15 * shadow);
-    const float edge = smoothstep(0.0, 0.025, depth);
-    // Shore foam on open water: bands running up the beach, broken by noise, in the last half metre of depth.
+    // Soft shoreline: the last few cm of depth (height map, which is smoothed over a cell) and, with the scene depth,
+    // of the view path to the ground behind fade the water out where it meets the bank.
+    float edge = smoothstep(0.0, 0.06, depth);
+    if (f.screenFx.x > 0.5) {
+        const float zw = viewDepth(P);
+        const float pathBehind = max(depthLin.SampleLevel(dls, suv, 0).r - zw, 0.0) * dist / max(zw, 1e-3);
+        edge *= smoothstep(0.0, 0.25, pathBehind);
+    }
+    // Shore foam on lakes and the sea (opaque depth above 3 m): bands running up the beach, broken by noise, in the
+    // last half metre of depth. Rivers get none: a white rim along both banks read as ice.
     float foam = 0.0;
-    if (open) {
+    if (vin.material.y > 3.0) {
         const float n = noiseTex.Sample(ns, P.xz * 0.23 + float2(t * 0.013, -t * 0.009)).g;
         const float band = sin(depth * 16.0 - t * 1.3 + n * 7.0) * 0.5 + 0.5;
         foam = (1.0 - smoothstep(0.03, 0.5, depth)) * saturate(n * 1.6 - 0.45 + band * 0.55) * edge *

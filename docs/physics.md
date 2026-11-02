@@ -47,7 +47,8 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
   the play limit is inside the bake). Waterfalls (sheet, foam, mist) are render-only meshes over rigid rock steps;
-  the river surface is a stepped level per sample, not a flow simulation. Waves, shore foam, refraction and
+  the river surface is a level per sample (smoothed along the river, thinning out toward the edge of its reach where
+  the banks lie lower), not a flow simulation. Waves, shore foam, refraction and
   reflections are shading only: the water surface the physics sees stays flat, and the waves do not follow wind,
   fetch or the river current. Clouds, their ground shadows and the valley fog are render-only too (cloud shadows dim
   only the rendered sunlight).

@@ -960,6 +960,30 @@ void LevelBaker::bakeRivers() {
             if (!std::isnan(pin[i])) y[i] = pin[i];
             else y[i] = std::max(i > 0 ? std::min(y[i - 1], autoY[i]) : autoY[i], nextPin[i]);
         }
+        // The never-rising rule leaves terraces (the surface waits at a dip's level, then drops): a running mean over
+        // +-10 m spreads each drop over the reach around it. Pins and waterfalls (drops of 2 m or more) bound the
+        // windows, pins stay exact, and the surface rises at most 0.3 m above the rule so it stays below the banks.
+        {
+            std::vector<int> seg(n, 0);
+            for (std::size_t i = 1; i < n; ++i)
+                seg[i] = seg[i - 1] + (!std::isnan(pin[i]) || !std::isnan(pin[i - 1]) || y[i - 1] - y[i] >= 2.0f ? 1 : 0);
+            constexpr long kHalf = 5;
+            std::vector<float> s(y);
+            for (std::size_t i = 0; i < n; ++i) {
+                if (!std::isnan(pin[i])) continue;
+                float sum = 0.0f;
+                int c = 0;
+                for (long k = long(i) - kHalf; k <= long(i) + kHalf; ++k)
+                    if (k >= 0 && k < long(n) && seg[std::size_t(k)] == seg[i]) {
+                        sum += y[std::size_t(k)];
+                        ++c;
+                    }
+                s[i] = std::min(sum / float(c), y[i] + 0.3f);
+            }
+            for (std::size_t i = 1; i < n; ++i)
+                if (std::isnan(pin[i]) && seg[i] == seg[i - 1]) s[i] = std::min(s[i], s[i - 1]);
+            y.swap(s);
+        }
         for (std::size_t i = 0; i < n; ++i) river.samples.push_back({pts[i].x, pts[i].z, y[i]});
         for (std::size_t i = 1; i < n; ++i)
             if (y[i - 1] - y[i] >= 2.0f)
@@ -1385,7 +1409,9 @@ void LevelBaker::bakeWater() {
             const std::size_t k = idx(i, j);
             const float h = m_h[k];
             if (m_riverD[k] < m_riverReach[k] && h < m_riverY[k]) {
-                L.m_water[k] = m_riverY[k];
+                // Toward the edge of the river's reach the water thins out (at most 0.5 m per m from it): where the
+                // banks of a steep stretch lie below the local surface it meets the ground instead of ending in a wall.
+                L.m_water[k] = std::min(m_riverY[k], h + 0.5f * (m_riverReach[k] - m_riverD[k]));
                 L.m_waterKind[k] = WaterKind::River;
             } else if (m_lakeId[k] && h < m_lakes[m_lakeId[k] - 1].level) {
                 L.m_water[k] = m_lakes[m_lakeId[k] - 1].level;

@@ -1,0 +1,47 @@
+# Exploration Peaks water against the ground from fixed cameras: the Valley Road ford over Glacier Creek, its mouth
+# at Alpine Lake and the steep reach above it, Lake Outlet running down to the coast, then PERF of the ford view.
+#   ./build/release/trailforge --script tools/scenarios/water_views.txt --no-audio
+# Captures /tmp/trailforge_water_*.png (time 10:00, High), then a PERF line. Exit code 1 on FAIL.
+set ui 0
+set hud 0
+set auto_reverse 0
+quality High
+level exploration_peaks
+until level == 1 10
+time 10
+place -222 -334 100
+wait 1.5
+
+# ---------------------------------------------------------------- Valley Road ford (Glacier Creek)
+camera -226.0 104.0 -343.0 -205.0 99.5 -332.0
+wait 2.0
+capture /tmp/trailforge_water_01_ford.png
+wait 0.3
+camera -190.0 112.0 -360.0 -205.0 99.5 -333.0
+wait 2.0
+capture /tmp/trailforge_water_02_ford_high.png
+wait 0.3
+
+# ---------------------------------------------------------------- creek mouth at Alpine Lake, steep reach above it
+camera -222.0 108.0 -332.0 -202.0 86.0 -298.0
+wait 2.0
+capture /tmp/trailforge_water_03_mouth.png
+wait 0.3
+camera -180.0 92.0 -300.0 -202.0 80.0 -295.0
+wait 2.0
+capture /tmp/trailforge_water_04_steep_side.png
+wait 0.3
+
+# ---------------------------------------------------------------- Lake Outlet toward the coast
+camera -110.0 42.0 520.0 -80.0 17.0 565.0
+wait 2.0
+capture /tmp/trailforge_water_05_outlet.png
+wait 0.3
+
+# ---------------------------------------------------------------- PERF: ford view
+set vsync 0
+camera -226.0 104.0 -343.0 -205.0 99.5 -332.0
+wait 2.0
+perf_begin water_ford_high
+wait 4
+perf_end

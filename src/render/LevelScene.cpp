@@ -124,6 +124,15 @@ MeshData buildLevelWaterMesh(const Level& level) {
     auto wet = [&](int i, int j) { return surf[std::size_t(j) * n + i] > 0.5f * Level::kNoWater; };
     auto waterAt = [&](int i, int j) { return surf[std::size_t(j) * n + i]; };
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    auto nearFall = [&](int i, int j) {
+        const glm::vec2 p(px(i) + 0.5f * cell, px(j) + 0.5f * cell);
+        for (const LevelWaterfall& w : level.waterfalls()) {
+            const glm::vec2 a(w.x0, w.z0), ab = glm::vec2(w.x1, w.z1) - a;
+            const float t = std::clamp(glm::dot(p - a, ab) / std::max(glm::dot(ab, ab), 1e-6f), 0.0f, 1.0f);
+            if (glm::length(p - a - ab * t) < 0.5f * w.width + 3.0f) return true;
+        }
+        return false;
+    };
 
     // Block statistics: the range of the wet surfaces, the kind, and whether a dry sample lies below the surface
     // (a flat quad would put water there).
@@ -168,7 +177,9 @@ MeshData buildLevelWaterMesh(const Level& level) {
                 for (int si = i0; si < i1; si += sub) self(self, si, sj, sub);
             return;
         }
-        // One cell: corner heights from the wet corners, dry corners at their mean (water_fs fades them by depth).
+        // One cell: corner heights from the wet corners. A dry corner sits at their mean, or just under its own
+        // ground where that is lower, so the surface meets the ground inside the cell (water_fs cuts it where the
+        // depth reaches zero) instead of ending in a wall along the cell edge.
         const int ci[4] = {i0, i0, i1, i1}, cj[4] = {j0, j1, j1, j0};
         float y[4], sum = 0.0f;
         int wetCorners = 0;
@@ -179,9 +190,10 @@ MeshData buildLevelWaterMesh(const Level& level) {
             }
         if (wetCorners == 0) return;
         const float mean = sum / float(wetCorners);
-        for (int k = 0; k < 4; ++k) y[k] = wet(ci[k], cj[k]) ? waterAt(ci[k], cj[k]) : mean;
+        for (int k = 0; k < 4; ++k)
+            y[k] = wet(ci[k], cj[k]) ? waterAt(ci[k], cj[k]) : std::min(mean, level.heightSample(ci[k], cj[k]) - 0.05f);
         // Steps of the river surface (waterfalls) get the falling sheet of buildLevelWaterfallMesh instead.
-        if (std::max({y[0], y[1], y[2], y[3]}) - std::min({y[0], y[1], y[2], y[3]}) > 1.0f) return;
+        if (std::max({y[0], y[1], y[2], y[3]}) - std::min({y[0], y[1], y[2], y[3]}) > 1.0f && nearFall(i0, j0)) return;
         const glm::vec3 a(px(ci[0]), y[0], px(cj[0])), bb(px(ci[1]), y[1], px(cj[1]));
         const glm::vec3 c(px(ci[2]), y[2], px(cj[2])), d(px(ci[3]), y[3], px(cj[3]));
         m.addTri(a, bb, c, up, up, up, mat);
