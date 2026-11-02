@@ -637,6 +637,18 @@ bool parseVehicleConfig(const json::Value& doc, const std::string& source, Vehic
             a.num("dragArea", t.dragArea, 0.0, 3.0, "m^2 (Cd x frontal area)");
             a.num("airDensity", t.airDensity, 0.9, 1.4, "kg/m^3");
         }
+        if (const json::Value* wv = root.member("water", false)) {
+            Obj w(wv, "water", source, errors);
+            VehicleWater& h = c.water;
+            w.num("density", h.density, 900.0, 1100.0, "kg/m^3", false);
+            w.num("frontalCd", h.frontalCd, 0.0, 2.5, "", false);
+            w.num("sideCd", h.sideCd, 0.0, 2.5, "", false);
+            w.num("heaveCd", h.heaveCd, 0.0, 2.5, "", false);
+            w.num("skinCf", h.skinCf, 0.0, 0.05, "", false);
+            w.num("frontSlopeDeg", h.frontSlopeDeg, 0.0, 70.0, "deg", false);
+            w.num("displacement", h.displacement, 0.0, 1.0, "(fraction of the collision volume)", false);
+            w.num("wheelCd", h.wheelCd, 0.0, 2.0, "", false);
+        }
         {
             Obj a(root.member("aids"), "aids", source, errors);
             readAids(a, t.aids);

@@ -38,6 +38,9 @@
 //                                       hill (0.5x8, 0.9x13, 1x12, 1x15, 1.5x20 m at 80 / 100 km/h): takeoff vertical
 //                                       speed and pitch rate, airtime, landing, rollovers
 //   trailforge_probe drop [H] [pitchDeg] - body lifted H (default 1.5 m) and released on the flat pad: rebound share
+//   trailforge_probe water [entry|rest|all] - coasting into still water 0.3 / 0.5 / 0.7 m deep at 20 / 40 / 60 km/h,
+//                                       straight and at 20 deg: deceleration, pitch, yaw; buoyancy standing in water
+//                                       (tools/WaterProbe.cpp)
 //   trailforge_probe levelmap [level.json] [out.ppm] - bake a level, print stats, write a shaded top view
 //   trailforge_probe levelslope [level.json] [out.ppm] - slope statistics, steepest 32 m tiles, slope map
 //   trailforge_probe levelprofile x0 z0 x1 z1 steps [level.json] - ground and water height along a line
@@ -70,6 +73,7 @@
 using namespace tf;
 
 void handlingProbe(int argc, char** argv); // tools/HandlingProbe.cpp
+void waterProbe(int argc, char** argv);    // tools/WaterProbe.cpp
 
 namespace {
 
@@ -3519,6 +3523,7 @@ int main(int argc, char** argv) {
     else if (mode == "handling") handlingProbe(argc, argv);
     else if (mode == "climb") climbTrace(argc > 2 ? std::atoi(argv[2]) : 9);
     else if (mode == "launch") launchTrace(argc > 2 ? std::atoi(argv[2]) : 0, argc > 3 ? float(std::atof(argv[3])) : 1.0f);
+    else if (mode == "water") waterProbe(argc, argv);
     else bench();
     return 0;
 }

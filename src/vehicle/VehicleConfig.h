@@ -4,6 +4,7 @@
 #include "vehicle/BodySound.h"
 #include "vehicle/TireModel.h"
 #include "vehicle/TireSound.h"
+#include "vehicle/VehicleWater.h"
 
 #include <array>
 #include <map>
@@ -336,6 +337,9 @@ struct VehicleConfig {
     bool isElectric() const { return engineType == EngineType::Electric; }
 
     VehicleTuning tuning;
+
+    // Hydrodynamic coefficients for driving through water (vehicle.json "water"; sim/WaterForces.h).
+    VehicleWater water;
 
     // Hood camera mount (vehicle.json camera.hood; view only, not physics), body space. The default sits at the roof
     // line in front of the windshield of the shared SUV / EV body (VehicleModel.cpp: belt deck y 0.655, windshield

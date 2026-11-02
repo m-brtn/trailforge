@@ -49,7 +49,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 109 tests, 98 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 111 tests, 100 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -78,12 +78,12 @@ prints them). Visual changes to Metal output can be measured with `tools/render/
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
-`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`,
+`trailforge_audio_tests`, `trailforge_level_tests`, `trailforge_model_tests`, `trailforge_camera_tests`, `trailforge_body_tests`, `trailforge_water_tests`,
 `trailforge_vehiclec` (Blender body converter, `docs/vehicle-format.md` "Blender bodies (body.glb)"), `trailforge_probe`
 (headless measurements: `brake`, `course`, `bench`, `corner`, `demo`, `hillbrake`, `susp`, `skid`, `launch`,
 `showcase`, `surfaces`, `surfacecmp` (asphalt / concrete / gravel), `climb`, `abs`, `brakedetail`, `ellipse`, `tc`, `tcmud`, `diff`, `layouts`, `compare` (EV vs SUV table), `minitrack` (mini handling track laps), `drift` (scripted drift attempts on the mini track's 32 m corner), `lap` (autopilot laps of a circuit level), `tires` (tire sets: braking per
 surface cold / warm, mini track and Suncoast laps with tire temperatures, `circle` limit circle, `limit` limit-driver
-laps with grip use, `cooldown` slow lap), `bump` (rollovers over single 0.20–0.40 m bumps per shipped vehicle and driver), `handling` (steer ramp / understeer gradient, step and sine steer, anti-roll bar balance, cross-slope launch, `user30` keyboard turn at 30 km/h; `tools/HandlingProbe.cpp`), `hill` (straight runs over 1 m class cosine hills, `hill all` = 10 runs per vehicle with a rollover count), `drop` (rebound after a flat drop); they drive the vehicle of
+laps with grip use, `cooldown` slow lap), `bump` (rollovers over single 0.20–0.40 m bumps per shipped vehicle and driver), `handling` (steer ramp / understeer gradient, step and sine steer, anti-roll bar balance, cross-slope launch, `user30` keyboard turn at 30 km/h; `tools/HandlingProbe.cpp`), `hill` (straight runs over 1 m class cosine hills, `hill all` = 10 runs per vehicle with a rollover count), `water` (coasting into 0.3 / 0.5 / 0.7 m of still water at 20 / 40 / 60 km/h, straight and at 20 deg: deceleration, pitch, yaw; buoyancy at rest; `tools/WaterProbe.cpp`), `drop` (rebound after a flat drop); they drive the vehicle of
 `TRAILFORGE_VEHICLE`, default `assets/vehicles/trailforge_suv/vehicle.json`, `builtin` = the C++ defaults).
 
 Scripted end-to-end checks run the real window and push input through the SDL event queue. Exit code is 1 if any
@@ -188,7 +188,8 @@ src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, contr
               reader / writer, roles, validation against every config; no SDL)
 src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
               BodyImpacts (chassis contact listener for impact sounds), LapTimer (gates, checkpoints, sectors; pure logic),
-              DriftScore (drift judge: slip x speed x time, clipping zones, level.json "drift" parser; pure logic)
+              DriftScore (drift judge: slip x speed x time, clipping zones, level.json "drift" parser; pure logic),
+              WaterForces (buoyancy, pressure drag, bow lift and tire drag on the vehicle from the water surface; no SDL)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
@@ -297,7 +298,8 @@ stays in the git history and in the LFS storage after deletion.
 - No hidden forces: no artificial downforce, no direct setting of velocity or position. The only teleports are
   the R reset and the teleport buttons / scenario `teleport`.
 - Do not claim simulation that does not exist. Mud is a rigid low-friction surface, puddles are dips in rigid
-  ground with a render-only water plane, vehicle dirt is cosmetic. Deformable terrain is a later stage.
+  ground under a flat, still water level (its buoyancy and drag on the vehicle are explicit forces, `sim/WaterForces`;
+  no waves, flow or flooding), vehicle dirt is cosmetic. Deformable terrain is a later stage.
 - Wheel and suspension visuals are placed from the Jolt wheel transforms and suspension length every frame;
   no decorative animation. The wheel mesh size is the physics wheel (outer radius == `wheel.radius`, width ==
   `wheel.width` of the active config; never fitted to a concept or scaled separately), and wheel-dependent body

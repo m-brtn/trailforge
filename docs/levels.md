@@ -38,8 +38,8 @@ Surrounded by an earth berm and concrete walls. South of its south wall is the w
 
 - **Mud & puddles showcase** (north, z ≈ 46–86, teleport "Mud & puddles showcase"): a grass meadow with a
   winding mud path, puddle bowls in the terrain and a few rocks. The mud is the rigid `Mud` surface (peak μ 0.35/0.32),
-  the meadow is `Grass` (peak μ 0.50/0.48). There is **no sinkage and no water physics**: puddles are dips in the
-  hard ground, and the water surface is render-only. The ruts you see are tire marks, which are render-only too
+  the meadow is `Grass` (peak μ 0.50/0.48). There is **no sinkage**: puddles are dips in the hard ground under a
+  still water level, whose buoyancy and drag act on the vehicle ([Water forces](physics.md#water-forces)). The ruts you see are tire marks, which are render-only too
   (see [Tire marks](rendering.md#tire-marks-visual-only)). Deformable terrain is a later stage.
 
 - **Mini handling track** (`src/track/MiniTrack`, walled area x −185…185, z −232…−51 south of the proving ground,
@@ -161,10 +161,11 @@ the development level and is what scenarios and `--demo` start on.
   outward, because Jolt's wheel casts ignore back faces (CTest `level_prop_winding`); both vehicles cross both
   bridges in both directions on four wheels without chassis contact (`level_bridges`). Buildings and props are
   placed clear of the road corridors (`level_placement`).
-- **Water is render-only:** rivers, the lakes and the sea are surfaces drawn over rigid ground. Fords are shallow
-  dips the vehicle drives through on rigid ground. Deep water: when the body origin stays below the water surface for
-  1 s the vehicle is put on the nearest road with the message "Deep water: vehicle recovered to the nearest road (no
-  buoyancy or water simulated)". The play limit (±1000 m) shows a warning 40 m before it and recovers the vehicle to
+- **Water:** rivers, the lakes and the sea are flat, still surfaces over rigid ground; they push the vehicle with
+  buoyancy and drag ([Water forces](physics.md#water-forces)). Fords are shallow dips the vehicle drives through on
+  rigid ground. Deep water: when the body origin stays below the water surface, or the vehicle is afloat (buoyancy
+  ≥ 80 % of its weight), for 1 s the vehicle is put on the nearest road with the message "Deep water: vehicle
+  submerged, recovered to the nearest road" (or "... vehicle afloat, ..."). The play limit (±1000 m) shows a warning 40 m before it and recovers the vehicle to
   the nearest road 8 m past it. R resets to the nearest road point, not to the spawn.
 - **Rendering:** quadtree terrain LOD over the same height grid (64 × 64 patch, split by distance and by a height
   error; `terrainDetail` per preset), splat weights (road paint with worn shoulders, rock, sand, snow) over the grass

@@ -9,9 +9,9 @@
 
 namespace tf {
 
-// Render-only water of the current level: the surface height over (x, z), or nullopt where there is no water.
-// Water never pushes the vehicle; it only changes visuals and sounds (wet tread, splashes) and, on open-world
-// levels, triggers the deep-water recovery.
+// Water of the current level: the surface height over (x, z), or nullopt where there is no water. The surface is
+// flat at each sample (no waves). It drives the water forces on the vehicle (sim/WaterForces.h), the visuals and
+// sounds (wet tread, splashes) and, on open-world levels, the deep-water recovery.
 using WaterSurface = std::function<std::optional<float>(float x, float z)>;
 
 // The proving ground puddles: one common level inside the TestTrack::water() rectangle.

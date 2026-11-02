@@ -6,6 +6,7 @@
 #include "sim/DriftScore.h"
 #include "sim/LapTimer.h"
 #include "sim/TireMarks.h"
+#include "sim/WaterForces.h"
 #include "sim/WaterQuery.h"
 #include "track/Level.h"
 #include "track/SurfaceProperties.h"
@@ -69,9 +70,14 @@ struct SimulationSettings {
     // Set: an open-world level (streamed heightfield tiles, its props and points of interest); layout is ignored.
     std::shared_ptr<const Level> level;
     TerrainTiles::Settings terrain;
-    // Open-world recovery: the body origin (about the center of mass) below the water surface this long, or the
-    // vehicle outside the play area, puts it back on the nearest road. There is no buoyancy or water drag.
+    // Open-world recovery: the body origin (about the center of mass) below the water surface, or the vehicle afloat
+    // (buoyancy >= 80 % of its weight), this long, or the vehicle outside the play area, puts it back on the nearest
+    // road.
     float deepWaterTime = 1.0f; // s
+    // Tests and probes: replaces the world's water surface (also for the visuals that read waterSurface()).
+    WaterSurface water;
+    // River current for the water forces (sim/WaterForces.h); empty = still water.
+    WaterFlow waterFlow;
     double fixedStep = 1.0 / 120.0; // s
     int collisionSteps = 1;
     PhysicsWorld::Settings physics;
@@ -181,8 +187,12 @@ public:
     const Level* level() const { return m_settings.level.get(); }
     const std::shared_ptr<const Level>& levelPtr() const { return m_settings.level; }
     const TerrainTiles* terrain() const { return m_terrain.get(); }
-    // Render-only water of the current world (proving ground puddles or the level's sea, lakes and rivers).
+    // Water of the current world (proving ground puddles or the level's sea, lakes and rivers): the surface the
+    // water forces, the visuals and the deep-water recovery use.
     const WaterSurface& waterSurface() const { return m_water; }
+    // Hydrodynamic forces applied to the vehicle on the last tick (sim/WaterForces.h).
+    const WaterForceResult& waterForces() const { return m_waterResult; }
+    const WaterForces& waterModel() const { return m_waterForces; }
     // Water surface height above the body origin (m, <= 0 when dry) and the deep-water recoveries so far.
     float vehicleSubmersion() const { return m_submersion; }
     int recoveries() const { return m_recoveries; }
@@ -227,6 +237,7 @@ private:
     void spawnVehicle(VehicleConfig config, const TrackFeature& at);
     void buildWorld();
     void checkRecovery(float dt);
+    void applyWaterForces();
     TrackFeature roadRecoveryPoint() const;
     void respawnInPlace(VehicleConfig config);
     RenderSnapshot captureSnapshot() const;
@@ -249,6 +260,8 @@ private:
     std::unique_ptr<TerrainTiles> m_terrain;
     std::unique_ptr<Vehicle> m_vehicle; // after the track and tiles: destroyed first
     WaterSurface m_water;
+    WaterForces m_waterForces;
+    WaterForceResult m_waterResult;
     float m_submersion = 0.0f, m_submergedTime = 0.0f;
     bool m_nearEdge = false; // within the warning band of the play limit (message once per approach)
     int m_recoveries = 0;

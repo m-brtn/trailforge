@@ -27,6 +27,11 @@
   concrete pad, driver from 4 m before the hill): height gain, airtime, takeoff vertical speed, pitch rate, solid
   suspension and rim hits, peak wheel load, `ROLLED`; `hill all [driver]` runs 0.5×8, 0.9×13, 1×12, 1×15 and 1.5×20 m
   at 80 and 100 km/h per vehicle (`TRAILFORGE_VEHICLE` or the three shipped ones) and prints a `RESULT` rollover count;
+- `water [entry|rest|all]` — the vehicle (`TRAILFORGE_VEHICLE`, default the SUV) coasting into still water 0.3 / 0.5 /
+  0.7 m deep (a vertical water front over the flat pad for z > 0) at 20 / 40 / 60 km/h, straight and at 20°: peak
+  and mean deceleration, speed after 1 s, pitch, yaw rate, heading change, bow lift, tire and body drag, with a dry
+  coast baseline (`tools/WaterProbe.cpp`, [Water forces](physics.md#water-forces)); `rest`: buoyancy / weight, wheels
+  on the ground and step time standing in 0–1.4 m of water; `WATER_TRACE=1` prints the 40 km/h / 0.5 m entry per tick;
 - `drop [H] [pitch]` — drop from H m (default 1.5) onto the flat pad: lowest point, rebound height as % of the drop,
   solid suspension count and peak wheel load;
 - `compare` — the EV vs SUV table: launch, brake 50-0 / 100-0 with and without ABS (regen share), lift-off, corner,

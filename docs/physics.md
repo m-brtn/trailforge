@@ -44,7 +44,7 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   sustained limit (EV on the 40 m circle) or off warmers.
 - The ground is hard and non-deformable. Surfaces differ only in friction coefficients (table under "Proving
   ground"). The "mud" is a low-μ rigid surface, not a mud simulation; "sand" is a rigid μ 0.55 surface with no
-  sinkage, flotation or bulldozing; puddles have no water physics. `Gravel` (mini track traps, the level's main
+  sinkage, flotation or bulldozing; puddles are dips under a water level (water forces below). `Gravel` (mini track traps, the level's main
   roads) is rigid too: only lower μ, a stretched slip curve with a flatter drop and a rolling resistance force — no
   sinkage, ruts or stones in the physics. Mini track asphalt and curbs are the rigid `Asphalt` surface (the curb
   colors are render-only).
@@ -52,8 +52,11 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   `Gravel` surface (no sinkage or deceleration bed), the tyre walls and armco are rigid
   convex pieces (no energy absorption), and the track surface is a smooth fit to a 30 m DEM, not a survey of the
   real asphalt (real bumps and camber are unknown). The lap timer and the best laps only observe the body position.
-- Level water (rivers, lakes, sea, fords) is render-only over rigid ground: no buoyancy, drag, splash forces or
-  engine stall. Deep water and leaving the play area are handled by an honest teleport to the nearest road with a
+- Water (rivers, lakes, sea, fords, the proving ground puddles) lies over rigid ground and pushes the vehicle with
+  explicit forces on the chassis every tick ([Water forces](#water-forces)): buoyancy, pressure drag and skin friction
+  on the wetted collision boxes, a bow lift on their front / rear faces, tire displacement drag. No splash forces,
+  water ingestion or engine stall. Deep water (the body origin under the surface, or the vehicle afloat: buoyancy
+  ≥ 80 % of its weight, for 1 s) and leaving the play area are handled by an honest teleport to the nearest road with a
   message (the only teleports besides R (on Suncoast Raceway during a lap: to the last gate passed), the F1 teleport buttons, the attract-drive reset behind the start menu and
   scenario `teleport` / `place`). Snow is rigid
   low-μ ground. The horizon ring and the open sea outside the 2 × 2 km bake are render-only scenery (no collision;
@@ -193,3 +196,64 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
   a recorded petrol inline-4 pitched down, not a synthesized model of the simulated engine. The electric drive
   sound is synthesized from the motor speed and torque (no recordings); its tone choices (pole pairs, slot count,
   gear teeth, carrier) are plausible values, not measurements of a real motor.
+
+## Water forces
+
+`sim/WaterForces` (no SDL) computes explicit forces on the chassis from the water surface height (`WaterSurface`:
+the level's smoothed river, lake and sea levels, the proving ground puddle level) once per physics tick, from the
+state after the previous step; Simulation adds the sum as one force and torque about the centre of mass before the
+step. Coefficients per vehicle are vehicle.json `water` ([format](vehicle-format.md)).
+
+What is modelled:
+
+- **Buoyancy:** the collision boxes (a convex piece of a traced or Blender body counts as its bounding box) are split
+  into ~0.2 m cells; each cell's submerged fraction, from the depth at its centre and its vertical extent in the
+  current pose, displaces ρ g V × `displacement` (default 0.7: doors, floor plugs and the engine bay are not sealed;
+  an estimate, no flooding over time). The tires are cylinders of the physics wheel size and displace their submerged
+  segment fully. Standing in still water the SUV carries 11 % of its weight at 0.3 m, 22 % at 0.5 m, 58 % at 0.7 m,
+  93 % at 0.9 m, and floats (no wheel on the ground) from ~1.0 m; the patrol buggy (`displacement` 0.35, an open
+  tube frame) floats from ~1.1 m.
+- **Pressure drag:** the outer surface of the boxes (faces inside another box removed) is split into ~0.2 m patches;
+  a wetted patch moving into the water gets ½ ρ Cd v_n² × its wetted area against its normal (v_n: the velocity
+  relative to the water along the normal; `frontalCd` 1.0 on the front / rear faces, `sideCd` 1.1, `heaveCd` 1.2 on
+  the bottom / top: bluff-body values), plus skin friction ½ ρ Cf |v_t| v_t along it (`skinCf` 0.005).
+- **Bow lift:** the boxes have vertical ends, a real bumper chin and the underbody behind it slope up; the pressure
+  on such a slope is normal to it, so a front or rear face pushing into the water also gets tan(`frontSlopeDeg`,
+  default 35°) × its pressure force upward in body axes. It grows with v² and with the wetted front area.
+- **Tires:** displacement drag ½ ρ `wheelCd` v² × width × submerged height along the rolling direction (the
+  contaminated-runway model for aircraft tires, ESDU 83042: Cd ~0.75) and `sideCd` on the submerged disc segment
+  sideways, at the centre of the submerged part of the wheel. Jolt's wheels are casts, so the force acts on the
+  chassis there; like a braking force below the centre of mass it pitches the nose down.
+- **Yaw and roll** only come from where these forces act: entering at an angle the side that is in the water first
+  is held back, one side deeper drags more, a current (if given) pushes downstream. No yaw torque is added.
+- **Current:** `SimulationSettings::waterFlow` (horizontal water velocity per x, z) is subtracted from the velocity
+  of every sample. No level provides one yet, so all water is still.
+
+Not modelled: waves (the surface the forces see is the static level per sample), the bow wave's run-up and spray (so
+the nose lifts only once the static water reaches the body: SUV / EV ~0.55 m; in shallower water only the tires drag
+and the nose dips as in braking), added mass, flooding of the cabin, water in the intake or engine stall, wet brakes,
+cooling of the tires, hydroplaning (the tire grip stays that of the ground at any depth and speed), and the wake of
+the front tires (the rear tires see the full depth; real rear tires run in a partly cleared track, so the tire drag
+is probably high at speed). The patrol buggy's cage and bed boxes count as closed faces though they are open tube
+work, so its drag and bow lift once the water is above its floor are overstated (0.7 m at 40 km/h: 3.1 g peak, nose
++21° then −9°; 0.5 m at 40 km/h: 1.9 g, +3.2 / −1.9°). The water front of the probe and the test is vertical (a test setup; real fords have
+sloping banks, and real water would flow out).
+
+Measured (`trailforge_probe water`, SUV 2000 kg, coasting with throttle and brake released into still water over
+the flat concrete pad; peak = the largest 50 ms average deceleration from the first wet tick, pitch relative to the
+pose before the entry, + nose up; 2026-11-02, Release):
+
+| depth | km/h | peak g | mean 1 s g | km/h after 1 s | pitch up / down deg | 20° entry: heading change after 2 s |
+|---|---|---|---|---|---|---|
+| dry | 60 | 0.05 | 0.05 | 62 | — | — |
+| 0.3 m | 20 / 40 / 60 | 0.15 / 0.68 / 1.67 | 0.11 / 0.44 / 0.94 | 15 / 25 / 31 | 60 km/h: +0.0 / −3.2 | −0.2 / −0.8 / −2.5° |
+| 0.5 m | 20 / 40 / 60 | 0.20 / 0.95 / 2.46 | 0.13 / 0.58 / 1.18 | 15 / 21 / 22 | 40 km/h: +0.2 / −0.9 | −0.3 / −1.2 / −4.8° |
+| 0.7 m | 20 / 40 / 60 | 0.32 / 1.37 / 3.06 | 0.20 / 0.73 / 1.34 | 12 / 15 / 17 | 40 km/h: +3.8 / −0.3; 60: +5.5 / −4.3 | −0.5 / −2.1 / −9.4° |
+
+At 0.5 m and 40 km/h the tires take 22 kN and the body 2 kN; at 0.7 m and 60 km/h the tires 54 kN, the body 44 kN and
+the bow lift 31 kN. A 20° entry turns the vehicle toward the water front's normal (the side that enters first is held
+back) at up to 6 / 12 / 14 °/s yaw rate (0.3 / 0.5 / 0.7 m at 60 km/h). The step cost of the water forces is
+~0.01–0.03 ms with the vehicle in water (noisy: measured with other agents' builds running); dry, the early-out
+probes ~30 points. Real-world comparison: driving into ~0.5 m of water at 50 km/h is commonly described as a hard
+stop "like a wall" (no measured deceleration was found for this); 50 km/h lies between the 40 and 60 km/h rows
+above (0.95–2.46 g peak, 0.58–1.18 g over the first second), falling with v² as the vehicle slows.

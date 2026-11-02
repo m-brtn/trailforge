@@ -60,6 +60,7 @@ void Simulation::buildWorld() {
         m_track = std::make_unique<TestTrack>(*m_world, m_surfaces, m_settings.layout);
         m_water = provingGroundWater();
     }
+    if (m_settings.water) m_water = m_settings.water;
     // Lap timing: the circuit of a level, or the proving ground's mini handling track (start / finish and two sector
     // lines).
     std::vector<LevelGate> gates;
@@ -75,6 +76,25 @@ void Simulation::buildWorld() {
     m_tireMarks.clear();
     m_spawnFeature = 0;
     m_submersion = m_submergedTime = 0.0f;
+}
+
+// Hydrodynamic forces from the state after the last step, applied for the coming step (Jolt clears them after it).
+void Simulation::applyWaterForces() {
+    JPH::BodyInterface& bi = m_world->bodies();
+    const JPH::BodyID id = m_vehicle->bodyId();
+    WaterBodyState state;
+    state.bodyToWorld = m_vehicle->bodyTransform();
+    state.centerOfMass = JPH::Vec3(bi.GetCenterOfMassPosition(id));
+    state.linearVelocity = bi.GetLinearVelocity(id);
+    state.angularVelocity = bi.GetAngularVelocity(id);
+    std::array<WaterWheel, kWheelCount> wheels;
+    for (int i = 0; i < kWheelCount; ++i) {
+        const JPH::RMat44 w = m_vehicle->wheelTransform(i);
+        const AxleConfig& a = m_vehicle->config().axles[i < 2 ? kFrontAxle : kRearAxle];
+        wheels[std::size_t(i)] = {JPH::Vec3(w.GetTranslation()), w.GetAxisX(), a.wheelRadius, a.wheelWidth};
+    }
+    m_waterResult = m_waterForces.compute(state, wheels, m_water, m_settings.waterFlow);
+    if (m_waterResult.wet) bi.AddForceAndTorque(id, m_waterResult.force, m_waterResult.torque);
 }
 
 TrackFeature Simulation::roadRecoveryPoint() const {
@@ -93,7 +113,8 @@ void Simulation::checkRecovery(float dt) {
     const JPH::Vec3 p(m_vehicle->bodyTransform().GetTranslation());
     const std::optional<float> water = level.waterAt(p.GetX(), p.GetZ());
     m_submersion = water ? *water - p.GetY() : 0.0f;
-    m_submergedTime = m_submersion > 0.0f ? m_submergedTime + dt : 0.0f;
+    const bool afloat = m_waterResult.buoyancy >= 0.8f * m_vehicle->config().mass * 9.81f;
+    m_submergedTime = m_submersion > 0.0f || afloat ? m_submergedTime + dt : 0.0f;
     const bool nearEdge = !level.insidePlayArea(p.GetX(), p.GetZ(), 40.0f);
     if (nearEdge && !m_nearEdge) setMessage("Edge of the map ahead: driving on recovers the vehicle to the nearest road");
     m_nearEdge = nearEdge;
@@ -101,7 +122,8 @@ void Simulation::checkRecovery(float dt) {
     if (!level.insidePlayArea(p.GetX(), p.GetZ(), -8.0f) || p.GetY() < level.bakeStats().minHeight - 30.0f)
         message = "Left the map: vehicle recovered to the nearest road";
     else if (m_submergedTime > m_settings.deepWaterTime)
-        message = "Deep water: vehicle recovered to the nearest road (no buoyancy or water simulated)";
+        message = afloat ? "Deep water: vehicle afloat, recovered to the nearest road"
+                         : "Deep water: vehicle submerged, recovered to the nearest road";
     if (!message) return;
     const TrackFeature at = roadRecoveryPoint();
     const AidControls controls = m_vehicle->aidControls();
@@ -136,6 +158,11 @@ void Simulation::spawnVehicle(VehicleConfig config, const TrackFeature& at) {
         m_vehicle->setAidControls(c);
     }
     m_impactListener.setBody(m_vehicle->bodyId());
+    {
+        const JPH::BodyLockRead lock(m_world->system().GetBodyLockInterface(), m_vehicle->bodyId());
+        m_waterForces.setBody(waterBoxesFromShape(*lock.GetBody().GetShape()), config.water);
+        m_waterResult = {};
+    }
     m_drift.abort();
     ++m_spawnCount;
     // The attract route of this world, steered with this vehicle's geometry; the progress starts over.
@@ -457,6 +484,7 @@ void Simulation::tick() {
     const JPH::Vec3 before(m_vehicle->bodyTransform().GetTranslation());
     const auto t0 = Clock::now();
     m_vehicle->prePhysics(m_smoothed, dt);
+    applyWaterForces();
     m_impactListener.beginTick();
     const JPH::EPhysicsUpdateError err = m_world->step(dt, m_settings.collisionSteps);
     m_physicsError = m_physicsError || err != JPH::EPhysicsUpdateError::None;

@@ -64,6 +64,7 @@ add_library(trailforge_sim STATIC
     src/sim/DriftScore.cpp
     src/sim/BodyImpacts.cpp
     src/sim/TireMarks.cpp
+    src/sim/WaterForces.cpp
     src/sim/WheelSpray.cpp
     src/sim/BodyMud.cpp
     src/vehicle/VehicleBlueprint.cpp
@@ -132,7 +133,7 @@ if(NOT TRAILFORGE_IOS)
     add_executable(trailforge_vehiclec tools/cars/vehiclec.cpp)
     target_link_libraries(trailforge_vehiclec PRIVATE trailforge_bodyc)
 
-    add_executable(trailforge_probe tools/SimProbe.cpp tools/HandlingProbe.cpp)
+    add_executable(trailforge_probe tools/SimProbe.cpp tools/HandlingProbe.cpp tools/WaterProbe.cpp)
     target_link_libraries(trailforge_probe PRIVATE trailforge_audio)
     target_compile_definitions(trailforge_probe PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
@@ -229,6 +230,15 @@ if(TRAILFORGE_BUILD_TESTS)
             tread_soil_surfaces body_mud lap_timer_logic mini_track_lap asphalt_gravel_surfaces
             drift_score_logic drift_config_parse mini_track_drift)
         add_test(NAME ${test_name} COMMAND trailforge_tests ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+    endforeach()
+
+    # Water forces on the vehicle (sim/WaterForces): buoyancy and drag of a box, entering water on the flat pad.
+    add_executable(trailforge_water_tests tests/WaterTests.cpp)
+    target_link_libraries(trailforge_water_tests PRIVATE trailforge_sim)
+    target_compile_definitions(trailforge_water_tests PRIVATE TRAILFORGE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    foreach(test_name water_forces_box water_entry)
+        add_test(NAME ${test_name} COMMAND trailforge_water_tests ${test_name})
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
 

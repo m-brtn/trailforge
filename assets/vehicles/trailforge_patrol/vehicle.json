@@ -87,6 +87,7 @@
     "lockedSlipRatio": 1.05
   },
   "aero": {"dragArea": 1.9, "airDensity": 1.225},
+  "water": {"displacement": 0.35},
   "aids": {
     "absEnabled": false,
     "traction": "off",
