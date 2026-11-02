@@ -1141,8 +1141,9 @@ void levelGrassClear() {
 }
 
 // ------------------------------------------------------------------------------------------- menu attract autopilot
-// One full loop of the attract route from the spawn, per world and vehicle (the SUV in 2H and in 4H), without an
-// autopilot reset or a recovery, close to the center line and at a gentle speed.
+// One full loop of the attract route per world and vehicle (the SUV in 2H and in 4H), without an autopilot reset or
+// a recovery, close to the center line and at a gentle speed. On the level it starts at the route start like the
+// menu (Application::updateAttractDrive), on the proving ground at the spawn.
 void autopilotLoops() {
     struct Case {
         const char* vehicle;
@@ -1157,11 +1158,18 @@ void autopilotLoops() {
             s.vehicle = vehicle(c.vehicle);
             s.terrain.async = false;
             Simulation sim(s);
-            if (c.transfer) sim.requestTransfer(*c.transfer);
-            sim.setAutopilot(AutopilotMode::Drive);
             const Autopilot& ap = sim.autopilot();
             CHECK(ap.hasRoute(), "%s: no attract route", open ? "level" : "proving ground");
             if (!ap.hasRoute()) return;
+            if (open) {
+                const RoutePoint p = ap.startPoint();
+                TrackFeature at;
+                at.position = JPH::Vec3(p.x, sim.level()->heightAt(p.x, p.z), p.z);
+                at.yaw = ap.startYaw();
+                sim.requestPlace(at);
+            }
+            if (c.transfer) sim.requestTransfer(*c.transfer);
+            sim.setAutopilot(AutopilotMode::Drive);
             const float length = ap.routeLength();
             const auto t0 = std::chrono::steady_clock::now();
             double t = 0.0, speedSum = 0.0, maxKmh = 0.0;

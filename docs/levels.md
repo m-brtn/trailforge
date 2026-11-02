@@ -388,11 +388,16 @@ curve radius, so it does not cut corners), a speed profile from the route
 curvature (2 m/s² lateral, braking 1.6 m/s² before curves, accelerating 1.0 m/s² after them, slower downhill) and a
 PI speed controller (throttle capped at 0.65 and reduced with steering). Its only output is a `DriverIntent`
 (throttle, brake, steering) that goes through the same pedal smoothing as the player's; there are no forces and no
-velocity setting. Routes: Exploration Peaks `attractRoute` in level.json (Valley Road → Lake Trail → Forest Trail,
-1550 m loop at 32 km/h, junction corners rounded in the bake), proving ground: a 195 m rounded rectangle around
-lane A. The vehicle page and the garage hold the vehicle with the brake. When the vehicle is stuck (> 10 s below
-0.6 m/s), off the route (> 12 m for 4 s) or on its side (2.5 s), it is recreated at the route start like the R
-reset; Start and Quit to menu put it on the spawn. The menu camera follows the smoothed heading (3.5 s) and swings
-from behind to the side and back over 80 s. CTest `autopilot_loops`: one full loop without a reset for the gasoline
-SUV in 2H and 4H and the EV on both worlds (max 0.75 m off the line on Exploration Peaks, 2.0 m on the proving
-ground where it joins the loop from the start pad).
+velocity setting. Routes: Exploration Peaks `attractRoute` in level.json ("Glacier Creek loop": Valley Road from
+the Canyon Road junction past Alpine Lake, through the Glacier Creek ford and down to the village → Coast Road →
+Ruins Track → Canyon Road, 3322 m at 40 km/h, junction corners rounded in the bake), proving ground: a 195 m rounded
+rectangle around lane A. On a level the menu puts the vehicle on the route start facing along the route (when the
+menu opens and after a level switch; the spawn faces a climb), and the attract drive uses 4H on a part-time
+transfer case, ABS and traction control on and no lockers; Start puts the vehicle back on the spawn with its default
+transfer mode and the aids of the settings. The vehicle page and the garage hold the vehicle with the brake. When
+the vehicle is stuck (> 10 s below 0.6 m/s), off the route (> 12 m for 4 s) or on its side (2.5 s), it is recreated
+at the route start like the R reset; Start and Quit to menu put it on the spawn. The menu camera follows the
+smoothed heading (3.5 s) and swings from behind to the side and back over 80 s. CTest `autopilot_loops`: one full
+loop without a reset for the gasoline SUV in 2H and 4H and the EV on both worlds (Exploration Peaks from the route
+start: 327-329 s, max 42.3 km/h, max 0.99 m off the line; 2.0 m on the proving ground where it joins the loop from
+the start pad).

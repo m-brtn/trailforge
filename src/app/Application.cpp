@@ -358,6 +358,7 @@ void Application::processEvents() {
         autopilot = AutopilotMode::Hold;
     if (m_scenarioAutopilot && screen == Screen::Playing) autopilot = AutopilotMode::Drive;
     m_sim.setAutopilot(autopilot);
+    if (autopilot == AutopilotMode::Drive && screen != Screen::Playing) updateAttractDrive();
     if (m_flow.menuActive() || mapHandled) {
         // Menus and the map own the input (also in the frame that closes the map): no gameplay actions, no pedals.
         m_sim.setIntent(DriverIntent{});
@@ -644,6 +645,8 @@ void Application::enterMenuWorld(bool restartMusic) {
     if (restartMusic) {
         ++m_musicRestart;
         m_sim.requestTeleport(0);
+        m_attractStartPending = true;
+        m_attractStartLevel = m_sim.level();
     }
     m_gfx.settings.timeOfDay = kMenuTimeOfDay;
     m_gfx.timeLapse = false;
@@ -759,6 +762,33 @@ void Application::updateMenuCamera(float dt, const glm::mat4& body) {
     m_camera.setFreePose(pos, target);
 }
 
+// Attract drive behind the intro and the start menu. On a level the vehicle starts at the route start facing along
+// it (the spawn is where the player starts, not where the route begins), and it drives in its most sure-footed road
+// mode: 4H on a part-time transfer case, ABS and traction control on, no lockers. Start puts the vehicle on the
+// spawn (a new vehicle: its default transfer mode) and applies the aids of the settings again.
+void Application::updateAttractDrive() {
+    if (m_attractStartPending && m_sim.level() == m_attractStartLevel) {
+        m_attractStartPending = false;
+        if (m_sim.level() && m_sim.autopilot().hasRoute()) {
+            const RoutePoint s = m_sim.autopilot().startPoint();
+            TrackFeature at;
+            at.name = "route start";
+            at.position = JPH::Vec3(s.x, m_sim.level()->heightAt(s.x, s.z), s.z);
+            at.yaw = m_sim.autopilot().startYaw();
+            m_sim.requestPlace(at);
+        }
+    }
+    const VehicleTelemetry& t = m_sim.vehicle().telemetry();
+    if (t.layout == DriveLayout::PartTime && t.transfer == TransferMode::TwoHigh) m_sim.requestTransfer(TransferMode::FourHigh);
+    const AidControls aids = m_sim.aidControls();
+    if (!aids.abs || aids.traction != TractionMode::On || aids.diffLocks != 0) {
+        AidControls attract;
+        attract.abs = true;
+        attract.traction = TractionMode::On;
+        m_sim.requestAidControls(attract);
+    }
+}
+
 // Garage camera: a slow orbit around the vehicle, which sits right of the panel.
 void Application::updateGarageCamera(float dt) {
     m_garageCamTime += dt;
@@ -806,11 +836,14 @@ bool Application::selectLevel(const std::string& requested) {
     const std::string id = requested.empty() ? m_levelIds.front() : requested;
     if (id == "proving_ground") {
         m_sim.requestLevel(nullptr);
+        m_attractStartPending = false;
         return true;
     }
     if (std::find(m_levelIds.begin(), m_levelIds.end(), id) == m_levelIds.end()) return false;
     std::shared_ptr<const Level> level = loadLevel(id);
     if (!level) return false;
+    m_attractStartPending = true;
+    m_attractStartLevel = level.get();
     m_sim.requestLevel(std::move(level));
     return true;
 }

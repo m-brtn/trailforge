@@ -10,11 +10,12 @@
   "rockSlopeDeg": 40,
   "spawn": { "x": -488, "z": 236, "towards": [-470, 180] },
   "attractRoute": {
-    "name": "Village loop", "speedKmh": 32,
+    "name": "Glacier Creek loop", "speedKmh": 40,
     "legs": [
-      { "road": "Valley Road", "from": [-500, 300], "to": [-385, -140] },
-      { "road": "Lake Trail", "from": [-385, -140], "to": [-745, -238] },
-      { "road": "Forest Trail", "from": [-745, -238], "to": [-500, 300] }
+      { "road": "Valley Road", "from": [-60, -310], "to": [-500, 400] },
+      { "road": "Coast Road", "from": [-500, 400], "to": [659, 254] },
+      { "road": "Ruins Track", "from": [659, 254], "to": [560, -150] },
+      { "road": "Canyon Road", "from": [560, -150], "to": [-60, -310] }
     ]
   },
   "detail": {

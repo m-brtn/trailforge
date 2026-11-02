@@ -97,6 +97,7 @@ private:
     bool showsGameplayTime() const;
     void saveSettings();
     void updateMenuCamera(float dt, const glm::mat4& body);
+    void updateAttractDrive();
     void updateGarageCamera(float dt);
     void handleGarage();
     void openGarage();
@@ -202,6 +203,10 @@ private:
     double m_menuCamTime = 0.0;
     float m_menuCamHeading = 0.0f;   // smoothed vehicle heading the menu camera follows
     glm::vec3 m_menuCamOffset{0.0f}; // smoothed camera offset from the vehicle
+    // The attract drive puts the vehicle on its route start once this world is the simulation's (a level switch or
+    // the spawn teleport is processed on the next tick).
+    bool m_attractStartPending = false;
+    const Level* m_attractStartLevel = nullptr;
     float m_menuBlur = 0.0f;          // eased blur of the 3D frame under the pause / settings menus
     float m_dofAmount = 0.0f;         // eased depth of field amount (menus, garage, optional while driving)
     FixedStepClock m_clock;

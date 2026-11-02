@@ -19,7 +19,7 @@ menu main
 until menu_fade == 1 8
 expect menu_screen == 1
 expect menu_page == 0
-wait 10
+wait 14.5                       # the attract drive in the Glacier Creek ford
 capture /tmp/trailforge_readme_01_menu.png
 wait 0.3
 menu start
