@@ -24,6 +24,7 @@ struct RenderSettings {
     int shadowMapSize = 2048;      // per cascade
     float shadowDistance = 80.0f;  // m
     int shadowFilter = 1;          // 0: 1 tap (2x2 hardware PCF), 1: 4 taps, 2: 12 taps
+    bool farShadows = true;        // terrain-only shadow of the whole level beyond the last cascade (needs cascades)
     bool reflections = true;       // planar reflection for the puddles (else sky only)
     float reflectionScale = 0.5f;  // of the render resolution
     bool bloom = true;
@@ -96,7 +97,7 @@ inline RenderSettings presetSettings(QualityPreset p) {
     switch (p) {
     case QualityPreset::Low:
         s.renderScale = 0.67f; s.msaa = 1; s.fxaa = true; s.shadowCascades = 1; s.shadowMapSize = 1024;
-        s.shadowDistance = 40.0f; s.shadowFilter = 0; s.reflections = false; s.bloom = false; s.grassLevel = 1;
+        s.shadowDistance = 40.0f; s.shadowFilter = 0; s.farShadows = false; s.reflections = false; s.bloom = false; s.grassLevel = 1;
         s.grassDistance = 40.0f; s.flowerDensity = 0.5f; s.grassDetail = false; s.sprayMax = 600; s.sprayDust = false;
         s.terrainDetail = 1.2f; s.treeDetailDistance = 380.0f; s.treeDistance = 2000.0f; s.terrainTextureSize = 512;
         s.taa = false; s.ao = 0; s.contactShadows = 0; s.motionBlur = 0.0f; s.sunShafts = 0.0f; s.lensFlare = 0.0f; s.waterSsr = false;

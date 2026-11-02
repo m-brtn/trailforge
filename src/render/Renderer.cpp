@@ -361,7 +361,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.sunHeadingDeg = std::fmod(std::fmod(s.sunHeadingDeg, 360.0f) + 360.0f, 360.0f);
     const bool targets = s.renderScale != m_settings.renderScale || s.msaa != m_settings.msaa ||
                          s.shadowCascades != m_settings.shadowCascades || s.shadowMapSize != m_settings.shadowMapSize ||
-                         s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
+                         s.farShadows != m_settings.farShadows || s.reflectionScale != m_settings.reflectionScale || s.fxaa != m_settings.fxaa ||
                          s.reflections != m_settings.reflections || s.bloom != m_settings.bloom ||
                          s.taa != m_settings.taa || (s.ao > 0) != (m_settings.ao > 0) ||
                          (s.contactShadows > 0) != (m_settings.contactShadows > 0) ||
@@ -695,8 +695,10 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
         m_reflDepth = makeTexture(fw, fh, kDepthFormat, depthRT);
     }
     m_shadow = makeTexture(std::uint32_t(s.shadowMapSize), std::uint32_t(s.shadowMapSize), kDepthFormat,
-                           depthRT | sampled, SDL_GPU_SAMPLECOUNT_1, std::uint32_t(std::max(1, s.shadowCascades)), 1,
+                           depthRT | sampled, SDL_GPU_SAMPLECOUNT_1,
+                           std::uint32_t(std::max(1, s.shadowCascades + (s.farShadows ? 1 : 0))), 1,
                            SDL_GPU_TEXTURETYPE_2D_ARRAY);
+    m_farShadowValid = false;
     if (s.bloom) {
         std::uint32_t bw = rw, bh = rh;
         for (int i = 0; i < kBloomLevels; ++i) {
@@ -914,6 +916,7 @@ void Renderer::setTerrain(const TerrainSource* src) {
     for (auto& level : m_terrainNodes) level.clear();
     m_terrainSamples = 0;
     m_terrainRoots = 0;
+    m_farShadowValid = false;
     m_terrainAsphalt = src && src->asphalt;
     if (!src || src->samples < 2) return;
     const int n = src->samples, cells = n - 1;
@@ -1726,6 +1729,8 @@ void Renderer::computeCascades(const FrameDesc& frame, float aspect, FrameUnifor
     fu.shadowParams = glm::vec4(float(n), 1.0f / float(s.shadowMapSize), float(s.shadowFilter), 1.6f);
     fu.cascadeSplits = glm::vec4(1e9f);
     fu.cascadeTexel = glm::vec4(0.0f);
+    fu.farShadow = glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f);
+    m_stats.farShadows = false;
     if (n <= 0) return;
     const float nearD = 0.5f, farD = s.shadowDistance * frame.shadowScale;
     const glm::mat4 invView = glm::inverse(frame.view);
@@ -1767,6 +1772,40 @@ void Renderer::computeCascades(const FrameDesc& frame, float aspect, FrameUnifor
         fu.cascadeTexel[c] = 2.0f * radius / float(s.shadowMapSize);
         prev = split;
     }
+
+    // Far terrain shadow: an ortho light view over the whole terrain square, kept until the light turns.
+    m_stats.farShadows = s.farShadows && m_terrainSamples > 0 && sun.y > 0.02f;
+    if (!m_stats.farShadows) {
+        m_farShadowValid = false; // the cascade pass cycles the array without it
+        return;
+    }
+    if (m_farShadowValid && glm::dot(m_farShadowLight, sun) < 0.99999f) m_farShadowValid = false; // ~0.26 deg
+    if (!m_farShadowValid) {
+        const float side = float(m_terrainSamples - 1) * m_terrainCell;
+        float minY = 1e9f, maxY = -1e9f;
+        for (const TerrainNode& node : m_terrainNodes[0]) {
+            minY = std::min(minY, node.minY);
+            maxY = std::max(maxY, node.maxY);
+        }
+        const glm::vec3 center(m_terrainOrigin + 0.5f * side, 0.5f * (minY + maxY), m_terrainOrigin + 0.5f * side);
+        const float radius = std::ceil(glm::length(glm::vec3(0.5f * side, 0.5f * (maxY - minY), 0.5f * side)));
+        const glm::mat4 lv = glm::lookAt(center + sun * radius, center, up);
+        m_farShadowViewProj = glm::ortho(-radius, radius, -radius, radius, 0.0f, 2.0f * radius) * lv;
+        m_farShadowTexel = 2.0f * radius / float(s.shadowMapSize);
+        m_farShadowLight = sun;
+        // One uniform grid level whose cell is no coarser than about two shadow texels.
+        int level = 0;
+        while (level < kTerrainLevels - 1 &&
+               float(1 << (kTerrainLevels - 1 - level)) * m_terrainCell > 2.0f * m_farShadowTexel)
+            ++level;
+        const int step = 1 << (kTerrainLevels - 1 - level), sideChunks = m_terrainRoots << level;
+        m_farShadowChunks.clear();
+        for (int nj = 0; nj < sideChunks; ++nj)
+            for (int ni = 0; ni < sideChunks; ++ni)
+                m_farShadowChunks.push_back({ni * kTerrainPatch * step, nj * kTerrainPatch * step, step});
+    }
+    fu.farShadowViewProj = m_farShadowViewProj;
+    fu.farShadow = glm::vec4(float(n), m_farShadowTexel, 1.0f + 2.0f * m_farShadowTexel, 0.0f);
 }
 
 std::uint32_t Renderer::cullGrass(const FrameDesc& frame, const glm::mat4& viewProj,
@@ -2294,7 +2333,25 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         return drawn;
     };
 
-    // ---- 1. Sun shadow cascades
+    // ---- 1. Sun shadow cascades (the far terrain layer after them keeps its content between updates)
+    if (m_stats.farShadows && !m_farShadowValid) {
+        SDL_GPUDepthStencilTargetInfo dt{};
+        dt.texture = m_shadow.tex;
+        dt.clear_depth = 1.0f;
+        dt.load_op = SDL_GPU_LOADOP_CLEAR;
+        dt.store_op = SDL_GPU_STOREOP_STORE;
+        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.layer = std::uint8_t(s.shadowCascades);
+        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
+        SDL_BindGPUGraphicsPipeline(pass, m_terrainShadowPipe);
+        ShadowUniforms su{m_farShadowViewProj};
+        SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+        m_stats.shadowDraws += drawTerrain(pass, m_farShadowChunks, 1, nullptr);
+        SDL_EndGPURenderPass(pass);
+        m_farShadowValid = true;
+        ++m_stats.farShadowUpdates;
+    }
     for (int c = 0; c < s.shadowCascades; ++c) {
         SDL_GPUDepthStencilTargetInfo dt{};
         dt.texture = m_shadow.tex;
@@ -2304,7 +2361,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
         dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         dt.layer = std::uint8_t(c);
-        dt.cycle = c == 0;
+        dt.cycle = c == 0 && !m_stats.farShadows;
         SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
         SDL_BindGPUGraphicsPipeline(pass, m_shadowPipe);
         ShadowUniforms su{lightViewProj[c]};

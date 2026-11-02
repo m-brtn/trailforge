@@ -12,7 +12,15 @@ SDL GPU (Metal on macOS; D3D12 or Vulkan elsewhere, untested on real hardware); 
 (`shaders/scene.hlsl`, see [Shader pipeline](#shader-pipeline)). Passes per frame:
 
 1. Sun (or moon) shadow cascades (1–4 layers of a D32 array, practical split, texel-snapped, hardware-compare PCF with
-   1/4/12 taps).
+   1/4/12 taps). On levels with a terrain grid (Medium and up, `far_shadows`), one more layer of the array holds a
+   terrain-only shadow of the whole level: an ortho view of the terrain square from the shadow light (cell no coarser
+   than two texels, about 1.4 m texels on Exploration Peaks at 2048²), rendered only when the light turns by more
+   than about 0.26°, the terrain changes or the targets are recreated (the cascade passes then stop cycling the
+   array so the layer survives). `shadowFactor` fades from the last cascade into it (4 taps, normal offset of one
+   texel plus a bias of 1 m + 2 texels toward the light, which hides the coarse caster grid) instead of into "lit".
+   Only the terrain casts there: trees, rocks and buildings beyond the cascades still cast nothing. Cost at
+   2880×1800 on a full-screen far view (alternating A/B, minimum frame time): High +0.18 ms static, +0.29 ms with
+   the light turning every frame (time-lapse); Ultra +0.13 / +0.39 ms.
 2. Grass trample mask (RG8, 0.1 m texels over the ground) rendered from the tire mark segments, only when marks were
    added or removed and every 0.5 s while they fade.
 3. Planar puddle reflection at reduced resolution (all puddles share one water level), skipped when no puddle is visible.

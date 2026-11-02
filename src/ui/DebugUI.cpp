@@ -426,6 +426,7 @@ void DebugUI::drawGraphics(Simulation& sim, const FrameStats& stats, GraphicsSta
         edited |= ImGui::SliderFloat("Shadow distance [m]", &s.shadowDistance, 20.0f, 150.0f, "%.0f");
         const char* filters[] = {"Hard (1 tap)", "Soft (4 taps)", "Softer (12 taps)"};
         edited |= ImGui::Combo("Shadow filter", &s.shadowFilter, filters, 3);
+        edited |= ImGui::Checkbox("Far terrain shadows", &s.farShadows);
         edited |= ImGui::Checkbox("Puddle reflections", &s.reflections);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100.0f);

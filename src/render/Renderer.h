@@ -67,6 +67,8 @@ struct FrameUniforms {
     glm::vec4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
     glm::vec4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
     glm::vec4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
+    glm::mat4 farShadowViewProj;
+    glm::vec4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
 };
 
 struct DrawUniforms {
@@ -288,6 +290,8 @@ struct RenderStats {
     bool depthEffects = false;                  // single-sample scene: TAA, AO, motion blur, shafts, DOF available
     bool taa = false, ao = false, motionBlur = false, shafts = false, dof = false, autoExposure = false;
     bool contactShadows = false;
+    bool farShadows = false;                    // far terrain shadow layer in use
+    int farShadowUpdates = 0;                   // times the far terrain shadow was rendered (since start)
     int velocityObjects = 0;                    // moving meshes drawn into the velocity buffer
     float flareSun = 0.0f;                      // sun weight feeding the lens flare ghosts (0: no ghosts)
     float sceneLogLum = 0.0f;                   // adapted log2 mean scene luminance (after the base exposure)
@@ -539,6 +543,13 @@ private:
     int m_terrainRoots = 0;                         // root nodes per side (step 8)
     std::array<std::vector<TerrainNode>, 4> m_terrainNodes; // per level (step 8, 4, 2, 1), row-major
     std::vector<TerrainChunk> m_terrainScratch, m_terrainShadowScratch;
+    // Far terrain shadow: one extra layer of the cascade array holding the whole terrain seen from the shadow light,
+    // re-rendered only when the light turns, the terrain or the shadow targets change.
+    bool m_farShadowValid = false;
+    glm::vec3 m_farShadowLight{0.0f};
+    glm::mat4 m_farShadowViewProj{1.0f};
+    float m_farShadowTexel = 0.0f;
+    std::vector<TerrainChunk> m_farShadowChunks;
     // Terrain material textures (BC7 arrays, one layer per material) or 1 x 1 placeholders.
     void updateTerrainTextures();
     Texture m_terrainAlbedo, m_terrainNra;

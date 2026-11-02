@@ -95,6 +95,8 @@ struct FrameUniforms {
     float4 bodyMudArch;      // vehicle body: axle z front / rear, arch centre y, arch radius (BodyMud regions)
     float4 bodyMudBody;      // vehicle body: side |x|, bumper zones from z front / rear
     float4 screenFx;         // x: opaque scene copy + linear depth bound (0/1), y: water SSR (0/1)
+    float4x4 farShadowViewProj;
+    float4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
 };
 
 struct DrawUniforms {
@@ -285,6 +287,24 @@ float3 applyFog(float3 color, float3 worldPos, float3 camPos) {
     return lerp(color, fog.rgb, fog.a);
 }
 
+// Terrain-only shadow of the whole level (layer after the cascades), used beyond the last cascade. Coarse texels:
+// the bias toward the light hides the gap between the coarse caster grid and the rendered ground.
+float farShadowFactor(Texture2DArray<float> sm, SamplerComparisonState cmp, float3 P, float3 N, int maxFilter) {
+    if (f.farShadow.x < 0.0) return 1.0;
+    const float3 Pn = P + N * f.farShadow.y + f.sunDir.xyz * f.farShadow.z;
+    const float4 sc = mul(f.farShadowViewProj, float4(Pn, 1.0));
+    float2 uv = sc.xy * 0.5 + 0.5;
+    uv.y = 1.0 - uv.y;
+    if (any(uv < 0.0) || any(uv > 1.0) || sc.z > 1.0) return 1.0;
+    const float layer = f.farShadow.x;
+    if (maxFilter == 0) return sm.SampleCmpLevelZero(cmp, float3(uv, layer), sc.z);
+    const float o = f.shadowParams.y * 0.75;
+    return 0.25 * (sm.SampleCmpLevelZero(cmp, float3(uv + float2(-o, -o), layer), sc.z) +
+                   sm.SampleCmpLevelZero(cmp, float3(uv + float2(o, -o), layer), sc.z) +
+                   sm.SampleCmpLevelZero(cmp, float3(uv + float2(-o, o), layer), sc.z) +
+                   sm.SampleCmpLevelZero(cmp, float3(uv + float2(o, o), layer), sc.z));
+}
+
 // Cascaded shadow lookup. Returns 1 = lit. maxFilter caps the filter (0: one tap, for large translucent particles).
 float shadowFactor(Texture2DArray<float> sm, SamplerComparisonState cmp, float3 P, float3 N,
                    int maxFilter = 2) {
@@ -294,7 +314,7 @@ float shadowFactor(Texture2DArray<float> sm, SamplerComparisonState cmp, float3 
     int c = 0;
     for (; c < cascades; ++c)
         if (viewDepth < f.cascadeSplits[c]) break;
-    if (c >= cascades) return 1.0;
+    if (c >= cascades) return farShadowFactor(sm, cmp, P, N, maxFilter);
     const float texel = f.shadowParams.y;
     // Normal offset scales with the world size of one shadow texel in this cascade.
     const float3 Pn = P + N * f.cascadeTexel[c] * f.shadowParams.w;
@@ -319,10 +339,11 @@ float shadowFactor(Texture2DArray<float> sm, SamplerComparisonState cmp, float3 
         for (int i = 0; i < 12; ++i) shadowLit += sm.SampleCmpLevelZero(cmp, float3(uv + taps[i] * texel * 2.2, c), z);
         shadowLit /= 12.0;
     }
-    // Fade out at the end of the last cascade.
+    // Fade into the far terrain shadow (or lit) at the end of the last cascade.
     const float fadeStart = f.cascadeSplits[cascades - 1] * 0.85;
     const float fade = saturate((viewDepth - fadeStart) / (f.cascadeSplits[cascades - 1] - fadeStart));
-    return lerp(shadowLit, 1.0, fade);
+    if (fade > 0.0) shadowLit = lerp(shadowLit, farShadowFactor(sm, cmp, P, N, maxFilter), fade);
+    return shadowLit;
 }
 
 // Ground maps (mask: R grass, G mud weight, B wetness).
