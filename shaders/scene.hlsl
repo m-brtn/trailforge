@@ -99,6 +99,7 @@ struct FrameUniforms {
     float4 farShadow;        // x: layer of the far terrain shadow (-1: off), y: texel size (m), z: bias toward the light (m)
     float4 envProbe;         // vehicle probe: x valid (0/1), y: diffuse mip, z: mip for roughness 1
     float4 parallax;         // level ground parallax: x steps (0 = off), y depth (m), z full until (m), w end (m)
+    float4 groundFx;         // level ground: x tiling (0 plain, 1 macro tone, 2 hex tiling + macro tone)
 };
 
 struct DrawUniforms {
@@ -1150,10 +1151,10 @@ struct LayerSample {
 
 float layerInvTile(int i) { return i < 4 ? tt.invTile[0][i] : tt.invTile[1][i - 4]; }
 
-// One planar projection: uv in repeats, u / v the world directions of the texture axes. far: 0..1 from ~15 m,
-// fade: 0..1 from ~60 m to ~250 m, where the layer turns into its mean (the 1x1 mip): seen from hundreds of
-// meters the repeats of a 2.5 m tile line up into a regular pattern even in the small mips.
-LayerSample sampleProjection(int layer, float2 uv, float3 u, float3 v, float far, float fade) {
+// One planar projection: uv in repeats, gx / gy its screen derivatives, u / v the world directions of the texture
+// axes. far: 0..1 from ~15 m, fade: 0..1 from ~60 m to ~250 m, where the layer turns into its mean (the 1x1 mip):
+// seen from hundreds of meters the repeats of a 2.5 m tile line up into a regular pattern even in the small mips.
+LayerSample sampleProjection(int layer, float2 uv, float2 gx, float2 gy, float3 u, float3 v, float far, float fade) {
     LayerSample r;
     const float3 at = float3(uv, float(layer));
     float4 a;
@@ -1162,14 +1163,15 @@ LayerSample sampleProjection(int layer, float2 uv, float3 u, float3 v, float far
         a = layerAlbedo.SampleLevel(layerAlbedoSampler, at, 16.0);
         n = layerNra.SampleLevel(layerNraSampler, at, 16.0);
     } else {
-        a = layerAlbedo.Sample(layerAlbedoSampler, at);
+        a = layerAlbedo.SampleGrad(layerAlbedoSampler, at, gx, gy);
         // Beyond ~15 m a second, rotated sample at 0.29 x the frequency breaks up the repeats (near the camera
         // only a few repeats are in view).
         if (far > 0.0) {
-            const float2 uv2 = float2(uv.x * 0.81 - uv.y * 0.59, uv.x * 0.59 + uv.y * 0.81) * 0.29 + 0.37;
-            a = lerp(a, layerAlbedo.Sample(layerAlbedoSampler, float3(uv2, float(layer))), 0.55 * far);
+            const float2x2 m = float2x2(0.81, -0.59, 0.59, 0.81) * 0.29;
+            a = lerp(a, layerAlbedo.SampleGrad(layerAlbedoSampler, float3(mul(m, uv) + 0.37, float(layer)), mul(m, gx),
+                                               mul(m, gy)), 0.55 * far);
         }
-        n = layerNra.Sample(layerNraSampler, at);
+        n = layerNra.SampleGrad(layerNraSampler, at, gx, gy);
         if (fade > 0.0) {
             a = lerp(a, layerAlbedo.SampleLevel(layerAlbedoSampler, at, 16.0), fade);
             n = lerp(n, layerNra.SampleLevel(layerNraSampler, at, 16.0), fade);
@@ -1184,16 +1186,160 @@ LayerSample sampleProjection(int layer, float2 uv, float3 u, float3 v, float far
     return r;
 }
 
-// Ground layers: top-down projection (x -> u, z -> v).
-LayerSample sampleLayer(int layer, float3 P, float far, float fade) {
-    return sampleProjection(layer, P.xz * layerInvTile(layer), float3(1, 0, 0), float3(0, 0, 1), far, fade);
+// Hex tiling (Mikkelsen 2022, "Practical Real-Time Hex-Tiling"): a triangle grid whose vertices are the centres of
+// hexagonal patches; each patch shows the texture rotated about its centre and shifted by a random amount, and a
+// fragment blends the (at most three) patches of its triangle with barycentric weights to the 7th power, so most
+// of a patch is one lookup and the blends are narrow. The grid is in world units on the projection plane, shared
+// by every layer (each layer adds its own shift per patch). Normal maps are rotated back with their patch.
+static const float kHexSpacing = 3.0; // m between patch centres
+struct HexTap {
+    float2 cen; // patch centre on the plane (m)
+    float2 cs;  // cos / sin of the patch rotation
+    float2 off; // random shift (repeats)
+};
+struct HexFrame {
+    HexTap t[3];
+    float3 w; // sharpened weights, sum 1
+    HexTap d; // tap with the largest weight
+};
+
+float2 hash22(float2 p) {
+    float3 p3 = frac(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.xx + p3.yz) * p3.zy);
 }
 
-// Rock: triplanar on steep faces (projections with a negligible weight are skipped).
-LayerSample sampleRock(float3 P, float3 N, float2 warp, float far, float fade) {
+// cut: weights below it drop to 0 (continuously), so more of the plane is a single lookup; it grows with distance,
+// where the narrower blend bands are smaller than the mip footprint.
+HexFrame hexFrame(float2 xz, float rotStrength, float cut) {
+    const float2 st = xz / kHexSpacing;
+    const float2 skew = float2(st.x - 0.57735027 * st.y, 1.15470054 * st.y);
+    const float2 base = floor(skew);
+    const float2 fr = skew - base;
+    const float z = 1.0 - fr.x - fr.y;
+    const float s = z < 0.0 ? 1.0 : 0.0;
+    const float s2 = 2.0 * s - 1.0;
+    const float3 bw = float3(-z * s2, s - fr.y * s2, s - fr.x * s2);
+    const float2 v[3] = {base + float2(s, s), base + float2(s, 1.0 - s), base + float2(1.0 - s, s)};
+    HexFrame h;
+    float3 w = pow(saturate(bw), 7.0);
+    w /= w.x + w.y + w.z;
+    w = saturate((w - cut) / (1.0 - cut));
+    h.w = w / (w.x + w.y + w.z);
+    [unroll] for (int i = 0; i < 3; ++i) {
+        const float2 r = hash22(v[i] + 0.5);
+        const float a = (r.x - 0.5) * 6.2831853 * rotStrength;
+        h.t[i].cen = float2(v[i].x + 0.5 * v[i].y, v[i].y * 0.8660254) * kHexSpacing;
+        h.t[i].cs = float2(cos(a), sin(a));
+        h.t[i].off = float2(r.y, hash22(v[i] * 1.37 + 5.1).x * 0.71 + r.x * 0.29);
+    }
+    h.d = h.t[2];
+    if (h.w.y >= h.w.z) h.d = h.t[1];
+    if (h.w.x >= h.w.y && h.w.x >= h.w.z) h.d = h.t[0];
+    return h;
+}
+
+float2 hexRot(HexTap t, float2 q) { return float2(t.cs.x * q.x - t.cs.y * q.y, t.cs.y * q.x + t.cs.x * q.y); }
+float2 hexUnrot(HexTap t, float2 q) { return float2(t.cs.x * q.x + t.cs.y * q.y, -t.cs.y * q.x + t.cs.x * q.y); }
+// Texture coordinate of plane position p in a patch (k: repeats per meter, layer: its own shift).
+float2 hexUV(HexTap t, float2 p, float k, int layer) {
+    return hexRot(t, p - t.cen) * k + frac(t.off + float2(0.618, 0.382) * float(layer));
+}
+
+// sampleProjection through the hex patches: p is the position on the plane (m), gx / gy its screen derivatives.
+LayerSample sampleHex(int layer, HexFrame h, float2 p, float2 gx, float2 gy, float k, float3 u, float3 v, float fade) {
+    LayerSample r;
+    float4 a = (float4)0.0;
+    float2 nxy = (float2)0.0;
+    float2 ra = (float2)0.0;
+    if (fade >= 1.0) {
+        a = layerAlbedo.SampleLevel(layerAlbedoSampler, float3(0.5, 0.5, float(layer)), 16.0);
+        const float4 n = layerNra.SampleLevel(layerNraSampler, float3(0.5, 0.5, float(layer)), 16.0);
+        nxy = n.rg * 2.0 - 1.0;
+        ra = n.ba;
+    } else {
+        float wsum = 0.0;
+        [unroll] for (int i = 0; i < 3; ++i) {
+            if (h.w[i] > 0.0) {
+                const HexTap t = h.t[i];
+                const float3 at = float3(hexUV(t, p, k, layer), float(layer));
+                const float2 tgx = hexRot(t, gx) * k, tgy = hexRot(t, gy) * k;
+                const float4 ai = layerAlbedo.SampleGrad(layerAlbedoSampler, at, tgx, tgy);
+                const float4 ni = layerNra.SampleGrad(layerNraSampler, at, tgx, tgy);
+                // Mikkelsen's luminance term: brighter texels win in the blend (no washed-out mix).
+                const float wi = h.w[i] * lerp(1.0, sqrt(luminance(ai.rgb)), 0.6);
+                a += ai * wi;
+                nxy += hexUnrot(t, ni.rg * 2.0 - 1.0) * wi;
+                ra += ni.ba * wi;
+                wsum += wi;
+            }
+        }
+        const float inv = 1.0 / max(wsum, 1e-5);
+        a *= inv;
+        nxy *= inv;
+        ra *= inv;
+        if (fade > 0.0) {
+            const float3 at = float3(0.5, 0.5, float(layer));
+            a = lerp(a, layerAlbedo.SampleLevel(layerAlbedoSampler, at, 16.0), fade);
+            const float4 n = layerNra.SampleLevel(layerNraSampler, at, 16.0);
+            nxy = lerp(nxy, n.rg * 2.0 - 1.0, fade);
+            ra = lerp(ra, n.ba, fade);
+        }
+    }
+    r.albedo = a.rgb * tt.tint[layer].rgb;
+    r.height = lerp(a.a, 0.5, fade);
+    r.dn = (u * nxy.x + v * nxy.y) * tt.params.y;
+    r.rough = ra.x;
+    r.ao = ra.y;
+    return r;
+}
+
+// Where and how the ground layers are looked up: xz the (parallax-shifted) lookup position, gx / gy the screen
+// derivatives of the world position (taken in uniform control flow: the layers are sampled in branches).
+struct GroundCtx {
+    float2 xz;
+    float3 gx, gy;
+    float far, fade;
+    bool hex;
+    float cut;  // hex weight cut (hexFrame)
+    HexFrame h; // top-down patches (hex only)
+};
+
+GroundCtx groundCtx(float3 P, float dist) {
+    GroundCtx c;
+    c.xz = P.xz;
+    c.gx = ddx(P);
+    c.gy = ddy(P);
+    c.hex = f.groundFx.x > 1.5;
+    c.far = smoothstep(15.0, 120.0, dist);
+    c.fade = smoothstep(60.0, 250.0, dist);
+    c.cut = lerp(0.03, 0.2, smoothstep(8.0, 60.0, dist));
+    c.h = (HexFrame)0;
+    if (c.hex) c.h = hexFrame(P.xz, 1.0, c.cut);
+    return c;
+}
+
+// Ground layers: top-down projection (x -> u, z -> v). scale multiplies the layer's frequency.
+LayerSample sampleLayerScaled(int layer, GroundCtx c, float scale) {
+    const float k = layerInvTile(layer) * scale;
+    if (c.hex) return sampleHex(layer, c.h, c.xz, c.gx.xz, c.gy.xz, k, float3(1, 0, 0), float3(0, 0, 1), c.fade);
+    return sampleProjection(layer, c.xz * k, c.gx.xz * k, c.gy.xz * k, float3(1, 0, 0), float3(0, 0, 1), c.far, c.fade);
+}
+
+LayerSample sampleLayer(int layer, GroundCtx c) { return sampleLayerScaled(layer, c, 1.0); }
+
+// One projection plane of the rock: p / gx / gy the plane position and its derivatives.
+LayerSample sampleRockPlane(GroundCtx c, float2 p, float2 gx, float2 gy, float3 u, float3 v, bool top) {
+    const float k = layerInvTile(LAYER_ROCK);
+    if (!c.hex) return sampleProjection(LAYER_ROCK, p * k, gx * k, gy * k, u, v, c.far, c.fade);
+    // Walls keep the texture nearly upright (strata); the shift alone breaks up the repeats.
+    return sampleHex(LAYER_ROCK, top ? c.h : hexFrame(p, 0.08, c.cut), p, gx, gy, k, u, v, c.fade);
+}
+
+// Rock: triplanar on steep faces (projections with a negligible weight are skipped). P: the lookup position.
+LayerSample sampleRock(GroundCtx c, float3 P, float3 N, float2 warp) {
     float3 w = pow(abs(N), 4.0);
     w /= w.x + w.y + w.z;
-    const float k = layerInvTile(LAYER_ROCK);
     LayerSample r;
     r.albedo = ((float3)(0.0));
     r.height = 0.0;
@@ -1201,21 +1347,43 @@ LayerSample sampleRock(float3 P, float3 N, float2 warp, float far, float fade) {
     r.rough = 0.0;
     r.ao = 0.0;
     if (w.y > 0.02) {
-        const LayerSample s = sampleProjection(LAYER_ROCK, P.xz * k, float3(1, 0, 0), float3(0, 0, 1), far, fade);
+        const LayerSample s = sampleRockPlane(c, P.xz, c.gx.xz, c.gy.xz, float3(1, 0, 0), float3(0, 0, 1), true);
         r.albedo += s.albedo * w.y; r.height += s.height * w.y; r.dn += s.dn * w.y; r.rough += s.rough * w.y; r.ao += s.ao * w.y;
     }
     if (w.x > 0.02) {
-        const LayerSample s = sampleProjection(LAYER_ROCK, (float2(P.z, -P.y) + warp) * k, float3(0, 0, 1), float3(0, -1, 0), far, fade);
+        const LayerSample s = sampleRockPlane(c, float2(P.z, -P.y) + warp, float2(c.gx.z, -c.gx.y), float2(c.gy.z, -c.gy.y),
+                                              float3(0, 0, 1), float3(0, -1, 0), false);
         r.albedo += s.albedo * w.x; r.height += s.height * w.x; r.dn += s.dn * w.x; r.rough += s.rough * w.x; r.ao += s.ao * w.x;
     }
     if (w.z > 0.02) {
-        const LayerSample s = sampleProjection(LAYER_ROCK, (float2(P.x, -P.y) + warp) * k, float3(1, 0, 0), float3(0, -1, 0), far, fade);
+        const LayerSample s = sampleRockPlane(c, float2(P.x, -P.y) + warp, float2(c.gx.x, -c.gx.y), float2(c.gy.x, -c.gy.y),
+                                              float3(1, 0, 0), float3(0, -1, 0), false);
         r.albedo += s.albedo * w.z; r.height += s.height * w.z; r.dn += s.dn * w.z; r.rough += s.rough * w.z; r.ao += s.ao * w.z;
     }
     const float sum = (w.y > 0.02 ? w.y : 0.0) + (w.x > 0.02 ? w.x : 0.0) + (w.z > 0.02 ? w.z : 0.0);
     const float inv = 1.0 / max(sum, 1e-4);
     r.albedo *= inv; r.height *= inv; r.dn *= inv; r.rough *= inv; r.ao *= inv;
     return r;
+}
+
+// Large-scale tone of the ground. Tiling 0: one noise octave (repeats every 91 m); 1 and 2: three octaves at
+// unrelated scales (213 m, 53 m, 16 m) vary brightness, hue, saturation and roughness, so neither the layer textures
+// nor the noise texture line up over hundreds of meters.
+void macroTone(Texture2D<float4> noiseT, SamplerState ns, float2 xz, inout float3 albedo, inout float rough) {
+    if (f.groundFx.x < 0.5) {
+        albedo *= 0.86 + 0.28 * noiseT.Sample(ns, xz * 0.011).r;
+        return;
+    }
+    const float n1 = noiseT.Sample(ns, xz * 0.0047 + 0.13).r;
+    const float n2 = noiseT.Sample(ns, xz * 0.0189 + 0.57).g;
+    const float n3 = noiseT.Sample(ns, xz * 0.0613 + 0.29).a;
+    const float tone = n1 * 0.5 + n2 * 0.35 + n3 * 0.15;
+    albedo *= 0.80 + 0.40 * tone;
+    const float hue = saturate((n2 - n1) * 2.0 + 0.5);
+    albedo *= lerp(float3(1.05, 1.0, 0.90), float3(0.95, 1.0, 1.07), hue);
+    const float l = luminance(albedo);
+    albedo = max(lerp((float3)l, albedo, 0.85 + 0.3 * n1), 0.0);
+    rough = saturate(rough * lerp(0.90, 1.10, n3));
 }
 
 // Blend factor of a layer of weight w over the current surface: the higher one wins near w = 0.5, and the
@@ -1235,30 +1403,39 @@ void blendLayer(inout LayerSample g, LayerSample l, float t) {
 
 #if defined(TF_ENTRY_terrain_fs)
 
+// Height (albedo alpha) of one layer at plane position p: plain repeats, or the dominant hex patch of the fragment
+// (the marches below stay within a few cm, inside one patch almost everywhere).
+float layerHeightAt(int layer, GroundCtx c, float2 p, float k, float2 gx, float2 gy) {
+    if (!c.hex) return layerAlbedo.SampleGrad(layerAlbedoSampler, float3(p * k, float(layer)), gx * k, gy * k).a;
+    const HexTap t = c.h.d;
+    return layerAlbedo.SampleGrad(layerAlbedoSampler, float3(hexUV(t, p, k, layer), float(layer)), hexRot(t, gx) * k,
+                                  hexRot(t, gy) * k).a;
+}
+
 // Parallax occlusion of the dominant layer's height (albedo alpha) near the camera: the ground is a height field
 // pushed down by up to depthM along the projection axis (world y). Returns the world xz shift for every layer's
-// lookup. dxz / dyz: screen derivatives of P.xz (the loop samples with explicit gradients).
-float2 parallaxShift(int layer, float2 xz, float3 V, float depthM, int steps, float2 dxz, float2 dyz) {
+// lookup (the loop samples with explicit gradients).
+float2 parallaxShift(int layer, GroundCtx c, float3 V, float depthM, int steps) {
     const float k = layerInvTile(layer);
-    const float2 gx = dxz * k, gy = dyz * k;
+    const float2 gx = c.gx.xz, gy = c.gy.xz;
     const float2 stepXZ = -V.xz / max(V.y, 0.35) * (depthM / float(steps));
     const float dStep = 1.0 / float(steps);
-    float2 cur = xz;
+    float2 cur = c.xz;
     float depth = 0.0;
     float prevGap = 0.0;
-    float gap = 1.0 - layerAlbedo.SampleGrad(layerAlbedoSampler, float3(cur * k, float(layer)), gx, gy).a;
+    float gap = 1.0 - layerHeightAt(layer, c, cur, k, gx, gy);
     int i = 0;
     [loop] for (; i < steps && gap > depth; ++i) {
         prevGap = gap - depth;
         cur += stepXZ;
         depth += dStep;
-        gap = 1.0 - layerAlbedo.SampleGrad(layerAlbedoSampler, float3(cur * k, float(layer)), gx, gy).a;
+        gap = 1.0 - layerHeightAt(layer, c, cur, k, gx, gy);
     }
     if (i == 0) return float2(0.0, 0.0);
     // Linear refinement between the last step above the surface and the first below it.
     const float after = gap - depth;
     const float t = prevGap / max(prevGap - after, 1e-4);
-    return (cur - stepXZ * (1.0 - saturate(t))) - xz;
+    return (cur - stepXZ * (1.0 - saturate(t))) - c.xz;
 }
 
 float4 terrain_fs(LitOut vin) : SV_Target0 {
@@ -1281,7 +1458,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         N = perturbNormal(N, P, g.height * 0.035, g.bump);
     } else {
         const float dist = length(P - f.cameraPos.xyz);
-        const float farTex = smoothstep(15.0, 120.0, dist);
+        GroundCtx gc = groundCtx(P, dist);
         const float fadeTex = smoothstep(60.0, 250.0, dist);
         const float2 nz = noiseTex.Sample(noiseSampler, P.xz * 0.13).rg;
         const float slope = sqrt(max(1.0 - N.y * N.y, 0.0)) / max(N.y, 0.1);
@@ -1299,7 +1476,6 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         // Parallax near the camera on flat-ish ground: one ray march in the dominant layer shifts every layer's
         // lookup (Pt); masks, shadows and lighting stay at P.
         float3 Pt = P;
-        const float2 dxz = ddx(P.xz), dyz = ddy(P.xz);
         const float pom = f.parallax.x * (1.0 - smoothstep(f.parallax.z, f.parallax.w, dist)) * smoothstep(0.80, 0.92, N.y);
         if (pom > 0.0) {
             int dom = grass >= 0.5 ? LAYER_GRASS : LAYER_SOIL;
@@ -1312,27 +1488,28 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
                 // Grazing views take the most steps and the least depth (stair steps between the slices).
                 const float depthM = f.parallax.y * saturate(pom / f.parallax.x) * smoothstep(0.10, 0.45, V.y);
                 const int steps = int(lerp(f.parallax.x, max(4.0, f.parallax.x * 0.5), saturate(V.y)));
-                Pt.xz += parallaxShift(dom, P.xz, V, depthM, steps, dxz, dyz);
+                Pt.xz += parallaxShift(dom, gc, V, depthM, steps);
             }
         }
 
+        gc.xz = Pt.xz;
         // Full grass hides the soil whatever the heights (heightBlend(1, ...) == 1), so the soil is not sampled.
         LayerSample g;
         if (grass >= 1.0) {
-            g = sampleLayer(LAYER_GRASS, Pt, farTex, fadeTex);
+            g = sampleLayer(LAYER_GRASS, gc);
         } else {
-            g = sampleLayer(LAYER_SOIL, Pt, farTex, fadeTex);
+            g = sampleLayer(LAYER_SOIL, gc);
             if (grass > 0.001) {
-                const LayerSample l = sampleLayer(LAYER_GRASS, Pt, farTex, fadeTex);
+                const LayerSample l = sampleLayer(LAYER_GRASS, gc);
                 blendLayer(g, l, heightBlend(grass, l.height, g.height));
             }
         }
         if (road > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_ROAD, Pt, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_ROAD, gc);
             blendLayer(g, l, heightBlend(road, l.height, g.height));
         }
         if (sand > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_SAND, Pt, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_SAND, gc);
             blendLayer(g, l, heightBlend(sand, l.height, g.height));
         }
         if (rock > 0.001) {
@@ -1340,7 +1517,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             // regular vertical stripes, then sedimentary beds and large tone patches that stay at any distance.
             const float steepF = smoothstep(0.25, 0.65, 1.0 - N.y);
             const float2 warp = (noiseTex.Sample(noiseSampler, P.xz * 0.021 + P.y * 0.013).rg - 0.5) * 3.0 * steepF;
-            LayerSample l = sampleRock(Pt, N, warp, farTex, fadeTex);
+            LayerSample l = sampleRock(gc, Pt, N, warp);
             if (steepF > 0.0) {
                 // Gently dipping beds (the dip turns with a large-scale noise), bent by smaller folds.
                 const float2 dip = (noiseTex.Sample(noiseSampler, P.xz * 0.0011).rg - 0.5) * 0.16;
@@ -1365,8 +1542,7 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         }
         if (snow > 0.001 && asphalt) {
             // Asphalt: the road layer's grain at 4x the frequency for the aggregate, desaturated and dark, flat.
-            LayerSample l = sampleProjection(LAYER_ROAD, Pt.xz * layerInvTile(LAYER_ROAD) * 4.0, float3(1, 0, 0),
-                                             float3(0, 0, 1), farTex, fadeTex);
+            LayerSample l = sampleLayerScaled(LAYER_ROAD, gc, 4.0);
             const float grain = dot(l.albedo, float3(0.3, 0.55, 0.15));
             l.albedo = asphaltAlbedo(P, saturate(grain * 2.2));
             l.dn *= 0.25;
@@ -1374,13 +1550,14 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
             l.height = 0.5;
             blendLayer(g, l, saturate((w.z - 0.5) * 6.0 + 0.5) * step(0.01, w.z));
         } else if (snow > 0.001) {
-            const LayerSample l = sampleLayer(LAYER_SNOW, Pt, farTex, fadeTex);
+            const LayerSample l = sampleLayer(LAYER_SNOW, gc);
             blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
         }
         // Large-scale tone variation so the repeats do not line up over hundreds of meters.
         const float macro = noiseTex.Sample(noiseSampler, P.xz * 0.011).r;
-        float3 albedo = g.albedo * (0.86 + 0.28 * macro);
+        float3 albedo = g.albedo;
         float rough = g.rough;
+        macroTone(noiseTex, noiseSampler, P.xz, albedo, rough);
         float flat = 1.0;
 
         // Mud near water (mask G, smooth, edges broken up by noise): dark, wet and smoother.
@@ -2858,7 +3035,8 @@ struct MarkGround {
 
 MarkGround levelGround(float3 P, float3 N, float4 m) {
     const float dist = length(P - f.cameraPos.xyz);
-    const float farTex = smoothstep(15.0, 120.0, dist), fadeTex = smoothstep(60.0, 250.0, dist);
+    const GroundCtx gc = groundCtx(P, dist);
+    const float fadeTex = smoothstep(60.0, 250.0, dist);
     const float2 ij = (P.xz - mu.ground.y) / mu.ground.z;
     const float4 sp = terrainSplat.SampleLevel(terrainSplatSampler, ij / mu.ground.w, 0);
     const float sandSnow = sp.b * (255.0 / 127.5) - 1.0;
@@ -2870,31 +3048,32 @@ MarkGround levelGround(float3 P, float3 N, float4 m) {
     const float rock = saturate((sp.g - 0.5) * 2.2 + 0.5 + (nz.r - 0.5) * 0.6) * step(0.01, sp.g);
     const float sand = saturate((max(sandSnow, 0.0) - 0.5) * 1.6 + 0.5 + (nz.g - 0.5) * 0.4) * step(0.01, sandSnow);
     const float snow = saturate((max(-sandSnow, 0.0) - 0.5) * 2.6 + 0.5 + (nz.g - 0.5) * 0.7) * step(0.01, -sandSnow);
-    LayerSample g = sampleLayer(LAYER_SOIL, P, farTex, fadeTex);
+    LayerSample g = sampleLayer(LAYER_SOIL, gc);
     const float3 soil = g.albedo;
     if (grass > 0.001) {
-        const LayerSample l = sampleLayer(LAYER_GRASS, P, farTex, fadeTex);
+        const LayerSample l = sampleLayer(LAYER_GRASS, gc);
         blendLayer(g, l, heightBlend(grass, l.height, g.height));
     }
     if (road > 0.001) {
-        const LayerSample l = sampleLayer(LAYER_ROAD, P, farTex, fadeTex);
+        const LayerSample l = sampleLayer(LAYER_ROAD, gc);
         blendLayer(g, l, heightBlend(road, l.height, g.height));
     }
     if (sand > 0.001) {
-        const LayerSample l = sampleLayer(LAYER_SAND, P, farTex, fadeTex);
+        const LayerSample l = sampleLayer(LAYER_SAND, gc);
         blendLayer(g, l, heightBlend(sand, l.height, g.height));
     }
     if (rock > 0.001) {
-        const LayerSample l = sampleLayer(LAYER_ROCK, P, farTex, fadeTex);
+        const LayerSample l = sampleLayer(LAYER_ROCK, gc);
         blendLayer(g, l, heightBlend(rock, l.height, g.height));
     }
     if (snow > 0.001) {
-        const LayerSample l = sampleLayer(LAYER_SNOW, P, farTex, fadeTex);
+        const LayerSample l = sampleLayer(LAYER_SNOW, gc);
         blendLayer(g, l, heightBlend(snow, l.height + 0.3, g.height));
     }
     const float macro = noiseTex.Sample(ns, P.xz * 0.011).r;
-    float3 albedo = g.albedo * (0.86 + 0.28 * macro);
+    float3 albedo = g.albedo;
     float rough = g.rough;
+    macroTone(noiseTex, ns, P.xz, albedo, rough);
     float flat = 1.0;
     const float mudBlend = smoothstep(0.30, 0.55, m.g + (nz.g - 0.5) * 0.30);
     if (mudBlend > 0.0) {
@@ -2919,7 +3098,10 @@ MarkGround levelGround(float3 P, float3 N, float4 m) {
     }
     MarkGround r;
     r.albedo = albedo;
-    r.soil = soil * (0.86 + 0.28 * macro);
+    float3 soilTone = soil;
+    float soilRough = 0.0;
+    macroTone(noiseTex, ns, P.xz, soilTone, soilRough);
+    r.soil = soilTone;
     r.dn = g.dn * flat;
     r.rough = rough;
     r.ao = lerp(1.0, g.ao, 0.8) * (1.0 - 0.35 * canopy);

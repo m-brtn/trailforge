@@ -231,6 +231,7 @@ private:
     bool m_perfActive = false;
     std::string m_perfLabel;
     std::vector<double> m_perfFrameMs;
+    std::vector<double> m_perfGpuMs; // per frame (Metal), for the low percentiles
     double m_perfCpuSum = 0.0, m_perfGpuSum = 0.0;
     int m_perfGpuCount = 0;
 

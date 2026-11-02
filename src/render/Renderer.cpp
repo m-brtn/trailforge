@@ -360,6 +360,7 @@ void Renderer::setSettings(const RenderSettings& in) {
     s.envProbe = s.envProbe <= 0 ? 0 : s.envProbe <= 32 ? 32 : s.envProbe <= 64 ? 64 : s.envProbe <= 128 ? 128 : 256;
     s.envProbeFaces = std::clamp(s.envProbeFaces, 1, 6);
     s.parallaxSteps = s.parallaxSteps <= 0 ? 0 : std::clamp(s.parallaxSteps, 4, 32);
+    s.groundTiling = std::clamp(s.groundTiling, 0, 2);
     s.motionBlur = std::clamp(s.motionBlur, 0.0f, 1.0f);
     s.sunShafts = std::clamp(s.sunShafts, 0.0f, 2.0f);
     s.lensFlare = std::clamp(s.lensFlare, 0.0f, 2.0f);
@@ -837,6 +838,7 @@ const char* const Renderer::kPostPassNames[] = {"lindepth", "gtao", "ao_blur", "
 void Renderer::setPostBench(const std::string& pass, int repeat) {
     m_benchPass = -1;
     m_benchRepeat = std::clamp(repeat, 1, 200);
+    m_benchTerrain = pass == "terrain" ? m_benchRepeat : 1;
     for (int i = 0; kPostPassNames[i]; ++i)
         if (pass == kPostPassNames[i]) m_benchPass = i;
 }
@@ -2152,6 +2154,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     fu.waterParams = glm::vec4(m_waterLevel, reflVisible ? 1.0f : 0.0f, 1.0f / float(rw), 1.0f / float(rh));
     fu.screenFx = glm::vec4(sceneCopy ? 1.0f : 0.0f, sceneCopy && s.waterSsr ? 1.0f : 0.0f, 0.0f, 0.0f);
     fu.parallax = glm::vec4(float(s.parallaxSteps), kParallaxDepth, 15.0f, 25.0f);
+    fu.groundFx = glm::vec4(float(s.groundTiling), 0.0f, 0.0f, 0.0f);
     m_stats.reflectionRendered = reflVisible;
     glm::mat4 mirror(1.0f);
     mirror[1][1] = -1.0f;
@@ -2469,6 +2472,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ef.screenFx = glm::vec4(0.0f);
         ef.envProbe = glm::vec4(0.0f);
         ef.parallax = glm::vec4(0.0f);
+        ef.groundFx = glm::vec4(std::min(fu.groundFx.x, 1.0f), 0.0f, 0.0f, 0.0f);
         // Face bases of the cube convention (+X, -X, +Y, -Y, +Z, -Z): forward, up; right = cross(up, forward).
         static const glm::vec3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         static const glm::vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
@@ -2625,6 +2629,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         rf.waterParams.y = 0.0f;
         rf.options.x = 0.0f;
         rf.parallax = glm::vec4(0.0f);
+        rf.groundFx = glm::vec4(std::min(fu.groundFx.x, 1.0f), 0.0f, 0.0f, 0.0f);
 
         SDL_GPUColorTargetInfo ct{};
         ct.texture = m_reflColor.tex;
@@ -2772,7 +2777,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                                                                 {m_terrainAlbedo.tex, m_terrainSampler},
                                                                 {m_terrainNra.tex, m_terrainSampler}};
             SDL_BindGPUFragmentSamplers(pass, 0, terrainTex, 5);
-            m_stats.drawCalls += drawTerrain(pass, m_terrainScratch, 2, nullptr);
+            // post_bench terrain N: the same draw again passes the depth test (GREATER_OR_EQUAL) on every visible
+            // terrain fragment, so N draws cost N times the terrain shading.
+            for (int i = 0; i < m_benchTerrain; ++i) m_stats.drawCalls += drawTerrain(pass, m_terrainScratch, 2, nullptr);
         }
 
         // Opaque meshes.

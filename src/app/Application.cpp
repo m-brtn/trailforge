@@ -1546,13 +1546,20 @@ void Application::endPerf() {
     const double avg = sum / double(v.size());
     const double p95 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.95))];
     const double p99 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.99))];
+    // Low percentiles: with other GPU work on the machine the fastest frames are the least disturbed ones.
+    const double p10 = v[std::size_t(double(v.size()) * 0.10)];
+    std::vector<double> g = m_perfGpuMs;
+    std::sort(g.begin(), g.end());
+    const double gpuMin = g.empty() ? -1.0 : g.front();
+    const double gpuP10 = g.empty() ? -1.0 : g[std::size_t(double(g.size()) * 0.10)];
     const RenderStats& rs = m_renderer->stats();
     std::printf("PERF %-12s frames=%zu fps=%.1f frame_avg=%.2f ms p95=%.2f p99=%.2f max=%.2f cpu_avg=%.2f ms "
-                "gpu_avg=%.2f ms render=%ux%u output=%ux%u vsync=%d draws=%d grass=%.0fk\n",
+                "gpu_avg=%.2f ms render=%ux%u output=%ux%u vsync=%d draws=%d grass=%.0fk frame_p10=%.2f gpu_min=%.2f "
+                "gpu_p10=%.2f\n",
                 m_perfLabel.c_str(), v.size(), 1000.0 / avg, avg, p95, p99, v.back(),
                 m_perfCpuSum / double(v.size()), m_perfGpuCount ? m_perfGpuSum / m_perfGpuCount : -1.0, rs.renderW,
                 rs.renderH, rs.outputW, rs.outputH, m_renderer->vsync() ? 1 : 0, rs.drawCalls,
-                double(rs.grassBlades) / 1000.0);
+                double(rs.grassBlades) / 1000.0, p10, gpuMin, gpuP10);
 }
 
 // ------------------------------------------------------------------ verification scenario
@@ -2275,6 +2282,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else if (k == "env_probe") s.envProbe = int(v);
         else if (k == "env_probe_faces") s.envProbeFaces = int(v);
         else if (k == "parallax") s.parallaxSteps = int(v);
+        else if (k == "ground_tiling") s.groundTiling = int(v);
         else if (k == "reflections") s.reflections = v != 0.0f;
         else if (k == "refl_scale") s.reflectionScale = v;
         else if (k == "bloom") s.bloom = v != 0.0f;
@@ -2452,6 +2460,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_perfActive = true;
         m_perfLabel = arg.empty() ? "perf" : arg;
         m_perfFrameMs.clear();
+        m_perfGpuMs.clear();
         m_perfCpuSum = m_perfGpuSum = 0.0;
         m_perfGpuCount = 0;
         return Exec::Done;
@@ -3032,6 +3041,7 @@ int Application::run() {
             if (m_renderer->stats().gpuMs > 0.0) {
                 m_perfGpuSum += m_renderer->stats().gpuMs;
                 ++m_perfGpuCount;
+                m_perfGpuMs.push_back(m_renderer->stats().gpuMs);
             }
         }
 

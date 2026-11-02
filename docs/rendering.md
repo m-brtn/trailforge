@@ -163,10 +163,27 @@ procedural materials.
   loaded when a level is entered or the size changes (Ultra 167.8 MB in 150–175 ms, High 67.1 MB in 22–80 ms,
   Medium 16.8 MB in 27 ms, Low 4.2 MB in 19 ms) and are not streamed; driving causes no texture loads.
 - **Shader (`terrain_fs`):** top-down projection per layer, triplanar for rock on steep faces; layers are blended by
-  their height maps (the higher material shows through near a weight of 0.5). Beyond ~15 m a second, rotated
-  sample at 0.29× frequency breaks up the repeats; from 60 to 250 m every layer fades to its mean colour (its 1×1
-  mip) so the tiles do not line up into a pattern seen from far away. The mud, wet-ground, wheat and distant grass
-  canopy colours of the procedural material are kept on top.
+  their height maps (the higher material shows through near a weight of 0.5). Every lookup uses explicit gradients
+  (`SampleGrad`, derivatives of the world position taken once, outside the per-layer branches). The mud,
+  wet-ground, wheat and distant grass canopy colours of the procedural material are kept on top.
+- **Tiling** (Graphics → "Ground texture tiling", scenario `set ground_tiling 0|1|2`; Low 1, Medium / High /
+  Ultra 2). 0 (plain repeats, the look before): beyond ~15 m a second, rotated sample at 0.29× frequency, from 60 to
+  250 m every layer fades to its mean colour (its 1×1 mip), one macro tone noise (repeats every 91 m). 1 adds the
+  macro variation: three noise octaves at unrelated scales (213 m, 53 m, 16 m) vary brightness (0.8–1.2), a warm /
+  cool hue shift, saturation and roughness (±10 %). 2 adds hex tiling (Mikkelsen 2022, "Practical Real-Time
+  Hex-Tiling"): a world-space triangle grid (3 m between patch centres, shared by every layer) whose vertices are
+  hexagonal patches; each patch shows the layer rotated by a random angle about its centre and shifted by a random
+  amount (per layer), and a fragment blends the at most three patches of its triangle with barycentric weights to
+  the 7th power times a luminance term; weights under a cut (3 % near the camera, 20 % beyond 60 m) drop
+  continuously to 0, so most of a patch is a single lookup and the blends are narrow. Normal maps are rotated back with their patch; the gradients are rotated with it, so
+  mip selection and anisotropic filtering follow the patch. Rock walls (triplanar sides) use their own patches on
+  the wall planes, shifted but rotated by at most ±0.08 turns (strata stay upright). The parallax march uses the
+  dominant patch of the fragment. With hex tiling the 0.29× sample is dropped (the fade to the mean is the same as
+  in mode 0). Tire marks reconstruct the ground under them with the same lookups. The probe and puddle reflection
+  passes use at most mode 1. Cost (2880×1800, Exploration Peaks, same-process alternating A/B, minimum `frame_avg`
+  of 3–4 windows, 2026-11-02): mode 2 vs 0 on High +0.1–0.5 ms (gravel road and ford views), on Ultra +0.6–0.7 ms;
+  of that the macro tone is ~0.1 ms (`post_bench terrain 5`: mode 1 vs 0 +0.6 ms over five terrain draws, mode 2
+  vs 0 +2.5 ms at the ford).
 - **Parallax** (High 8 steps, Ultra 16, Low / Medium off; Graphics → "Ground parallax steps", scenario
   `set parallax N`): within 15 m of the camera (fading out by 25 m) on slopes up to 23 deg (gone at 37), one parallax
   occlusion ray march through the height map of the dominant layer (the one with the largest weight) treats the
