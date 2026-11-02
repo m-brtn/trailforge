@@ -269,7 +269,7 @@ if(TRAILFORGE_BUILD_TESTS)
         set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
     endforeach()
     # Blender level pipeline: import -> export without edits gives the same files and the same bake (only where
-    # Blender is installed; README "Editing a level in Blender").
+    # Blender is installed; docs/levels.md "Editing a level in Blender").
     find_program(TRAILFORGE_BLENDER NAMES blender Blender PATHS /Applications/Blender.app/Contents/MacOS NO_CACHE)
     if(TRAILFORGE_BLENDER)
         add_test(NAME level_blender_roundtrip

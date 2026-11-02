@@ -45,8 +45,8 @@ struct SuspensionMounts {
 
 // Visual-only vehicle model in body space (+Z forward, +X left, +Y up). The kit body (bodyShape "kit", the default) is
 // lofted from StyleKit panels around the collision boxes of vehicle/VehicleShape.h; the traced body (bodyShape
-// "traced") is meshed from the blueprint (BlueprintBody), the same data its collision hulls come from; see README
-// "Vehicle rendering" and "Vehicle blueprints".
+// "traced") is meshed from the blueprint (BlueprintBody), the same data its collision hulls come from; see
+// docs/vehicles.md "Vehicle rendering and the style kit" and docs/vehicle-format.md "Vehicle blueprints".
 struct VehicleVisual {
     MeshData mesh;                 // all parts, in `parts` order
     std::vector<VehiclePart> parts;

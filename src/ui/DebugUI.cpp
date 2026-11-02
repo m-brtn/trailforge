@@ -716,7 +716,8 @@ void DebugUI::drawTelemetry(Simulation& sim, const FrameStats& stats, UiRequests
                     t.ambientC);
         tireTemperatureGrid(t, false);
         remember("tire_temps");
-        ImGui::TextDisabled("Surface = 2 mm tread layer, core = carcass (2-node model, README \"Tire sets and temperature\").");
+        ImGui::TextDisabled("Surface = 2 mm tread layer, core = carcass (2-node model, docs/vehicles.md "
+                            "\"Tire sets and temperature\").");
     }
 
     ImGui::SeparatorText("Wheels");

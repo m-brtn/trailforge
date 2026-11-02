@@ -68,8 +68,8 @@ const char* sideName(float sx) { return sx > 0 ? "left" : "right"; }
 std::string sided(const char* base, float sx) { return std::string(base) + "_" + sideName(sx); }
 
 // ================================================================ kit bodies (bodyShape "kit", the default)
-// Lofted StyleKit panels around the physics wheels (README "Vehicle rendering"); the collision is the three boxes of
-// vehicle/VehicleShape.h. Laid out for track 1.80 and wheelbase 2.80 (wheels at x = +-0.90, z = +-1.40); the
+// Lofted StyleKit panels around the physics wheels (docs/vehicles.md "Vehicle rendering and the style kit"); the
+// collision is the three boxes of vehicle/VehicleShape.h. Laid out for track 1.80 and wheelbase 2.80 (wheels at x = +-0.90, z = +-1.40); the
 // arches, flares and wheel-house walls follow the configured wheels, travel and steering.
 namespace kit {
 
@@ -1901,7 +1901,7 @@ void wheelStyle(VehicleVisual& v, bool ev) {
 }
 
 // ================================================================ Blender bodies (body.glb)
-// LOD0 of every part, materials by role (README "Vehicle data format"): the light roles get the shader's light ids
+// LOD0 of every part, materials by role (docs/vehicle-format.md): the light roles get the shader's light ids
 // so the lamps follow the headlight switch, brake pedal, reverse gear and indicators; paint roles can be recoloured
 // by vehicle.json body.paint.
 Material roleMaterial(const BodyMaterial& m, const VehicleConfig& cfg) {
