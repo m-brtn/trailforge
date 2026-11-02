@@ -305,7 +305,8 @@ vertex shader decides everything per blade from hashes, the ground maps and a ti
 
 ### Time of day and environment
 
-- **Time of day** (F2 → Look, or F1 → Tuning → "Time of day"): a 0–24 h slider, presets Dawn (5:45), Noon,
+- **Time of day** (for players Settings → TIME OF DAY, see [controls](controls.md); F2 → Look, or F1 → Tuning →
+  "Time of day"): a 0–24 h slider, presets Dawn (5:45), Noon,
   Sunset (18:12) and Night (23:30), and a time-lapse with a speed slider (0.01–4 h/s) and Run/Pause. The sun follows
   a simple solar path (latitude 45°, declination 10°: sunrise ~5:20, sunset ~18:40, noon elevation 55°); the
   "Sun path heading" rotates the path so the sunset lies north, behind the showcase meadow. Sun color and intensity,

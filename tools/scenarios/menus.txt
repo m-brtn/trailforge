@@ -110,6 +110,41 @@ wait 0.1
 expect setting_grass_distance == 0
 expect grass_dist == 110
 
+# time of day from the start menu: stored for gameplay, the start-menu sunset stays
+expect setting_time_of_day == 9
+menu select time_preset
+wait 0.5
+tap Right                       # MORNING -> NOON
+wait 0.1
+expect setting_time_of_day == 12
+expect tod > 18                 # the start-menu world keeps its sunset
+expect tod < 18.5
+menu select time_of_day
+tap Left                        # 12:00 -> 11:30
+wait 0.1
+expect setting_time_of_day == 11.5
+tap Return                      # a slider: accept changes nothing
+wait 0.1
+expect setting_time_of_day == 11.5
+menu select time_flow
+tap Right
+wait 0.1
+expect setting_time_flow == 1   # REAL TIME
+tap Left
+wait 0.1
+expect setting_time_flow == 0
+# debug windows: scenarios start with them on (the checks read the F1-F3 windows), the row switches them
+menu select debug_windows
+wait 0.5
+expect setting_debug_windows == 1
+capture /tmp/trailforge_menu_04c_time_debug_rows.png
+tap Return
+wait 0.1
+expect setting_debug_windows == 0
+tap Right
+wait 0.1
+expect setting_debug_windows == 1
+
 # mouse: click a row
 menu select controls            # the last row: the cursor scrolls it into view
 wait 0.5
@@ -131,7 +166,7 @@ menu select quality
 wait 0.5
 tap Up                          # BACK sits above the page title (top left): Up from the first row
 wait 0.5
-expect menu_cursor == 18
+expect menu_cursor == 22
 expect menu_scroll == 0         # outside the scrolling list
 capture /tmp/trailforge_menu_05c_settings_back.png
 wait 0.1
@@ -230,6 +265,8 @@ expect d_x > -1                 # back at the spawn
 expect d_x < 1
 expect d_z > -1
 expect d_z < 1
+expect tod > 11.49              # gameplay starts at the time chosen in Settings
+expect tod < 11.51
 wait 1.5
 down W
 wait 1.2
@@ -268,6 +305,28 @@ expect menu_page == 2
 expect d_ticks == 0
 capture /tmp/trailforge_menu_07_pause_settings.png
 wait 0.1
+# time of day from the pause Settings: applied to the paused world at once
+menu select time_preset
+wait 0.5
+expect setting_time_of_day > 11.49
+tap Right                       # 11:30 -> NOON
+wait 0.1
+expect tod > 11.99
+expect tod < 12.01
+tap Right                       # NOON -> GOLDEN HOUR
+wait 0.3
+expect tod > 17.49
+expect tod < 17.51
+capture /tmp/trailforge_menu_07b_pause_golden_hour.png
+wait 0.1
+# debug windows off: the read-out and the F1 windows go, the player HUD stays
+expect debug_hud == 0           # (no HUD under a menu)
+menu select debug_windows
+wait 0.3
+tap Return
+wait 0.1
+expect setting_debug_windows == 0
+expect d_ticks == 0
 click menu:back                 # BACK from the pause Settings returns to the pause menu
 wait 0.3
 expect menu_page == 1
@@ -276,6 +335,19 @@ tap Escape
 wait 0.6
 expect menu_screen == 2
 expect d_ticks > 40            # resume continues the simulation (W still held)
+expect debug_hud == 0
+expect tire_temps == 0          # telemetry window (F1) hidden
+expect tire_hud == 1            # player HUD
+expect ui_visible == 1
+tap F1                          # does nothing while the debug windows are off
+wait 0.1
+expect ui_visible == 1
+capture /tmp/trailforge_menu_07c_debug_windows_off.png
+wait 0.1
+set debug_windows 1
+wait 0.1
+expect debug_hud == 1
+expect tire_temps == 1
 log resumed
 up W
 down S

@@ -39,6 +39,13 @@ struct GameSettings {
     int minimapSize = 1;
     bool minimapNorthUp = false;
     bool compass = true;
+    // Time of day in gameplay (render-only): local solar hours 0..24 (the live clock, also after it ran), and
+    // whether the clock runs while driving (TimeFlow: 0 off, 1 real time, 2 fast = one game hour per real minute)
+    float timeOfDay = 9.0f;
+    int timeFlow = 0;
+    // Developer windows: the top-left read-out, F1 telemetry + tuning, F2 graphics, F3 audio and the physics debug
+    // lines. Off: only the player HUD (speed / gear, lap and drift panels, minimap, compass) and F1-F3 do nothing.
+    bool debugWindows = false;
     // Controls
     int driveKeys = 0;         // DriveKeys: 0 W A S D, 1 arrows (the other cluster moves the free camera)
     int padGlyphs = 0;         // PadGlyphSetting: 0 auto (from the connected pad), 1 Xbox, 2 PlayStation

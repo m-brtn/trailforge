@@ -27,6 +27,8 @@ enum class MenuItem {
     MasterVolume, MusicVolume, EffectsVolume, UiVolume, // audio
     Abs, Traction, DiffLocks, AutoReverse,       // driving aid defaults
     Minimap, MinimapSize, MinimapNorthUp, Compass, // map
+    TimeOfDay, TimePreset, TimeFlow,             // time of day (gameplay)
+    DebugWindows,                                // developer
     DriveKeys, PadGlyphs,                        // controls page
     Controls, Back,
     VehicleChoice, Drive,                        // vehicle page
@@ -153,7 +155,18 @@ bool menuAdjustable(MenuItem item);
 // capitals with spaces ("EXPLORATION PEAKS"); an empty level shows `defaultLevel` that way.
 std::string menuValue(MenuItem item, const GameSettings& s, const std::string& defaultLevel = {});
 std::string levelDisplayName(const std::string& id);
-// Changes the value one step (dir -1 / +1); returns false if nothing changed.
+// Changes the value one step (dir -1 / +1); returns false if nothing changed. TIME moves to the next half hour
+// (wrapping at midnight), PRESET to the next or previous preset after the current time.
 bool adjustSetting(MenuItem item, GameSettings& s, int dir);
+
+// Time-of-day presets of the PRESET row (hours; Dawn, Noon, Sunset and Night are the kTimePresets of TimeOfDay.h).
+struct MenuTimePreset {
+    const char* name;
+    float hours;
+};
+inline constexpr MenuTimePreset kMenuTimePresets[] = {{"DAWN", 5.75f},        {"MORNING", 9.0f}, {"NOON", 12.0f},
+                                                      {"GOLDEN HOUR", 17.5f}, {"SUNSET", 18.2f}, {"NIGHT", 23.5f}};
+// Game hours per real second of each TimeFlow value (off, real time, fast).
+inline constexpr float kTimeFlowRates[] = {0.0f, 1.0f / 3600.0f, 1.0f / 60.0f};
 
 } // namespace tf

@@ -43,6 +43,9 @@ GameSettings sanitized(GameSettings s) {
     s.traction = std::clamp(s.traction, -1, 2);
     s.diffLocks = std::clamp(s.diffLocks, 0, 3);
     s.minimapSize = std::clamp(s.minimapSize, 0, 2);
+    if (!std::isfinite(s.timeOfDay)) s.timeOfDay = 9.0f;
+    s.timeOfDay = std::fmod(std::fmod(s.timeOfDay, 24.0f) + 24.0f, 24.0f);
+    s.timeFlow = std::clamp(s.timeFlow, 0, 2);
     s.driveKeys = std::clamp(s.driveKeys, 0, 1);
     s.padGlyphs = std::clamp(s.padGlyphs, 0, 2);
     const bool idOk = s.vehicle.size() <= 64 && std::all_of(s.vehicle.begin(), s.vehicle.end(), [](char c) {
@@ -78,12 +81,15 @@ std::string serializeSettings(const GameSettings& in) {
                   "minimap_size = %d\n"
                   "minimap_north_up = %d\n"
                   "compass = %d\n"
+                  "time_of_day = %.9g\n"
+                  "time_flow = %d\n"
+                  "debug_windows = %d\n"
                   "drive_keys = %d\n"
                   "pad_glyphs = %d\n",
                   s.quality, double(s.renderScale), double(s.grassDistance), double(s.treeDistance), s.vsync ? 1 : 0, double(s.masterVolume), double(s.musicVolume),
                   double(s.effectsVolume), double(s.uiVolume), s.abs ? 1 : 0, s.traction, s.diffLocks,
                   s.autoReverse ? 1 : 0, s.minimap ? 1 : 0, s.minimapSize, s.minimapNorthUp ? 1 : 0, s.compass ? 1 : 0,
-                  s.driveKeys, s.padGlyphs);
+                  double(s.timeOfDay), s.timeFlow, s.debugWindows ? 1 : 0, s.driveKeys, s.padGlyphs);
     std::string out = buf;
     if (!s.vehicle.empty()) out += "vehicle = " + s.vehicle + "\n";
     if (!s.level.empty()) out += "level = " + s.level + "\n";
@@ -143,6 +149,9 @@ GameSettings parseSettings(const std::string& text, int* skipped) {
         else if (k == "minimap_size") s.minimapSize = i;
         else if (k == "minimap_north_up") s.minimapNorthUp = i != 0;
         else if (k == "compass") s.compass = i != 0;
+        else if (k == "time_of_day") s.timeOfDay = float(v);
+        else if (k == "time_flow") s.timeFlow = i;
+        else if (k == "debug_windows") s.debugWindows = i != 0;
         else if (k == "drive_keys") s.driveKeys = i;
         else if (k == "pad_glyphs") s.padGlyphs = i;
         else ++bad;

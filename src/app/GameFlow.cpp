@@ -26,6 +26,8 @@ float step(const float* steps, int n, float v, int dir) {
 
 int wrap(int v, int n) { return ((v % n) + n) % n; }
 
+constexpr float kSameTime = 1.0f / 120.0f; // h: a clock within 30 s of a preset shows that preset
+
 bool stepVolume(float& v, int dir) {
     const float old = v;
     v = std::clamp(std::round((v + 0.05f * float(dir)) * 20.0f) / 20.0f, 0.0f, 1.0f);
@@ -53,7 +55,8 @@ const std::vector<MenuItem>& GameFlow::items(MenuPage p) {
                                                     M::VSync,         M::MasterVolume,
                                                     M::MusicVolume,   M::EffectsVolume, M::UiVolume, M::Abs,
                                                     M::Traction,      M::DiffLocks,   M::AutoReverse, M::Minimap,
-                                                    M::MinimapSize,   M::MinimapNorthUp, M::Compass, M::Controls,
+                                                    M::MinimapSize,   M::MinimapNorthUp, M::Compass, M::TimeOfDay,
+                                                    M::TimePreset,    M::TimeFlow,    M::DebugWindows, M::Controls,
                                                     M::Back};
     static const std::vector<MenuItem> kControls = {M::DriveKeys, M::PadGlyphs, M::Back};
     static const std::vector<MenuItem> kVehicle = {M::VehicleChoice, M::Drive, M::Back};
@@ -241,7 +244,7 @@ MenuResult GameFlow::activate(MenuItem item, GameSettings& settings, int dir) {
     // Volumes change only with left / right; choices and switches also cycle on accept.
     const bool slider = item == M::MasterVolume || item == M::MusicVolume || item == M::EffectsVolume ||
                         item == M::UiVolume || item == M::RenderScale || item == M::GrassDistance ||
-                        item == M::TreeDistance;
+                        item == M::TreeDistance || item == M::TimeOfDay;
     if (dir == 0 && slider) return {};
     if (!adjustSetting(item, settings, dir == 0 ? 1 : dir)) return {};
     return {MenuCommand::SettingsChanged, MenuSound::Adjust};
@@ -329,6 +332,10 @@ const char* menuLabel(MenuItem item) {
     case M::MinimapSize: return "MINIMAP SIZE";
     case M::MinimapNorthUp: return "MINIMAP ORIENTATION";
     case M::Compass: return "COMPASS BAR";
+    case M::TimeOfDay: return "TIME";
+    case M::TimePreset: return "PRESET";
+    case M::TimeFlow: return "TIME FLOW";
+    case M::DebugWindows: return "DEBUG WINDOWS (F1-F3)";
     case M::DriveKeys: return "DRIVE KEYS";
     case M::PadGlyphs: return "GAMEPAD BUTTONS";
     case M::Controls: return "CONTROLS";
@@ -356,6 +363,8 @@ const char* menuSection(MenuItem item) {
     case MenuItem::MasterVolume: return "AUDIO";
     case MenuItem::Abs: return "DRIVING AIDS (DEFAULTS)";
     case MenuItem::Minimap: return "MAP";
+    case MenuItem::TimeOfDay: return "TIME OF DAY";
+    case MenuItem::DebugWindows: return "DEVELOPER";
     default: return nullptr;
     }
 }
@@ -414,6 +423,22 @@ std::string menuValue(MenuItem item, const GameSettings& s, const std::string& d
     }
     case M::MinimapNorthUp: return s.minimapNorthUp ? "NORTH UP" : "TURNS WITH VEHICLE";
     case M::Compass: return s.compass ? "ON" : "OFF";
+    case M::TimeOfDay: {
+        const int minutes = int(std::lround(s.timeOfDay * 60.0f)) % (24 * 60);
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", minutes / 60, minutes % 60);
+        return buf;
+    }
+    case M::TimePreset: {
+        for (const MenuTimePreset& p : kMenuTimePresets)
+            if (std::abs(p.hours - s.timeOfDay) < kSameTime) return p.name;
+        return "CUSTOM";
+    }
+    case M::TimeFlow: {
+        static const char* kNames[] = {"OFF", "REAL TIME", "FAST (1 H PER MIN)"};
+        return kNames[std::clamp(s.timeFlow, 0, 2)];
+    }
+    case M::DebugWindows: return s.debugWindows ? "ON" : "OFF";
     case M::DriveKeys: return driveKeysName(DriveKeys(std::clamp(s.driveKeys, 0, 1)));
     case M::PadGlyphs: {
         static const char* kNames[] = {"AUTO", "XBOX", "PLAYSTATION"};
@@ -450,6 +475,27 @@ bool adjustSetting(MenuItem item, GameSettings& s, int dir) {
     case M::MinimapSize: s.minimapSize = wrap(s.minimapSize + dir, 3); break;
     case M::MinimapNorthUp: s.minimapNorthUp = !s.minimapNorthUp; break;
     case M::Compass: s.compass = !s.compass; break;
+    case M::TimeOfDay: {
+        // The next half hour in the direction (a clock that ran stops on the grid first).
+        const float half = dir > 0 ? std::floor(s.timeOfDay * 2.0f + 0.01f) + 1.0f : std::ceil(s.timeOfDay * 2.0f - 0.01f) - 1.0f;
+        s.timeOfDay = float(wrap(int(half), 48)) * 0.5f;
+        break;
+    }
+    case M::TimePreset: {
+        constexpr int n = int(std::size(kMenuTimePresets));
+        int next = dir > 0 ? 0 : n - 1;
+        if (dir > 0) {
+            for (int i = n - 1; i >= 0; --i)
+                if (kMenuTimePresets[i].hours > s.timeOfDay + kSameTime) next = i;
+        } else {
+            for (int i = 0; i < n; ++i)
+                if (kMenuTimePresets[i].hours < s.timeOfDay - kSameTime) next = i;
+        }
+        s.timeOfDay = kMenuTimePresets[next].hours;
+        break;
+    }
+    case M::TimeFlow: s.timeFlow = wrap(s.timeFlow + dir, 3); break;
+    case M::DebugWindows: s.debugWindows = !s.debugWindows; break;
     case M::DriveKeys: s.driveKeys = wrap(s.driveKeys + dir, 2); break;
     case M::PadGlyphs: s.padGlyphs = wrap(s.padGlyphs + dir, 3); break;
     default: return false;

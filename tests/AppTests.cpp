@@ -99,6 +99,9 @@ void settingsRoundtrip() {
     s.minimapSize = 2;
     s.minimapNorthUp = true;
     s.compass = false;
+    s.timeOfDay = 17.123456f; // a clock that ran: the file keeps every bit
+    s.timeFlow = 2;
+    s.debugWindows = true;
     s.vehicle = "trailforge_ev";
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "trailforge_app_tests";
     std::filesystem::create_directories(dir);
@@ -138,6 +141,12 @@ void settingsRoundtrip() {
               odd.padGlyphs == 0 && odd.vehicle.empty(),
           "damaged values not clamped as expected");
     CHECK(skipped == 4, "skipped lines %d (expected 4)", skipped);
+    CHECK(!defaults.debugWindows && defaults.timeFlow == 0 && defaults.timeOfDay == 9.0f,
+          "defaults: debug windows off, time 09:00, clock stopped");
+    const GameSettings clock = parseSettings("time_of_day = -1\ntime_flow = 7\n");
+    CHECK(clock.timeOfDay == 23.0f && clock.timeFlow == 2, "time wrapped %.2f, flow clamped %d", double(clock.timeOfDay),
+          clock.timeFlow);
+    CHECK(parseSettings("time_of_day = 24\n").timeOfDay == 0.0f, "24:00 is midnight");
     const GameSettings far = parseSettings("grass_distance = 900\ntree_distance = 5\n");
     CHECK(far.grassDistance == 250.0f && far.treeDistance == 0.0f, "distances clamped: grass %.0f tree %.0f",
           double(far.grassDistance), double(far.treeDistance));
@@ -263,6 +272,52 @@ void menuNavigation() {
     flow.select(MenuItem::TreeDistance);
     flow.handle(key(&MenuInput::left), settings);
     CHECK(settings.treeDistance == 0.0f, "tree distance stays at the preset on the left end");
+    // Time of day: half-hour steps that wrap at midnight, presets after the current time, the time flow, and the
+    // debug windows switch (off by default).
+    CHECK(flow.select(MenuItem::TimeOfDay) && menuValue(MenuItem::TimeOfDay, settings) == "09:00" &&
+              menuValue(MenuItem::TimePreset, settings) == "MORNING",
+          "time row '%s'", menuValue(MenuItem::TimeOfDay, settings).c_str());
+    r = flow.handle(key(&MenuInput::right), settings);
+    CHECK(r.command == MenuCommand::SettingsChanged && settings.timeOfDay == 9.5f &&
+              menuValue(MenuItem::TimePreset, settings) == "CUSTOM",
+          "time 09:00 -> 09:30 (%.2f)", double(settings.timeOfDay));
+    r = flow.handle(key(&MenuInput::accept), settings);
+    CHECK(r.command == MenuCommand::None && settings.timeOfDay == 9.5f, "accept on the time row changes nothing");
+    settings.timeOfDay = 9.37f; // a clock that ran
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.timeOfDay == 9.0f, "left from 09:22 stops on 09:00 (%.2f)", double(settings.timeOfDay));
+    settings.timeOfDay = 23.5f;
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.timeOfDay == 0.0f && menuValue(MenuItem::TimeOfDay, settings) == "00:00", "time wraps at midnight");
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.timeOfDay == 23.5f, "and back (%.2f)", double(settings.timeOfDay));
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::TimePreset, "down moves to the preset row");
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(settings.timeOfDay == 5.75f && menuValue(MenuItem::TimePreset, settings) == "DAWN", "night -> dawn (wraps)");
+    flow.handle(key(&MenuInput::accept), settings);
+    CHECK(settings.timeOfDay == 9.0f, "accept: the next preset (%.2f)", double(settings.timeOfDay));
+    settings.timeOfDay = 14.0f;
+    flow.handle(key(&MenuInput::right), settings);
+    CHECK(menuValue(MenuItem::TimePreset, settings) == "GOLDEN HOUR", "14:00 -> golden hour");
+    settings.timeOfDay = 14.0f;
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(menuValue(MenuItem::TimePreset, settings) == "NOON", "14:00 <- noon");
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::TimeFlow && menuValue(MenuItem::TimeFlow, settings) == "OFF", "time flow row");
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(settings.timeFlow == 2 && menuValue(MenuItem::TimeFlow, settings) == "FAST (1 H PER MIN)", "time flow wraps");
+    flow.handle(key(&MenuInput::accept), settings);
+    CHECK(settings.timeFlow == 0, "accept cycles the time flow");
+    flow.handle(key(&MenuInput::down), settings);
+    CHECK(flow.current() == MenuItem::DebugWindows && !settings.debugWindows &&
+              menuValue(MenuItem::DebugWindows, settings) == "OFF",
+          "debug windows row, off by default");
+    flow.handle(key(&MenuInput::accept), settings);
+    CHECK(settings.debugWindows && menuValue(MenuItem::DebugWindows, settings) == "ON", "accept toggles debug windows");
+    flow.handle(key(&MenuInput::left), settings);
+    CHECK(!settings.debugWindows, "left toggles back");
+    settings.timeOfDay = 9.0f;
     flow.select(MenuItem::Controls);
     flow.handle(key(&MenuInput::accept), settings);
     CHECK(flow.page() == MenuPage::Controls && flow.depth() == 3, "controls page");

@@ -113,7 +113,8 @@ constexpr NamedItem kItemNames[] = {
     {"controls", MenuItem::Controls},   {"back", MenuItem::Back},             {"drive_keys", MenuItem::DriveKeys},
     {"pad_glyphs", MenuItem::PadGlyphs}, {"map", MenuItem::Map},        {"minimap", MenuItem::Minimap},
     {"minimap_size", MenuItem::MinimapSize}, {"minimap_orientation", MenuItem::MinimapNorthUp},
-    {"compass", MenuItem::Compass},
+    {"compass", MenuItem::Compass},     {"time_of_day", MenuItem::TimeOfDay}, {"time_preset", MenuItem::TimePreset},
+    {"time_flow", MenuItem::TimeFlow},  {"debug_windows", MenuItem::DebugWindows},
 };
 
 std::optional<MenuItem> itemByName(const std::string& n) {
@@ -207,6 +208,8 @@ Application::Application(const AppOptions& options)
             std::printf("Settings: loaded %s (%d lines skipped)\n", m_settingsPath.c_str(), skipped);
         else
             std::printf("Settings: defaults (%s)\n", m_settingsPath.empty() ? "no user data directory" : "no settings file yet");
+    } else {
+        m_settings.debugWindows = true; // scenario checks read and click the F1-F3 windows
     }
 
     if (m_scenario) {
@@ -292,7 +295,8 @@ Application::Application(const AppOptions& options)
     m_audio = std::make_unique<AudioSystem>(audio);
 
     applySettings(true);
-    m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
+    m_gfx.settings.timeOfDay = m_settings.timeOfDay;
+    m_gfx.changed = true;
     if (m_flow.menuActive()) enterMenuWorld(false);
     SDL_AddEventWatch(&Application::onAppLifecycle, this);
 }
@@ -316,6 +320,11 @@ Application::~Application() {
 
 void Application::processEvents() {
     m_input.beginFrame();
+    if (showsGameplayTime()) {
+        // The TIME row and settings.cfg follow the live clock (time flow, the F2 time-lapse, scenario `time`).
+        m_settings.timeOfDay = std::fmod(std::fmod(m_gfx.settings.timeOfDay, 24.0f) + 24.0f, 24.0f);
+        m_applied.timeOfDay = m_settings.timeOfDay;
+    }
     if (m_scenario) updateScenario();
     const ImGuiIO& io = ImGui::GetIO();
     SDL_Event e;
@@ -331,9 +340,11 @@ void Application::processEvents() {
     m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, float(std::min(m_frameDt, 0.1)));
 
     if (m_input.pressed(Action::Quit)) m_running = false;
-    if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
-    if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
-    if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
+    if (m_settings.debugWindows) {
+        if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
+        if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
+        if (m_input.pressed(Action::ToggleAudioUI)) m_audioPanel.visible = !m_audioPanel.visible;
+    }
     const bool mapHandled = m_flow.screen() == Screen::Map;
     if (m_flow.screen() == Screen::Garage) handleGarage();
     else if (mapHandled) handleMap();
@@ -622,7 +633,7 @@ void Application::startGameplay() {
     if (m_settings.traction < 0) m_sim.requestDefaultTraction();
     m_ui.autoReverse = m_settings.autoReverse;
     if (m_camera.mode() == Camera::Mode::Free) m_camera.setMode(Camera::Mode::Follow);
-    m_gfx.settings.timeOfDay = m_gameplayTimeOfDay;
+    m_gfx.settings.timeOfDay = m_settings.timeOfDay;
     m_gfx.changed = true;
     m_musicTarget = 0.0f;
     m_musicFade = 3.0f;
@@ -632,7 +643,6 @@ void Application::startGameplay() {
 void Application::enterMenuWorld(bool restartMusic) {
     if (restartMusic) {
         ++m_musicRestart;
-        m_gameplayTimeOfDay = m_gfx.settings.timeOfDay;
         m_sim.requestTeleport(0);
     }
     m_gfx.settings.timeOfDay = kMenuTimeOfDay;
@@ -677,9 +687,24 @@ void Application::applySettings(bool force) {
         if (s.traction < 0 && (force || s.traction != m_applied.traction)) m_sim.requestDefaultTraction();
     }
     if (force || s.autoReverse != m_applied.autoReverse) m_ui.autoReverse = s.autoReverse;
+    if (!force && s.timeOfDay != m_applied.timeOfDay && showsGameplayTime()) {
+        m_gfx.settings.timeOfDay = s.timeOfDay;
+        m_gfx.changed = true;
+    }
+    m_ui.debugWindows = s.debugWindows;
     m_input.setDriveKeys(DriveKeys(s.driveKeys));
     m_ui.driveHint = driveHint(DriveKeys(s.driveKeys), keyboardStyle());
     m_applied = s;
+}
+
+bool Application::showsGameplayTime() const {
+    switch (m_flow.screen()) {
+    case Screen::Playing:
+    case Screen::Paused:
+    case Screen::Map: return true;
+    case Screen::Garage: return m_flow.garageReturn() == Screen::Paused;
+    default: return false;
+    }
 }
 
 void Application::saveSettings() {
@@ -1231,6 +1256,12 @@ void Application::renderFrame(float frameTime) {
         m_gfx.settings.timeOfDay = std::fmod(m_gfx.settings.timeOfDay + m_gfx.timeLapseSpeed * frameTime, 24.0f);
         m_gfx.changed = true;
     }
+    if (m_settings.timeFlow > 0 && m_flow.screen() == Screen::Playing) {
+        // Settings > TIME FLOW: the gameplay clock runs while driving (frozen in the menus and the map).
+        const float rate = kTimeFlowRates[std::clamp(m_settings.timeFlow, 0, 2)];
+        m_gfx.settings.timeOfDay = std::fmod(m_gfx.settings.timeOfDay + rate * frameTime, 24.0f);
+        m_gfx.changed = true;
+    }
     if (m_gfx.changed) {
         m_renderer->setSettings(m_gfx.settings);
         m_gfx.settings = m_renderer->settings();
@@ -1260,7 +1291,7 @@ void Application::renderFrame(float frameTime) {
     buildDraws(bodyM, wheelM);
 
     m_debugDraw.clear();
-    if (m_ui.drawPhysicsDebug) {
+    if (m_ui.drawPhysicsDebug && m_ui.debugWindows) {
         const VehicleConfig& vc = m_sim.vehicleConfig();
         drawVehicleDebug(m_debugDraw, m_sim.vehicle().telemetry(),
                          {vc.axles[0].suspensionMinLength, vc.axles[1].suspensionMinLength},
@@ -2288,6 +2319,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
             else if (k == "debug_lines") m_ui.drawPhysicsDebug = v != 0.0f;
             else if (k == "ui") m_ui.visible = v != 0.0f;
             else if (k == "hud") m_ui.hud = v != 0.0f;
+            else if (k == "debug_windows") m_ui.debugWindows = m_applied.debugWindows = m_settings.debugWindows = v != 0.0f;
+            else if (k == "time_flow") m_applied.timeFlow = m_settings.timeFlow = std::clamp(int(v), 0, 2);
             else if (k == "minimap") m_settings.minimap = v != 0.0f;
             else if (k == "compass") m_settings.compass = v != 0.0f;
             else if (k == "auto_reverse") m_ui.autoReverse = v != 0.0f;
@@ -2586,6 +2619,9 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         if (k == "minimap_size") return g.minimapSize;
         if (k == "minimap_north_up") return g.minimapNorthUp ? 1.0 : 0.0;
         if (k == "compass") return g.compass ? 1.0 : 0.0;
+        if (k == "time_of_day") return g.timeOfDay;
+        if (k == "time_flow") return g.timeFlow;
+        if (k == "debug_windows") return g.debugWindows ? 1.0 : 0.0;
         if (k == "vehicle") return m_flow.vehicleIndex(g);
         return std::nullopt;
     }
@@ -2731,6 +2767,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "energy_in_kwh") return t.ev.energyInKWh;
     if (n == "tire_set") return double(int(m_sim.vehicleConfig().tireSet)); // 0 offroad, 1 road, 2 slick
     if (n == "ambient") return m_sim.ambientTemperature();
+    if (n == "debug_hud") return m_ui.item("hud") ? 1.0 : 0.0; // the top-left read-out drawn this frame
     if (n == "tire_hud" || n == "tire_temps") {
         // 1 while the compact HUD widget / the telemetry grid is drawn this frame.
         const UiItemRect* r = m_ui.item(n);

@@ -28,9 +28,9 @@ directly bypass the ramp.
 | Traction control: off → on → off-road | T | D-pad right |
 | Diff locks: open → rear → rear + center → all | X | D-pad down |
 | Headlights | H | — |
-| Diagnostics | F1 | — |
-| Graphics panel (quality, look, cosmetic dirt) | F2 | — |
-| Audio panel (volumes, mute, engine pitch, read-outs) | F3 | — |
+| Diagnostics (only with Settings → DEVELOPER → DEBUG WINDOWS on) | F1 | — |
+| Graphics panel (quality, look, cosmetic dirt; same switch) | F2 | — |
+| Audio panel (volumes, mute, engine pitch, read-outs; same switch) | F3 | — |
 | Pause menu (Resume, Map, Reset vehicle, Garage, Settings, Quit to main menu, Quit game) | Escape | Start / Menu |
 | Debug freeze (physics stops, no menu) / single physics step while frozen | P / N | — |
 | Camera orbit / zoom | RMB + mouse / wheel | — |
@@ -85,17 +85,32 @@ clicks rows (clicking the arrows of a setting steps it down / up). Every page be
 it), never the default focus. Esc during play opens the pause menu. Settings
 (shared by both menus): graphics preset, resolution scale, grass distance, tree detail distance, VSync, master / music / effects / UI volume, the driver
 aid defaults applied on Start and on Reset vehicle (ABS, TC mode, diff locks, auto reverse), the MAP rows (minimap on /
-off, minimap size small / medium / large, minimap orientation turns with the vehicle / north up, compass bar on / off) and the Controls page
+off, minimap size small / medium / large, minimap orientation turns with the vehicle / north up, compass bar on / off), the
+TIME OF DAY rows (TIME in half-hour steps that wrap at midnight, PRESET dawn 05:45 / morning 09:00 / noon / golden hour
+17:30 / sunset 18:12 / night 23:30 — CUSTOM between them —, TIME FLOW off / real time / fast = one game hour per real
+minute), the DEVELOPER row (DEBUG WINDOWS on / off) and the Controls page
 (drive keys W A S D / arrows, gamepad button names auto / Xbox / PlayStation, keyboard and gamepad diagrams).
 The TC default "VEHICLE DEFAULT" (the default setting) uses each vehicle's `aids.traction`: on for the electric SUV,
 off for the gasoline SUV; OFF / ON / OFF-ROAD force one mode for every vehicle.
 They are saved to `settings.cfg` (keys include `grass_distance` / `tree_distance` in m, 0 = the preset's value, `traction_mode` -1 vehicle default / 0 off / 1 on / 2 off-road,
 `drive_keys` 0 / 1, `pad_glyphs` 0 auto / 1 Xbox / 2 PlayStation, `minimap` / `minimap_north_up` / `compass` 0 / 1 and
-`minimap_size` 0..2; an old `traction = 0` line reads as the vehicle
-default)
+`minimap_size` 0..2, `time_of_day` in hours, `time_flow` 0 off / 1 real time / 2 fast, `debug_windows` 0 / 1; an old
+`traction = 0` line reads as the vehicle default)
 in the user data directory (`trailforge --paths`) when a Settings page is closed and
-loaded on start; unknown keys and bad values are ignored. The F1–F3 debug panels still work in gameplay and override
-the settings for the session; they are hidden while a menu is open.
+loaded on start; unknown keys and bad values are ignored. With DEBUG WINDOWS on, the F1–F3 debug panels work in
+gameplay and override the settings for the session; they are hidden while a menu is open.
+
+**Time of day.** The time rows set the gameplay clock (render only: sun, sky, fog, light; no effect on physics). From
+the pause menu's Settings the change shows at once; from the start menu it is used on Start (the start menu world
+keeps its own sunset). TIME FLOW runs the clock only while driving (stopped in the menus, the garage and the map);
+the rows show the live clock, and `settings.cfg` keeps it the next time the settings are saved (closing a Settings
+page, quitting from the menu). There is no per-level default: levels do not define a time of day yet.
+
+**Debug windows.** Off by default (Settings → DEVELOPER → DEBUG WINDOWS): gameplay then shows only the player HUD (the
+bottom speed / gear / aids / tire read-out, the short driving hints, the lap and drift panels, the minimap and the
+compass bar). On: also the top-left read-out (wheel compression, key hints, FPS and frame times), F1 telemetry and
+tuning (shown on the first frame unless `--no-ui`), F2 graphics, F3 audio and the physics debug lines of the tuning
+window; F1–F3 do nothing while it is off. Scenario runs start with it on (their checks read those windows).
 
 **Vehicle page.** With more than one vehicle in the catalog, Start opens SELECT VEHICLE: a strip of cards (name and
 GASOLINE / ELECTRIC), the description and a spec list (mass, peak power, torque, drivetrain, battery, tires), with
@@ -124,7 +139,8 @@ switches survive R and teleports; the diff locks reset to none. ABS is off by de
 default mode (on for the electric SUV, off for the gasoline SUV, see the Settings page). Details and limits are
 under [Driver aids](vehicles.md#driver-aids).
 While ImGui owns the keyboard or mouse (focus in a field or hovering a window), the vehicle does not receive that input.
-F1–F3, P and Escape always work (Escape opens the pause menu, which takes all input until it is closed).
+F1–F3 (with DEBUG WINDOWS on), P and Escape always work (Escape opens the pause menu, which takes all input until it is
+closed).
 
 To type a number into an ImGui slider on macOS use **Cmd+click** (in ImGui's macOS mode Ctrl+click acts as a right click);
 on other platforms use Ctrl+click.

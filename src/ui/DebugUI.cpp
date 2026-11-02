@@ -93,8 +93,9 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
     req.vsync = m_vsync;
 
     if (menuOpen) return req;
-    // A short hint is always visible (even with the UI hidden), unless turned off for clean screenshots.
-    if (hud) {
+    // The read-out with the key hints is visible with the F1 windows hidden (not with the debug windows setting off);
+    // the player HUD is turned off only for clean screenshots.
+    if (hud && debugWindows) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.45f);
         ImGui::Begin("##hud", nullptr,
@@ -138,11 +139,14 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
                             stats.renderH, TRAILFORGE_VERSION);
         remember("hud", true);
         ImGui::End();
+    }
+    if (hud) {
         drawDriveHud(sim);
         drawLapHud(sim);
         drawDriftHud(sim);
     }
 
+    if (!debugWindows) return req;
     if (gfx.visible) drawGraphics(sim, stats, gfx);
     if (!visible) return req;
     drawTelemetry(sim, stats, req);
@@ -562,7 +566,7 @@ void DebugUI::drawTireMarks(Simulation& sim, const FrameStats& stats, GraphicsSt
 }
 
 void DebugUI::drawAudio(AudioPanelState& a) {
-    if (!a.visible) return;
+    if (!a.visible || !debugWindows) return;
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float w = std::min(400.0f, display.x * 0.3f);
     ImGui::SetNextWindowPos(ImVec2(0.5f * (display.x - w), 80), ImGuiCond_FirstUseEver);
