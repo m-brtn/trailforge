@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.24)
 if(CMAKE_HOST_APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET 14.0 CACHE STRING "Minimum macOS version" FORCE)
 endif()
-project(TrailForge VERSION 0.31.0 LANGUAGES C CXX)
+project(TrailForge VERSION 0.32.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -299,6 +299,7 @@ if(TRAILFORGE_BUILD_TESTS)
             building_kit_materials
             level_buildings
             level_poi_buildings
+            level_woodland
             level_tree_style
             level_baked_layout
             lap_timer_gates

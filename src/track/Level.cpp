@@ -357,6 +357,11 @@ private:
     struct Flat { std::string name; float x, z, r, h, fade; SurfaceId surface; };
     struct Forest { Polygon poly; float density; };
     struct Field { Polygon poly; };
+    // Local art-directed landforms and forest composition, baked into the same collision heightfield.
+    struct Terrace { float x, z, rx, rz, height, edge; };
+    struct Woodland { float x, z, radius, fade; };
+    float woodlandWeight(float x, float z) const;
+
 
     std::size_t idx(int i, int j) const { return std::size_t(j) * std::size_t(m_n) + std::size_t(i); }
     float X(int i) const { return m_origin + float(i) * m_cell; }
@@ -384,6 +389,7 @@ private:
     void bakeLogs();
     void bakeCliffs();
     void bakeTalus();
+    void bakeTerraceRocks();
     void bakeCutBanks();
     void bakeCanopy();
     void bakeBankSmoothing(const std::vector<float>& uncarved);
@@ -466,6 +472,8 @@ private:
           m_fineAmp = 1.2f, m_fineScale = 24;
     std::vector<Float3> m_controls;
     std::vector<Peak> m_peaks;
+    std::vector<Terrace> m_terraces;
+    std::vector<Woodland> m_woodlands;
     std::vector<Polygon> m_land;
     std::vector<Beach> m_beaches;
     float m_seaLevel = 0.0f, m_maxDepth = 20.0f, m_cliffRise = 1.0f, m_beachRise = 0.035f;
@@ -561,6 +569,13 @@ float LevelBaker::beachFactor(float x, float z) const {
     return b;
 }
 
+float LevelBaker::woodlandWeight(float x, float z) const {
+    float weight = 0.0f;
+    for (const Woodland& w : m_woodlands)
+        weight = std::max(weight, 1.0f - smoothstep(w.radius - w.fade, w.radius, std::hypot(x - w.x, z - w.z)));
+    return weight;
+}
+
 float LevelBaker::forestDensity(float x, float z) const {
     // Polygon edges are warped by noise (up to ~45 m) so the forests have ragged, natural borders.
     const float wx = x + 45.0f * (fbm(x / 140.0f, z / 140.0f, 3, m_seed + 301u) - 0.5f) * 2.0f;
@@ -568,7 +583,7 @@ float LevelBaker::forestDensity(float x, float z) const {
     float d = 0.0f;
     for (const Forest& f : m_forests)
         if (f.poly.inside(wx, wz)) d = std::max(d, f.density * smoothstep(0.0f, 30.0f, f.poly.edgeDistance(wx, wz)));
-    return d;
+    return std::max(d, 0.95f * woodlandWeight(x, z));
 }
 
 float LevelBaker::treeDensity(float x, float z, float forest) const {
@@ -703,6 +718,27 @@ bool LevelBaker::parse(const json::Value& doc, std::string& err) {
         m_flats.push_back(fl);
     }
     for (const json::Value& f : doc["forests"].array) m_forests.push_back({readPolygon(f["polygon"]), float(f["density"].numberOr(0.5))});
+    for (const json::Value& v : doc["woodlands"].array) {
+        Woodland w{float(v["x"].numberOr(0)), float(v["z"].numberOr(0)),
+                   float(v["radius"].numberOr(100)), float(v["fade"].numberOr(30))};
+        if (!std::isfinite(w.x) || !std::isfinite(w.z) || !std::isfinite(w.radius) || !std::isfinite(w.fade) ||
+            w.radius < 10 || w.radius > 500 || w.fade < 1 || w.fade > w.radius) {
+            err = "level: woodland needs finite coordinates, radius 10..500 and fade 1..radius";
+            return false;
+        }
+        m_woodlands.push_back(w);
+    }
+    for (const json::Value& v : doc["terraces"].array) {
+        Terrace t{float(v["x"].numberOr(0)), float(v["z"].numberOr(0)), float(v["radiusX"].numberOr(30)),
+                  float(v["radiusZ"].numberOr(30)), float(v["height"].numberOr(10)), float(v["edge"].numberOr(0.2))};
+        if (!std::isfinite(t.x) || !std::isfinite(t.z) || !std::isfinite(t.rx) || !std::isfinite(t.rz) ||
+            !std::isfinite(t.height) || !std::isfinite(t.edge) || t.rx < 10 || t.rz < 10 || t.rx > 200 ||
+            t.rz > 200 || t.height < 0 || t.height > 60 || t.edge < 0.1f || t.edge > 0.6f) {
+            err = "level: terrace needs finite coordinates, radii 10..200, height 0..60 and edge 0.1..0.6";
+            return false;
+        }
+        m_terraces.push_back(t);
+    }
     m_meadowTrees = float(doc["meadowTreeDensity"].numberOr(0.03));
     for (const json::Value& f : doc["fields"].array) m_fields.push_back({readPolygon(f["polygon"])});
     for (const json::Value& p : doc["pois"].array) {
@@ -873,6 +909,14 @@ void LevelBaker::bakeBase() {
             if (m > 0.0f) h += m * m_ridgeAmp * (ridged(x / m_ridgeScale, z / m_ridgeScale, 5, m_seed + 11u) - 0.45f);
             h += m_hillAmp * 2.0f * (fbm(x / m_hillScale, z / m_hillScale, 4, m_seed + 23u) - 0.5f);
             h += m_fineAmp * 2.0f * (fbm(x / m_fineScale, z / m_fineScale, 3, m_seed + 37u) - 0.5f);
+            for (const Terrace& t : m_terraces) {
+                const float dx = (x - t.x) / t.rx, dz = (z - t.z) / t.rz;
+                if (std::abs(dx) > 1.2f || std::abs(dz) > 1.2f) continue;
+                // Broad benches with broken, steep rims; rivers and roads carve these afterwards.
+                const float rim = std::hypot(dx, dz) + 0.11f *
+                    (fbm(x / 17.0f, z / 17.0f, 3, m_seed + 809u) - 0.5f) * 2.0f;
+                h += t.height * (1.0f - smoothstep(1.0f - t.edge, 1.0f, rim));
+            }
             m_h[idx(i, j)] = h;
         }
     });
@@ -1709,96 +1753,105 @@ float LevelBaker::waterDistance(float x, float z) const {
 }
 
 void LevelBaker::bakeTrees() {
-    const float spacing = 6.0f;
-    const int g = int(2.0f * m_half / spacing);
-    const int cn = m_n - 1;
-    std::vector<std::vector<LevelTree>> rows(static_cast<std::size_t>(g));
-    parallelFor(g, m_threads, [&](int gj) {
-        for (int gi = 0; gi < g; ++gi) {
-            const float x = m_origin + (float(gi) + 0.15f + 0.7f * hashUnit(gi, gj, m_seed + 101u)) * spacing;
-            const float z = m_origin + (float(gj) + 0.15f + 0.7f * hashUnit(gi, gj, m_seed + 103u)) * spacing;
-            const int ci = std::clamp(int((x - m_origin) / m_cell), 0, cn - 1), cj = std::clamp(int((z - m_origin) / m_cell), 0, cn - 1);
-            const std::size_t c = std::size_t(cj) * std::size_t(cn) + std::size_t(ci);
-            const SurfaceId s = L.m_surface[c];
-            if (s != SurfaceId::Grass && s != SurfaceId::PackedDirt) continue;
-            if (m_nearWater[idx(ci, cj)] > 0 || channel(L.m_mask[c], 3) > 0.0f) continue;
-            const float treeHeight = 7.0f + 8.5f * hashUnit(gi, gj, m_seed + 113u) + (m_forest[c] > 0.4f ? 2.0f : 0.0f);
-            const float treeWidth = 0.85f + 0.3f * hashUnit(gi, gj, m_seed + 137u);
-            if (roadClearance(x, z) < kRoadMargin + 0.022f * treeHeight * treeWidth + kGridSlack) continue;
-            const std::size_t k = idx(ci, cj);
-            const float gx = m_h[idx(ci + 1, cj)] - m_h[k], gz = m_h[idx(ci, cj + 1)] - m_h[k];
-            if (std::hypot(gx, gz) > 0.65f) continue;
-            bool clear = true;
-            for (const Flat& f : m_flats)
-                if (std::hypot(x - f.x, z - f.z) < f.r + 4.0f) clear = false;
-            for (const LevelPoi& p : L.m_pois)
-                if (std::hypot(x - p.atX, z - p.atZ) < 14.0f) clear = false;
-            if (!clear) continue;
-            const float h = m_h[k];
-            const float snowFade = 1.0f - smoothstep(snowLineAt(x, z) - 40.0f, snowLineAt(x, z) - 5.0f, h);
-            const float forest = m_forest[c];
-            // Past the play area the forest thins out toward the bake edge along a noisy line, so the horizon ring
-            // (no trees) does not meet a straight wall of trees.
-            const float edge = std::max(std::abs(x), std::abs(z)) + 150.0f * (fbm(x / 240.0f, z / 240.0f, 3, m_seed + 151u) - 0.5f);
-            const float outer = 1.0f - smoothstep(L.m_playHalf + 80.0f, m_half - 30.0f, edge);
-            const float density = treeDensity(x, z, forest) * snowFade * outer;
-            if (hashUnit(gi, gj, m_seed + 109u) >= density) continue;
-            LevelTree t;
-            t.x = x;
-            t.z = z;
-            t.height = treeHeight;
-            t.y = L.heightAt(x, z) - 0.3f;
-            t.yaw = 2.0f * kPi * hashUnit(gi, gj, m_seed + 127u);
-            t.hue = hashUnit(gi, gj, m_seed + 131u);
-            t.width = treeWidth;
-            if (!m_conifers.empty()) {
-                // Species: broadleaf trees near water and the village and on low ground, fir saplings among the
-                // smaller trees, firs elsewhere. The model scale keeps the tree near the drawn height.
-                const float water = 1.0f - smoothstep(12.0f, 70.0f, waterDistance(x, z));
-                float village = 0.0f;
+    // A second, offset regeneration layer exists only inside authored woodlands.
+    for (int layer = 0; layer < 2; ++layer) {
+        if (layer == 1 && m_woodlands.empty()) break;
+        const std::uint32_t treeSeed = m_seed + std::uint32_t(layer) * 977u;
+        const float spacing = 6.0f;
+        const int g = int(2.0f * m_half / spacing);
+        const int cn = m_n - 1;
+        std::vector<std::vector<LevelTree>> rows(static_cast<std::size_t>(g));
+        parallelFor(g, m_threads, [&](int gj) {
+            for (int gi = 0; gi < g; ++gi) {
+                const float x = m_origin + (float(gi) + 0.15f + 0.7f * hashUnit(gi, gj, treeSeed + 101u)) * spacing;
+                const float z = m_origin + (float(gj) + 0.15f + 0.7f * hashUnit(gi, gj, treeSeed + 103u)) * spacing;
+                const float woodland = woodlandWeight(x, z);
+                if (layer == 1 && woodland <= 0.0f) continue;
+                const int ci = std::clamp(int((x - m_origin) / m_cell), 0, cn - 1), cj = std::clamp(int((z - m_origin) / m_cell), 0, cn - 1);
+                const std::size_t c = std::size_t(cj) * std::size_t(cn) + std::size_t(ci);
+                const SurfaceId s = L.m_surface[c];
+                if (s != SurfaceId::Grass && s != SurfaceId::PackedDirt) continue;
+                if (m_nearWater[idx(ci, cj)] > 0 || channel(L.m_mask[c], 3) > 0.0f) continue;
+                const float age = hashUnit(gi, gj, treeSeed + 113u);
+                const float treeHeight = layer == 1 ? 4.5f + 5.5f * age :
+                    lerp(7.0f + 8.5f * age + (m_forest[c] > 0.4f ? 2.0f : 0.0f), 13.0f + 11.0f * age, woodland);
+                const float treeWidth = (0.85f + 0.3f * hashUnit(gi, gj, treeSeed + 137u)) * (1.0f + 0.22f * woodland);
+                if (roadClearance(x, z) < kRoadMargin + 0.022f * treeHeight * treeWidth + kGridSlack) continue;
+                const std::size_t k = idx(ci, cj);
+                const float gx = m_h[idx(ci + 1, cj)] - m_h[k], gz = m_h[idx(ci, cj + 1)] - m_h[k];
+                if (std::hypot(gx, gz) > 0.65f) continue;
+                bool clear = true;
                 for (const Flat& f : m_flats)
-                    if (f.name.find("village") != std::string::npos)
-                        village = std::max(village, 1.0f - smoothstep(f.r, f.r + 160.0f, std::hypot(x - f.x, z - f.z)));
-                const float low = 1.0f - smoothstep(55.0f, 120.0f, h);
-                const float broad = std::min(0.85f, (0.05f + 0.65f * water + 0.55f * village + 0.12f * low) *
-                                                        (forest > 0.4f ? 0.45f : 1.0f) * low);
-                const float u = hashUnit(gi, gj, m_seed + 141u), v = hashUnit(gi, gj, m_seed + 143u);
-                const std::vector<int>* pool = &m_conifers;
-                float target = treeHeight, lo = 0.6f, hi = 1.15f;
-                t.kind = TreeKind::Conifer;
-                if (!m_broadleaf.empty() && u < broad) {
-                    pool = &m_broadleaf;
-                    t.kind = TreeKind::Broadleaf;
-                    target = 0.75f * treeHeight;
-                    lo = 1.0f;
-                    hi = 2.2f;
-                } else if (!m_saplings.empty() && treeHeight < 10.0f && v < 0.55f) {
-                    pool = &m_saplings;
-                    t.kind = TreeKind::Sapling;
-                    lo = 0.7f;
-                    hi = 1.25f;
+                    if (std::hypot(x - f.x, z - f.z) < f.r + 4.0f) clear = false;
+                for (const LevelPoi& p : L.m_pois)
+                    if (std::hypot(x - p.atX, z - p.atZ) < 14.0f) clear = false;
+                if (!clear) continue;
+                const float h = m_h[k];
+                const float snowFade = 1.0f - smoothstep(snowLineAt(x, z) - 40.0f, snowLineAt(x, z) - 5.0f, h);
+                const float forest = m_forest[c];
+                // Past the play area the forest thins out toward the bake edge along a noisy line, so the horizon ring
+                // (no trees) does not meet a straight wall of trees.
+                const float edge = std::max(std::abs(x), std::abs(z)) + 150.0f * (fbm(x / 240.0f, z / 240.0f, 3, treeSeed + 151u) - 0.5f);
+                const float outer = 1.0f - smoothstep(L.m_playHalf + 80.0f, m_half - 30.0f, edge);
+                const float density = (layer == 1 ? 0.38f * woodland : lerp(treeDensity(x, z, forest), 0.74f, woodland)) * snowFade * outer;
+                if (hashUnit(gi, gj, treeSeed + 109u) >= density) continue;
+                LevelTree t;
+                t.x = x;
+                t.z = z;
+                t.height = treeHeight;
+                t.y = L.heightAt(x, z) - 0.3f;
+                t.yaw = 2.0f * kPi * hashUnit(gi, gj, treeSeed + 127u);
+                t.hue = hashUnit(gi, gj, treeSeed + 131u);
+                t.width = treeWidth;
+                if (!m_conifers.empty()) {
+                    // Species: broadleaf trees near water and the village and on low ground, fir saplings among the
+                    // smaller trees, firs elsewhere. The model scale keeps the tree near the drawn height.
+                    const float water = 1.0f - smoothstep(12.0f, 70.0f, waterDistance(x, z));
+                    float village = 0.0f;
+                    for (const Flat& f : m_flats)
+                        if (f.name.find("village") != std::string::npos)
+                            village = std::max(village, 1.0f - smoothstep(f.r, f.r + 160.0f, std::hypot(x - f.x, z - f.z)));
+                    const float low = 1.0f - smoothstep(55.0f, 120.0f, h);
+                    const float broad = std::min(0.85f, (0.05f + 0.65f * water + 0.55f * village + 0.12f * low) *
+                                                            (forest > 0.4f ? 0.45f : 1.0f) * low);
+                    const float u = hashUnit(gi, gj, treeSeed + 141u), v = hashUnit(gi, gj, treeSeed + 143u);
+                    const std::vector<int>* pool = &m_conifers;
+                    float target = treeHeight, lo = 0.6f, hi = 1.15f + 0.3f * woodland;
+                    t.kind = TreeKind::Conifer;
+                    if (!m_broadleaf.empty() && u < broad * (1.0f - 0.8f * woodland)) {
+                        pool = &m_broadleaf;
+                        t.kind = TreeKind::Broadleaf;
+                        target = 0.75f * treeHeight;
+                        lo = 1.0f;
+                        hi = 2.2f;
+                    } else if (!m_saplings.empty() && (layer == 1 || (treeHeight < 10.0f && v < 0.55f))) {
+                        pool = &m_saplings;
+                        t.kind = TreeKind::Sapling;
+                        lo = 0.7f;
+                        hi = 1.25f;
+                    }
+                    // Conifers: the tallest variant for the tall trees, the others for the rest.
+                    std::size_t pick = std::size_t(hash3(gi, gj, treeSeed + 147u) % std::uint32_t(pool->size()));
+                    if (t.kind == TreeKind::Conifer && pool->size() > 1) {
+                        std::size_t tallest = 0;
+                        for (std::size_t k = 1; k < pool->size(); ++k)
+                            if (L.m_models[std::size_t((*pool)[k])].height > L.m_models[std::size_t((*pool)[tallest])].height)
+                                tallest = k;
+                        if (treeHeight > 13.5f && woodland < 0.5f) pick = tallest;
+                        else if (pick == tallest) pick = (pick + 1) % pool->size();
+                    }
+                    t.model = std::int16_t((*pool)[pick]);
+                    const LevelModel& m = L.m_models[std::size_t(t.model)];
+                    t.scale = std::clamp(target / m.height, lo, hi);
+                    t.height = m.height * t.scale;
+                    const float lean = std::hypot(m.trunkTop.x, m.trunkTop.z) * t.scale * t.width;
+                    if (roadClearance(x, z) < kRoadMargin + m.trunkRadius * t.scale * t.width + lean + kGridSlack) continue;
                 }
-                // Conifers: the tallest variant for the tall trees, the others for the rest.
-                std::size_t pick = std::size_t(hash3(gi, gj, m_seed + 147u) % std::uint32_t(pool->size()));
-                if (t.kind == TreeKind::Conifer && pool->size() > 1) {
-                    std::size_t tallest = 0;
-                    for (std::size_t k = 1; k < pool->size(); ++k)
-                        if (L.m_models[std::size_t((*pool)[k])].height > L.m_models[std::size_t((*pool)[tallest])].height)
-                            tallest = k;
-                    if (treeHeight > 13.5f) pick = tallest;
-                    else if (pick == tallest) pick = (pick + 1) % pool->size();
-                }
-                t.model = std::int16_t((*pool)[pick]);
-                const LevelModel& m = L.m_models[std::size_t(t.model)];
-                t.scale = std::clamp(target / m.height, lo, hi);
-                t.height = m.height * t.scale;
-                const float lean = std::hypot(m.trunkTop.x, m.trunkTop.z) * t.scale * t.width;
-                if (roadClearance(x, z) < kRoadMargin + m.trunkRadius * t.scale * t.width + lean + kGridSlack) continue;
+                rows[std::size_t(gj)].push_back(t);
             }
-            rows[std::size_t(gj)].push_back(t);
-        }
-    });
-    for (auto& r : rows) L.m_trees.insert(L.m_trees.end(), r.begin(), r.end());
+        });
+        for (auto& r : rows) L.m_trees.insert(L.m_trees.end(), r.begin(), r.end());
+    }
 }
 
 // Render-only canopy weight in the splat alpha: 1 under the crowns of the placed trees, fading out past their edge
@@ -1851,6 +1904,8 @@ void LevelBaker::bakeRocks() {
             else if (s == SurfaceId::Snow) p = 0.03f;
             else if (s == SurfaceId::PackedDirt) p = 0.018f;
             if (L.m_water[k] > Level::kNoWater && L.m_water[k] - m_h[k] > 0.6f) continue;
+            const float woodland = woodlandWeight(x, z);
+            p = lerp(p, wetBank ? 0.65f : (s == SurfaceId::Rock ? 0.38f : 0.09f), woodland);
             if (hashUnit(gi, gj, m_seed + 207u) >= p) continue;
             const float big = s == SurfaceId::Rock ? 1.0f : 0.6f;
             const float r = (0.45f + 1.6f * big * hashUnit(gi, gj, m_seed + 211u) * hashUnit(gi, gj, m_seed + 223u)) ;
@@ -2080,6 +2135,53 @@ void LevelBaker::bakeTalus() {
         }
 }
 
+// Closed boulders break the benches into rock masses. Unlike open cliff shells these can safely wrap a
+// convex rim. Their buried lower halves intersect the terrain, and their collision uses the same model transform.
+void LevelBaker::bakeTerraceRocks() {
+    if (m_rockModels.empty()) return;
+    for (std::size_t ti = 0; ti < m_terraces.size(); ++ti) {
+        const Terrace& t = m_terraces[ti];
+        const int count = int(kPi * (t.rx + t.rz) / 10.0f);
+        const int courses = std::clamp(int(std::ceil(t.height / 7.0f)), 1, 5);
+        for (int course = 0; course < courses; ++course) {
+            for (int k = 0; k < count; ++k) {
+                const auto seed = m_seed + 907u + std::uint32_t(ti) * 53u + std::uint32_t(course) * 103u;
+                const float angle = 2.0f * kPi * (float(k) + 0.5f * float(course % 2) +
+                    0.4f * hashUnit(k, 0, seed)) / float(count);
+                const float rim = 1.0f - t.edge * (0.12f + 0.78f * (float(course) + 0.5f) / float(courses));
+                const float x = t.x + rim * t.rx * std::cos(angle), z = t.z + rim * t.rz * std::sin(angle);
+                const float h = L.heightAt(x, z);
+                const float radius = 5.5f + 2.5f * hashUnit(k, 1, seed);
+                const int id = m_rockModels[hash3(k, 2, seed) % std::uint32_t(m_rockModels.size())];
+                const LevelModel& model = L.m_models[std::size_t(id)];
+                const float ex = 0.5f * (model.boundsMax.x - model.boundsMin.x);
+                const float ey = 0.5f * (model.boundsMax.y - model.boundsMin.y);
+                const float ez = 0.5f * (model.boundsMax.z - model.boundsMin.z);
+                LevelRock r;
+                r.model = std::int16_t(id);
+                r.sx = r.sz = radius / std::max(ex, ez);
+                r.sy = r.sx * (1.0f + 0.35f * hashUnit(k, 3, seed));
+                r.rx = ex * r.sx; r.ry = ey * r.sy; r.rz = ez * r.sz;
+                // Embed into the slope normal, not straight down: vertical sinking leaves whole boulders
+                // hanging in front of steep faces. Only the outer relief should emerge from the rock wall.
+                const float gx = (L.heightAt(x + 1, z) - L.heightAt(x - 1, z)) * 0.5f;
+                const float gz = (L.heightAt(x, z + 1) - L.heightAt(x, z - 1)) * 0.5f;
+                const float invNormal = 1.0f / std::sqrt(1.0f + gx * gx + gz * gz);
+                const float burial = 0.45f * radius;
+                r.x = x + burial * gx * invNormal;
+                r.z = z + burial * gz * invNormal;
+                r.y = h - burial * invNormal;
+                if (waterDistance(r.x, r.z) < radius + 4.0f ||
+                    !siteClear({P2{r.x, r.z}}, kRoadMargin + radius, false, false)) continue;
+                r.yaw = angle + 0.6f * hashUnit(k, 4, seed);
+                r.seed = hash3(k, 5, seed);
+                r.style = PropStyle::DarkStone;
+                L.m_rocks.push_back(r);
+            }
+        }
+    }
+}
+
 void LevelBaker::bakeScatter() {
     if (m_bushes.empty() && m_ferns.empty() && m_debris.empty()) return;
     // Occupied 4 m cells: footprints of the placed props.
@@ -2124,7 +2226,7 @@ void LevelBaker::bakeScatter() {
             const float pBush = snowFade * (0.05f + 0.30f * edge + 0.18f * water + 0.22f * cluster * (1.0f - forest)) * (0.4f + 0.6f * cluster);
             const float pFern = snowFade * (0.40f * forest + 0.25f * water) * (0.3f + 0.7f * cluster);
             const float pDebris = snowFade * 0.10f * forest;
-            const float u = hashUnit(gi, gj, m_seed + 511u);
+            const float u = hashUnit(gi, gj, m_seed + 511u) / (1.0f + 1.3f * woodlandWeight(x, z));
             const std::vector<int>* pool = nullptr;
             float size = 1.0f;
             if (u < pBush) pool = &m_bushes, size = 0.7f + 0.6f * hashUnit(gi, gj, m_seed + 513u);
@@ -2797,6 +2899,7 @@ void LevelBaker::bake() {
     bakeLogs();
     bakeCliffs();
     bakeTalus();
+    bakeTerraceRocks();
     bakeScatter();
     L.m_props.styles.resize(L.m_props.geometry.triangleCount(), PropStyle::Stone);
 

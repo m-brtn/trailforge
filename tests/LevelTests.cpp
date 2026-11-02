@@ -1605,6 +1605,54 @@ std::vector<std::string> bakeDifferences(const Level& a, const Level& b) {
     return d;
 }
 
+// Local landscape controls must not reshape the rest of the world or depend on worker scheduling.
+void levelWoodland() {
+    const std::string source = R"({
+      "format":1,"id":"woodland_test","seed":1207,"bakeHalfExtent":256,"playHalfExtent":128,
+      "elevation":[[-256,-256,60],[256,-256,60],[-256,256,60],[256,256,60]],
+      "coast":{"land":[[[-2000,-2000],[2000,-2000],[2000,2000],[-2000,2000]]]},
+      "detail":{"hillAmplitude":0,"fineAmplitude":0,"ridgeAmplitude":0},
+      "meadowTreeDensity":0,
+      "woodlands":[{"x":0,"z":0,"radius":85,"fade":20}],
+      "terraces":[{"x":20,"z":0,"radiusX":25,"radiusZ":40,"height":18,"edge":0.3}]
+    })";
+    std::string err;
+    auto a = Level::fromJsonText(source, &err, 1);
+    auto b = Level::fromJsonText(source, &err, 4);
+    CHECK(a && b, "woodland bake: %s", err.c_str());
+    if (!a || !b) return;
+    CHECK(bakeDifferences(*a, *b).empty(), "woodland bake differs across worker counts");
+    CHECK(a->heightAt(20, 0) > 77 && a->heightAt(20, 0) < 79, "terrace center height");
+    CHECK(a->trees().size() > 200, "woodland needs canopy and regeneration, got %zu trees", a->trees().size());
+    int outside = 0, young = 0, mature = 0;
+    for (const auto& t : a->trees()) {
+        outside += std::hypot(t.x, t.z) >= 85;
+        young += t.height < 10;
+        mature += t.height > 15;
+    }
+    CHECK(outside == 0 && young > 30 && mature > 30, "outside %d young %d mature %d", outside, young, mature);
+    json::Value doc;
+    CHECK(json::parse(source, doc), "parse woodland fixture");
+    doc.object.erase("woodlands");
+    doc.object.erase("terraces");
+    auto bare = Level::fromJsonText(json::write(doc), &err, 1);
+    CHECK(bare != nullptr, "baseline: %s", err.c_str());
+    if (bare) {
+        int changed = 0;
+        for (int z = -220; z <= 220; z += 5)
+            for (int x = -220; x <= 220; x += 5)
+                if (std::hypot(float(x), float(z)) > 85)
+                    changed += a->heightAt(float(x), float(z)) != bare->heightAt(float(x), float(z));
+        CHECK(changed == 0, "local terraces changed %d remote samples", changed);
+    }
+    CHECK(json::parse(source, doc), "parse invalid fixture");
+    doc.object["woodlands"].array[0].object["fade"] = json::Value::makeNumber(0);
+    CHECK(!Level::fromJsonText(json::write(doc), &err), "zero woodland fade accepted");
+    CHECK(json::parse(source, doc), "parse invalid terrace fixture");
+    doc.object["terraces"].array[0].object["radiusX"] = json::Value::makeNumber(-1);
+    CHECK(!Level::fromJsonText(json::write(doc), &err), "negative terrace radius accepted");
+}
+
 // The shipped Blender-authored level: no layout issues, the model library, the circuit and its gates, the surface
 // classes, the heights exactly the 16-bit heightmap, the physics tiles on the same grid, a deterministic bake.
 // Settings > TREES: STYLIZED bakes every tree as a procedural pine (no tree models in the library) while rocks, logs,
@@ -1935,6 +1983,7 @@ int main(int argc, char** argv) {
         {"level_buildings", levelBuildings},
         {"level_poi_buildings", levelPoiBuildings},
         {"level_tree_style", levelTreeStyle},
+        {"level_woodland", levelWoodland},
         {"level_baked_layout", levelBakedLayout},
         {"lap_timer_gates", lapTimerGates},
         {"level_baked_track_smooth", levelBakedTrackSmooth},

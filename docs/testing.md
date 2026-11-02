@@ -528,3 +528,11 @@ Everything below was actually run on macOS 27 / M-series.
   - manually dragging the window edge (resize was verified only via `SDL_SetWindowSize`);
   - subjective handling feel;
   - how the sound actually sounds (only measured from captures and spectrograms).
+
+### Woodland landscape inspection
+
+`./build/release/trailforge --script tools/scenarios/woodland_views.txt --no-audio` selects detailed trees,
+sets fixed daylight, and captures the Glacier Creek woodland from overview, creek and terrace cameras into
+`/tmp/trailforge_woodland_*.png`. It measures the overview at Ultra/native resolution and a closer view at
+High/65% render scale. These are different viewpoints/settings, not a direct preset speed comparison.
+`level_woodland` covers local height effects, young/mature tree layers, invalid dimensions and thread determinism.

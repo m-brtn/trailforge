@@ -401,3 +401,25 @@ smoothed heading (3.5 s) and swings from behind to the side and back over 80 s. 
 loop without a reset for the gasoline SUV in 2H and 4H and the EV on both worlds (Exploration Peaks from the route
 start: 327-329 s, max 42.3 km/h, max 0.99 m off the line; 2.0 m on the proving ground where it joins the loop from
 the start pad).
+
+### Local woodland and terrace composition
+
+![Glacier Creek woodland and rock benches in the game](woodland.jpg)
+
+Exploration Peaks has a focused woodland around Glacier Creek upstream of the ford, centered at
+`(-230, -440)` with a 150 m radius and a 45 m transition. Existing CC0 firs form a taller, broader canopy,
+with a separate younger sapling layer, denser fern/shrub patches and more bank stones. Four irregular
+benches flank the creek. Roads, water and vegetation clearance still use the shared baked heightfield.
+This is a local environment study, not a replacement of the whole map.
+
+Optional procedural level fields:
+
+- `woodlands`: `{x, z, radius, fade}` in meters. Radius 10..500; fade 1..radius. Controls blend to the
+  existing biome at the edge. The secondary tree layer is limited to these areas.
+- `terraces`: `{x, z, radiusX, radiusZ, height, edge}`. Elliptical additive rock benches; radii 10..200 m,
+  height 0..60 m, edge 0.1..0.6 of the radius. Noise breaks up the rims. These are applied before
+  lakes, rivers and roads are carved; collision and rendering use the resulting heightfield.
+
+The existing cliff/talus placement passes dress steep rims with collision-bearing CC0 models. Rock-wall shading uses subtle neutral weathering rather than strong synthetic horizontal bands;
+this shading change also affects rock walls elsewhere. Asset files and LFS storage are unchanged. `level_woodland` checks locality, two age layers, parameter validation and
+repeatability across worker counts; the general placement tests cover roads, water and model footprints.

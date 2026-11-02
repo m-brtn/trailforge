@@ -187,6 +187,15 @@
     { "name": "Peninsula", "density": 0.3,
       "polygon": [[600, 800], [900, 800], [900, 1000], [600, 1000]] }
   ],
+  "woodlands": [
+    { "x": -230, "z": -440, "radius": 150, "fade": 45 }
+  ],
+  "terraces": [
+    { "x": -140, "z": -450, "radiusX": 48, "radiusZ": 67, "height": 30, "edge": 0.28 },
+    { "x": -123, "z": -470, "radiusX": 28, "radiusZ": 36, "height": 9, "edge": 0.25 },
+    { "x": -312, "z": -465, "radiusX": 36, "radiusZ": 73, "height": 27, "edge": 0.28 },
+    { "x": -310, "z": -495, "radiusX": 25, "radiusZ": 30, "height": 8, "edge": 0.3 }
+  ],
   "meadowTreeDensity": 0.03,
   "fields": [
     { "name": "Wheat Field", "kind": "wheat",

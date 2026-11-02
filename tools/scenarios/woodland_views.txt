@@ -1,0 +1,82 @@
+# Glacier Creek woodland: fixed overview, creek and terrace views.
+# Detailed trees; daylight; no motion blur. Ultra native overview and High scaled timings.
+# ./build/release/trailforge --script tools/scenarios/woodland_views.txt --no-audio
+controls pad_type none
+set ui 0
+set hud 0
+set auto_reverse 0
+set minimap 0
+set compass 0
+resize 1600 900
+level exploration_peaks
+until level == 1 20
+menu pause
+wait .2
+menu settings
+wait .2
+menu select tree_style
+wait .2
+tap Right
+wait .5
+expect setting_tree_style == 1
+until level == 1 30
+menu back
+wait .1
+menu resume
+wait 1
+set ui 0
+set hud 0
+vehicle trailforge_expedition
+quality Ultra
+set flowers 1
+set grass_dist 160
+set flare .08
+set headlights 0
+time 10
+set sun_heading 115
+set motion_blur 0
+set shafts .2
+set fog .35
+set valley_fog .3
+place -205 -335 180
+down S
+wait 1.5
+camera local -45 28 -30 -30 12 85 65
+wait 1
+capture /tmp/trailforge_woodland_overview.png
+wait .3
+perf_begin woodland_overview
+wait 3
+perf_end
+camera local -15 5 -8 -28 10 48 65
+wait .6
+capture /tmp/trailforge_woodland_creek.png
+wait .3
+camera local -10 34 25 -65 30 115 65
+wait .6
+capture /tmp/trailforge_woodland_terraces.png
+wait .3
+quality High
+set render_scale .65
+set vsync 0
+wait .8
+perf_begin woodland_high
+wait 4
+perf_end
+# The adjacent road ford remains traversable with the new banks and rock placement.
+up S
+camera follow
+place -228 -333 100
+wait 1.5
+mark recoveries
+pedal throttle .35
+until water_depth > .1 15
+until water_depth == 0 20
+wait .2
+pedal throttle 0
+pedal brake 1
+until speed_kmh < 1 10
+pedal brake 0
+expect d_recoveries == 0
+expect road_dist < 5
+quit

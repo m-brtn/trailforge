@@ -1625,29 +1625,18 @@ float4 terrain_fs(LitOut vin) : SV_Target0 {
         }
         if (rock > 0.001) {
             // Walls: the side projections are warped by ~1.5 m so the repeats of the texture do not stack into
-            // regular vertical stripes, then sedimentary beds and large tone patches that stay at any distance.
+            // regular vertical stripes. Broad weathering stays subtle so the scanned fractures remain legible.
             const float steepF = smoothstep(0.25, 0.65, 1.0 - N.y);
             const float2 warp = (noiseTex.Sample(noiseSampler, P.xz * 0.021 + P.y * 0.013).rg - 0.5) * 3.0 * steepF;
             LayerSample l = sampleRock(gc, Pt, N, warp);
             if (steepF > 0.0) {
-                // Gently dipping beds (the dip turns with a large-scale noise), bent by smaller folds.
-                const float2 dip = (noiseTex.Sample(noiseSampler, P.xz * 0.0011).rg - 0.5) * 0.16;
-                const float y = P.y + dot(P.xz, dip) + noiseTex.Sample(noiseSampler, P.xz * 0.0045).r * 16.0 +
-                                noiseTex.Sample(noiseSampler, P.xz * 0.029).g * 2.5;
-                const float coarse = noiseTex.Sample(noiseSampler, float2(y * 0.047, 0.213)).r;
-                const float fine = noiseTex.Sample(noiseSampler, float2(y * 0.21, 0.637)).g;
-                const float fineUp = noiseTex.Sample(noiseSampler, float2((y + 0.25) * 0.21, 0.637)).g;
-                const float bed = smoothstep(0.36, 0.64, coarse * 0.72 + fine * 0.28);
-                float3 tone = lerp(float3(0.76, 0.75, 0.74), float3(1.14, 1.06, 0.95), bed);
-                tone = lerp(tone, tone * float3(1.10, 0.93, 0.82), smoothstep(0.64, 0.80, fine)); // iron-stained beds
-                tone *= 0.82 + 0.36 * noiseTex.Sample(noiseSampler, float2(P.x + P.z, P.y * 2.5) * 0.0043).r;
-                // Grey beds between the buff ones (the source texture alone is one warm brown).
-                const float grey = dot(l.albedo, float3(0.3, 0.55, 0.15));
-                l.albedo = lerp(l.albedo, grey * float3(1.0, 0.98, 0.95), 0.55 * (1.0 - bed) * steepF);
-                l.albedo *= lerp((float3)(1.0), tone, steepF);
-                // Bed edges stand out as small ledges: the normal tips up where the harder bed starts.
-                l.dn.y += steepF * clamp((fineUp - fine) * 6.0, -0.35, 0.35);
-                l.height = lerp(l.height, saturate(l.height * 0.6 + bed * 0.5), steepF);
+                // Keep the scan's fractures and normals. High-contrast procedural height bands made
+                // every steep wall look like stacked ribbons, independent of its actual rock geometry.
+                const float stain = noiseTex.Sample(noiseSampler, P.xz * 0.017 + P.y * 0.009).r;
+                const float broad = noiseTex.Sample(noiseSampler, float2(P.x + P.z, P.y * 1.7) * 0.006).g;
+                const float luminance = dot(l.albedo, float3(0.2126, 0.7152, 0.0722));
+                const float3 weathered = lerp(l.albedo, luminance * float3(1.02, 1.01, 1.0), 0.72);
+                l.albedo = lerp(l.albedo, weathered * (1.12 + 0.18 * stain + 0.12 * broad), steepF);
             }
             blendLayer(g, l, heightBlend(rock, l.height, g.height));
         }
