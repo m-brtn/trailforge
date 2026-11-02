@@ -6,11 +6,29 @@
 #   - SPIR-V (Vulkan), on every platform;
 #   - macOS: SPIR-V -> MSL (SPIRV-Cross, SDL GPU resource slots) -> xcrun metal -> one .metallib per entry point.
 #     Without the Metal toolchain the generated MSL source is embedded instead and SDL compiles it at startup;
+#   - iOS: the same MSL path for the iOS platform (SPIRV-Cross iOS options), metallibs from the iphoneos /
+#     iphonesimulator SDK of the build;
 #   - Windows: DXIL (D3D12) with the pinned DXC release (dxc.exe compiles the same HLSL directly).
+# Cross builds (iOS) cannot run a compiler built for the target: they take a macOS `trailforge_shaderc` through
+# TRAILFORGE_HOST_SHADERC (the `host-tools` preset builds it, docs/building.md "iOS").
 # All blobs are embedded into the binary (cmake/EmbedShaders.cmake -> render/ShaderBlobs.h); no shader files are
 # read at runtime. The renderer picks the format the SDL GPU device reports (SDL_GetGPUShaderFormats).
 
-include(${CMAKE_CURRENT_LIST_DIR}/ShaderToolchain.cmake)
+set(TRAILFORGE_HOST_SHADERC "" CACHE FILEPATH "trailforge_shaderc built for the host (required for cross builds)")
+if(TRAILFORGE_HOST_SHADERC)
+    if(NOT EXISTS ${TRAILFORGE_HOST_SHADERC})
+        message(FATAL_ERROR "TrailForge: TRAILFORGE_HOST_SHADERC=${TRAILFORGE_HOST_SHADERC} does not exist. Build it "
+                            "first: cmake --preset host-tools && cmake --build --preset host-tools")
+    endif()
+    set(_shaderc ${TRAILFORGE_HOST_SHADERC})
+    set(TRAILFORGE_DXC "")
+elseif(CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "TrailForge: cross builds need TRAILFORGE_HOST_SHADERC (cmake --preset host-tools && "
+                        "cmake --build --preset host-tools)")
+else()
+    include(${CMAKE_CURRENT_LIST_DIR}/ShaderToolchain.cmake)
+    set(_shaderc trailforge_shaderc)
+endif()
 
 set(TRAILFORGE_SHADER_SOURCES "")
 set(TRAILFORGE_SHADER_DEFINES "")
@@ -32,8 +50,21 @@ set(TRAILFORGE_SHADER_ENTRIES
     dof_blur_fs:fragment dof_fs:fragment lum_fs:fragment adapt_fs:fragment shafts_fs:fragment)
 
 set(_metal_ok OFF)
+set(_metal_sdk macosx)
+set(_metal_target -mmacosx-version-min=14.0)
+set(_msl_platform macos)
+if(TRAILFORGE_IOS)
+    set(_msl_platform ios)
+    if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        set(_metal_sdk iphonesimulator)
+        set(_metal_target -mios-simulator-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET})
+    else()
+        set(_metal_sdk iphoneos)
+        set(_metal_target -mios-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET})
+    endif()
+endif()
 if(APPLE)
-    execute_process(COMMAND xcrun -sdk macosx -f metal
+    execute_process(COMMAND xcrun -sdk ${_metal_sdk} -f metal
         OUTPUT_VARIABLE _metal_path OUTPUT_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE _metal_res ERROR_QUIET)
     if(_metal_res EQUAL 0 AND EXISTS "${_metal_path}")
@@ -70,13 +101,13 @@ foreach(item IN LISTS TRAILFORGE_SHADER_ENTRIES)
     set(_msl_args "")
     if(APPLE)
         list(APPEND _outs ${_gen_dir}/${entry}.msl)
-        set(_msl_args --msl ${_gen_dir}/${entry}.msl)
+        set(_msl_args --msl ${_gen_dir}/${entry}.msl --msl-platform ${_msl_platform})
     endif()
     add_custom_command(
         OUTPUT ${_outs}
-        COMMAND trailforge_shaderc --input ${_hlsl} --entry ${entry} --stage ${stage} --spirv ${_gen_dir}/${entry}.spv
+        COMMAND ${_shaderc} --input ${_hlsl} --entry ${entry} --stage ${stage} --spirv ${_gen_dir}/${entry}.spv
                 ${_msl_args}
-        DEPENDS ${_hlsl} trailforge_shaderc
+        DEPENDS ${_hlsl} ${_shaderc}
         COMMENT "Compiling scene.hlsl:${entry} (${stage})"
         VERBATIM)
     list(APPEND _blobs ${_outs})
@@ -84,9 +115,9 @@ foreach(item IN LISTS TRAILFORGE_SHADER_ENTRIES)
     if(APPLE AND _metal_ok)
         add_custom_command(
             OUTPUT ${_gen_dir}/${entry}.metallib
-            COMMAND xcrun -sdk macosx metal -x metal -c ${_gen_dir}/${entry}.msl -o ${_gen_dir}/${entry}.air
-                    -mmacosx-version-min=14.0
-            COMMAND xcrun -sdk macosx metallib ${_gen_dir}/${entry}.air -o ${_gen_dir}/${entry}.metallib
+            COMMAND xcrun -sdk ${_metal_sdk} metal -x metal -c ${_gen_dir}/${entry}.msl -o ${_gen_dir}/${entry}.air
+                    ${_metal_target}
+            COMMAND xcrun -sdk ${_metal_sdk} metallib ${_gen_dir}/${entry}.air -o ${_gen_dir}/${entry}.metallib
             DEPENDS ${_gen_dir}/${entry}.msl
             COMMENT "Compiling ${entry}.msl -> ${entry}.metallib"
             VERBATIM)

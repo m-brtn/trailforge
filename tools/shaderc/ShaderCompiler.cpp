@@ -10,6 +10,7 @@
 // resources in set 2 and uniforms in set 3. DXIL is produced separately by DXC (Windows builds only).
 //
 // Usage: trailforge_shaderc --input scene.hlsl --entry lit_fs --stage fragment --spirv out.spv [--msl out.metal]
+//                           [--msl-platform macos|ios]
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -31,7 +32,7 @@
 namespace {
 
 struct Args {
-    std::string input, entry, stage, spirvOut, mslOut;
+    std::string input, entry, stage, spirvOut, mslOut, mslPlatform = "macos";
 };
 
 bool parseArgs(int argc, char** argv, Args& a) {
@@ -42,9 +43,11 @@ bool parseArgs(int argc, char** argv, Args& a) {
         else if (k == "--stage") a.stage = v;
         else if (k == "--spirv") a.spirvOut = v;
         else if (k == "--msl") a.mslOut = v;
+        else if (k == "--msl-platform") a.mslPlatform = v;
         else return false;
     }
-    return !a.input.empty() && !a.entry.empty() && (a.stage == "vertex" || a.stage == "fragment") &&
+    return (a.mslPlatform == "macos" || a.mslPlatform == "ios") && !a.input.empty() && !a.entry.empty() &&
+           (a.stage == "vertex" || a.stage == "fragment") &&
            !a.spirvOut.empty();
 }
 
@@ -136,7 +139,8 @@ bool translateMsl(const Args& a, const std::vector<std::uint32_t>& spirv, std::s
     const spv::ExecutionModel model = vertex ? spv::ExecutionModelVertex : spv::ExecutionModelFragment;
     spirv_cross::CompilerMSL compiler(spirv);
     spirv_cross::CompilerMSL::Options options;
-    options.platform = spirv_cross::CompilerMSL::Options::macOS;
+    options.platform = a.mslPlatform == "ios" ? spirv_cross::CompilerMSL::Options::iOS
+                                              : spirv_cross::CompilerMSL::Options::macOS;
     options.set_msl_version(3, 0);
     compiler.set_msl_options(options);
 
@@ -207,7 +211,7 @@ int main(int argc, char** argv) {
     Args a;
     if (!parseArgs(argc, argv, a)) {
         std::fprintf(stderr, "usage: trailforge_shaderc --input FILE.hlsl --entry NAME --stage vertex|fragment "
-                             "--spirv OUT.spv [--msl OUT.metal]\n");
+                             "--spirv OUT.spv [--msl OUT.metal] [--msl-platform macos|ios]\n");
         return 2;
     }
     std::string source;
