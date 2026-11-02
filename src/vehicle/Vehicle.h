@@ -212,7 +212,7 @@ private:
     void updateEllipseSlip(JPH::uint wheel, float slip, float slipScale);
     void frictionEllipse(JPH::uint wheel, float& ioLongImpulse, float& ioLatImpulse, float suspensionImpulse) const;
     DiffMode effectiveDiff(int which) const; // 0 front, 1 rear, 2 center
-    float clutchStrength(float throttle) const;
+    float clutchStrength(float throttle);
     void applyDifferentials();
     void updateSuspension(float dt); // compression / rebound damping, damper curve, bump stops (inside the step)
     void applyAckermann(float steer);
@@ -261,6 +261,8 @@ private:
     bool m_lowRange = false;
     TransferMode m_transfer = TransferMode::TwoHigh;
     bool m_revCut = false;
+    bool m_clutchSyncing = false;  // a gear change's clutch has not yet matched the engine speed (clutchStrength)
+    bool m_shiftTorqueCut = false; // engine torque cut while it runs above the syncing clutch (clutchStrength)
     std::array<float, kWheelCount> m_prevSuspLength{};
     std::array<float, kWheelCount> m_stepSuspLength{}; // after the wheel casts of the last physics step (updateSuspension)
     std::array<float, kWheelCount> m_suspensionMass{}; // kg, effective mass of each wheel's suspension constraint

@@ -68,7 +68,7 @@
     "lowRange": 2.72,
     "shiftUpRPM": 3800,
     "shiftDownRPM": 1500,
-    "shiftTime": 0.35,
+    "shiftTime": 0.10,
     "clutchReleaseTime": 0.25,
     "shiftLatency": 0.5,
     "clutchStrength": 10,

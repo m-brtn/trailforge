@@ -957,7 +957,9 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
     applyDrag();
     applyRollingResistance();
     // Jolt automatic: the sign of the forward input selects forward or reverse.
-    const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * m_aidOut.throttle;
+    // A zero input would let Jolt's automatic drop to neutral; 1e-3 keeps the gear and makes no torque to speak of.
+    const float engineThrottle = m_shiftTorqueCut ? std::min(m_aidOut.throttle, 1e-3f) : m_aidOut.throttle;
+    const float forward = (m_direction == DriveDirection::Forward ? 1.0f : -1.0f) * engineThrottle;
     m_controller->SetDriverInput(forward, cmd.steer, maxTorque > 0.0f ? 1.0f : 0.0f, cmd.handBrake);
 }
 
@@ -966,12 +968,41 @@ void Vehicle::prePhysics(const DriverCommand& cmd, float dt) {
 // torque. Close to the minimum rpm the clutch therefore passes at most what the engine makes at this throttle (at
 // least the creep torque), like a torque converter at stall; 400 rpm above it the full strength applies again and
 // the clutch may pull the flywheel down (shifts, engine braking).
-float Vehicle::clutchStrength(float throttle) const {
+//
+// From a gear change until the engine runs at the clutch speed (within 10 rad/s, or until the full strength would pass
+// no more than the limit) the same limit applies at any rpm, both ways:
+// Jolt's engine revs freely while the clutch is open and the closing clutch then dumped the flywheel's excess speed
+// into the wheels within ~0.1 s (SUV in a grass corner: 2350 N per rear wheel at slip 0.3-0.4 after the 1-2 upshift,
+// the rear stepped out with the throttle already cut by TC; a coasting 2-1 downshift locked the outer rear at slip
+// 0.64). An automatic's shift control cuts engine torque during the upshift and the slipping clutch pack passes
+// only what the engine delivers; here the closing clutch passes at most the engine torque at the current (TC-limited)
+// throttle driving and the creep torque dragging. While the engine runs above the clutch speed its own torque is cut
+// (m_shiftTorqueCut), so the flywheel comes down by the torque the clutch passes instead of holding its speed: the
+// patrol after a part-throttle 2-3 upshift stayed ~2000 rpm above the clutch for ~0.5 s with the throttle on.
+float Vehicle::clutchStrength(float throttle) {
     const VehicleTuning& t = m_config.tuning;
+    m_shiftTorqueCut = false;
     if (!t.launchClutchLimit) return t.clutchStrength;
     const JPH::VehicleEngine& engine = m_controller->GetEngine();
     const float rpm = engine.GetCurrentRPM();
-    const float slip = (rpm - m_controller->GetWheelSpeedAtClutch()) * (2.0f * 3.14159265f / 60.0f); // rad/s
+    const float clutchRPM = m_controller->GetWheelSpeedAtClutch();
+    const float slip = (rpm - clutchRPM) * (2.0f * 3.14159265f / 60.0f); // rad/s
+    const JPH::VehicleTransmission& tr = m_controller->GetTransmission();
+    const float friction = tr.GetClutchFriction();
+    const bool engaging = tr.IsSwitchingGear() || (friction > 0.0f && friction < 1.0f);
+    if (engaging) m_clutchSyncing = true;
+    else if (std::abs(slip) < 10.0f || tr.GetCurrentGear() == 0) m_clutchSyncing = false;
+    // Not at a launch: there the clutch speed is below the engine's minimum and the engine must make torque.
+    m_shiftTorqueCut = m_clutchSyncing && slip > 1.0f && clutchRPM > m_config.engineMinRPM;
+    if (m_clutchSyncing && friction > 0.0f && std::abs(slip) > 1.0f) {
+        const float cap = slip > 0.0f ? std::max(engine.GetTorque(std::clamp(throttle, 0.0f, 1.0f)), t.creepTorque)
+                                      : t.creepTorque;
+        const float capped = cap / (friction * std::abs(slip));
+        if (capped < t.clutchStrength) return capped;
+        // The full-strength clutch passes no more than the limit: synced, also when the engine torque alone keeps the
+        // slip above 10 rad/s (patrol: 112 N*m at strength 10 slips ~11 rad/s at full throttle).
+        if (!engaging) m_clutchSyncing = m_shiftTorqueCut = false;
+    }
     if (slip <= 1.0f) return t.clutchStrength;
     const float available = std::max(engine.GetTorque(std::clamp(throttle, 0.0f, 1.0f)), t.creepTorque);
     const float limited = std::min(t.clutchStrength, available / slip);

@@ -3362,11 +3362,13 @@ HillOutcome hillRun(const VehicleConfig& cfg, float H, float L, float kmh, const
         o.rolled = o.rolled || up.GetY() < 0.0f;
         if (trace && i % 3 == 0)
             std::printf("  t=%5.2f z=%6.2f y=%+.2f vy=%+5.2f pitch=%+6.1f rate=%+6.1f v=%5.1f | L %.3f %.3f %.3f %.3f | "
-                        "F %5.1f %5.1f %5.1f %5.1f kN\n",
+                        "F %5.1f %5.1f %5.1f %5.1f kN | g%d %5.0f rpm Fx %+5.2f %+5.2f kN\n",
                         i * dt, frontZ, float(com.GetY()) - rest, v.GetY(), pitch, rate, tw.forwardSpeed * 3.6f,
                         tw.wheels[0].suspensionLength, tw.wheels[1].suspensionLength, tw.wheels[2].suspensionLength,
                         tw.wheels[3].suspensionLength, tw.wheels[0].load / 1000, tw.wheels[1].load / 1000,
-                        tw.wheels[2].load / 1000, tw.wheels[3].load / 1000);
+                        tw.wheels[2].load / 1000, tw.wheels[3].load / 1000, tw.gear, tw.engineRPM,
+                        (tw.wheels[0].longitudinalForce + tw.wheels[1].longitudinalForce) / 1000,
+                        (tw.wheels[2].longitudinalForce + tw.wheels[3].longitudinalForce) / 1000);
         if (frontZ > zc + 0.5f * L + 60.0f) break;
     }
     o.rolled = o.rolled || bi.GetRotation(vid).RotateAxisY().GetY() < 0.5f;

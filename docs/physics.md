@@ -95,6 +95,16 @@ The honest list of what is simplified or not simulated. Keep it up to date when 
 - Launch clutch: near the minimum rpm the clutch passes at most the engine torque at the current throttle (at least
   a 40 N·m creep torque), like a torque converter at stall. Jolt clamps the engine rpm, so an unlimited slipping
   clutch delivered ~840 N·m at any throttle.
+- Shift clutch: after a gear change, until the engine runs at the clutch speed, the clutch passes at most the engine
+  torque at the current (TC-limited) throttle when the engine is faster and the creep torque when it is slower, and
+  while the engine is faster its own torque is cut (an automatic's upshift torque reduction). Jolt's engine revs
+  freely while the clutch is open and the closing clutch dumped the flywheel's overspeed into the wheels in ~0.1 s:
+  2350 N per rear tire after the SUV's 1-2 upshift in a grass corner (rear stepped out with TC on), a locked outer
+  rear after a coasting 2-1 downshift. The flywheel's excess energy is lost in the clutch; there is no shift
+  schedule, no torque converter and no clutch heat. Jolt still opens the clutch fully for `shiftTime` (no drive at
+  all): the SUV's automatic uses 0.10 s (was 0.35 s, whose lost drive the flywheel kick had partly made up; without
+  it the SUV slowed on the diagonal twister in low range and was turned off line), a clutch-to-clutch automatic
+  hands over with almost no interruption.
 - Once a tire spins up it is on the sliding part of the curve (μ × 0.80): full throttle from a standstill on a slope
   near the limit spins in place where a careful throttle would climb. Traction control (off by default) is
   simplified control logic, see [Driver aids](vehicles.md#driver-aids).

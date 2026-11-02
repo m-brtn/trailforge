@@ -321,7 +321,7 @@ struct VehicleConfig {
     std::vector<float> reverseRatios{-4.00f};
     float shiftUpRPM = 3800.0f;
     float shiftDownRPM = 1500.0f;
-    float shiftTime = 0.35f;         // s, Jolt mSwitchTime
+    float shiftTime = 0.10f;         // s, Jolt mSwitchTime: torque-free phase (an automatic hands over between clutches)
     float clutchReleaseTime = 0.25f; // s
     float shiftLatency = 0.5f;       // s, minimum time between shifts
     float lowRangeRatio = 2.72f;     // transfer case low range (1 = none)

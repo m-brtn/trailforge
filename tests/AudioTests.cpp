@@ -1214,9 +1214,11 @@ void rollover() {
         const float v = d.sim.vehicle().telemetry().speed * 3.6f;
         DriverIntent in;
         in.throttle = 1.0f;
-        // Full lock from 3.5 s, on the rocks. With the tire load sensitivity the SUV no longer tips with full lock from
-        // 2.0 s (max tilt 41 deg) nor on the 18 deg side slope; this rollover is a test setup, not a typical event.
-        in.steer = k > d.ticks(3.5) ? 1.0f : 0.0f;
+        // Full right lock from 3.5 s, on the rocks. With the tire load sensitivity the SUV no longer tips with full lock
+        // from 2.0 s (max tilt 41 deg) nor on the 18 deg side slope; since the shift torque cut (no clutch kick after
+        // the upshifts) it no longer tips with full left lock from 3.5 s either (max tilt 18 deg), while full right
+        // lock from 3.5 to 5.0 s tips it (161-171 deg). This rollover is a test setup, not a typical event.
+        in.steer = k > d.ticks(3.5) ? -1.0f : 0.0f;
         d.sim.setIntent(in);
         d.sim.tick();
         d.feed.onTick(d.sim);
