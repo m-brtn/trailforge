@@ -274,6 +274,7 @@ if(TRAILFORGE_BUILD_TESTS)
             level_heightfield_sampling
             level_tile_streaming
             level_road_carving
+            level_road_embankment
             level_surfaces_water
             level_vehicles
             level_prop_winding

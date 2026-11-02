@@ -241,9 +241,11 @@ std::vector<Float3> resampleSpline(const std::vector<Float3>& pts, float step) {
 }
 
 std::vector<float> gradeLimitedProfile(const std::vector<float>& target, const std::vector<float>& pin, float ds,
-                                       float grade) {
+                                       float grade, const std::vector<float>* ground) {
     const std::size_t n = target.size();
+    if (n == 0) return {};
     const float g = grade * ds;
+    const std::vector<float>& gr = ground ? *ground : target;
     // Slope envelopes of the pins.
     std::vector<float> lo(n, -1e30f), hi(n, 1e30f);
     for (std::size_t i = 0; i < n; ++i) {
@@ -254,20 +256,58 @@ std::vector<float> gradeLimitedProfile(const std::vector<float>& target, const s
             hi[k] = std::min(hi[k], pin[i] + d);
         }
     }
-    std::vector<float> t(n);
-    for (std::size_t i = 0; i < n; ++i) t[i] = std::clamp(target[i], lo[i], hi[i]);
-    // Largest Lipschitz function below t (cut) and smallest above t (fill).
-    std::vector<float> a = t, b = t;
-    for (std::size_t i = 1; i < n; ++i) {
-        a[i] = std::min(a[i], a[i - 1] + g);
-        b[i] = std::max(b[i], b[i - 1] - g);
+    // The profile with |dy| <= g per sample that costs least, by dynamic programming over height levels g / 6 apart
+    // (the full grade stays usable): per sample |y - target| (ride), plus fill above the ground (2x, and 8x more
+    // beyond 1.5 m), plus the cut below the ground beyond 4 m (2x); pins and their slope envelopes as near-hard costs.
+    // Where the ground is steeper than the grade limit, the road cuts into the upper end and fills only a little at
+    // the lower end, locally, instead of spreading half of the difference over the whole road (the cut/fill midpoint
+    // of the two Lipschitz envelopes used before raised long embankments far ahead of every climb).
+    const int w = 6;
+    const float res = g / float(w);
+    float y0 = 1e30f, y1 = -1e30f;
+    for (std::size_t i = 0; i < n; ++i) {
+        const float t = std::clamp(target[i], lo[i], hi[i]);
+        y0 = std::min({y0, t, gr[i]});
+        y1 = std::max({y1, t, gr[i]});
     }
-    for (std::size_t i = n - 1; i-- > 0;) {
-        a[i] = std::min(a[i], a[i + 1] + g);
-        b[i] = std::max(b[i], b[i + 1] - g);
+    y0 -= 20.0f;
+    y1 += 20.0f;
+    const int levels = int(std::ceil((y1 - y0) / res)) + 1;
+    const auto cost = [&](std::size_t i, float y) {
+        const float fill = y - gr[i];
+        double c = std::abs(y - target[i]) + 2.0f * std::max(0.0f, fill) + 8.0f * std::max(0.0f, fill - 1.5f) +
+                  2.0f * std::max(0.0f, -fill - 4.0f);
+        c += 1e4 * (std::max(0.0f, lo[i] - y) + std::max(0.0f, y - hi[i]));
+        if (!std::isnan(pin[i])) c += 1e4 * std::abs(y - pin[i]);
+        return c;
+    };
+    const std::size_t nl = std::size_t(levels);
+    std::vector<double> acc(nl), next(nl);
+    std::vector<std::int8_t> from(n * nl, 0);
+    for (int l = 0; l < levels; ++l) acc[std::size_t(l)] = cost(0, y0 + float(l) * res);
+    std::vector<int> dq(nl);
+    for (std::size_t i = 1; i < n; ++i) {
+        // Sliding minimum of acc over [l - w, l + w] (monotone deque of level indices).
+        std::size_t head = 0, tail = 0;
+        int pushed = 0;
+        for (int l = 0; l < levels; ++l) {
+            while (pushed < levels && pushed <= l + w) {
+                while (tail > head && acc[std::size_t(dq[tail - 1])] >= acc[std::size_t(pushed)]) --tail;
+                dq[tail++] = pushed++;
+            }
+            while (dq[head] < l - w) ++head;
+            const int best = dq[head];
+            next[std::size_t(l)] = acc[std::size_t(best)] + cost(i, y0 + float(l) * res);
+            from[i * std::size_t(levels) + std::size_t(l)] = std::int8_t(best - l);
+        }
+        acc.swap(next);
     }
     std::vector<float> y(n);
-    for (std::size_t i = 0; i < n; ++i) y[i] = std::clamp(0.5f * (a[i] + b[i]), lo[i], hi[i]);
+    int l = int(std::min_element(acc.begin(), acc.end()) - acc.begin());
+    for (std::size_t i = n; i-- > 0;) {
+        y[i] = std::clamp(y0 + float(l) * res, lo[i], hi[i]);
+        if (i > 0) l += from[i * std::size_t(levels) + std::size_t(l)];
+    }
     // Light smoothing (moving average keeps the slope limit), then the pins again.
     const int r = 4;
     std::vector<float> s(n);
@@ -1134,11 +1174,10 @@ void LevelBaker::bakeRoads() {
             r.dz = dz / len;
         }
         const float step = n > 1 ? s / float(n - 1) : ds;
-        // Target: terrain under the road, smoothed over +-20 m.
-        std::vector<float> h0(n), target(n), pin(n, kNaN);
+        // Target: terrain under the road, smoothed over +-20 m (ride); ground: smoothed over +-4 m (cut and fill).
+        std::vector<float> h0(n), target(n), ground(n), pin(n, kNaN);
         for (std::size_t i = 0; i < n; ++i) h0[i] = sampleGrid(m_h, road.samples[i].x, road.samples[i].z);
-        const int r = 10;
-        for (std::size_t i = 0; i < n; ++i) {
+        const auto mean = [&](std::size_t i, int r) {
             float sum = 0.0f;
             int c = 0;
             for (int k = -r; k <= r; ++k) {
@@ -1147,7 +1186,11 @@ void LevelBaker::bakeRoads() {
                 sum += h0[std::size_t(j)];
                 ++c;
             }
-            target[i] = sum / float(c);
+            return sum / float(c);
+        };
+        for (std::size_t i = 0; i < n; ++i) {
+            target[i] = mean(i, 10);
+            ground[i] = mean(i, 2);
         }
         // Fords: water under the center line pins the road just below the surface.
         const float fordDepth = def.trail ? 0.3f : 0.25f;
@@ -1199,7 +1242,18 @@ void LevelBaker::bakeRoads() {
                 }
             if (!std::isnan(y)) pin[end] = y;
         }
-        const std::vector<float> y = level_math::gradeLimitedProfile(target, pin, step, def.grade);
+        std::vector<float> y = level_math::gradeLimitedProfile(target, pin, step, def.grade, &ground);
+        // An end on a POI flat that the profile reaches only in a cut of up to 6 m meets the flat instead (the cut
+        // and its shoulders would eat into the pad); a summit far above the grade stays cut.
+        bool pinned = false;
+        for (std::size_t end : {std::size_t(0), n - 1})
+            for (const Flat& f : m_flats)
+                if (std::isnan(pin[end]) && std::hypot(f.x - road.samples[end].x, f.z - road.samples[end].z) < f.r &&
+                    f.h > y[end] + 0.05f && f.h < y[end] + 6.0f) {
+                    pin[end] = f.h;
+                    pinned = true;
+                }
+        if (pinned) y = level_math::gradeLimitedProfile(target, pin, step, def.grade, &ground);
         for (std::size_t i = 0; i < n; ++i) road.samples[i].y = y[i];
         // Banking from the signed curvature over +-8 m: the inside of a bend is lower, at most 4 degrees.
         std::vector<float> bank(n, 0.0f);
@@ -1305,15 +1359,21 @@ void LevelBaker::bakeRoads() {
                     if (d > 1e29f || pend[k]) continue;
                     const std::size_t g = idx(i, j);
                     m_roadClear[g] = std::min(m_roadClear[g], d - hw);
-                    const float dy = std::abs(h0[g] - py[k]);
-                    const float shoulder = (road.trail ? 1.2f : 1.6f) + 1.45f * dy;
+                    // Shoulders blend back into the ground with a smoothstep whose steepest part is 1:3 on fill
+                    // (an embankment) and 1:2 in a cut (1.5 x the mean slope = the smoothstep's peak), ending within
+                    // the reach (only fills and cuts of more than ~10 m get steeper).
+                    const float dy = h0[g] - py[k];
+                    const float shoulder = std::min(maxReach - 2.0f, (road.trail ? 1.2f : 1.6f) +
+                                                                         (dy < 0.0f ? 4.5f : 3.0f) * std::abs(dy));
                     const float w = d <= hw ? 1.0f : 1.0f - smoothstep(0.0f, 1.0f, (d - hw) / shoulder);
                     if (w <= 0.0f) continue;
                     // weight^16: the nearest piece dominates, two legs blend only where they are about equally near.
+                    // A road surface outweighs the (wide) shoulders of other legs.
                     float wp = w * w;
                     wp *= wp;
                     wp *= wp;
                     wp *= wp;
+                    if (d > hw) wp *= 1e-3f;
                     sumW[k] += wp + 1e-30f;
                     sumWY[k] += (wp + 1e-30f) * py[k];
                     maxW[k] = std::max(maxW[k], w);

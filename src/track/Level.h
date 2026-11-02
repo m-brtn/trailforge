@@ -329,10 +329,11 @@ private:
 namespace level_math {
 // Uniform Catmull-Rom resampling of a polyline at about `step` meters.
 std::vector<JPH::Float3> resampleSpline(const std::vector<JPH::Float3>& points, float step);
-// Grade-limited profile: the cut/fill average of the largest function below and the smallest function above
-// `target` with |dy/ds| <= grade, clamped to the slope envelopes of the pins (pinned samples are exact).
+// Grade-limited profile: the profile with |dy/ds| <= grade closest to `target` that prefers cut to fill against
+// `ground` (default: the target; see Level.cpp for the costs), lightly smoothed, clamped to the slope envelopes of
+// the pins (pinned samples are exact).
 std::vector<float> gradeLimitedProfile(const std::vector<float>& target, const std::vector<float>& pin,
-                                       float ds, float grade);
+                                       float ds, float grade, const std::vector<float>* ground = nullptr);
 } // namespace level_math
 
 } // namespace tf

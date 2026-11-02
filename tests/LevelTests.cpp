@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Body/BodyFilter.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -361,6 +362,111 @@ void levelRoadCarving() {
     std::printf("  %d fords, %d bridges\n", fords, bridges);
     CHECK(fords >= 3, "fords %d", fords);
     CHECK(bridges == 2, "bridges %d", bridges);
+}
+
+// Roads follow the land: against a bake of the same level without its roads (the natural ground), every road sample
+// (~2 m) away from bridges, fords and junctions is measured: fill = road surface above the natural ground at the
+// center line and at each edge (1 m out), raised = road edge above the final ground 6 m past the edge on both sides
+// (a road on a dam), and the steepest 1 m drop of the final ground within 10 m of a filled edge (side slope).
+void levelRoadEmbankment() {
+    const Level& L = *level();
+    std::ifstream in(kLevel);
+    std::stringstream text;
+    text << in.rdbuf();
+    json::Value doc;
+    CHECK(json::parse(text.str(), doc), "level.json");
+    doc.object.erase("roads");
+    doc.object.erase("attractRoute");
+    std::string err;
+    const auto bare = Level::fromJsonText(json::write(doc), &err);
+    CHECK(bare != nullptr, "bake without roads: %s", err.c_str());
+    if (!bare) return;
+    struct Spot { float fill, edgeFill, raised, raisedFar, slope, x, z, y, natural; const char* road; };
+    std::vector<Spot> spots;
+    for (const LevelRoad& r : L.roads()) {
+        const float hw = 0.5f * r.width;
+        for (std::size_t i = 0; i < r.samples.size(); ++i) {
+            const RoadSample& s = r.samples[i];
+            if (s.bridge || std::abs(s.x) > L.playHalfExtent() - 20.0f || std::abs(s.z) > L.playHalfExtent() - 20.0f)
+                continue;
+            bool skip = false;
+            for (std::size_t k = i >= 8 ? i - 8 : 0; k < std::min(r.samples.size(), i + 9); ++k)
+                skip = skip || r.samples[k].ford;
+            for (const LevelBridge& b : L.bridges())
+                skip = skip || std::hypot(s.x - b.x0, s.z - b.z0) < 25.0f || std::hypot(s.x - b.x1, s.z - b.z1) < 25.0f;
+            for (const LevelRoad& o : L.roads())
+                if (&o != &r)
+                    for (const RoadSample& q : o.samples)
+                        skip = skip || std::hypot(q.x - s.x, q.z - s.z) < 0.5f * (o.width + r.width) + 10.0f;
+            if (skip) continue;
+            Spot sp{0, -1e9f, 1e9f, 1e9f, 0, s.x, s.z, s.y, bare->heightAt(s.x, s.z), r.name.c_str()};
+            sp.fill = s.y - sp.natural;
+            for (const float o : {-1.0f, 1.0f}) {
+                const auto px = [&](float lat) { return s.x + s.dz * o * lat; };
+                const auto pz = [&](float lat) { return s.z - s.dx * o * lat; };
+                const auto at = [&](float lat) { return L.heightAt(px(lat), pz(lat)); };
+                const float edge = s.y + o * hw * std::tan(s.bank);
+                const float edgeFill = edge - bare->heightAt(px(hw + 1.0f), pz(hw + 1.0f));
+                sp.edgeFill = std::max(sp.edgeFill, edgeFill);
+                sp.raised = std::min(sp.raised, at(hw - 0.3f) - at(hw + 6.0f));
+                sp.raisedFar = std::min(sp.raisedFar, at(hw - 0.3f) - at(hw + 15.0f));
+                if (edgeFill > 0.3f)
+                    for (float lat = hw; lat < hw + 10.0f; lat += 1.0f) sp.slope = std::max(sp.slope, at(lat) - at(lat + 1.0f));
+            }
+            spots.push_back(sp);
+        }
+    }
+    CHECK(spots.size() > 2000, "%zu road samples measured", spots.size());
+    const auto stats = [&](const char* what, float Spot::*m) {
+        std::vector<float> v;
+        for (const Spot& s : spots) v.push_back(s.*m);
+        std::sort(v.begin(), v.end());
+        const auto q = [&](double f) { return v[std::min(v.size() - 1, std::size_t(f * double(v.size())))]; };
+        float over1 = 0.0f, over2 = 0.0f;
+        for (const float x : v) {
+            over1 += x > 1.0f ? 2.0f : 0.0f;
+            over2 += x > 2.0f ? 2.0f : 0.0f;
+        }
+        std::printf("  %-34s max %5.2f  p95 %5.2f  median %5.2f; > 1 m: %5.0f m, > 2 m: %5.0f m\n", what, v.back(), q(0.95),
+                    q(0.5), over1, over2);
+        return std::array<float, 2>{v.back(), q(0.95)};
+    };
+    std::printf("  %zu road samples (~%.0f m of road)\n", spots.size(), 2.0 * double(spots.size()));
+    const auto fill = stats("fill at the center line", &Spot::fill);
+    stats("fill at the edge (higher side)", &Spot::edgeFill);
+    const auto raised = stats("raised above both sides (6 m out)", &Spot::raised);
+    const auto raisedFar = stats("raised above both sides (15 m out)", &Spot::raisedFar);
+    std::vector<float> slopes;
+    for (const Spot& s : spots)
+        if (s.edgeFill > 0.3f) slopes.push_back(s.slope);
+    std::sort(slopes.begin(), slopes.end());
+    const float slopeP95 = slopes.empty() ? 0.0f : slopes[std::size_t(0.95 * double(slopes.size()))];
+    const float slopeMax = slopes.empty() ? 0.0f : slopes.back();
+    std::printf("  fill-side shoulder slope (rise per m): p95 %.2f, max %.2f (%zu samples)\n", slopeP95, slopeMax,
+                slopes.size());
+    std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return a.slope > b.slope; });
+    for (std::size_t k = 0; k < 5 && k < spots.size(); ++k)
+        std::printf("  shoulder %.2f at %5.0f %5.0f (%s): fill %.2f / edge %.2f\n", spots[k].slope, spots[k].x, spots[k].z,
+                    spots[k].road, spots[k].fill, spots[k].edgeFill);
+    // Worst raised spots, at least 40 m apart.
+    std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return a.raised > b.raised; });
+    std::vector<Spot> worst;
+    for (const Spot& s : spots) {
+        bool near = false;
+        for (const Spot& w : worst) near = near || std::hypot(w.x - s.x, w.z - s.z) < 40.0f;
+        if (!near) worst.push_back(s);
+        if (worst.size() == 12) break;
+    }
+    for (const Spot& s : worst)
+        std::printf("  raised %5.2f m at %5.0f %5.0f (%s): road %.2f, natural %.2f, fill %.2f / edge %.2f, shoulder %.2f\n",
+                    s.raised, s.x, s.z, s.road, s.y, s.natural, s.fill, s.edgeFill, s.slope);
+    // Before the cut-preferring profile and the 1:3 shoulders (2026-11-02): fill p95 6.62 m, raised p95 2.95 / 3.07 m,
+    // shoulder p95 0.97.
+    CHECK(fill[1] < 2.0f, "fill at the center line p95 %.2f m", fill[1]);
+    CHECK(raised[1] < 1.0f && raised[0] < 2.0f, "raised above both sides (6 m out) p95 %.2f, max %.2f m", raised[1],
+          raised[0]);
+    CHECK(raisedFar[1] < 1.0f, "raised above both sides (15 m out) p95 %.2f m", raisedFar[1]);
+    CHECK(slopeP95 < 0.45f, "fill-side shoulder slope p95 %.2f", slopeP95);
 }
 
 void levelSurfacesAndWater() {
@@ -1773,6 +1879,7 @@ int main(int argc, char** argv) {
         {"level_heightfield_sampling", levelHeightfieldSampling},
         {"level_tile_streaming", levelTileStreaming},
         {"level_road_carving", levelRoadCarving},
+        {"level_road_embankment", levelRoadEmbankment},
         {"level_surfaces_water", levelSurfacesAndWater},
         {"level_vehicles", levelVehicles},
         {"level_prop_winding", levelPropWinding},

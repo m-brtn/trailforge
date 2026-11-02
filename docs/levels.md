@@ -142,7 +142,13 @@ the development level and is what scenarios and `--demo` start on.
   and gorge walls rise from it at most ~63°. Steep river banks (`bankSlope` ≥ 1.5, the canyon) have a scree apron of
   1.5–5.5 m at ~37° at the water, spurs and gullies (the slope varies ±25 % along the wall), ledges every ~16 m of
   height, a bank line that wanders a few meters off the spline and a rim rounded by a smooth minimum. Cut banks
-  within 40 m of a road are relaxed to about 45° (switchback legs used to meet in a wall). The coast cap fades out
+  within 40 m of a road are relaxed to about 45° (switchback legs used to meet in a wall). Road profiles follow the
+  land: the grade-limited profile is the cheapest one under a cost that prefers cut to fill (fill above the ground
+  costs 3x, beyond 1.5 m 11x; `level_math::gradeLimitedProfile`), so a climb steeper than the road's `maxGrade` is cut
+  into its upper end instead of raising an embankment far ahead of it, and a road end on a POI flat that the profile
+  reaches within a 6 m cut meets the flat. Shoulders blend back into the ground at 1:3 at their steepest on fill and
+  1:2 in a cut (steeper only for fills and cuts beyond ~10 m, within the 48 m reach). CTest `level_road_embankment`
+  compares the bake with a bake without roads; `tools/scenarios/road_views.txt` shows the former worst spots. The coast cap fades out
   toward its 400 m reach (it used to cut a 64 m cliff into the northern range). Cliff faces (CC0 models with their
   collision meshes) clad walls of 46° or more every ~7 m, scree boulders (rock models, collision meshes) lie at the
   wall feet where the ground within 6 m rises by more than 6 m. CTest `level_slopes`: no dry cell steeper than 80°
