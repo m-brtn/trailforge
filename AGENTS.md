@@ -33,7 +33,10 @@ devlog.
 Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on the same Mac as a test of the
 SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
 (`.github/workflows/ci.yml`; the Linux package also starts on Mesa lavapipe under Xvfb) but have never been run on
-real hardware: say so whenever they are mentioned. Dependencies are fetched by CMake FetchContent as pinned archives
+real hardware: say so whenever they are mentioned. iOS / iPadOS 26+ (presets `host-tools` + `ios-sim-release` /
+`ios-device-release`, game controller only, no touch controls) has been run only in the iOS Simulator (iOS 27.0
+runtime); the device build links but has never run on a real iPhone or iPad, and a real controller is untested
+(`docs/building.md` "iOS"). Dependencies are fetched by CMake FetchContent as pinned archives
 with SHA256 checks (internet is needed for the first configure).
 
 ## Build and test
@@ -46,12 +49,17 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 105 tests, 94 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 109 tests, 98 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
 # physics and tests only, without SDL/rendering
 cmake --preset headless && cmake --build --preset headless && ctest --preset headless
+
+# iOS Simulator (macOS host): host shader compiler first, then the app; run_simulator.sh boots, installs, launches
+cmake --preset host-tools && cmake --build --preset host-tools
+cmake --preset ios-sim-release && cmake --build --preset ios-sim-release
+tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/ios_check.txt --no-audio
 
 # Windows (x64 Native Tools prompt: MSVC cl + Ninja) and Linux (Ninja, gcc/clang); shown only on their host
 cmake --preset windows-release && cmake --build --preset windows-release && ctest --preset windows-release
@@ -110,6 +118,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
+./build/release/trailforge --script tools/scenarios/ios_check.txt      # gamepad only (virtual pad): menu, vehicle page, drive, pause, Peaks, PERF Low; also run in the iOS Simulator, /tmp/trailforge_ios_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav
@@ -195,7 +204,7 @@ tests/        CTest physics, vehicle, app and audio tests (no window, no audio d
               vehicle_catalog_sweep together with assets/vehicles
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
-              packages), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
+              packages), ios/ (run_simulator.sh: boot, install and launch the iOS Simulator build), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
               texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain and building texture rebuild),
  cars/ (trace_blueprint.py + <id>.keypoints.json hand corrections, compare_silhouettes.py IoU / half-half images,
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;
@@ -295,7 +304,8 @@ stays in the git history and in the LFS storage after deletion.
   contact samples, contacts); body impact strength is an estimated impulse (Jolt's listener has no solved impulse).
   Sound quality claims must come from capture analysis; nobody has judged the mix by ear unless the devlog says so.
 - Keep the "Physics simplifications" list in `docs/physics.md` honest when behavior changes.
-- Only claim platforms that were actually run (currently macOS / Apple Silicon / Metal).
+- Only claim platforms that were actually run (currently macOS / Apple Silicon / Metal, and the iOS build in the iOS
+  Simulator only).
 
 ### Commits and pushing
 

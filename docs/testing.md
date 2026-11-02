@@ -121,7 +121,11 @@ real.
 Scenarios start in gameplay (no intro, no menu) and never read or write the settings file; garage setups go to
 `<tmp>/trailforge_scenario_setups`, emptied at start.
 
-Other scenarios: `tools/scenarios/bump_check.txt` (every shipped vehicle accelerated to 30 km/h on the proving
+Other scenarios: `tools/scenarios/ios_check.txt` (gamepad only through SDL's virtual pad: A on START opens the vehicle
+page, A again drives, right trigger / left stick / left trigger, Start pauses with frozen ticks and resumes,
+Exploration Peaks spawn and drive, `perf_begin` on the Low preset; written for the iOS build, which has no touch
+controls, and run in the iOS Simulator as well as on macOS, see [iOS](building.md#ios); `/tmp/trailforge_ios_*.png`),
+`tools/scenarios/bump_check.txt` (every shipped vehicle accelerated to 30 km/h on the proving
 ground's bump strip, teleport 16, coasting over a 0.35 m, 2.5 m long mound under both wheel tracks and then one under
 the left wheels; no
 rollover (`max_tilt` < 45°), upright on four wheels afterwards; `/tmp/trailforge_bump_*.png`),

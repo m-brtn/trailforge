@@ -10,6 +10,7 @@ Platforms, prerequisites, build presets, the app bundle, packaging and command-l
 | macOS, Vulkan through MoltenVK (`SDL_GPU_DRIVER=vulkan`) | Run on the same Mac: `full_check` 210 / 0, captures look like Metal. Not a supported configuration, only a test of the SPIR-V path |
 | Windows x64 (MSVC, D3D12 / Vulkan) | Builds and the headless tests pass in GitHub Actions; the package is built there. **Not run on real hardware** |
 | Linux x64 (gcc, Vulkan) | Builds and the headless tests pass in GitHub Actions; the packaged app starts and renders on Mesa lavapipe (software Vulkan) under Xvfb. **Not run on real hardware** |
+| iOS / iPadOS 26+ (arm64, Metal), game controller only | Run in the **iOS Simulator only** (Xcode 27.2, iOS 27.0 runtime, iPhone 18 Pro): start, menus, both levels, driving with SDL's virtual gamepad (`ios_check` 14 / 0). The device build compiles and links but is **not run on a real iPhone or iPad**; a real controller is untested. See [iOS](#ios) |
 
 The shaders have one HLSL source compiled at build time to SPIR-V, MSL / metallib and (on Windows) DXIL, see
 [Shader pipeline](rendering.md#shader-pipeline). The renderer takes the first format the SDL GPU device accepts, in the order
@@ -142,3 +143,96 @@ Command-line options:
 - `--paths` — print the asset lookup directories (`assets:` sounds, `music:`, `fonts:`, `images:`) and the user data
   directory, then exit;
 - `--version` — print the version and exit.
+
+## iOS
+
+First port (v0.29.0 tree): **iOS Simulator only, game controller only, untested on a real iPhone or iPad.** There are
+no touch controls yet: without a controller the start menu can only be looked at. Minimum iOS 26.0 (iPhone and iPad,
+landscape only, arm64).
+
+Prerequisites: Xcode with the iOS SDK and an iOS Simulator runtime (checked with Xcode 27.2, iOS SDK 27.2 and the
+iOS 27.0 runtime; there was no iOS 26 runtime on the test Mac, so iOS 26 itself was not run), the Metal toolchain for
+the iOS SDKs (`xcrun -sdk iphonesimulator -f metal`), CMake and Ninja.
+
+```sh
+# 1) host tools: trailforge_shaderc for macOS (cross builds cannot run a compiler built for iOS)
+cmake --preset host-tools && cmake --build --preset host-tools
+# 2) the app for the Simulator (arm64) -> build/ios-sim-release/TrailForge.app (ad-hoc signed)
+cmake --preset ios-sim-release && cmake --build --preset ios-sim-release
+# 3) boot a device, install, launch with the console; arguments after -- go to the app
+tools/ios/run_simulator.sh --no-build
+tools/ios/run_simulator.sh --no-build --device "iPad Air 11-inch (M4)" -- --demo --quit-after 30
+tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/ios_check.txt --no-audio
+# device build (compiles and links; installing it needs signing, below)
+cmake --preset ios-device-release && cmake --build --preset ios-device-release
+```
+
+`tools/ios/run_simulator.sh` boots the device headless (`--gui` opens the Simulator window), installs the bundle and
+runs `simctl launch --console-pty`. It calls CoreSimulator's own `simctl`: on the test Mac the `xcrun simctl` wrapper
+hangs in `xcodebuild -runFirstLaunch` (it waits for an administrator password because the installed CoreSimulator
+1174.9.2 is older than the 1174.21 Xcode 27.2 expects). Paths given to the app (`--script`, `--capture`) are host
+paths: Simulator apps read and write the Mac's file system, e.g. `--capture /tmp/trailforge_ios.png`. Settings,
+setups and best laps go to the app container (`simctl get_app_container <udid> com.trailforge.app data`, then
+`Library/Application Support/TrailForge/`).
+
+How the build works:
+
+- Presets `host-tools` (macOS, builds only `trailforge_shaderc`), `ios-sim-release` and `ios-device-release`
+  (`CMAKE_SYSTEM_NAME=iOS`, `CMAKE_OSX_DEPLOYMENT_TARGET=26.0`, arm64, Ninja). Only the app is built for iOS: the
+  tests, the probe, `trailforge_vehiclec` and the model exporter stay on macOS, and `TRAILFORGE_PACKAGED` is forced on
+  (assets only from the bundle). `texc` / `modelc` are not needed: the assets in the repository are already converted.
+- Shaders: the host `trailforge_shaderc` (`TRAILFORGE_HOST_SHADERC`) translates SPIR-V to MSL with SPIRV-Cross's iOS
+  options (`--msl-platform ios`), and `xcrun -sdk iphonesimulator|iphoneos metal` compiles the metallibs for the
+  deployment target.
+- `cmake/IosBundle.cmake`: `TrailForge.app` with `Info.plist` from `cmake/Info.ios.plist.in` (bundle id
+  `com.trailforge.app`, UIScene manifest, landscape only, full screen, status bar hidden, `GCSupportedGameControllers`
+  extended gamepad, `GCSupportsControllerUserInteraction`), the app icon compiled by `actool` from
+  `external_assets/images/Icon.png`, and `assets/` copied to the bundle root (`SDL_GetBasePath()` on iOS). It is
+  signed with `TRAILFORGE_IOS_SIGN_IDENTITY` (default `-`, ad hoc).
+- Two patches of the pinned dependencies run as FetchContent `PATCH_COMMAND`s:
+  `cmake/patches/SdlIosSimulator.cmake` (inside `#if TARGET_OS_SIMULATOR` only: SDL GPU accepts the Simulator's Metal
+  device, which reports only GPU family Apple2, and skips `setDepthClipMode`, which that device rejects; Metal
+  validation asserts on it and without validation the GPU stalls) and `cmake/patches/ImguiIos.cmake` (ImGui's SDL GPU
+  backend tests `TARGET_OS_MAC` first, which is also true on iOS, and so picks its macOS metallibs; on iOS it now uses
+  its MSL source). macOS compiles the original code paths.
+- Code: Low is the default quality preset on iOS (`kDefaultQuality`, until the port is measured on a device). The app
+  lifecycle events pause the game when it loses focus (pause menu), and in the background nothing is rendered, the
+  simulation does not tick and the audio device is stopped; it restarts on return.
+
+Measured in the Simulator (iPhone 18 Pro, iOS 27.0, 2622 × 1206 output, Low preset 1757 × 808 render): about 2 s
+from launch to the loaded menu world (log timestamps), 112–185 FPS in the menu, on the proving ground and on
+Exploration Peaks (`perf_begin` averages 5.4–8.9 ms; the Simulator does not hold VSync), process memory 520–600 MB.
+The Simulator's GPU is the Mac's GPU behind a translation layer, so these numbers say nothing about an iPhone.
+
+Known limitations:
+
+- The Simulator's Metal device has no BC texture compression: the level ground falls back to the procedural ground and
+  the level models (trees, ground cover, rocks, cliffs, logs) are skipped with a log line, as on any GPU without BC7:
+  Exploration Peaks shows bare hills. Whether a given iPhone / iPad reports `supportsBCTextureCompression` was not checked; an
+  ASTC copy of the textures would be the portable fix.
+- No depth clamp in the Simulator (see the SDL patch): shadow casters behind the light's near plane are clipped.
+- Controller input was verified only with SDL's virtual gamepad (`gamepad attach` in `tools/scenarios/ios_check.txt`),
+  which goes through the game's gamepad code but not through Apple's GameController framework. The Simulator does not
+  pass a physical controller through here; MFi / Xbox / DualSense pads are untested.
+- No touch controls, no on-screen keyboard; the HUD still shows the keyboard help line. UI layout ignores the safe
+  area (the Dynamic Island can cover the left edge of the HUD in landscape).
+- Background and return: the lifecycle events arrive and the app stops rendering and audio (log lines `App: entered
+  the background`, `Audio: device stopped`). Returning crashed once because the Simulator's own GPU host process
+  (`SimMetalHost`) had crashed; it also crashed when the Simulator window opened and when other apps launched with
+  TrailForge not running, so the resume path is unverified.
+- Scenario checks other than `ios_check.txt` were not run on iOS.
+
+Running on a real iPhone or iPad (not done yet):
+
+1. Xcode → Settings → Accounts: add an Apple ID (a free personal team works for 7-day development builds), enable
+   Developer Mode on the device (Settings → Privacy & Security) and connect it once with Xcode.
+2. Create a development provisioning profile for the bundle id (e.g. an empty Xcode iOS app project with
+   `com.<you>.trailforge` and the same team builds one), then configure with that id, the identity and the profile:
+   `cmake --preset ios-device-release -DTRAILFORGE_IOS_BUNDLE_ID=com.<you>.trailforge
+   -DTRAILFORGE_IOS_SIGN_IDENTITY="Apple Development: <name> (<id>)"
+   -DTRAILFORGE_IOS_PROVISIONING_PROFILE=<profile>.mobileprovision -DTRAILFORGE_IOS_ENTITLEMENTS=<entitlements>.plist`
+   (the entitlements need `application-identifier` and `com.apple.developer.team-identifier` from the profile;
+   `security cms -D -i <profile>` prints them).
+3. Install and launch: `xcrun devicectl device install app --device <id> build/ios-device-release/TrailForge.app`,
+   `xcrun devicectl device process launch --device <id> com.<you>.trailforge`.
+4. Check the BC7 support and the real controller, then measure the Low / Medium presets on the device.
