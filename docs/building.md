@@ -147,9 +147,10 @@ Command-line options:
 
 ## iOS
 
-First port (v0.29.0 tree): **iOS Simulator only, game controller only, untested on a real iPhone or iPad.** Touch
-works in the menus only (tap a row or a value arrow, drag a list to scroll it, a flick coasts); there are no touch
-driving controls, so driving needs a controller. Minimum iOS 26.0 (iPhone and iPad,
+First port (v0.29.0 tree): **iOS Simulator only, untested on a real iPhone or iPad.** Touch
+works in the menus (tap a row or a value arrow, drag a list to scroll it, a flick coasts) and, without a controller,
+on-screen driving controls appear in gameplay (`docs/controls.md` "Touch driving"); they were checked with synthetic
+finger events, never on a device. Minimum iOS 26.0 (iPhone and iPad,
 landscape only, arm64). For a real iPhone / iPad use the Xcode project ("iOS device: Xcode project" below).
 
 Prerequisites: Xcode with the iOS SDK and an iOS Simulator runtime (checked with Xcode 27.2, iOS SDK 27.2 and the
@@ -217,8 +218,8 @@ Known limitations:
   which goes through the game's gamepad code but not through Apple's GameController framework. The Simulator does not
   pass a physical controller through here; MFi / Xbox / DualSense pads are untested.
 - Touch in the menus only (SDL's touch -> mouse events: a tap acts when the finger lifts, a drag past 10 points
-  scrolls the list and activates nothing, garage sliders are set by tapping the bar); no touch driving controls, no
-  on-screen keyboard; the HUD still shows the keyboard help line. UI layout ignores the safe
+  scrolls the list and activates nothing, garage sliders are set by tapping the bar); on-screen driving controls
+  only while no pad is connected (synthetic finger events only, never a real touch screen); no on-screen keyboard. UI layout ignores the safe
   area (the Dynamic Island can cover the left edge of the HUD in landscape).
 - Background and return: the lifecycle events arrive and the app stops rendering and audio (log lines `App: entered
   the background`, `Audio: device stopped`). Returning crashed once because the Simulator's own GPU host process

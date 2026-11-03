@@ -1,0 +1,127 @@
+# Touch driving controls (iOS on-screen controls), forced on with `touch_controls on` so the check runs on macOS too:
+# GAS pedal ramp, steering stick both ways, BRAKE, HAND, a finger sliding from GAS to BRAKE, the top-row buttons
+# (lights, camera, reset, map, pause), and the controls hiding while a gamepad is connected.
+#   ./build/release/trailforge --script tools/scenarios/touch_drive.txt --no-audio
+# On iOS: tools/ios/run_simulator.sh --no-build -- --script $PWD/tools/scenarios/touch_drive.txt --no-audio
+# Fingers are SDL finger events pushed into the event queue (window points), the path a touch screen uses; nobody has
+# driven with them on a real iPhone. Captures /tmp/trailforge_touch_*.png.
+
+controls pad_type none
+set ui 0
+set auto_reverse 0
+quality Low
+wait 1.0
+
+expect touch_active == 0             # macOS, auto: off
+touch_controls on
+wait 0.2
+expect touch_active == 1
+capture /tmp/trailforge_touch_00_idle.png
+wait 0.1
+
+# ---------------------------------------------------------------- GAS: half at once, full after a moment
+finger down 1 button:throttle
+wait 0.3
+expect touch_fingers == 1
+expect touch_throttle >= 0.5
+expect throttle >= 0.5
+wait 1.0
+expect touch_throttle > 0.99
+until fwd_kmh > 20 15
+log touch_gas
+
+# ---------------------------------------------------------------- steering stick: right, then left past full lock
+finger down 2 stick
+finger move 2 stick 60 0
+wait 0.3
+expect touch_steer > 0.5
+expect steer > 0.5
+capture /tmp/trailforge_touch_01_drive_right.png
+wait 0.1
+finger move 2 stick -300 0           # the centre follows past full lock
+wait 0.3
+expect touch_steer < -0.99
+expect steer < -0.95               # the vehicle command is rate-limited
+finger move 2 stick -200 0           # back by 100 points (more than the radius) answers at once
+wait 0.2
+expect touch_steer > 0
+finger up 2
+wait 0.2
+expect touch_steer == 0
+expect steer == 0
+
+# ---------------------------------------------------------------- the GAS finger slides onto BRAKE
+finger move 1 button:brake
+wait 0.5
+expect touch_throttle == 0
+expect touch_brake > 0.3
+expect brake > 0.3
+until fwd_kmh < 1 15
+finger up 1
+wait 0.2
+expect touch_fingers == 0
+expect touch_brake == 0
+
+# ---------------------------------------------------------------- HAND
+finger down 3 button:handbrake
+wait 0.5
+expect handbrake > 0.95              # the simulation ramps the lever
+capture /tmp/trailforge_touch_02_hand.png
+wait 0.1
+finger up 3
+wait 0.5
+expect handbrake < 0.05
+
+# ---------------------------------------------------------------- top row: lights, camera, reset, map, pause
+set headlights 0
+wait 0.1
+finger down 4 button:lights
+finger up 4
+wait 0.2
+expect headlights == 1
+finger down 4 button:lights
+finger up 4
+wait 0.2
+expect headlights == 0
+expect cam_mode == 0
+finger down 4 button:camera
+finger up 4
+wait 0.5
+expect cam_mode == 1
+finger down 4 button:camera
+finger up 4
+wait 0.1
+finger down 4 button:camera
+finger up 4
+wait 0.1
+finger down 4 button:camera
+finger up 4
+wait 0.5
+expect cam_mode == 0
+finger down 4 button:reset
+finger up 4
+wait 1.0
+expect fwd_kmh < 1
+finger down 4 button:map
+finger up 4
+wait 0.5
+expect map_open == 1
+expect touch_active == 0             # gameplay only
+tap M
+wait 0.5
+expect map_open == 0
+expect touch_active == 1
+finger down 4 button:pause
+finger up 4
+wait 0.3
+expect menu_screen == 3
+expect touch_active == 0
+menu resume
+wait 0.3
+expect menu_screen == 2
+expect touch_active == 1
+
+# ---------------------------------------------------------------- auto on a desktop / with a pad: hidden
+touch_controls auto
+wait 0.2
+expect touch_active == 0

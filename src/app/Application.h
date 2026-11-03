@@ -120,6 +120,8 @@ private:
     MapPlayer mapPlayer() const;
     MapHints mapHints() const;
     void drawMapHud(); // minimap and compass bar in gameplay
+    void updateTouchControls(); // on-screen driving controls on or off for this frame, layout from the window
+    void drawTouchControls();
     static bool SDLCALL onAppLifecycle(void* app, SDL_Event* event);
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
@@ -198,6 +200,8 @@ private:
     // Scenario `gamepad attach`: an SDL virtual gamepad that the input opens like a real one (axes set by the script).
     SDL_JoystickID m_virtualPadId = 0;
     SDL_Joystick* m_virtualPad = nullptr;
+    // On-screen touch driving: auto (iOS without a gamepad), or forced on / off by the scenario `touch_controls`.
+    enum class TouchMode { Auto, On, Off } m_touchMode = TouchMode::Auto;
     KeyboardStyle keyboardStyle() const { return m_keyboardOverride.value_or(nativeKeyboardStyle()); }
     PadType padType() const { return m_padTypeOverride.value_or(m_input.gamepadType()); }
     float m_musicTarget = 0.0f;

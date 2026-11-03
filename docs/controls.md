@@ -113,10 +113,17 @@ compass bar). On: also the top-left read-out (wheel compression, key hints, FPS 
 tuning (shown on the first frame unless `--no-ui`), F2 graphics, F3 audio and the physics debug lines of the tuning
 window; F1–F3 do nothing while it is off. Scenario runs start with it on (their checks read those windows).
 
-**Touch (menus only).** On a touch screen (iOS) a tap on a menu or garage row, a value arrow or a vehicle card acts
+**Touch.** On a touch screen (iOS) a tap on a menu or garage row, a value arrow or a vehicle card acts
 like a click when the finger lifts; dragging a list (Settings, Controls, vehicle page, garage) scrolls it, coasts
 briefly after a flick and activates nothing. A keyboard / gamepad move still scrolls the selected row into view.
-There are no touch driving controls.
+
+**Touch driving (iOS).** On iOS, in gameplay and while no gamepad is connected, on-screen controls appear (a connected
+pad hides them at once): GAS (bottom right) and BRAKE beside it with the same ramp as the keyboard pedals (a finger
+can slide from one to the other), HAND above BRAKE, a steering stick anywhere in the lower left (it appears under the
+finger, steers sideways only, and its centre follows the finger past full lock), and a top-right row LIGHT, R (reset),
+CAM, MAP, II (pause). The minimap moves under that row and the keyboard help lines are hidden. Layout respects the
+safe area. Checked with synthetic finger events on macOS (`tools/scenarios/touch_drive.txt`, `touch_controls on`);
+not yet tried on a real iPhone.
 
 **Vehicle page.** With more than one vehicle in the catalog, Start opens SELECT VEHICLE: a strip of cards (name and
 GASOLINE / ELECTRIC), the description and a spec list (mass, peak power, torque, drivetrain, battery, tires), with

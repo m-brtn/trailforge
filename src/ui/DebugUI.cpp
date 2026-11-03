@@ -128,12 +128,14 @@ UiRequests DebugUI::draw(Simulation& sim, const FrameStats& stats, GraphicsState
         }
         if (stats.paused) ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "FROZEN (P to resume, N = single step)");
         if (sim.lastMessage()[0]) ImGui::TextDisabled("%s", sim.lastMessage());
-        ImGui::TextDisabled("%s", driveHint.c_str());
-        if (sim.vehicleConfig().isElectric())
-            ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
-        else
-            ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
-        ImGui::TextDisabled("M map  C camera (follow / close / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
+        if (keyHints) {
+            ImGui::TextDisabled("%s", driveHint.c_str());
+            if (sim.vehicleConfig().isElectric())
+                ImGui::TextDisabled("Q fwd/rev  V drive mode NORMAL/OFF-ROAD  B ABS  T traction control  X diff locks  R reset");
+            else
+                ImGui::TextDisabled("Q fwd/rev  L low range  V 2H/4H/4L  B ABS  T traction control  X diff locks  R reset");
+            ImGui::TextDisabled("M map  C camera (follow / close / hood / free)  H lights  Esc menu  P freeze  F1 UI  F2 graphics  F3 audio");
+        }
         ImGui::TextDisabled("%.0f FPS  frame %.2f ms  CPU %.2f ms  GPU %s  %s %ux%u  v%s", stats.fps, stats.frameMs,
                             stats.cpuFrameMs, gpuText(stats.gpuFrameMs).c_str(), presetName(gfx.preset), stats.renderW,
                             stats.renderH, TRAILFORGE_VERSION);

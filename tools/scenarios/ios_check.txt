@@ -1,4 +1,4 @@
-# iOS check, gamepad first (touch works in the menus only, there are no touch driving controls): start menu -> START
+# iOS check, gamepad first (a connected pad hides the touch driving controls; those are in touch_drive.txt): start menu -> START
 # and the vehicle page with A, drive with the right trigger and the left stick, Start pauses, Settings follows the
 # selection with its scroll and a finger drags the list, Start resumes, Exploration Peaks spawn and drive, frame times
 # on the Low preset. Runs on macOS as well; on iOS it is passed to the Simulator app (tools/ios/run_simulator.sh):

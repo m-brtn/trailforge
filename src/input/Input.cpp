@@ -122,6 +122,16 @@ SDL_JoystickID Input::gamepadId() const { return m_gamepad ? SDL_GetGamepadID(m_
 
 PadType Input::gamepadType() const { return m_gamepad ? PadType(SDL_GetGamepadType(m_gamepad)) : PadType::None; }
 
+void Input::setTouchControls(bool active, const TouchLayout& layout) {
+    m_touch.setLayout(layout);
+    if (active == m_touchActive) return;
+    m_touchActive = active;
+    m_touch.releaseAll();
+    m_touchPedals.reset();
+    // A finger that went down before the switch must not leave a held mouse button or a menu drag behind.
+    m_mouseDown = m_touchDown = m_touchDrag = false;
+}
+
 void Input::beginFrame() {
     m_pressed.fill(false);
     m_padPressed.fill(false);
@@ -190,7 +200,32 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
             break;
         }
         break;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_MOTION:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED: {
+        if (!m_touchActive) break;
+        const float x = e.tfinger.x * m_touch.layout().width, y = e.tfinger.y * m_touch.layout().height;
+        if (e.type == SDL_EVENT_FINGER_MOTION) {
+            m_touch.fingerMove(e.tfinger.fingerID, x, y);
+            break;
+        }
+        if (e.type != SDL_EVENT_FINGER_DOWN) {
+            m_touch.fingerUp(e.tfinger.fingerID);
+            break;
+        }
+        switch (m_touch.fingerDown(e.tfinger.fingerID, x, y)) {
+        case TouchButton::Pause: m_menu.pause = m_menu.any = true; break;
+        case TouchButton::Map: press(Action::ToggleMap); break;
+        case TouchButton::Camera: press(Action::ToggleCamera); break;
+        case TouchButton::Reset: press(Action::Reset); break;
+        case TouchButton::Lights: press(Action::ToggleHeadlights); break;
+        default: break;
+        }
+        break;
+    }
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (m_touchActive && e.button.which == SDL_TOUCH_MOUSEID) break;
         if (!uiWantsMouse && e.button.button == SDL_BUTTON_RIGHT) m_rmb = true;
         if (!uiWantsMouse) {
             m_menu.any = true;
@@ -209,6 +244,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (m_touchActive && e.button.which == SDL_TOUCH_MOUSEID) break;
         if (e.button.button == SDL_BUTTON_RIGHT) m_rmb = false;
         if (e.button.button == SDL_BUTTON_LEFT) {
             if (m_mouseDown) m_menu.release = true;
@@ -223,6 +259,7 @@ void Input::handleEvent(const SDL_Event& e, bool uiWantsKeyboard, bool uiWantsMo
         }
         break;
     case SDL_EVENT_MOUSE_MOTION:
+        if (m_touchActive && e.motion.which == SDL_TOUCH_MOUSEID) break;
         if (m_rmb && !uiWantsMouse) m_mouseDelta += glm::vec2(e.motion.xrel, e.motion.yrel);
         m_menu.mouseX = m_mouseX = e.motion.x;
         m_menu.mouseY = m_mouseY = e.motion.y;
@@ -338,6 +375,17 @@ void Input::endEvents(bool uiWantsKeyboard, bool /*uiWantsMouse*/, float dt) {
         m_freeMove.x = keyHeld(cam.right) - keyHeld(cam.left);
         m_freeMove.y = keyHeld(Key::PageUp) - keyHeld(Key::PageDown);
         m_fast = m_held[SDL_SCANCODE_LSHIFT] || m_held[SDL_SCANCODE_RSHIFT];
+    }
+    m_touchPedals.update(m_touchActive && m_touch.held(TouchButton::Throttle),
+                         m_touchActive && m_touch.held(TouchButton::Brake), dt);
+    if (m_touchActive) {
+        in.throttle = std::max(in.throttle, m_touchPedals.throttle());
+        in.brake = std::max(in.brake, m_touchPedals.brake());
+        if (m_touch.held(TouchButton::Handbrake)) in.handBrake = 1.0f;
+        if (m_touch.steering() && std::abs(m_touch.steer()) >= std::abs(in.steer)) {
+            in.steer = m_touch.steer();
+            in.analog = true;
+        }
     }
     if (m_gamepad) {
         // Gamepad: RT throttle, LT brake, left stick steering, A handbrake. Take the maximum with the keyboard.

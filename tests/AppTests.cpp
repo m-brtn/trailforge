@@ -9,6 +9,7 @@
 #include "app/MapData.h"
 #include "app/MapView.h"
 #include "input/ControlLayout.h"
+#include "input/TouchControls.h"
 #include "track/Level.h"
 #include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
@@ -1121,6 +1122,68 @@ void setupMigration() {
     std::filesystem::remove_all(dir);
 }
 
+// On-screen touch controls: the layout fits a landscape iPhone with its safe area and a desktop window (no overlaps,
+// inside the safe area), fingers map to buttons, the stick steers both ways with a dead zone and a centre that follows
+// past full lock, a pedal finger slides between GAS and BRAKE, and only one finger steers.
+void touchControlsLogic() {
+    struct Screen {
+        float w, h, l, t, r, b;
+    };
+    for (const Screen& sc : {Screen{874, 402, 62, 0, 62, 21}, Screen{1280, 720, 0, 0, 0, 0}, Screen{667, 375, 0, 0, 0, 0}}) {
+        const TouchLayout L = touchLayout(sc.w, sc.h, sc.l, sc.t, sc.r, sc.b);
+        for (int i = 0; i < kTouchButtonCount; ++i) {
+            const TouchRect& a = L.buttons[std::size_t(i)];
+            CHECK(a.x0 >= sc.l && a.x1 <= sc.w - sc.r && a.y0 >= sc.t && a.y1 <= sc.h - sc.b && a.x1 > a.x0 + 30.0f &&
+                      a.y1 > a.y0 + 30.0f,
+                  "%gx%g: %s inside the safe area, at least 30 points", sc.w, sc.h, touchButtonName(TouchButton(i)));
+            for (int j = i + 1; j < kTouchButtonCount; ++j) {
+                const TouchRect& c = L.buttons[std::size_t(j)];
+                CHECK(a.x1 <= c.x0 || c.x1 <= a.x0 || a.y1 <= c.y0 || c.y1 <= a.y0, "%gx%g: %s overlaps %s", sc.w, sc.h,
+                      touchButtonName(TouchButton(i)), touchButtonName(TouchButton(j)));
+            }
+            CHECK(!L.steerZone.contains(a.cx(), a.cy()) || i >= int(TouchButton::Pause),
+                  "%gx%g: pedal %s in the steering zone", sc.w, sc.h, touchButtonName(TouchButton(i)));
+        }
+        CHECK(L.steerZone.contains(L.restX, L.restY) && L.restX - L.stickRadius >= sc.l,
+              "%gx%g: stick rest inside the zone and the safe area", sc.w, sc.h);
+    }
+
+    TouchControls tc;
+    const TouchLayout L = touchLayout(874, 402, 62, 0, 62, 21);
+    tc.setLayout(L);
+    const TouchRect& gas = L.buttons[std::size_t(TouchButton::Throttle)];
+    const TouchRect& brake = L.buttons[std::size_t(TouchButton::Brake)];
+    CHECK(tc.fingerDown(1, gas.cx(), gas.cy()) == TouchButton::Throttle && tc.held(TouchButton::Throttle), "GAS");
+    tc.fingerMove(1, brake.cx(), brake.cy());
+    CHECK(!tc.held(TouchButton::Throttle) && tc.held(TouchButton::Brake), "GAS finger slid onto BRAKE");
+    tc.fingerMove(1, 10.0f, 10.0f);
+    CHECK(tc.held(TouchButton::Brake), "a pedal stays held when the finger leaves it");
+
+    const float r = L.stickRadius;
+    CHECK(tc.fingerDown(2, L.restX, L.restY) == TouchButton::Count && tc.steering() && tc.steer() == 0.0f, "stick down");
+    CHECK(tc.stickX() == L.restX && tc.stickY() == L.restY, "stick centre under the finger");
+    tc.fingerMove(2, L.restX + 0.03f * r, L.restY);
+    CHECK(tc.steer() == 0.0f, "dead zone: %g", tc.steer());
+    tc.fingerMove(2, L.restX + 0.5f * r, L.restY - 40.0f);
+    CHECK(tc.steer() > 0.4f && tc.steer() < 0.5f, "half right, vertical motion ignored: %g", tc.steer());
+    tc.fingerMove(2, L.restX - 3.0f * r, L.restY);
+    CHECK(tc.steer() == -1.0f && std::abs(tc.stickX() - (L.restX - 2.0f * r)) < 1e-3f, "full left, centre follows: %g %g",
+          tc.steer(), tc.stickX());
+    tc.fingerMove(2, L.restX - 2.0f * r, L.restY);
+    CHECK(tc.steer() == 0.0f, "back to the dragged centre: %g", tc.steer());
+    CHECK(tc.fingerDown(3, L.restX + 20.0f, L.restY) == TouchButton::Count && tc.fingers() == 3, "second finger in the zone");
+    tc.fingerMove(3, L.restX + 3.0f * r, L.restY);
+    CHECK(tc.steer() == 0.0f, "only the first finger steers: %g", tc.steer());
+    tc.fingerUp(2);
+    CHECK(!tc.steering() && tc.steer() == 0.0f && tc.stickX() == L.restX, "stick released back to rest");
+    tc.fingerUp(1);
+    CHECK(!tc.held(TouchButton::Brake) && tc.fingers() == 1, "BRAKE released");
+    tc.releaseAll();
+    CHECK(tc.fingers() == 0, "release all");
+    const TouchRect& pause = L.buttons[std::size_t(TouchButton::Pause)];
+    CHECK(tc.fingerDown(4, pause.cx(), pause.cy()) == TouchButton::Pause, "pause button");
+}
+
 int main(int argc, char** argv) {
     const std::vector<std::pair<const char*, void (*)()>> tests = {
         {"setup_migration", setupMigration},
@@ -1135,6 +1198,7 @@ int main(int argc, char** argv) {
         {"controls_layout", controlsLayout},
         {"pad_glyph_detect", padGlyphDetect},
         {"callout_spread", calloutSpread},
+        {"touch_controls_logic", touchControlsLogic},
     };
     int ran = 0;
     for (const auto& [name, fn] : tests) {

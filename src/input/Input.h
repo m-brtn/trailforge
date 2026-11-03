@@ -4,6 +4,7 @@
 
 #include "input/ControlLayout.h"
 #include "input/KeyboardPedals.h"
+#include "input/TouchControls.h"
 #include "sim/Simulation.h"
 
 #include <SDL3/SDL_events.h>
@@ -89,6 +90,14 @@ public:
     const char* gamepadName() const;
     PadType gamepadType() const; // PadType::None without a pad
 
+    // On-screen touch driving (TouchControls, layout in window points). Active: SDL finger events drive and pause, and
+    // SDL's touch-synthesized mouse events are ignored; inactive: fingers reach the menus only as that mouse.
+    void setTouchControls(bool active, const TouchLayout& layout);
+    bool touchControlsActive() const { return m_touchActive; }
+    const TouchControls& touchControls() const { return m_touch; }
+    float touchThrottle() const { return m_touchPedals.throttle(); }
+    float touchBrake() const { return m_touchPedals.brake(); }
+
     // Driving cluster (W A S D or the arrows); the other cluster moves the free camera. Both ramp (KeyboardPedals).
     void setDriveKeys(DriveKeys layout) { m_driveKeys = layout; }
     DriveKeys driveKeys() const { return m_driveKeys; }
@@ -116,6 +125,9 @@ private:
     bool m_mouseDown = false;
     bool m_touchDown = false, m_touchDrag = false;
     float m_touchX0 = 0.0f, m_touchY0 = 0.0f;
+    TouchControls m_touch;
+    KeyboardPedals m_touchPedals; // the on-screen pedals ramp like the keyboard's
+    bool m_touchActive = false;
     SDL_Gamepad* m_gamepad = nullptr;
     MenuKeys m_menu;
     float m_mouseX = 0.0f, m_mouseY = 0.0f;

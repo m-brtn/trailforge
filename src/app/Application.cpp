@@ -326,6 +326,7 @@ void Application::processEvents() {
         m_applied.timeOfDay = m_settings.timeOfDay;
     }
     if (m_scenario) updateScenario();
+    updateTouchControls();
     const ImGuiIO& io = ImGui::GetIO();
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -1098,11 +1099,13 @@ void Application::drawMapHud() {
     const ImVec2 D = ImGui::GetIO().DisplaySize;
     const MapPlayer p = mapPlayer();
     const bool open = m_sim.level() != nullptr;
+    const bool touch = m_input.touchControlsActive();
+    const TouchLayout& tl = m_input.touchControls().layout();
     if (m_settings.compass) {
-        const float w = std::clamp(0.36f * D.x, 360.0f, 640.0f);
+        const float w = std::clamp(0.36f * D.x, touch ? 260.0f : 360.0f, 640.0f);
         float cx = 0.5f * D.x;
         if (const UiItemRect* hud = m_ui.item("hud")) cx = std::max(cx, hud->x1 + 14.0f + 0.5f * w);
-        cx = std::min(cx, D.x - 10.0f - 0.5f * w);
+        cx = std::min(cx, (touch ? tl.topRowLeft : D.x) - 10.0f - 0.5f * w);
         m_mapUI.drawCompass(cx, 10.0f, w, open ? 900.0f : 120.0f, m_marker, p);
         m_ui.lapHudX = cx;
         m_ui.lapHudTop = 10.0f + std::clamp(0.075f * w, 30.0f, 42.0f) + 8.0f;
@@ -1114,8 +1117,72 @@ void Application::drawMapHud() {
         static constexpr float kSize[] = {0.085f, 0.11f, 0.145f};
         const float r = std::clamp(kSize[std::clamp(m_settings.minimapSize, 0, 2)] * D.y, 60.0f, 220.0f);
         const float margin = 22.0f;
-        m_mapUI.drawMinimap(D.x - margin - r, D.y - margin - r - 22.0f, r, open ? 180.0f : 45.0f, m_settings.minimapNorthUp,
-                            m_marker, p);
+        // With the touch controls the pedals take the bottom right corner: the minimap moves under the button row.
+        const float cy = touch ? tl.topRowBottom + 14.0f + r : D.y - margin - r - 22.0f;
+        m_mapUI.drawMinimap(D.x - margin - r, cy, r, open ? 180.0f : 45.0f, m_settings.minimapNorthUp, m_marker, p);
+    }
+}
+
+// On-screen driving controls: on iOS while no gamepad is connected (a pad takes over at once and hides them), only in
+// gameplay; the scenario `touch_controls on` shows them on any platform for the checks.
+void Application::updateTouchControls() {
+#if defined(SDL_PLATFORM_IOS)
+    constexpr bool kTouchPlatform = true;
+#else
+    constexpr bool kTouchPlatform = false;
+#endif
+    const bool wanted = m_touchMode == TouchMode::On ||
+                        (m_touchMode == TouchMode::Auto && kTouchPlatform && !m_input.gamepadConnected());
+    const bool active = wanted && m_flow.screen() == Screen::Playing && !m_scenarioAutopilot && !m_options.demoDrive;
+    int w = 0, h = 0;
+    SDL_GetWindowSize(m_window.get(), &w, &h);
+    SDL_Rect safe{0, 0, w, h};
+    if (!SDL_GetWindowSafeArea(m_window.get(), &safe) || safe.w <= 0 || safe.h <= 0) safe = SDL_Rect{0, 0, w, h};
+    m_input.setTouchControls(active, touchLayout(float(w), float(h), float(safe.x), float(safe.y),
+                                                 float(w - safe.x - safe.w), float(h - safe.y - safe.h)));
+    m_ui.keyHints = !active;
+}
+
+void Application::drawTouchControls() {
+    if (!m_input.touchControlsActive() || !m_ui.hud) return;
+    const TouchControls& tc = m_input.touchControls();
+    const TouchLayout& L = tc.layout();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList(); // over the scene, under the ImGui windows
+    ImFont* font = ImGui::GetFont();
+    const float u = L.stickRadius / 0.75f;
+    const ImU32 fill = IM_COL32(18, 22, 26, 95), lit = IM_COL32(236, 150, 40, 150), edge = IM_COL32(255, 255, 255, 120),
+                ink = IM_COL32(255, 255, 255, 215);
+    const auto label = [&](const char* text, float size, ImVec2 centre) {
+        const ImVec2 ts = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
+        dl->AddText(font, size, ImVec2(centre.x - 0.5f * ts.x, centre.y - 0.5f * ts.y), ink, text);
+    };
+    for (int i = 0; i < kTouchButtonCount; ++i) {
+        const TouchButton b = TouchButton(i);
+        const TouchRect& r = L.buttons[std::size_t(i)];
+        const float round = 0.22f * std::min(r.x1 - r.x0, r.y1 - r.y0);
+        const bool on = tc.held(b) || (b == TouchButton::Lights && m_gfx.headlights);
+        dl->AddRectFilled(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), on && b != TouchButton::Throttle && b != TouchButton::Brake ? lit : fill, round);
+        // The pedals fill from the bottom with their ramped travel.
+        const float travel = b == TouchButton::Throttle ? m_input.touchThrottle() : b == TouchButton::Brake ? m_input.touchBrake() : 0.0f;
+        if (travel > 0.0f)
+            dl->AddRectFilled(ImVec2(r.x0, r.y1 - travel * (r.y1 - r.y0)), ImVec2(r.x1, r.y1), lit, round,
+                              ImDrawFlags_RoundCornersBottom);
+        dl->AddRect(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), edge, round, 0, 2.0f);
+        const bool big = b == TouchButton::Throttle || b == TouchButton::Brake || b == TouchButton::Handbrake;
+        label(touchButtonLabel(b), (big ? 0.24f : 0.18f) * u, ImVec2(r.cx(), r.cy()));
+    }
+    // Steering stick: drawn at rest in the corner, under the finger while steering; the knob moves sideways only.
+    const bool steering = tc.steering();
+    const float R = L.stickRadius;
+    const ImVec2 c(tc.stickX(), tc.stickY());
+    dl->AddCircleFilled(c, R, IM_COL32(18, 22, 26, steering ? 95 : 55), 48);
+    dl->AddCircle(c, R, IM_COL32(255, 255, 255, steering ? 120 : 70), 48, 2.0f);
+    const float knob = c.x + std::clamp(tc.fingerX() - c.x, -R, R);
+    dl->AddCircleFilled(ImVec2(knob, c.y), 0.42f * R, IM_COL32(255, 255, 255, steering ? 175 : 85), 32);
+    if (!steering) {
+        label("<", 0.3f * u, ImVec2(c.x - 0.72f * R, c.y));
+        label(">", 0.3f * u, ImVec2(c.x + 0.72f * R, c.y));
+        label("STEER", 0.18f * u, ImVec2(c.x, c.y + R + 0.18f * u));
     }
 }
 
@@ -1280,6 +1347,7 @@ void Application::renderFrame(float frameTime) {
     if (!m_flow.menuActive()) m_ui.drawAudio(m_audioPanel);
     pollMapBuild();
     if (m_flow.screen() == Screen::Playing) drawMapHud();
+    drawTouchControls();
     if (m_flow.screen() == Screen::Map) m_mapUI.drawFullMap(m_mapView, m_marker, mapPlayer(), mapHints(), m_mapHoverPoi, m_mapCrosshair);
     MenuView view;
     view.gamepad = m_input.gamepadConnected();
@@ -2071,6 +2139,62 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueTouch(x0 + 0.15f * (x1 - x0), 0.5f * (y0 + y1), 0.0f, 0.0f, 0);
         return Exec::Done;
     }
+    if (c.op == "touch_controls") {
+        // touch_controls on | off | auto: the on-screen driving controls (auto: iOS without a gamepad).
+        if (arg == "on") m_touchMode = TouchMode::On;
+        else if (arg == "off") m_touchMode = TouchMode::Off;
+        else if (arg == "auto") m_touchMode = TouchMode::Auto;
+        else return Exec::Failed;
+        updateTouchControls();
+        return Exec::Done;
+    }
+    if (c.op == "finger") {
+        // finger down|move|up ID [X Y | button:NAME | stick] [DX DY]: an SDL finger event (window points; stick = the
+        // stick's rest position, DX DY an offset from the target), through the same path as a real touch screen.
+        if (c.args.size() < 2) return Exec::Failed;
+        const std::string& what = c.args[0];
+        const std::uint64_t id = std::strtoull(c.args[1].c_str(), nullptr, 10);
+        const TouchLayout& L = m_input.touchControls().layout();
+        if (L.width <= 0.0f || L.height <= 0.0f) return Exec::Failed;
+        float x = 0.0f, y = 0.0f;
+        std::size_t next = 3;
+        if (what != "up") {
+            if (c.args.size() < 3) return Exec::Failed;
+            const std::string& target = c.args[2];
+            if (target == "stick") {
+                x = L.restX;
+                y = L.restY;
+            } else if (target.rfind("button:", 0) == 0) {
+                int found = -1;
+                for (int b = 0; b < kTouchButtonCount; ++b)
+                    if (target.substr(7) == touchButtonName(TouchButton(b))) found = b;
+                if (found < 0) return Exec::Failed;
+                x = L.buttons[std::size_t(found)].cx();
+                y = L.buttons[std::size_t(found)].cy();
+            } else {
+                if (c.args.size() < 4) return Exec::Failed;
+                x = float(std::atof(target.c_str()));
+                y = float(std::atof(c.args[3].c_str()));
+                next = 4;
+            }
+            if (c.args.size() >= next + 2) {
+                x += float(std::atof(c.args[next].c_str()));
+                y += float(std::atof(c.args[next + 1].c_str()));
+            }
+        }
+        SDL_Event ev{};
+        if (what == "down") ev.type = SDL_EVENT_FINGER_DOWN;
+        else if (what == "move") ev.type = SDL_EVENT_FINGER_MOTION;
+        else if (what == "up") ev.type = SDL_EVENT_FINGER_UP;
+        else return Exec::Failed;
+        ev.tfinger.touchID = 1;
+        ev.tfinger.fingerID = id;
+        ev.tfinger.x = x / L.width;
+        ev.tfinger.y = y / L.height;
+        ev.tfinger.pressure = what == "up" ? 0.0f : 1.0f;
+        ev.tfinger.windowID = SDL_GetWindowID(m_window.get());
+        return SDL_PushEvent(&ev) ? Exec::Done : Exec::Failed;
+    }
     if (c.op == "touchdrag") {
         // touchdrag [menu:ROW] DX DY [STEPS]: a finger drag by (DX, DY) points in STEPS frames (default 8), starting on
         // the label of a menu row, else over the menu lists (a quarter across, half way down the window).
@@ -2627,6 +2751,12 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "dir") return t.direction == DriveDirection::Forward ? 1.0 : -1.0;
     if (n == "low") return t.lowRange ? 1.0 : 0.0;
     if (n == "auto_reverse") return m_ui.autoReverse ? 1.0 : 0.0;
+    if (n == "touch_active") return m_input.touchControlsActive() ? 1.0 : 0.0;
+    if (n == "touch_fingers") return m_input.touchControls().fingers();
+    if (n == "touch_steer") return m_input.touchControls().steer();
+    if (n == "touch_throttle") return m_input.touchThrottle();
+    if (n == "touch_brake") return m_input.touchBrake();
+    if (n == "headlights") return m_gfx.headlights ? 1.0 : 0.0;
     if (n == "hint") return m_ui.hintVisible(m_sim) ? 1.0 : 0.0;
     if (n == "abs") return t.controls.abs ? 1.0 : 0.0;
     if (n == "tc") return double(int(t.controls.traction));

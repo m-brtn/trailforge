@@ -34,7 +34,7 @@ Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on
 SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
 (`.github/workflows/ci.yml`; the Linux package also starts on Mesa lavapipe under Xvfb) but have never been run on
 real hardware: say so whenever they are mentioned. iOS / iPadOS 26+ (presets `host-tools` + `ios-sim-release` /
-`ios-device-release`, game controller only, no touch controls) has been run only in the iOS Simulator (iOS 27.0
+`ios-device-release`, game controller or on-screen touch driving controls, the latter checked only with synthetic finger events) has been run only in the iOS Simulator (iOS 27.0
 runtime); the device build links but has never run on a real iPhone or iPad, and a real controller is untested
 (`docs/building.md` "iOS"). Dependencies are fetched by CMake FetchContent as pinned archives
 with SHA256 checks (internet is needed for the first configure).
@@ -123,6 +123,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
 ./build/release/trailforge --script tools/scenarios/ios_check.txt      # gamepad only (virtual pad): menu, vehicle page, drive, pause, Peaks, PERF Low; also run in the iOS Simulator, /tmp/trailforge_ios_*.png
+./build/release/trailforge --script tools/scenarios/touch_drive.txt    # on-screen touch driving (forced on, synthetic finger events): pedals, stick, HAND, top row, /tmp/trailforge_touch_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
 ./build/release/trailforge --script tools/scenarios/audio_check.txt --audio-capture /tmp/trailforge_audio_check.wav

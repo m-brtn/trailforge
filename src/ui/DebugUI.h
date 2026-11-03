@@ -90,6 +90,7 @@ public:
     void drawAudio(AudioPanelState& audio);
 
     bool visible = true;
+    bool keyHints = true;          // keyboard help lines in the read-out (off with the touch controls)
     bool hud = true;               // the small always-on hint/perf window and the driving read-out
     bool menuOpen = false;         // a menu is on screen: no HUD and no diagnostics windows (F1-F3 keep their state)
     bool debugWindows = true;      // Settings > DEBUG WINDOWS; off: only the player HUD (no read-out, no F1-F3 windows)
