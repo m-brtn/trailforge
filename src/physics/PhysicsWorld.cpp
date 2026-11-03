@@ -9,6 +9,10 @@
 #include <mutex>
 #include <thread>
 
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
+
 namespace tf {
 namespace {
 
@@ -53,8 +57,13 @@ PhysicsWorld::PhysicsWorld(const Settings& settings) {
         const int hw = static_cast<int>(std::thread::hardware_concurrency());
         threads = std::clamp(hw - 1, 1, 4);
     }
-    m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>(
-        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
+    m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>();
+#if defined(__APPLE__)
+    // The frame thread (user-interactive QoS) waits for these workers on every step: a lower default QoS would be a
+    // priority inversion.
+    m_jobSystem->SetThreadInitFunction([](int) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); });
+#endif
+    m_jobSystem->Init(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads);
 
     m_system = std::make_unique<JPH::PhysicsSystem>();
     m_system->Init(settings.maxBodies, 0, settings.maxBodyPairs, settings.maxContactConstraints,
