@@ -1164,9 +1164,11 @@ void Application::drawTouchControls() {
         dl->AddRectFilled(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), on && b != TouchButton::Throttle && b != TouchButton::Brake ? lit : fill, round);
         // The pedals fill from the bottom with their ramped travel.
         const float travel = b == TouchButton::Throttle ? m_input.touchThrottle() : b == TouchButton::Brake ? m_input.touchBrake() : 0.0f;
-        if (travel > 0.0f)
-            dl->AddRectFilled(ImVec2(r.x0, r.y1 - travel * (r.y1 - r.y0)), ImVec2(r.x1, r.y1), lit, round,
-                              ImDrawFlags_RoundCornersBottom);
+        if (travel > 0.0f) {
+            dl->PushClipRect(ImVec2(r.x0, r.y1 - travel * (r.y1 - r.y0)), ImVec2(r.x1, r.y1), true);
+            dl->AddRectFilled(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), lit, round);
+            dl->PopClipRect();
+        }
         dl->AddRect(ImVec2(r.x0, r.y0), ImVec2(r.x1, r.y1), edge, round, 0, 2.0f);
         const bool big = b == TouchButton::Throttle || b == TouchButton::Brake || b == TouchButton::Handbrake;
         label(touchButtonLabel(b), (big ? 0.24f : 0.18f) * u, ImVec2(r.cx(), r.cy()));
