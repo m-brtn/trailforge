@@ -10,7 +10,7 @@ expect garage_open == 0
 tap Escape
 wait 0.3
 expect menu_screen == 3
-click menu:garage
+click_item menu:garage
 wait 0.5
 expect garage_open == 1
 expect menu_screen == 4
@@ -57,10 +57,10 @@ expect cfg:suspension.rear.frequency > 1.24
 expect cfg:suspension.rear.frequency < 1.26
 
 # ---------------------------------------------------------------- mouse: click the anti-roll bar slider at 60 %
-click garage:suspension.front.antiRoll:0.6
+click_item garage:suspension.front.antiRoll:0.6
 wait 0.3
 expect cfg:suspension.front.antiRoll > 1000
-log antiroll
+telemetry antiroll
 
 # ---------------------------------------------------------------- rebuild in place: ride height +60 mm
 mark y
@@ -78,12 +78,12 @@ capture /tmp/trailforge_garage_03_lifted.png
 wait 0.1
 
 # ---------------------------------------------------------------- save (mouse), rename (typed), save as new
-click garage:save
+click_item garage:save
 wait 0.2
 expect garage_setups == 1
 expect garage_factory == 0
 expect garage_dirty == 0
-click garage:rename
+click_item garage:rename
 wait 0.2
 expect garage_renaming == 1
 expect garage_modal == 1
@@ -121,7 +121,7 @@ expect garage_modal_error == 0
 wait 0.4
 capture /tmp/trailforge_garage_04_rename.png
 wait 0.1
-click modal:confirm
+click_item modal:confirm
 wait 0.2
 expect garage_renaming == 0
 expect garage_modal == 0
@@ -129,7 +129,7 @@ expect text_input == 0
 expect garage_open == 1
 expect garage_factory == 0
 # Escape cancels the rename modal without leaving the garage (no pause menu).
-click garage:rename
+click_item garage:rename
 wait 0.2
 expect garage_modal == 1
 tap Escape
@@ -158,18 +158,18 @@ expect cfg:tires.gripScale < 1
 garage select factory
 garage step engine.torqueScale 1
 expect garage_dirty == 1
-click garage:reset
+click_item garage:reset
 wait 0.3
 expect garage_modal == 3          # "Reset to factory?"
 expect garage_dirty == 1
-click modal:confirm
+click_item modal:confirm
 wait 0.2
 expect garage_modal == 0
 expect garage_dirty == 0
 
 # ---------------------------------------------------------------- delete and back to the pause menu
 garage select Lifted
-click garage:delete
+click_item garage:delete
 wait 0.3
 expect garage_modal == 2          # "Delete setup?" with the focus on Cancel
 capture /tmp/trailforge_garage_07_delete_confirm.png
@@ -178,9 +178,9 @@ tap Return
 wait 0.2
 expect garage_modal == 0
 expect garage_setups == 2
-click garage:delete
+click_item garage:delete
 wait 0.3
-click modal:confirm
+click_item modal:confirm
 wait 0.2
 expect garage_modal == 0
 expect garage_setups == 1
@@ -208,14 +208,14 @@ capture /tmp/trailforge_garage_05_start_menu.png
 wait 0.1
 # mouse wheel over the long parameter list: scrolls without moving the cursor, back up to the top
 expect garage_scroll == 0
-wheel -4
+wheel_center -4
 wait 0.5
-log garage_wheel_down
+telemetry garage_wheel_down
 expect garage_scroll > 100
 expect garage_cursor == 0
 capture /tmp/trailforge_garage_06_wheel.png
 wait 0.1
-wheel 20
+wheel_center 20
 wait 0.5
 expect garage_scroll == 0
 tap Down                       # a keyboard move after the wheel still works

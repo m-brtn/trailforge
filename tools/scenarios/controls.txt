@@ -88,10 +88,10 @@ wait 0.2
 controls keyboard native
 
 # mouse wheel scrolls the page, the cursor brings its row back
-wheel -6
+wheel_center -6
 wait 0.6
 expect menu_scroll > 100
-wheel 20
+wheel_center 20
 wait 0.6
 expect menu_scroll == 0
 
@@ -99,7 +99,7 @@ expect menu_scroll == 0
 tap Escape
 wait 0.2
 expect menu_page == 2
-click menu:controls
+click_item menu:controls
 wait 0.5
 expect menu_page == 3
 expect setting_drive_keys == 1
@@ -138,4 +138,4 @@ up Up
 down Down
 until speed_kmh < 0.5 8
 up Down
-log arrows_drive
+telemetry arrows_drive

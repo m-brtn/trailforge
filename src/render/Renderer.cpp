@@ -9,11 +9,8 @@
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 
-#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_log.h>
-#include <SDL3/SDL_surface.h>
 #include <SDL3/SDL_timer.h>
-#include <imgui.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -150,14 +147,11 @@ void GpuMesh::release() {
 // ---------------------------------------------------------------- setup
 
 // The engine offers every shader format its shader build embeds (shaders/scene.hlsl -> SPIR-V everywhere, metallib or
-// MSL on macOS, DXIL on Windows). SDL tries Metal, then D3D12, then Vulkan; its driver environment variable overrides
-// the choice.
-Renderer::Renderer(SDL_Window* window, bool debugDevice)
-    : m_window(window), m_device(take(gpu::Device::create({.debug = debugDevice}), "GPU device")) {
+// MSL on macOS, DXIL on Windows). The app shell creates the device (SDL tries Metal, then D3D12, then Vulkan; its
+// --gpu-driver flag or SDL's driver environment variable overrides the choice).
+Renderer::Renderer(gpu::Device& device, gpu::TextureFormat colorFormat)
+    : m_device(device), m_colorFormat(colorFormat) {
     if (!quench::shaders::scene.find("lit_vs")) throw std::runtime_error("no embedded shaders");
-    if (const quench::Result<void> r = m_device.claimWindow(m_window, gpu::PresentMode::Vsync); !r)
-        throw std::runtime_error("claim window: " + r.error());
-    m_colorFormat = m_device.swapchainFormat(m_window);
 
     const gpu::Caps& caps = m_device.caps();
     switch (caps.shaderFormat) {
@@ -166,7 +160,6 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice)
     case gpu::ShaderFormat::Dxil: m_shaderFormatName = "DXIL"; break;
     case gpu::ShaderFormat::Spirv: m_shaderFormatName = "SPIR-V"; break;
     }
-    m_gpuTiming = caps.gpuTiming;
 
     if (!m_device.supportsFormat(kDepthFormat, gpu::TextureType::Texture2DArray,
                                  gpu::TextureUsage::DepthStencilTarget | gpu::TextureUsage::Sampled))
@@ -257,25 +250,8 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice)
     createScenePipelines();
 }
 
-// The members release their GPU resources before the device (declared first) waits for the GPU and goes away.
+// The members release their GPU resources after the GPU has finished with them; the device itself stays.
 Renderer::~Renderer() { m_device.waitIdle(); }
-
-void Renderer::initImGui() {
-    m_imgui = take(quench::app::ImGuiRenderer::create(m_device), "ImGui renderer");
-}
-
-void Renderer::shutdownImGui() {
-    if (!m_imgui) return;
-    m_device.waitIdle();
-    m_imgui->shutdown();
-    m_imgui.reset();
-}
-
-void Renderer::setVSync(bool on) {
-    m_vsync = on;
-    // Without immediate presentation the engine keeps VSync.
-    m_device.setPresentMode(m_window, on ? gpu::PresentMode::Vsync : gpu::PresentMode::Immediate);
-}
 
 int Renderer::supportedMsaa(int n) const {
     if (n >= 4 && m_maxMsaa >= 4) return 4;
@@ -1432,20 +1408,6 @@ GpuMesh Renderer::upload(const MeshData& mesh) {
     return GpuMesh(std::move(buffer), std::uint32_t(mesh.vertices.size()), bmin, bmax);
 }
 
-// GPU time of completed frames. SDL GPU has no timestamp queries; the engine reads the command buffer times on Metal
-// only (gpu::Caps::gpuTiming). Elsewhere the GPU time is reported as unavailable.
-void Renderer::pollGpuTiming() {
-    while (!m_fences.empty()) {
-        const gpu::Fence& f = m_fences.front();
-        if (!m_device.isSignaled(f)) break;
-        if (const std::optional<double> ms = m_device.gpuMilliseconds(f)) {
-            m_stats.gpuMs = *ms;
-            m_stats.gpuMsAvg = m_stats.gpuMsAvg <= 0.0 ? *ms : m_stats.gpuMsAvg * 0.9 + *ms * 0.1;
-        }
-        m_fences.pop_front();
-    }
-}
-
 // ---------------------------------------------------------------- per-frame setup
 
 void Renderer::fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& exposure, float& bloomMul) const {
@@ -1789,8 +1751,9 @@ void Renderer::updateTerrainTextures() {
             m_stats.terrainTexLoadMs);
 }
 
-bool Renderer::drawFrame(const FrameDesc& frame) {
-    pollGpuTiming();
+void Renderer::drawFrame(const FrameDesc& frame, gpu::CommandBuffer& cmd, const gpu::TextureRef& target,
+                         std::uint32_t w, std::uint32_t h) {
+    if (!target || w == 0 || h == 0) return;
     if (m_adaptReadback && m_adaptValid) {
         float v = 0.0f;
         std::memcpy(&v, m_adaptReadback.map(false).data(), 4);
@@ -1800,39 +1763,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                                  kAutoExposureStrength;
     }
     updateTerrainTextures();
-    gpu::CommandBuffer cmd = acquireCommands(m_device);
-
-    const Uint64 acquireStart = SDL_GetPerformanceCounter();
-    const gpu::TextureRef swapchain = cmd.acquireSwapchainTexture(m_window);
-    const std::uint32_t w = swapchain.desc.width, h = swapchain.desc.height;
-    m_stats.acquireWaitMs =
-        1000.0 * double(SDL_GetPerformanceCounter() - acquireStart) / double(SDL_GetPerformanceFrequency());
-    if (!swapchain || w == 0 || h == 0) {
-        submit(cmd);
-        return false;
-    }
     ensureTargets(w, h);
     const RenderSettings& s = m_settings;
     const std::uint32_t rw = m_hdr.w, rh = m_hdr.h;
     const float aspect = float(rw) / float(rh);
     m_stats.drawCalls = 0;
     m_stats.shadowDraws = 0;
-
-    // The swapchain cannot be read back, so a capture frame is rendered into an offscreen texture.
-    gpu::TextureRef target = swapchain;
-    gpu::Texture captureTex;
-    if (frame.capturePath) {
-        gpu::TextureDesc ci;
-        ci.type = gpu::TextureType::Texture2D;
-        ci.format = m_colorFormat;
-        ci.usage = gpu::TextureUsage::ColorTarget | gpu::TextureUsage::Sampled;
-        ci.width = w;
-        ci.height = h;
-        if (quench::Result<gpu::Texture> created = m_device.createTexture(ci)) {
-            captureTex = std::move(*created);
-            target = captureTex;
-        }
-    }
 
     // ---- Frame uniforms
     FrameUniforms fu{};
@@ -1935,7 +1871,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     const glm::mat4 reflView = frame.view * mirror;
     const glm::mat4 reflViewProj = proj * reflView;
 
-    // ---- Uploads (lines, grass chunks, tree instances, ImGui) before any render pass
+    // ---- Uploads (lines, grass chunks, tree instances) before any render pass
     const std::uint32_t lineBytes = std::uint32_t(frame.lines.size_bytes());
     std::array<std::uint32_t, 3> grassCounts{};
     const std::uint32_t grassTotal = cullGrass(frame, viewProj, grassCounts);
@@ -1998,7 +1934,6 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
         copy.end();
     }
-    if (frame.ui && m_imgui) m_imgui->prepare(cmd, frame.ui);
 
     auto drawLit = [&](gpu::RenderPass& pass, const DrawItem& d) {
         DrawUniforms du{};
@@ -2961,80 +2896,6 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         gpu::TextureSamplerBinding tex[2] = {{m_blurSrc.tex, m_clampSampler}, {m_blur[0].tex, m_clampSampler}};
         fullscreen(target, gpu::LoadOp::DontCare, m_blurCompositePipe, cu, tex, 2);
     }
-
-    // ---- 7. UI on top (the ImGui pipeline is created without a depth target)
-    if (frame.ui && frame.ui->DisplaySize.x > 0 && frame.ui->DisplaySize.y > 0) {
-        gpu::ColorTarget uiColor;
-        uiColor.texture = target;
-        uiColor.load = gpu::LoadOp::Load;
-        uiColor.store = gpu::StoreOp::Store;
-        gpu::RenderPass uiPass = cmd.beginRenderPass(uiColor);
-        if (m_imgui) m_imgui->draw(uiPass, frame.ui, m_colorFormat, w, h);
-        uiPass.end();
-    }
-
-    if (captureTex) {
-        gpu::BlitDesc blit;
-        blit.source.texture = captureTex;
-        blit.source.width = w;
-        blit.source.height = h;
-        blit.destination.texture = swapchain;
-        blit.destination.width = w;
-        blit.destination.height = h;
-        blit.load = gpu::LoadOp::DontCare;
-        blit.filter = gpu::Filter::Nearest;
-        cmd.blit(blit);
-        saveCapture(cmd, captureTex, w, h, frame.capturePath); // submits cmd
-        return true;
-    }
-
-    if (quench::Result<gpu::Fence> fence = cmd.submitWithFence()) {
-        m_fences.push_back(std::move(*fence));
-        while (m_fences.size() > 8) m_fences.pop_front();
-    } else {
-        SDL_Log("TrailForge: %s", fence.error().c_str());
-    }
-    return true;
-}
-
-bool Renderer::saveCapture(gpu::CommandBuffer& cmd, const gpu::TextureRef& src, std::uint32_t w, std::uint32_t h,
-                           const char* path) {
-    const std::uint32_t bytes = w * h * 4;
-    quench::Result<gpu::TransferBuffer> created =
-        m_device.createTransferBuffer({gpu::TransferDirection::Download, bytes});
-    if (!created) {
-        submit(cmd);
-        return false;
-    }
-    gpu::TransferBuffer tb = std::move(*created);
-    gpu::CopyPass copy = cmd.beginCopyPass();
-    gpu::TextureRegion region;
-    region.texture = src;
-    region.width = w;
-    region.height = h;
-    region.depth = 1;
-    copy.download(region, tb, 0);
-    copy.end();
-    const quench::Result<gpu::Fence> fence = cmd.submitWithFence();
-    bool ok = false;
-    if (fence) {
-        m_device.wait(*fence);
-        if (const std::optional<double> ms = m_device.gpuMilliseconds(*fence)) m_stats.gpuMs = *ms;
-        const gpu::TextureFormat fmt = m_colorFormat;
-        const SDL_PixelFormat pf = (fmt == gpu::TextureFormat::Bgra8Unorm || fmt == gpu::TextureFormat::Bgra8UnormSrgb)
-                                       ? SDL_PIXELFORMAT_ARGB8888
-                                       : SDL_PIXELFORMAT_ABGR8888;
-        void* pixels = tb.map(false).data();
-        if (SDL_Surface* surf = SDL_CreateSurfaceFrom(int(w), int(h), pf, pixels, int(w * 4))) {
-            const std::size_t len = std::strlen(path);
-            const bool png = len > 4 && SDL_strcasecmp(path + len - 4, ".png") == 0;
-            ok = png ? SDL_SavePNG(surf, path) : SDL_SaveBMP(surf, path);
-            SDL_DestroySurface(surf);
-        }
-        tb.unmap();
-    }
-    SDL_Log("TrailForge: capture %s -> %s", path, ok ? "ok" : SDL_GetError());
-    return ok;
 }
 
 } // namespace tf

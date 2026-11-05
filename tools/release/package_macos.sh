@@ -115,7 +115,7 @@ smoke() {
     grep -F "level(s) from $app/Contents/Resources/assets/levels" "$log" || { cat "$log"; fail "levels missing"; }
     grep -F "Textures: terrain materials from $app/Contents/Resources/assets/textures" "$log" ||
         { cat "$log"; fail "terrain textures missing"; }
-    grep -E "auto-quit after" "$log"
+    grep -F "app: quit after" "$log" || { cat "$log"; fail "no quit-after line"; }
     rm -f "$log" "$log.wav" "$log.wav.csv"
 }
 

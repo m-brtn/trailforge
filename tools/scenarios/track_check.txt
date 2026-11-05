@@ -3,7 +3,7 @@
 #   ./build/release/trailforge --script tools/scenarios/track_check.txt --no-audio
 # Level switch, start line, one autopilot lap through every checkpoint and both sector lines (lap timer, sector
 # times, best lap stored in a scratch best_laps.cfg), an R reset to the last checkpoint, the map, fixed-camera
-# captures /tmp/trailforge_track_*.png and frame times per quality preset (PERF lines). Exit code 1 on FAIL. Takes
+# captures /tmp/trailforge_track_*.png and frame times per quality preset (perf lines). Exit code 1 on FAIL. Takes
 # about 4 minutes (the lap is real time).
 controls pad_type none
 set ui 0

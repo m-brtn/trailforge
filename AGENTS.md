@@ -34,15 +34,18 @@ Only macOS / Apple Silicon / Metal has been run (plus Vulkan through MoltenVK on
 SPIR-V path). Windows x64 and Linux x64 build and pass the headless tests in GitHub Actions
 (`.github/workflows/ci.yml`; the Linux package also starts on Mesa lavapipe under Xvfb) but have never been run on
 real hardware: say so whenever they are mentioned. iOS / iPadOS 26+ (presets `host-tools` + `ios-sim-release` /
-`ios-device-release`, game controller or on-screen touch driving controls, the latter checked only with synthetic finger events) has been run only in the iOS Simulator (iOS 27.0
-runtime); the device build links but has never run on a real iPhone or iPad, and a real controller is untested
+`ios-device-release`, game controller or on-screen touch driving controls, the latter checked only with synthetic finger events) has been run in the iOS Simulator (iOS 27.0
+runtime) and, with scripted input only, on an iPhone 18 Pro Max (`ios-xcode` build on the engine's app shell,
+`ios_check.txt` with the Metal validation layer, 120 Hz, 2026-11-05); real touch and a real controller are untested on a device, and no iPad has run it
 (`docs/building.md` "iOS"). Dependencies are fetched by CMake FetchContent as pinned archives
 with SHA256 checks (internet is needed for the first configure).
 
 The game builds on the Quench engine (https://github.com/m-brtn/Quench, local checkout `/Users/mbrtn/Projects/engine`),
 fetched like the other dependencies at the commit pinned in `cmake/Quench.cmake`. So far it uses the engine's
-`quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json` and shader build; the rest of the game still has its
-own code (the engine's `docs/migration.md` lists the order). For work on the engine and the game together, configure
+`quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, shader build, GPU layer (`quench::gpu`) and app
+shell (`quench_main` / `quench_app`: `main` through SDL main callbacks, window, GPU device, ImGui, the common command
+line flags, the scenario runner, captures and perf regions; `src/app/TrailForgeGame.cpp` is the game interface); the
+rest of the game still has its own code (the engine's `docs/migration.md` lists the order). For work on the engine and the game together, configure
 with `-DFETCHCONTENT_SOURCE_DIR_QUENCH=/Users/mbrtn/Projects/engine`; a game change must also build against the pinned
 commit. An engine change is committed and pushed first, then the pin here is updated (commit and archive SHA256).
 
@@ -107,7 +110,7 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/tree_style.txt    # Exploration Peaks with stylized / detailed trees, /tmp/trailforge_trees_*.png
 ./build/release/trailforge --script tools/scenarios/readme_shots.txt   # README screenshots (start menu, two Exploration Peaks chase views), /tmp/trailforge_readme_*.png -> docs/*.jpg
 ./build/release/trailforge --script tools/scenarios/perf_presets.txt   # frame times per quality preset
-./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, PERF, /tmp/trailforge_track_*.png
+./build/release/trailforge --script tools/scenarios/track_check.txt # Suncoast Raceway: autopilot lap, sectors, best lap stored, R to checkpoint, map, perf, /tmp/trailforge_track_*.png
 ./build/release/trailforge --script tools/scenarios/minitrack.txt # proving ground mini handling track: teleport, lap timer, map, /tmp/trailforge_minitrack_*.png
 ./build/release/trailforge --script tools/scenarios/drift_check.txt # drift scoring on the mini track: judged run, drift on/off/level switch, /tmp/trailforge_drift_*.png
 ./build/release/trailforge --script tools/scenarios/tracks.txt         # tire marks per surface + cost, /tmp/trailforge_tracks_*.png
@@ -119,17 +122,17 @@ check failed:
 ./build/release/trailforge --script tools/scenarios/bump_check.txt     # 0.35 m bump strip at 30 km/h, every shipped vehicle, no rollover, /tmp/trailforge_bump_*.png
 ./build/release/trailforge --script tools/scenarios/ev_check.txt # electric SUV: vehicle page, launch, regen, SoC, modes, /tmp/trailforge_ev_*.png
 ./build/release/trailforge --script tools/scenarios/exploration_check.txt # level: spawn, road, tile crossing, ford, deep water, POIs, /tmp/trailforge_expl_*.png
-./build/release/trailforge --script tools/scenarios/water_views.txt # Glacier Creek ford, creek mouth, steep reach, Lake Outlet from fixed cameras, PERF ford view, /tmp/trailforge_water_*.png
+./build/release/trailforge --script tools/scenarios/water_views.txt # Glacier Creek ford, creek mouth, steep reach, Lake Outlet from fixed cameras, perf ford view, /tmp/trailforge_water_*.png
 ./build/release/trailforge --script tools/scenarios/road_views.txt # roads against the land: village exit, former worst embankments, /tmp/trailforge_road_*.png
-./build/release/trailforge --script tools/scenarios/map_edge_views.txt # Exploration Peaks map edge / horizon ring from fixed high and low cameras, PERF per preset, /tmp/trailforge_edge_*.png
-./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, PERF tex vs off, /tmp/trailforge_tex_*.png
+./build/release/trailforge --script tools/scenarios/map_edge_views.txt # Exploration Peaks map edge / horizon ring from fixed high and low cameras, perf per preset, /tmp/trailforge_edge_*.png
+./build/release/trailforge --script tools/scenarios/terrain_textures.txt # level ground textures per preset, no reloads while driving, perf tex vs off, /tmp/trailforge_tex_*.png
 ./build/release/trailforge --script tools/scenarios/lamp_flare.txt # night lamps without lens flare ghosts (glb test body, SUV, EV), sunset flare, /tmp/trailforge_flare_*.png
-./build/release/trailforge --script tools/scenarios/buildings_views.txt # village + every POI with buildings from fixed cameras, PERF per preset + Ultra stress, /tmp/trailforge_bld_*.png
+./build/release/trailforge --script tools/scenarios/buildings_views.txt # village + every POI with buildings from fixed cameras, perf per preset + Ultra stress, /tmp/trailforge_bld_*.png
 ./build/release/trailforge --script tools/scenarios/map_check.txt # full-screen map, waypoint, compass distance, pad map controls, minimap options, /tmp/trailforge_map_*.png
 ./build/release/trailforge --script tools/scenarios/car2_views.txt # EV model views vs Cars.png car #2, /tmp/trailforge_car2_*.png
 ./build/release/trailforge --script tools/scenarios/patrol_views.txt # desert patrol buggy views, full droop / full bump coil-overs, /tmp/trailforge_patrol_*.png
 ./build/release/trailforge --script tools/scenarios/vehicle_glb.txt # Blender body test vehicle (tests/data), twister, lamps, /tmp/trailforge_vglb_*.png
-./build/release/trailforge --script tools/scenarios/ios_check.txt      # gamepad only (virtual pad): menu, vehicle page, drive, pause, Peaks, PERF Low; also run in the iOS Simulator, /tmp/trailforge_ios_*.png
+./build/release/trailforge --script tools/scenarios/ios_check.txt      # gamepad only (virtual pad): menu, vehicle page, drive, pause, Peaks, perf Low; also run in the iOS Simulator, /tmp/trailforge_ios_*.png
 ./build/release/trailforge --script tools/scenarios/touch_drive.txt    # on-screen touch driving (forced on, synthetic finger events): pedals, stick, HAND, top row, /tmp/trailforge_touch_*.png
 ./build/release/trailforge --script tools/scenarios/skid_check.txt     # tire squeal gating (needs a device or --audio-capture)
 # audio: offline capture (no device) + analysis (numpy; ffmpeg/sox for loudness and spectrograms)
@@ -143,8 +146,10 @@ Scenario time is a fixed 1/120 s per frame (paced to real time; not inside `perf
 behave the same at 60 and 120 Hz and with VSync on or off. A real gamepad may be connected to the test Mac: use
 `controls pad_type none` or the virtual `gamepad attach` in checks that must not depend on it.
 
-Other app flags: `--level ID` (`exploration_peaks`, `proving_ground`; scenarios and `--demo` start on the proving ground), `--no-ui`, `--demo`, `--quit-after N`, `--capture file.png [--capture-at N]`, `--no-audio`,
-`--audio-capture file.wav`, `--paths`, `--version`. Scenario checks must not depend on an audio device: everything except
+Other app flags: the engine's `--quit-after S`, `--capture file.png [--capture-at S]`, `--window WxH`,
+`--frame-size WxH`, `--gpu-driver NAME`, `--gpu-debug`, `--present-mode vsync|immediate|mailbox`, `--version`;
+TrailForge's `--level ID` (`exploration_peaks`, `proving_ground`; scenarios and `--demo` start on the proving ground),
+`--no-ui`, `--demo`, `--no-audio`, `--audio-capture file.wav`, `--paths` (`--help` lists all). Scenario checks must not depend on an audio device: everything except
 `audio_check.txt` and `skid_check.txt` (both check the mixer) passes with `--no-audio`.
 The scenario command reference is in `docs/testing.md` ("Scenario mode").
 
@@ -182,7 +187,9 @@ hardware" in the release notes.
 
 ```
 (engine)      from Quench (cmake/Quench.cmake): quench::PhysicsWorld and JoltRuntime (Jolt wrapper),
-              quench::FixedStepClock, quench::json (reader, writer), the shader build (quench_add_shaders)
+              quench::FixedStepClock, quench::json (reader, writer), the shader build (quench_add_shaders),
+              quench::gpu, the app shell (quench_main, quench::app: main loop, window, ImGui, flags, scenario
+              runner, captures, perf regions)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape), Level (level.json
               bake: heights, surfaces, render-only water, trees, rocks, POIs, buildings), BuildingKit (procedural buildings:
               render LODs + convex collision pieces from the same solid parts), TerrainTiles (streamed HeightFieldShape tiles),
@@ -202,17 +209,17 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), TireMarks 
               WaterForces (buoyancy, pressure drag, bow lift and tire drag on the vehicle from the water surface; no SDL)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
-src/render/   Renderer (render passes over the engine's quench::gpu, ImGui through quench::app::ImGuiRenderer),
+src/render/   Renderer (render passes over the engine's quench::gpu into the frame target the engine gives it),
               RenderSettings, TimeOfDay, StyleKit (shared vehicle materials, panels, lights, accessories, wheels),
               VehicleModel (named parts per model), Scenery, LevelScene (level props, water, horizon ring), GroundMaps,
               Mesh, Camera, DebugDraw
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
-src/app/      Application (lifecycle, main loop), GameFlow (menu state machine), Garage (setup model, no SDL),
-              GameSettings (settings.cfg), BestLaps (best_laps.cfg: best lap per level and vehicle),
-              Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
-              dir via SDL_GetPrefPath), main
+src/app/      TrailForgeGame (quench::app::Game: TrailForge's flags, createGame), Application (the game on the
+              engine's frame: events, update, UI, render, scenario commands and values), GameFlow (menu state
+              machine), Garage (setup model, no SDL), GameSettings (settings.cfg), BestLaps (best_laps.cfg: best lap
+              per level and vehicle), Paths (assets via SDL_GetBasePath, user dir via SDL_GetPrefPath)
 shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time (quench_add_shaders),
               embedded in the binary
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only

@@ -16,14 +16,14 @@ until speed_kmh < 0.1 5
 wait 0.5
 set marks_clear 1
 pedal brake 0
-log launch_begin
+telemetry launch_begin
 pedal throttle 1
 wait 3
 pedal throttle 0
 pedal brake 0.3
 until speed_kmh < 0.5 12
 pedal brake 0
-log launch_end
+telemetry launch_end
 expect marks_s0 >= 0
 camera 42.8 1.7 -49.0 42.0 0.0 -36.0
 wait 0.6
@@ -32,14 +32,14 @@ wait 0.3
 
 # ---------------------------------------------------------------- skid strip, where the launch stopped: 2 s burnout
 camera follow
-log burnout2_begin
+telemetry burnout2_begin
 pedal brake 0.6
 pedal throttle 1
 wait 2
 pedal throttle 0
 wait 0.5
 pedal brake 0
-log burnout2_end
+telemetry burnout2_end
 pedal throttle 0.3
 wait 2
 pedal throttle 0
@@ -55,14 +55,14 @@ wait 0.3
 camera follow
 teleport 0
 wait 1.5
-log burnout_begin
+telemetry burnout_begin
 pedal brake 0.6
 pedal throttle 1
 wait 5
 pedal throttle 0
 wait 0.5
 pedal brake 0
-log burnout_end
+telemetry burnout_end
 pedal throttle 0.3
 wait 2
 pedal throttle 0

@@ -4,20 +4,15 @@
 #include "render/RenderSettings.h"
 #include "track/SurfaceProperties.h"
 
-#include <SDL3/SDL_video.h>
 #include <glm/glm.hpp>
-#include <quench/app/ImGuiRenderer.h>
 #include <quench/gpu/Device.h>
 
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
-
-struct ImDrawData;
 
 namespace tf {
 
@@ -228,8 +223,6 @@ struct FrameDesc {
     float shadowScale = 1.0f;       // multiplies the shadow distance setting (open levels see farther)
     std::span<const LineVertex> lines;
     bool linesOnTop = false;   // true: lines without depth test (visible through the body)
-    ImDrawData* ui = nullptr;
-    const char* capturePath = nullptr; // non-null: save this frame as BMP or PNG (by extension)
     float blur = 0.0f;           // 0..1: menu blur of the finished 3D frame (under the UI)
     float blurDim = 0.55f;       // brightness of the blurred frame at full blur
     float blurDesaturate = 0.25f;
@@ -261,7 +254,7 @@ struct FrameDesc {
 
 struct RenderStats {
     std::uint32_t renderW = 0, renderH = 0;   // 3D resolution
-    std::uint32_t outputW = 0, outputH = 0;   // swapchain resolution
+    std::uint32_t outputW = 0, outputH = 0;   // frame target resolution (the swapchain, or the engine's --frame-size)
     int drawCalls = 0;
     int shadowDraws = 0;
     int grassChunks = 0;
@@ -273,9 +266,6 @@ struct RenderStats {
     std::uint32_t markUploadBytes = 0;        // tire mark bytes uploaded this frame
     std::uint32_t sprayParticles = 0;         // wheel spray particles drawn
     bool trampleUpdated = false;              // grass trample mask re-rendered this frame
-    double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
-    double gpuMsAvg = 0.0;                    // exponential average
-    double acquireWaitMs = 0.0;               // CPU time blocked acquiring the swapchain texture
     int terrainChunks = 0;                    // level terrain chunks drawn (main view)
     std::uint64_t terrainTriangles = 0;
     std::array<int, 4> terrainLod{};          // chunks per LOD (step 1, 2, 4, 8 samples)
@@ -318,24 +308,19 @@ struct TerrainSource {
 // Renderer on the engine's GPU layer (quench::gpu: SDL GPU, Metal on Apple platforms). Passes: sun/moon shadow
 // cascades -> grass trample mask -> puddle reflection -> HDR scene (lit, instanced trees, tire marks, grass, sky with
 // mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale) -> FXAA -> menu blur (dual Kawase, only with
-// FrameDesc::blur) -> ImGui.
+// FrameDesc::blur). The engine's app shell owns the device, records ImGui on top and presents.
 class Renderer {
 public:
-    explicit Renderer(SDL_Window* window, bool debugDevice);
+    // colorFormat: the format of the frame targets drawFrame renders into (the swapchain format).
+    Renderer(quench::gpu::Device& device, quench::gpu::TextureFormat colorFormat);
     ~Renderer();
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // ImGui draws through the engine's ImGuiRenderer: initImGui after the ImGui context and its platform backend are
-    // set up, shutdownImGui before the context is destroyed.
-    void initImGui();
-    void shutdownImGui();
     // Waits until the GPU has finished all submitted work.
     void waitIdle() { m_device.waitIdle(); }
     const char* driverName() const { return m_device.caps().driver.c_str(); }
     const char* shaderFormatName() const { return m_shaderFormatName; }
-    // GPU frame time is measured only on the Metal backend; elsewhere it is reported as unavailable.
-    bool gpuTimingAvailable() const { return m_gpuTiming; }
 
     GpuMesh upload(const MeshData& mesh);
     // Ground maps (height, mask, noise) and grass chunk list; call once after loading the track.
@@ -354,22 +339,21 @@ public:
     int setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements,
                   std::span<const ModelAsset* const> assets = {}, const std::string& assetTextureDir = {});
 
-    // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
-    bool drawFrame(const FrameDesc& frame);
+    // Records a frame into cmd: every pass up to the finished image in target (w x h pixels, colorFormat). The caller
+    // submits cmd.
+    void drawFrame(const FrameDesc& frame, quench::gpu::CommandBuffer& cmd, const quench::gpu::TextureRef& target,
+                   std::uint32_t w, std::uint32_t h);
 
     // RGBA8 image (sRGB-encoded, straight alpha) with a full mip chain, for ImGui (quench::app::imguiTexture).
     // The caller releases it before the renderer goes away.
     quench::gpu::Texture createImage(const void* rgba, std::uint32_t w, std::uint32_t h);
-
-    void setVSync(bool on);
-    bool vsync() const { return m_vsync; }
 
     const RenderSettings& settings() const { return m_settings; }
     void setSettings(const RenderSettings& s); // validated; pipelines/targets are rebuilt lazily
     int maxMsaa() const { return m_maxMsaa; }
     const RenderStats& stats() const { return m_stats; }
 
-    // Output (swapchain) size the frame targets were last built for, and how many times they were created.
+    // Output (frame target) size the render targets were last built for, and how many times they were created.
     std::uint32_t depthWidth() const { return m_outW; }
     std::uint32_t depthHeight() const { return m_outH; }
     int depthCreations() const { return m_targetCreations; }
@@ -415,9 +399,6 @@ private:
     std::uint32_t uploadMarks(quench::gpu::CopyPass& copy, const TireMarks& marks);
     void ensureMarkCapacity(std::uint32_t segments);
     void clearTrample();
-    void pollGpuTiming();
-    bool saveCapture(quench::gpu::CommandBuffer& cmd, const quench::gpu::TextureRef& src, std::uint32_t w,
-                     std::uint32_t h, const char* path);
 
     void computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj);
     void fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& exposure, float& bloomMul) const;
@@ -436,16 +417,12 @@ private:
     void selectTerrain(const glm::vec3& cam, const glm::mat4* viewProj, float maxDistance, float lodScale,
                        std::vector<TerrainChunk>& out) const;
 
-    SDL_Window* m_window = nullptr;
-    // Declared before every GPU resource, so they are all released before the device is destroyed.
-    quench::gpu::Device m_device;
-    std::optional<quench::app::ImGuiRenderer> m_imgui;
+    // The engine's device outlives the renderer: every GPU resource below is released while it exists.
+    quench::gpu::Device& m_device;
     const char* m_shaderFormatName = "";
-    bool m_gpuTiming = false;
     quench::gpu::TextureFormat m_colorFormat = quench::gpu::TextureFormat::Invalid;
     static constexpr quench::gpu::TextureFormat kHdrFormat = quench::gpu::TextureFormat::Rgba16Float;
     static constexpr quench::gpu::TextureFormat kDepthFormat = quench::gpu::TextureFormat::Depth32Float;
-    bool m_vsync = true;
     int m_maxMsaa = 1;
     bool m_msaa2 = false;
     float m_shadowBiasClamp = 0.01f;
@@ -702,7 +679,6 @@ private:
     quench::gpu::TransferBuffer m_lineTransfer;
     std::uint32_t m_lineCapacity = 0;
 
-    std::deque<quench::gpu::Fence> m_fences;
     RenderStats m_stats;
 };
 

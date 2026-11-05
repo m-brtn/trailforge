@@ -1,7 +1,7 @@
 # Building kit views on Exploration Peaks (src/track/BuildingKit, materials in assets/textures/buildings, Git LFS):
 #   ./build/release/trailforge --script tools/scenarios/buildings_views.txt --no-audio
 # Fixed cameras on Valley Village and every POI with buildings, captures /tmp/trailforge_bld_*.png (time 10:00,
-# High). Then frame times on the village overview per quality preset (PERF lines, vsync off; the GPU column is the
+# High). Then frame times on the village overview per quality preset (perf lines, vsync off; the GPU column is the
 # honest measure on a 60 Hz display), and an Ultra stress pass (bigger shadows and grass). Exit code 1 on FAIL.
 set ui 0
 set hud 0
@@ -119,5 +119,5 @@ wait 2.0
 perf_begin bld_stress_street
 wait 4
 perf_end
-log buildings
+telemetry buildings
 quality High

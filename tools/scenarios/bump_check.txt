@@ -17,7 +17,7 @@ down W
 until fwd_kmh >= 30 10
 up W
 until z > -26.4 5
-log suv_at_mound
+telemetry suv_at_mound
 until z > -24.0 2
 capture /tmp/trailforge_bump_01_suv_mound.png
 until z > -21.0 2
@@ -25,14 +25,14 @@ down W
 until fwd_kmh >= 30 3
 up W
 until z > -11.4 5
-log suv_at_left_mound
+telemetry suv_at_left_mound
 until z > -10.0 2
 capture /tmp/trailforge_bump_02_suv_left_mound.png
 until z > -6 5
 down S
 wait 2.0
 up S
-log suv_after
+telemetry suv_after
 expect max_tilt < 45
 expect tilt < 10
 expect wheels_contact == 4
@@ -46,18 +46,18 @@ down W
 until fwd_kmh >= 30 10
 up W
 until z > -26.4 5
-log ev_at_mound
+telemetry ev_at_mound
 until z > -21.0 2
 down W
 until fwd_kmh >= 30 3
 up W
 until z > -11.4 5
-log ev_at_left_mound
+telemetry ev_at_left_mound
 until z > -6 5
 down S
 wait 2.0
 up S
-log ev_after
+telemetry ev_after
 expect max_tilt < 45
 expect tilt < 10
 expect wheels_contact == 4
@@ -71,7 +71,7 @@ down W
 until fwd_kmh >= 30 10
 up W
 until z > -26.4 5
-log patrol_at_mound
+telemetry patrol_at_mound
 until z > -24.0 2
 capture /tmp/trailforge_bump_03_patrol_mound.png
 until z > -21.0 2
@@ -79,14 +79,14 @@ down W
 until fwd_kmh >= 30 3
 up W
 until z > -11.4 5
-log patrol_at_left_mound
+telemetry patrol_at_left_mound
 until z > -10.0 2
 capture /tmp/trailforge_bump_04_patrol_left_mound.png
 until z > -6 5
 down S
 wait 2.0
 up S
-log patrol_after
+telemetry patrol_after
 expect max_tilt < 45
 expect tilt < 10
 expect wheels_contact == 4

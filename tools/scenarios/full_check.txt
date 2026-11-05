@@ -10,7 +10,7 @@ wait 1.5
 # at the stop, released and pressed again at a standstill it engages reverse.
 set auto_reverse 0
 reset_stats
-log start
+telemetry start
 expect depth_matches_window == 1
 expect speed_kmh < 0.5
 capture /tmp/trailforge_01_start.png
@@ -20,7 +20,7 @@ down W
 wait 1.5
 expect throttle > 0.95
 expect fwd_kmh > 10
-log throttle
+telemetry throttle
 up W
 mark speed_kmh
 down S
@@ -72,7 +72,7 @@ expect hint == 1
 until fwd_kmh < -4 3            # S is now the reverse throttle (ramped; slower when backing off the bumps)
 expect gear < 0
 capture /tmp/trailforge_03_reverse.png
-log auto_reverse
+telemetry auto_reverse
 up S
 down W
 wait 0.3
@@ -113,7 +113,7 @@ expect dir == -1
 down S                          # reverse selected: S drives backwards right away
 wait 1.0
 expect fwd_kmh < -4
-log reverse_q
+telemetry reverse_q
 up S
 down W                          # W brakes the backward roll; released and pressed again it engages drive
 until speed_kmh < 0.5 6
@@ -133,7 +133,7 @@ up W
 down Space
 wait 0.5
 expect handbrake > 0.9
-log handbrake
+telemetry handbrake
 capture /tmp/trailforge_04_handbrake.png
 until speed_kmh < 0.5 8
 up Space
@@ -191,7 +191,7 @@ reset_stats
 down S
 until speed_kmh < 0.5 6
 up S
-log brake_no_abs
+telemetry brake_no_abs
 expect max_locked >= 2
 expect lock_time > 3            # wheel-seconds
 expect abs_seen == 0
@@ -208,7 +208,7 @@ wait 0.4
 capture /tmp/trailforge_04c_abs_stop.png
 until speed_kmh < 0.5 6
 up S
-log brake_abs
+telemetry brake_abs
 expect abs_seen == 1
 expect lock_time < 0.5
 tap B
@@ -236,7 +236,7 @@ until dir == -1 3
 wait 1.0
 expect fwd_kmh < -1
 expect low == 1
-log low_reverse
+telemetry low_reverse
 up S
 down W
 until speed_kmh < 0.5 6
@@ -287,7 +287,7 @@ expect msg:4L == 1
 capture /tmp/trailforge_04d_transfer_4l.png
 down W
 wait 1.5
-log transfer_4l
+telemetry transfer_4l
 expect fwd_kmh > 3
 up W
 down S
@@ -328,7 +328,7 @@ down S                          # reverse right after a reset
 until dir == -1 3
 wait 1.0
 expect fwd_kmh < -3
-log reverse_after_reset
+telemetry reverse_after_reset
 up S
 down W
 until speed_kmh < 0.5 6
@@ -376,37 +376,37 @@ tap Escape
 wait 0.1
 expect paused == 1
 expect menu_screen == 3
-mark ticks
+mark sim_ticks
 mark z
 wait 1.0
-expect d_ticks == 0             # while paused the physics is frozen even with W held
+expect d_sim_ticks == 0             # while paused the physics is frozen even with W held
 expect d_z == 0
 tap N
 wait 0.1
-expect d_ticks == 0             # no single step from the pause menu
+expect d_sim_ticks == 0             # no single step from the pause menu
 capture /tmp/trailforge_07_paused.png
 tap Escape
 wait 0.5
 expect paused == 0
 expect menu_screen == 2
-expect d_ticks > 40
+expect d_sim_ticks > 40
 tap P
 wait 0.1
 expect frozen == 1
 expect paused == 1
-mark ticks
+mark sim_ticks
 wait 0.5
-expect d_ticks == 0
+expect d_sim_ticks == 0
 tap N
 wait 0.1
-expect d_ticks == 1             # exactly one step
+expect d_sim_ticks == 1             # exactly one step
 tap N
 wait 0.1
-expect d_ticks == 2
+expect d_sim_ticks == 2
 tap P
 wait 0.5
 expect frozen == 0
-expect d_ticks > 40
+expect d_sim_ticks > 40
 up W
 down S
 until speed_kmh < 0.5 6
@@ -451,7 +451,7 @@ up S
 # ---------------------------------------------------------------- climbs (lane B), low range
 teleport 4
 wait 1.0
-log after_teleport4
+telemetry after_teleport4
 tap L
 wait 0.1
 expect low == 1
@@ -463,7 +463,7 @@ set auto_reverse 1
 down W
 until z > -38 8
 capture /tmp/trailforge_09_hill12.png
-log hill12
+telemetry hill12
 until z > -33.6 8
 up W
 down S
@@ -472,7 +472,7 @@ mark z
 wait 1.0
 expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
 expect d_z > -0.05
-log hill12_top
+telemetry hill12_top
 up S
 down W
 until z > -24 8
@@ -483,7 +483,7 @@ up S
 down W
 until z > -13.5 8
 capture /tmp/trailforge_10_hill20.png
-log hill20
+telemetry hill20
 until z > -11.3 6
 up W
 down S
@@ -492,7 +492,7 @@ mark z
 wait 1.0
 expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
 expect d_z > -0.05
-log hill20_top
+telemetry hill20_top
 up S
 down W
 until z > -4 6
@@ -503,7 +503,7 @@ up S
 down W
 until z > 4 8
 capture /tmp/trailforge_11_hill28.png
-log hill28
+telemetry hill28
 until z > 5.7 6
 up W
 down S
@@ -512,7 +512,7 @@ mark z
 wait 1.0
 expect d_z < 0.05                # the brake holds the vehicle on the slope (gearbox in neutral)
 expect d_z > -0.05
-log hill28_top
+telemetry hill28_top
 expect dir == 1                 # held for 1 s on the slope, no reverse
 up S                            # pressed again: reverse engages, S backs up the slope
 down S
@@ -520,7 +520,7 @@ until dir == -1 3
 expect tilt > 5                 # on the slope; the stop varies from the crest transition (4L: ~9 deg) to its foot
 wait 1.0
 expect fwd_kmh < -1
-log hill28_reverse
+telemetry hill28_reverse
 up S
 down W
 until speed_kmh < 0.5 6
@@ -537,7 +537,7 @@ up S
 down W
 until z > 21.4 8
 capture /tmp/trailforge_12_hill35.png
-log hill35
+telemetry hill35
 until z > 22.0 6
 up W                             # coast over the crest: the run-up reaches ~19 km/h, the plateau is 4 m long
 until z > 23.2 6
@@ -547,12 +547,12 @@ mark z
 wait 1.0
 expect d_z < 0.05
 expect d_z > -0.05
-log hill35_top
+telemetry hill35_top
 up S
 expect y > 1.6                  # above the foot: the 35 degree climb is done
 expect tilt < 45
 expect min_cam_clearance > 0.1  # the camera did not go underground on the slopes
-log hills_cam min_cam_clearance checked
+telemetry hills_cam min_cam_clearance checked
 set auto_reverse 0
 
 # ---------------------------------------------------------------- 18 degree side slope (2H is not enough here: 4H)
@@ -570,7 +570,7 @@ until z > -30 10
 up W
 down S
 until speed_kmh < 0.5 6
-log side_slope
+telemetry side_slope
 expect tilt > 12
 expect tilt < 30
 capture /tmp/trailforge_13_side_slope.png
@@ -579,7 +579,7 @@ up S
 # ---------------------------------------------------------------- diagonal: wheel lift
 teleport 2
 wait 1.0
-log after_teleport2
+telemetry after_teleport2
 tap L
 wait 0.1
 expect low == 1
@@ -587,7 +587,7 @@ reset_stats
 down W
 until air >= 1 10
 capture /tmp/trailforge_14_diagonal_lift.png
-log diagonal
+telemetry diagonal
 until z > 16 15
 expect max_air >= 1
 up W
@@ -598,21 +598,21 @@ up S
 # ---------------------------------------------------------------- steps 0.15 / 0.30 / 0.45 m
 teleport 6
 wait 1.0
-log after_teleport6
+telemetry after_teleport6
 tap L
 wait 0.1
 expect low == 1
 down W
 until z > -2 10
-log step015
+telemetry step015
 until z > 3 10
 capture /tmp/trailforge_15_step030.png
-log step030
+telemetry step030
 up W
 down S
 until speed_kmh < 0.5 6
 up S
-log step030_stop
+telemetry step030_stop
 tap Q                           # the stop pose after the bouncy 0.30 m drop varies (z 5.6-6.7); between the steps the
 wait 0.3                        # car can wedge (rear wheels on the 0.30 m step, fronts at the 0.45 m face) and stall,
 expect dir == -1                # so back up onto the 0.30 m step and climb from a defined standstill
@@ -625,14 +625,14 @@ up S
 tap Q
 wait 0.3
 expect dir == 1
-log before_step045
+telemetry before_step045
 expect z < 4.5                  # standstill on (or behind) the 0.30 m step, 4-8 m before the 0.45 m face (z = 8.5)
 down W
 until z > 7.3 15                # the rear wheels drop off the 0.30 m step, the fronts reach the 0.45 m face
 capture /tmp/trailforge_16_step045.png
-log step045_climb
+telemetry step045_climb
 until z > 12 8                  # 0.45 m is more than the wheel radius (0.4 m), but low range climbs it from a standstill
-log step045_done
+telemetry step045_done
 up W
 down S
 wait 0.5
@@ -641,7 +641,7 @@ up S
 # ---------------------------------------------------------------- rocks
 teleport 7
 wait 1.0
-log after_teleport7
+telemetry after_teleport7
 tap L
 wait 0.1
 expect low == 1
@@ -649,9 +649,9 @@ reset_stats
 down W
 until z > 26 15
 capture /tmp/trailforge_17_rocks.png
-log rocks
+telemetry rocks
 until z > 38 20
-log rocks_end
+telemetry rocks_end
 up W
 down S
 until speed_kmh < 0.5 6
@@ -666,7 +666,7 @@ set tc 1                        # TC on: full throttle onto the low-grip patch s
 reset_stats
 down W
 until lowgrip_wheels >= 4 10
-log lowgrip_enter
+telemetry lowgrip_enter
 wait 0.5
 expect tc_seen == 1
 set tc 0
@@ -677,7 +677,7 @@ mark speed_kmh
 down S
 wait 1.0
 expect d_speed_kmh > -18        # mu x0.35: brakes noticeably weaker than on concrete
-log lowgrip_brake
+telemetry lowgrip_brake
 until speed_kmh < 0.5 10
 expect dir == 1
 up S
@@ -685,7 +685,7 @@ down S                          # pressed again at the stop: reverse on low grip
 until dir == -1 3
 wait 0.8
 expect fwd_kmh < -0.5
-log lowgrip_reverse_start
+telemetry lowgrip_reverse_start
 up S
 set auto_reverse 0
 
@@ -694,11 +694,11 @@ tap R
 wait 1.0
 reset_stats
 orbit 0 400
-wheel -20
+wheel_center -20
 wait 1.0
 expect min_cam_clearance > 0.1
 capture /tmp/trailforge_19_camera_low.png
-log camera_low
+telemetry camera_low
 
 # ---------------------------------------------------------------- resize window
 mark depth_creations
@@ -723,17 +723,17 @@ expect depth_matches_window == 1
 expect static_grip == 1
 expect clutch_limit == 1
 scrollto static_grip
-click static_grip
+click_item static_grip
 wait 0.2
 expect static_grip == 0         # the checkbox reached the vehicle between steps
-click static_grip
+click_item static_grip
 wait 0.2
 expect static_grip == 1
 scrollto clutch_limit
-click clutch_limit
+click_item clutch_limit
 wait 0.2
 expect clutch_limit == 0
-click clutch_limit
+click_item clutch_limit
 wait 0.2
 expect clutch_limit == 1
 
@@ -741,7 +741,7 @@ expect clutch_limit == 1
 tap R
 wait 0.5
 scrollto vehicle_header
-click vehicle_header
+click_item vehicle_header
 wait 0.2
 scrollto mass
 inputclick mass
@@ -751,7 +751,7 @@ text 2600
 tap Return
 wait 0.2
 scrollto rebuild
-click rebuild
+click_item rebuild
 wait 0.5
 expect mass == 2600
 expect front_spring == 2.2      # live tuning survives the rebuild
@@ -760,5 +760,5 @@ wait 1.5
 expect load_sum > 25000         # 2600 kg * 9.81 = 25506 N
 expect load_sum < 26000
 capture /tmp/trailforge_22_rebuilt.png
-log rebuilt
+telemetry rebuilt
 quit

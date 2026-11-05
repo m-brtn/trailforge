@@ -28,7 +28,7 @@ expect throttle >= 0.5
 wait 1.0
 expect touch_throttle > 0.99
 until fwd_kmh > 20 15
-log touch_gas
+telemetry touch_gas
 
 # ---------------------------------------------------------------- steering stick: right, then left past full lock
 finger down 2 stick
@@ -41,7 +41,7 @@ wait 0.1
 finger move 2 stick -300 0           # the centre follows past full lock
 wait 0.3
 expect touch_steer < -0.99
-expect steer < -0.95               # the vehicle command is rate-limited
+until steer < -0.95 0.1            # the vehicle command is rate-limited (it follows within a few ticks)
 finger move 2 stick -200 0           # back by 100 points (more than the radius) answers at once
 wait 0.2
 expect touch_steer > 0

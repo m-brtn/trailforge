@@ -14,7 +14,7 @@ until z > -1.5 20
 up W
 down S
 wait 2.5
-log stopped
+telemetry stopped
 expect susp_spread > 0.20
 capture /tmp/trailforge_v_susp_01_follow_hud.png
 wait 0.3

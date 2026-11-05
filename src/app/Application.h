@@ -4,7 +4,6 @@
 #include "app/GameFlow.h"
 #include "app/Garage.h"
 #include "app/GameSettings.h"
-#include "app/Scenario.h"
 #include "audio/AudioSystem.h"
 #include "audio/VehicleAudioFeed.h"
 #include "input/Input.h"
@@ -21,11 +20,12 @@
 #include "vehicle/VehicleDefinition.h"
 
 #include <SDL3/SDL_events.h>
-#include <SDL3/SDL_video.h>
+#include <quench/app/App.h>
+#include <quench/app/Scenario.h>
 #include <quench/core/FixedStepClock.h>
 
 #include <array>
-#include <deque>
+#include <cstdint>
 #include <future>
 #include <map>
 #include <memory>
@@ -35,13 +35,10 @@
 
 namespace tf {
 
+// TrailForge's own command line flags (the engine's, such as --script and --capture, are in quench::app).
 struct AppOptions {
-    double quitAfterSeconds = 0.0; // >0: quit automatically (startup smoke test)
     bool demoDrive = false;        // scripted throttle/steering for a demo without input
     bool startWithUi = true;
-    std::string capturePath;   // non-empty: save a frame (BMP/PNG) at captureAtSeconds
-    double captureAtSeconds = 3.0;
-    std::string scriptPath;    // non-empty: run a verification scenario (see Scenario.h)
     bool audio = true;         // false: --no-audio (no device, no sound assets loaded)
     std::string audioCapturePath; // non-empty: offline audio render to this WAV instead of the device
     std::string vehicleId;     // --vehicle ID: start with this catalog vehicle (remembered like a menu choice)
@@ -49,48 +46,36 @@ struct AppOptions {
     bool intro = true;         // false: --no-intro (start at the main menu); scenarios and --demo start driving
 };
 
-// RAII wrapper for SDL initialization.
-class SdlContext {
-public:
-    SdlContext();
-    ~SdlContext();
-    SdlContext(const SdlContext&) = delete;
-    SdlContext& operator=(const SdlContext&) = delete;
-};
-
-class Window {
-public:
-    Window(const char* title, int w, int h);
-    ~Window();
-    Window(const Window&) = delete;
-    Window& operator=(const Window&) = delete;
-    SDL_Window* get() const { return m_window; }
-
-private:
-    SDL_Window* m_window = nullptr;
-};
-
-// RAII Dear ImGui context with the SDL3 platform backend and the renderer's ImGui renderer (quench::app).
-class ImGuiContextGuard {
-public:
-    ImGuiContextGuard(SDL_Window* window, Renderer& renderer);
-    ~ImGuiContextGuard();
-    ImGuiContextGuard(const ImGuiContextGuard&) = delete;
-    ImGuiContextGuard& operator=(const ImGuiContextGuard&) = delete;
-
-private:
-    Renderer& m_renderer;
-};
-
-// Lifecycle and main loop: events -> fixed physics steps -> interpolation -> render.
+// The game on the engine's app shell (quench::app, see TrailForgeGame.cpp): the engine owns the window, the GPU
+// device, the frame loop, ImGui, the scenario runner, captures and perf regions. Per frame: event() for every SDL
+// event -> scenario commands -> update() (input, game flow, physics ticks, camera) -> ui() (ImGui windows, menus and
+// what they change) -> render() (the 3D frame; the engine draws ImGui on top). Valid between Game::init and
+// Game::shutdown.
 class Application {
 public:
-    explicit Application(const AppOptions& options);
+    Application(quench::app::App& app, const AppOptions& options);
     ~Application();
-    int run();
+    Application(const Application&) = delete;
+    Application& operator=(const Application&) = delete;
+
+    void event(const SDL_Event& e);
+    void update(double frameDt);
+    void ui();
+    void render(quench::app::Frame& frame);
+    // Scenario support (--script): game values and the commands the engine does not know.
+    std::optional<double> scenarioValue(const std::string& name) const;
+    quench::app::ScenarioExec scenarioCommand(const quench::app::ScenarioCommand& c);
+    // Appended to the engine's perf line: render and output size, VSync, draw calls, grass blades.
+    std::string perfDetails() const;
+    // One line at exit: run time, physics ticks, body position, FPS, dropped time.
+    void printExitSummary() const;
 
 private:
-    void processEvents();
+    // Start of a frame's input, before its events: per-frame input state, the TIME row from the live clock, touch
+    // controls for the window.
+    void beginInputFrame();
+    // The frame's input: debug toggles, menus, garage and map, gameplay actions, the driver intent.
+    void handleInput();
     void handleMenu();
     void onMenuCommand(MenuCommand c);
     void startGameplay();
@@ -114,7 +99,7 @@ private:
     std::shared_ptr<const Level> loadLevel(const std::string& id);
     // Render content of the simulation's current world (track or level props, water, ground maps, terrain, trees).
     void buildWorldContent();
-    // Map: built on a worker thread per world (buildWorldContent starts it, renderFrame uploads the result).
+    // Map: built on a worker thread per world (buildWorldContent starts it, the UI uploads the result).
     void startMapBuild();
     void pollMapBuild();
     void openMap();
@@ -125,29 +110,31 @@ private:
     void drawMapHud(); // minimap and compass bar in gameplay
     void updateTouchControls(); // on-screen driving controls on or off for this frame, layout from the window
     void drawTouchControls();
-    static bool SDLCALL onAppLifecycle(void* app, SDL_Event* event);
     bool simulationRuns() const { return m_flow.simulationRuns() && !m_paused; }
     void setPaused(bool paused);
+    void setVSync(bool on);
     void publishAudio();
     void stepSimulation(double frameTime);
-    void renderFrame(float frameTime);
+    // Pose interpolation between the last two physics ticks, camera, scenario statistics.
+    void updateView(float frameTime);
 
     // ---- Verification scenario (--script)
-    void updateScenario();
-    Scenario::Exec execScenario(const ScenarioCommand& c);
-    std::optional<double> scenarioValue(const std::string& name) const;
+    quench::app::ScenarioExec execScenario(const quench::app::ScenarioCommand& c);
+    // Multi-frame input of the game's commands (clicks on named UI items, touches, drags): SDL events pushed
+    // framesFromNow frames later, from scenarioCommand, so each lands in the frame it would have in a live run.
     void queueEvent(const SDL_Event& e, int framesFromNow);
+    void pushQueuedEvents();
+    // Events still queued, or the last one not yet handled by a whole frame (update and ui).
+    bool inputInFlight() const;
     void queueClick(float x, float y, bool textInput);
     // A finger as SDL reports it (mouse events from SDL_TOUCH_MOUSEID): down at (x, y), `steps` moves over one frame
     // each to (x + dx, y + dy), up. steps 0: a tap.
     void queueTouch(float x, float y, float dx, float dy, int steps);
 
+    quench::app::App& m_app;
     AppOptions m_options;
     // Member order = construction order; destruction is the reverse.
-    SdlContext m_sdl;
-    Window m_window;
     std::unique_ptr<Renderer> m_renderer;
-    std::unique_ptr<ImGuiContextGuard> m_imgui;
     std::vector<VehicleDefinition> m_vehicles; // assets/vehicles/*/vehicle.json (before m_sim: it spawns the first)
     Simulation m_sim;
     WheelSpray m_spray; // cosmetic particles thrown by the wheels (render-only)
@@ -200,9 +187,6 @@ private:
     // Scenario-only overrides for the Controls page captures: key cap wording and the connected pad type.
     std::optional<KeyboardStyle> m_keyboardOverride;
     std::optional<PadType> m_padTypeOverride;
-    // Scenario `gamepad attach`: an SDL virtual gamepad that the input opens like a real one (axes set by the script).
-    SDL_JoystickID m_virtualPadId = 0;
-    SDL_Joystick* m_virtualPad = nullptr;
     // On-screen touch driving: auto (iOS without a gamepad), or forced on / off by the scenario `touch_controls`.
     enum class TouchMode { Auto, On, Off } m_touchMode = TouchMode::Auto;
     KeyboardStyle keyboardStyle() const { return m_keyboardOverride.value_or(nativeKeyboardStyle()); }
@@ -227,9 +211,9 @@ private:
     std::unique_ptr<AudioSystem> m_audio;
 
     void rebuildVehicleVisual(); // body (fitted to the wheels) and wheel meshes from the current config
+    void ensureVehicleVisual();  // rebuilds them when the wheel fit of the running vehicle changed
     void buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM);
     void updateCosmetics(float dt);
-    void endPerf();
     void fillTireMarks();
 
     // m_sceneryMesh: the proving ground backdrop, or the render-only horizon ring of a level.
@@ -240,42 +224,27 @@ private:
     VehicleVisual m_vehicleVisual; // parts, spare mounts and wheel style of the body model
     std::vector<DrawItem> m_draws;
     GraphicsState m_gfx;
-    double m_cpuMs = 0.0;            // last frame: CPU work without the swapchain wait
+    bool m_vsync = true;     // the present mode TrailForge asked the engine for (settings, F2, scenario `set vsync`)
 
-    // perf_begin / perf_end (scenario frame-time measurement)
-    bool m_perfActive = false;
-    std::string m_perfLabel;
-    std::vector<double> m_perfFrameMs;
-    std::vector<double> m_perfGpuMs; // per frame (Metal), for the low percentiles
-    double m_perfCpuSum = 0.0, m_perfGpuSum = 0.0;
-    int m_perfGpuCount = 0;
-
-    bool m_running = true;
     bool m_paused = false;   // debug freeze (P / Pause button in F1), independent of the pause menu
     bool m_inBackground = false; // iOS: between DID_ENTER_BACKGROUND and WILL_ENTER_FOREGROUND (no GPU, no audio)
     bool m_stepOnce = false;
-    bool m_captured = false;
     int m_stepsThisFrame = 0;
-    double m_time = 0.0;     // application time: real, or the fixed scenario frame steps
-    // Scenario runs advance by a fixed step per frame (paced to at most real time), so input, waits and conditions
-    // land on the same physics ticks at any display refresh rate. perf_begin..perf_end measures in real time.
-    static constexpr double kScenarioFrameStep = 1.0 / 120.0;
-    double m_frameDt = 0.0;  // the step of the current frame
-    float m_fpsAccum = 0.0f;
-    int m_fpsFrames = 0;
-    float m_fps = 0.0f;
-    float m_frameMs = 0.0f;
-    int m_exitCode = 0;
+    // The engine's frame step: real time, or one fixed step per frame in scenario and capture runs (paced to at most
+    // real time), so input, waits and conditions land on the same physics ticks at any display refresh rate.
+    double m_frameDt = 0.0;
+    float m_frameTime = 0.0f; // m_frameDt clamped to 0.1 s (camera, cosmetics, easing)
+    // Interpolated poses of this frame (update) for the UI and the scene (render).
+    glm::mat4 m_bodyM{1.0f};
+    std::array<glm::mat4, kWheelCount> m_wheelM{};
 
-    std::optional<Scenario> m_scenario;
-    struct QueuedEvent { int frames; SDL_Event event; };
+    struct QueuedEvent { std::uint64_t frame; SDL_Event event; }; // pushed in this engine frame
     std::vector<QueuedEvent> m_queuedEvents;
-    std::deque<std::string> m_textStorage; // SDL_EVENT_TEXT_INPUT stores a pointer to the string
-    bool m_pushedThisFrame = false;
+    std::optional<std::uint64_t> m_lastPushFrame; // engine frame of the last pushed queued event
+    int m_inputCommandLine = -1; // the command whose queued input is in flight (Busy until it is handled)
     int m_scrollFrames = 0;
     int m_scrollStableFrames = 0;
     float m_scrollLastY = 0.0f;
-    std::string m_captureRequest;
     float m_camClearance = 0.0f;     // m: camera height above the surface below it
     float m_minCamClearance = 1e9f;  // minimum since the last reset_stats (follow camera only)
     int m_maxAirWheels = 0;          // maximum number of wheels without contact since the last reset_stats

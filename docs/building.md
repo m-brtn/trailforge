@@ -10,7 +10,7 @@ Platforms, prerequisites, build presets, the app bundle, packaging and command-l
 | macOS, Vulkan through MoltenVK (`SDL_GPU_DRIVER=vulkan`) | Run on the same Mac: `full_check` 210 / 0, captures look like Metal. Not a supported configuration, only a test of the SPIR-V path |
 | Windows x64 (MSVC, D3D12 / Vulkan) | Builds and the headless tests pass in GitHub Actions; the package is built there. **Not run on real hardware** |
 | Linux x64 (gcc, Vulkan) | Builds and the headless tests pass in GitHub Actions; the packaged app starts and renders on Mesa lavapipe (software Vulkan) under Xvfb. **Not run on real hardware** |
-| iOS / iPadOS 26+ (arm64, Metal), game controller only | Run in the **iOS Simulator only** (Xcode 27.2, iOS 27.0 runtime, iPhone 18 Pro): start, menus, both levels, driving with SDL's virtual gamepad (`ios_check` 14 / 0). The device build compiles and links but is **not run on a real iPhone or iPad**; a real controller is untested. See [iOS](#ios) |
+| iOS / iPadOS 26+ (arm64, Metal), game controller or touch | Run in the iOS Simulator (Xcode 27.2, iOS 27.0 runtime, iPhone 18 Pro Max): start, menus, both levels, driving with SDL's virtual gamepad (`ios_check` 25 / 0). On a real iPhone 18 Pro Max (iOS 27.2) only scripted: `ios_check` 25 / 0 with the Metal validation layer, on the engine's app shell at 120 Hz (2026-11-05). A real controller and real touch are untested on a device; no iPad run. See [iOS](#ios) |
 
 The shaders have one HLSL source compiled at build time to SPIR-V, MSL / metallib and (on Windows) DXIL, see
 [Shader pipeline](rendering.md#shader-pipeline). The renderer takes the first format the SDL GPU device accepts, in the order
@@ -49,7 +49,7 @@ Trying Windows or Linux (please report what happens):
 
 | Dependency | Version | Commit |
 |---|---|---|
-| Quench (the engine: `quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, the shader build, `quench::gpu`, its ImGui renderer; `cmake/Quench.cmake`) | 0.1.0 + the public ImGui renderer | `3dfb9f49` |
+| Quench (the engine: `quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, the shader build, `quench::gpu`, its ImGui renderer, the app shell `quench_main` / `quench_app`; `cmake/Quench.cmake`) | 0.1.0 + the app shell for games | `d7087832` |
 | SDL | release-3.4.18 | `829a65d7` |
 | Jolt Physics | v5.6.0 | `e77f1755` |
 | Dear ImGui (pinned and built by the engine, `quench_imgui`) | v1.92.9b | `f1cc2ae1` |
@@ -131,14 +131,19 @@ directory and check from another working directory that `--version` matches, tha
 sound asset directory, the one inside the package, and that its music directory has `intro.mp3`. The optional window smoke test needs a GPU (CI runs the Linux package
 on lavapipe in a separate step instead).
 
-Command-line options:
+Command-line options (`--help` lists them). The engine's app shell (Quench `quench_main`) owns `main` and parses its
+own flags first; the rest are TrailForge's:
 
+- engine: `--quit-after S` — quit after S seconds of app time (smoke test); `--capture file.png [--capture-at S]` —
+  save one rendered frame with the UI as PNG (default at 3 s); `--script file.txt` — scenario mode (see
+  [Testing](testing.md)), exit code 1 if any check failed; `--window WxH` — window size in points; `--frame-size WxH`
+  — render offscreen at W x H pixels (captures independent of the display density); `--gpu-driver NAME`,
+  `--gpu-debug` (GPU validation; Debug builds no longer turn it on by themselves), `--present-mode
+  vsync|immediate|mailbox`; `--version`, `--help`. With `--script` or `--capture` every frame advances the app time
+  by one simulation step (1/120 s), never faster than real time;
 - `--no-intro` — skip the intro and go straight to the start menu (scripts and `--demo` start in gameplay);
 - `--no-ui` — start with diagnostics hidden;
 - `--demo` — scripted drive without input;
-- `--quit-after N` — quit automatically after N seconds (smoke test);
-- `--capture file.bmp|file.png [--capture-at N]` — save one rendered frame;
-- `--script file.txt` — scenario mode (see below). Exit code 1 if any check failed;
 - `--vehicle ID` — start with catalog vehicle ID (`assets/vehicles/ID`, e.g. `trailforge_ev`), remembered like a
   choice on the vehicle page (not in scenario mode);
 - `--level ID` — start on level ID (`exploration_peaks`, `suncoast_raceway`, `proving_ground`); scenarios and `--demo` start on the
@@ -146,15 +151,15 @@ Command-line options:
 - `--no-audio` — no audio device, no sounds loaded;
 - `--audio-capture out.wav` — render the mix offline into `out.wav` (no device, see [Audio](audio.md#audio));
 - `--paths` — print the asset lookup directories (`assets:` sounds, `music:`, `fonts:`, `images:`) and the user data
-  directory, then exit;
-- `--version` — print the version and exit.
+  directory, then exit.
 
 ## iOS
 
 First port (v0.29.0 tree): **iOS Simulator only, untested on a real iPhone or iPad.** Touch
 works in the menus (tap a row or a value arrow, drag a list to scroll it, a flick coasts) and, without a controller,
 on-screen driving controls appear in gameplay (`docs/controls.md` "Touch driving"); they were checked with synthetic
-finger events, never on a device. Minimum iOS 26.0 (iPhone and iPad,
+finger events, never on a device. Since 2026-11-05 the `ios-xcode` build has also run `ios_check.txt` on an iPhone
+(scripted input only, see "iOS device: Xcode project"). Minimum iOS 26.0 (iPhone and iPad,
 landscape only, arm64). For a real iPhone / iPad use the Xcode project ("iOS device: Xcode project" below).
 
 Prerequisites: Xcode with the iOS SDK and an iOS Simulator runtime (checked with Xcode 27.2, iOS SDK 27.2 and the
@@ -209,6 +214,13 @@ How the build works:
 Measured in the Simulator (iPhone 18 Pro, iOS 27.0, 2622 × 1206 output, Low preset 1757 × 808 render): about 2 s
 from launch to the loaded menu world (log timestamps), 112–185 FPS in the menu, on the proving ground and on
 Exploration Peaks (`perf_begin` averages 5.4–8.9 ms; the Simulator does not hold VSync), process memory 520–600 MB.
+Since the engine's app shell drives the frames (SDL main callbacks: on iOS a `CADisplayLink`), the Simulator runs at
+its display's 60 Hz (2026-11-05: `ios_check` perf 16.66 ms per frame, GPU 0.53 ms on the proving ground and on
+Peaks). It stays at 60 Hz with `CADisableMinimumFrameDurationOnPhone` in TrailForge's `Info.plist` (added
+2026-11-05, as in the engine's template; without it iOS keeps the display link of a ProMotion iPhone at 60 Hz or
+below). On the iPhone 18 Pro Max it runs at 120 Hz (2026-11-05, Low preset, 1922 × 884 render, 2868 × 1320 output,
+no validation, the vehicle parked on the proving ground: frame p50 8.333 ms, CPU p50 1.14 ms, GPU p50 6.19 ms; in
+`ios_check` with validation, while driving: frame p50 8.34 ms on the proving ground and 8.32 ms on Exploration Peaks).
 The Simulator's GPU is the Mac's GPU behind a translation layer, so these numbers say nothing about an iPhone.
 
 Known limitations:
@@ -237,8 +249,8 @@ Preset `ios-xcode` generates `build/ios-xcode/TrailForge.xcodeproj` (Xcode gener
 iOS 26.0+) with Xcode's **Automatic** signing. The project has the app target `trailforge` (product `TrailForge.app`),
 its libraries (`trailforge_sim`, `trailforge_audio`, `trailforge_flow`, the engine's `quench_*` libraries with ImGui in
 `quench_imgui`, Jolt, SDL3, miniaudio) and one shared
-scheme, `trailforge`, whose Run action uses the Release configuration (Debug Jolt is too slow to drive). Not run on a
-real iPhone or iPad yet.
+scheme, `trailforge`, whose Run action uses the Release configuration (Debug Jolt is too slow to drive). Run on an
+iPhone 18 Pro Max (iOS 27.2) with `ios_check.txt` and the Metal validation layer (2026-11-05); not on an iPad.
 
 ```sh
 cmake --preset host-tools && cmake --build --preset host-tools   # once: macOS quench_shaderc
@@ -283,6 +295,16 @@ Details:
   `devicectl device process launch --device <udid> com.trailforge.app.<user>`. On the test Mac `xcrun devicectl`
   hangs in `xcodebuild -runFirstLaunch` like `xcrun simctl`; CoreDevice's own binary works:
   `/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl`.
+- Scenarios on the device: the app cannot read Mac paths. `--paths` prints the data container; copy the script into
+  it (`devicectl device copy to --domain-type appDataContainer --domain-identifier com.trailforge.app.<user>
+  --source ios_check.txt --destination tmp/ios_check.txt`) with its `capture` paths rewritten to that container's
+  `tmp/`, launch with `--console --environment-variables '{"MTL_DEBUG_LAYER":"1"}' ... --script <container>/tmp/ios_check.txt
+  --no-audio`, and copy the captures back with `device copy from`. Keep `devicectl` running until the result line:
+  when it is killed it terminates the app, SDL turns that into a quit event, and the scenario stops without a result.
+  The phone must stay unlocked (auto-lock off) for the whole run. With the engine's app shell the process ends by
+  itself when the app quits (SDL's main callbacks call `exit`; seen in the Simulator and on the iPhone). With
+  the earlier own loop SDL kept the process alive after `main` returned (black screen); a process left like that is
+  ended with `devicectl device process terminate --pid <pid>`.
 - The Ninja preset `ios-device-release` still builds an ad-hoc bundle; signing it by hand needs
   `TRAILFORGE_IOS_SIGN_IDENTITY`, `TRAILFORGE_IOS_PROVISIONING_PROFILE` and `TRAILFORGE_IOS_ENTITLEMENTS`
   (`cmake/IosBundle.cmake`). The Xcode project is the simpler path.

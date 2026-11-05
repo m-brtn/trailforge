@@ -21,7 +21,7 @@ wait 1.8
 capture /tmp/trailforge_menu_01_intro.png
 until menu_screen == 1 6
 wait 0.9
-log fade
+telemetry fade
 expect menu_fade > 0.2
 expect menu_fade < 0.9
 capture /tmp/trailforge_menu_02_intro_fade.png
@@ -32,7 +32,7 @@ expect autopilot == 1          # the vehicle drives the attract route on its own
 capture /tmp/trailforge_menu_03_start_menu.png
 wait 0.1                       # the capture is taken at the end of the next frame
 wait 5.0
-log attract
+telemetry attract
 expect fwd_kmh > 10            # moving forward along the route at a gentle speed
 expect fwd_kmh < 40
 expect autopilot_driven > 25
@@ -159,7 +159,7 @@ expect setting_debug_windows == 1
 # mouse: click a row
 menu select controls            # the last row: the cursor scrolls it into view
 wait 0.5
-click menu:controls
+click_item menu:controls
 wait 0.4
 expect menu_page == 3
 capture /tmp/trailforge_menu_05_controls.png
@@ -168,7 +168,7 @@ wait 0.1
 expect menu_page == 2
 # mouse wheel scrolls the Settings rows (they do not fit at 16:10)
 menu select music
-wheel -3
+wheel_center -3
 wait 0.5
 expect menu_scroll > 20
 capture /tmp/trailforge_menu_05b_settings_rows.png
@@ -190,7 +190,7 @@ touchdrag 0 -150 3              # a quick flick up: the list goes on after the f
 wait 1.2
 expect menu_page == 2
 expect d_menu_scroll > 200
-touch menu:controls             # a tap still opens the row
+touch_item menu:controls             # a tap still opens the row
 wait 0.4
 expect menu_page == 3
 tap Escape
@@ -220,7 +220,7 @@ wait 0.3
 expect menu_page == 2
 menu select controls            # the last row: the cursor scrolls it into view
 wait 0.5
-click menu:controls
+click_item menu:controls
 wait 0.3
 expect menu_page == 3
 expect menu_cursor == 0
@@ -230,18 +230,18 @@ expect menu_cursor == 2
 tap Return
 wait 0.3
 expect menu_page == 2
-click menu:controls
+click_item menu:controls
 wait 0.3
 expect menu_page == 3
 capture /tmp/trailforge_menu_05d_controls_back.png
 wait 0.1
-click menu:back
+click_item menu:back
 wait 0.3
 expect menu_page == 2
-wheel 20
+wheel_center 20
 wait 0.5
 expect menu_scroll == 0
-click menu:back                 # BACK is clickable whatever the list scroll
+click_item menu:back                 # BACK is clickable whatever the list scroll
 wait 0.3
 expect menu_page == 0
 expect menu_screen == 1
@@ -255,7 +255,7 @@ expect menu_cursor == 0
 expect autopilot == 2           # the vehicle page holds the vehicle still for the preview
 capture /tmp/trailforge_menu_05e_vehicle_back.png
 wait 0.1
-click menu:back
+click_item menu:back
 wait 0.3
 expect menu_page == 0
 expect menu_screen == 1
@@ -275,7 +275,7 @@ wait 0.1
 tap Down
 wait 0.1
 expect garage_cursor == 0
-click garage:back
+click_item garage:back
 wait 0.3
 expect garage_open == 0
 expect garage_scroll == 0       # the click did not need to scroll the list
@@ -311,12 +311,12 @@ tap Escape
 wait 0.05
 expect menu_screen == 3
 expect paused == 1
-mark ticks
+mark sim_ticks
 mark z
 mark x
 wait 1.0
-log paused
-expect d_ticks == 0            # W is still held: no ticks while paused
+telemetry paused
+expect d_sim_ticks == 0            # W is still held: no ticks while paused
 expect d_z == 0
 expect d_x == 0
 expect menu_blur > 0.99
@@ -324,7 +324,7 @@ capture /tmp/trailforge_menu_06_pause.png
 tap R                          # gameplay keys do nothing in the menu
 tap Q
 wait 0.2
-expect d_ticks == 0
+expect d_sim_ticks == 0
 expect d_z == 0
 
 # Settings from the pause menu, then back and resume (Resume, Map, Reset vehicle, Garage, Settings)
@@ -336,7 +336,7 @@ wait 0.1
 tap Return
 wait 0.3
 expect menu_page == 2
-expect d_ticks == 0
+expect d_sim_ticks == 0
 capture /tmp/trailforge_menu_07_pause_settings.png
 wait 0.1
 # time of day from the pause Settings: applied to the paused world at once
@@ -360,15 +360,15 @@ wait 0.3
 tap Return
 wait 0.1
 expect setting_debug_windows == 0
-expect d_ticks == 0
-click menu:back                 # BACK from the pause Settings returns to the pause menu
+expect d_sim_ticks == 0
+click_item menu:back                 # BACK from the pause Settings returns to the pause menu
 wait 0.3
 expect menu_page == 1
-expect d_ticks == 0
+expect d_sim_ticks == 0
 tap Escape
 wait 0.6
 expect menu_screen == 2
-expect d_ticks > 40            # resume continues the simulation (W still held)
+expect d_sim_ticks > 40            # resume continues the simulation (W still held)
 expect debug_hud == 0
 expect tire_temps == 0          # telemetry window (F1) hidden
 expect tire_hud == 1            # player HUD
@@ -382,7 +382,7 @@ set debug_windows 1
 wait 0.1
 expect debug_hud == 1
 expect tire_temps == 1
-log resumed
+telemetry resumed
 up W
 down S
 until speed_kmh < 0.5 6
@@ -402,7 +402,7 @@ expect speed_kmh < 0.5
 # ---------------------------------------------------------------- Quit to the start menu (mouse)
 tap Escape
 wait 0.4
-click menu:quit_to_menu
+click_item menu:quit_to_menu
 wait 0.5
 expect menu_screen == 1
 expect cam_free == 1

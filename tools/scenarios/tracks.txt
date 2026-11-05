@@ -13,7 +13,7 @@ wait 1.5
 set marks_clear 1
 down W
 wait 2.5
-log launch                       # full throttle in first gear: the tires keep grip, no rubber
+telemetry launch                       # full throttle in first gear: the tires keep grip, no rubber
 expect marks_s0 < 5
 mark marks_s0
 wait 1.5
@@ -22,7 +22,7 @@ up W
 down S
 until speed_kmh < 0.5 8
 up S
-log after_brake
+telemetry after_brake
 expect d_marks_s0 > 40           # locked / sliding wheels lay rubber
 camera 44.2 1.6 -4.0 41.8 0.0 6.0
 wait 0.6
@@ -38,7 +38,7 @@ until z > 58 10
 down S
 until speed_kmh < 0.5 8
 up S
-log sand
+telemetry sand
 expect marks_s6 > 4              # rolling imprint in the sand area (x 28-45, z 48-84) north of the strip
 camera 45.6 1.7 36.0 41.6 0.0 50.0
 wait 0.6
@@ -58,7 +58,7 @@ until z > 68 10
 down S
 until speed_kmh < 0.5 8
 up S
-log meadow
+telemetry meadow
 expect marks_s5 > 40             # pressed grass
 # A low-range power turn tears the turf (the unloaded inner wheels spin).
 tap L
@@ -94,7 +94,7 @@ up W
 down S
 until speed_kmh < 0.5 8
 up S
-log mud
+telemetry mud
 expect marks_s4 > 40
 camera -2.0 1.5 46.0 0.6 0.0 54.0
 wait 0.6
@@ -125,7 +125,7 @@ up D
 down S
 until speed_kmh < 0.5 8
 up S
-log donut
+telemetry donut
 camera 0.0 14.0 -52.0 -1.0 0.0 -39.0
 wait 0.6
 capture /tmp/trailforge_tracks_concrete_drift.png
@@ -146,7 +146,7 @@ down S
 until speed_kmh < 0.5 8
 up S
 tap L
-log dirt
+telemetry dirt
 expect marks_s1 > 20
 time Noon
 camera -25.0 2.6 -49.5 -26.0 0.0 -42.0
@@ -156,7 +156,7 @@ wait 0.3
 
 # ---------------------------------------------------------------- cost: marks off vs. the ring filled to its cap
 # Synthetic ribbons over the whole proving ground ("Fill to cap"), follow camera in the mud showcase, High preset.
-# Prints "PERF <label> ..." lines (frame avg/p95/p99, CPU and GPU ms).
+# Prints the engine's "perf: <label>: ..." lines (frame avg/p95/p99, CPU and GPU ms).
 time 16.5
 camera follow
 teleport 8

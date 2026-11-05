@@ -15,20 +15,20 @@ until speed_kmh < 0.1 5
 wait 1.0
 pedal brake 0
 wait 1.0
-log ev_launch
+telemetry ev_launch
 pedal throttle 1
 wait 4.0
 expect motor_kw > 150
-log ev_liftoff
+telemetry ev_liftoff
 pedal throttle 0
 wait 2.5
 expect regen == 1
-log ev_brake
+telemetry ev_brake
 pedal brake 0.3
 wait 0.5
 expect regen == 1
 until speed_kmh < 0.5 12
-log ev_stop
+telemetry ev_stop
 wait 2.0
 pedal brake 0
 quit

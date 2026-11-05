@@ -2,7 +2,7 @@
 #   ./build/release/trailforge --script tools/scenarios/terrain_textures.txt --no-audio
 # Checks the texture size per quality preset (Low 512, Medium 1024, High 2048, Ultra 4096; normal maps at most 2048)
 # and the Off setting, that driving does not reload them (they are loaded once per level entry / size change, not
-# streamed), prints frame times textured vs procedural per preset (PERF lines, vsync off) and the load time of each
+# streamed), prints frame times textured vs procedural per preset (perf lines, vsync off) and the load time of each
 # size. Captures /tmp/trailforge_tex_*.png. Exit code 1 on FAIL.
 set ui 0
 set hud 0

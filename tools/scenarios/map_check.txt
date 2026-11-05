@@ -8,7 +8,7 @@ level exploration_peaks
 until level == 1 30
 until map_ready == 1 10
 wait 1.0
-log spawn
+telemetry spawn
 expect map_pois == 13
 expect map_build_ms < 1500           # worker thread, 2048^2 raster
 expect marker_set == 0
@@ -21,15 +21,15 @@ wait 0.2
 expect map_open == 1
 expect menu_screen == 5
 expect paused == 1
-mark ticks
+mark sim_ticks
 wait 0.5
-expect d_ticks == 0
+expect d_sim_ticks == 0
 capture /tmp/trailforge_map_02_full.png
 wait 0.1
 
 # zoom with the wheel (around the pointer), pan with a drag, C centers on the vehicle
 mark map_scale
-wheel 4
+wheel_center 4
 wait 0.2
 expect d_map_scale > 0.2              # 4 notches: x2.07 (fit is ~0.4 pt/m)
 mark map_cx
@@ -59,7 +59,7 @@ expect marker_set == 0
 mapclick -442 130
 wait 0.2
 expect marker_set == 1
-log marker
+telemetry marker
 expect marker_dist > 100
 expect marker_dist < 125
 expect marker_bearing > -20          # nearly straight ahead of the spawn heading
@@ -78,7 +78,7 @@ wait 3.0                             # keyboard pedal ramp, uphill, no steering
 expect d_marker_dist < -1             # it was rolling back at 4 km/h when the map opened
 mark marker_dist
 wait 3.0
-log driving
+telemetry driving
 expect d_marker_dist < -12           # still closing, faster
 expect marker_bearing > -30
 expect marker_bearing < 30
@@ -108,15 +108,15 @@ expect menu_screen == 2
 # ---------------------------------------------------------------- gamepad: LB opens, triggers zoom, stick pans, A sets, B closes
 gamepad attach
 wait 0.3
-gamepad button lb 1
+gamepad button leftshoulder down
 wait 0.1
-gamepad button lb 0
+gamepad button leftshoulder up
 wait 0.2
 expect map_open == 1
 mark map_scale
-gamepad axis rt 1
+gamepad axis righttrigger 1
 wait 0.5
-gamepad axis rt 0
+gamepad axis righttrigger 0
 wait 0.1
 expect d_map_scale > 0
 mark map_cx
@@ -126,17 +126,17 @@ gamepad axis leftx 0
 wait 0.1
 expect d_map_cx > 5                  # stick right: the view moves east
 mapaim -300 -100
-gamepad button south 1
+gamepad button a down
 wait 0.1
-gamepad button south 0
+gamepad button a up
 wait 0.2
 expect marker_x > -303
 expect marker_x < -297
 capture /tmp/trailforge_map_06_gamepad.png
 wait 0.1
-gamepad button east 1
+gamepad button b down
 wait 0.1
-gamepad button east 0
+gamepad button b up
 wait 0.2
 expect map_open == 0
 gamepad detach

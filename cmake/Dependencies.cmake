@@ -124,7 +124,8 @@ endif()
 # first declaration wins, so both use the same sources (with the SDL patch above). Dear ImGui (v1.92.9b) comes from
 # the engine's declaration alone. Used so far: quench_core (FixedStepClock, JSON), quench_physics (PhysicsWorld), the
 # shader build (quench_add_shaders, quench_shaderc), quench_gpu (the renderer's GPU layer), quench_imgui (Dear ImGui
-# with its SDL3 platform backend) and quench_app (only its ImGui renderer, quench::app::ImGuiRenderer).
+# with its SDL3 platform backend) and quench_app with quench_main (the app shell: main through SDL main callbacks,
+# window, GPU device, ImGui, command line flags, scenario runner, captures, perf regions).
 # Without the app only the engine's headless modules are configured, and SDL is not fetched.
 include(${CMAKE_CURRENT_LIST_DIR}/Quench.cmake)
 if(TRAILFORGE_BUILD_APP)

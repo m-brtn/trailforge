@@ -78,7 +78,7 @@ mark y
 until x > -58 10
 capture /tmp/trailforge_expl_08_bridge_coast.png
 until x > -24 10
-log bridge_coast
+telemetry bridge_coast
 expect max_air == 0                     # no wheel left the deck (it is not a hole for the wheel casts)
 expect speed_kmh > 25
 expect d_y > -0.5                       # the deck is level with the road: the body did not drop into it
@@ -103,7 +103,7 @@ mark y
 until x > 748 12
 capture /tmp/trailforge_expl_09_bridge_canyon.png
 until x > 807 12
-log bridge_canyon
+telemetry bridge_canyon
 expect max_air == 0
 expect speed_kmh > 25
 expect d_y > -0.5

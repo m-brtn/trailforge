@@ -13,7 +13,7 @@ down W
 until speed_kmh > 22 6
 up W
 until z < 10 12
-log mud_roll_done
+telemetry mud_roll_done
 expect tread_soil_max < 0.2
 down S
 until speed_kmh < 0.5 6
@@ -62,7 +62,7 @@ up W
 down S
 until speed_kmh < 0.5 6
 up S
-log mud_wheel
+telemetry mud_wheel
 expect tread_soil_max > 0.8
 camera -44.9 0.9 33.0 -42.3 0.45 34.6
 capture /tmp/trailforge_tread_wheel_mud.png
@@ -75,7 +75,7 @@ up W
 down S
 until speed_kmh < 0.5 6
 up S
-log sand_wheel
+telemetry sand_wheel
 expect tread_soil_max > 0.08
 expect tread_soil_max < 0.2
 camera 38.8 1.4 53.0 41.3 0.9 54.5

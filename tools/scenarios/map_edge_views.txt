@@ -1,8 +1,8 @@
 # Exploration Peaks map edge from fixed high cameras: the 2 x 2 km bake against the render-only horizon terrain in
-# all four directions, the north-west corner, a top view and an outward view from above the centre, then PERF of an
+# all four directions, the north-west corner, a top view and an outward view from above the centre, then frame times of an
 # edge view per quality preset.
 #   ./build/release/trailforge --script tools/scenarios/map_edge_views.txt --no-audio
-# Captures /tmp/trailforge_edge_*.png (time 10:00, High), then PERF lines. Exit code 1 on FAIL.
+# Captures /tmp/trailforge_edge_*.png (time 10:00, High), then perf lines. Exit code 1 on FAIL.
 set ui 0
 set hud 0
 set auto_reverse 0

@@ -24,7 +24,7 @@ mark marks_s8
 down S
 until speed_kmh < 0.5 8
 up S
-log asphalt_stop
+telemetry asphalt_stop
 expect surface == 8
 expect d_marks_s8 > 40           # locked wheels lay rubber on asphalt
 expect spray < 40                # asphalt throws no stones
@@ -42,7 +42,7 @@ set spray_clear 1
 camera -167.0 3.6 -154.0 -173.0 3.0 -160.5
 down W
 wait 0.8
-log gravel_spin
+telemetry gravel_spin
 expect spray > 20                # wheelspin throws gravel stones and dust
 capture /tmp/trailforge_surfaces_gravel_spray.png
 wait 0.3
@@ -51,12 +51,12 @@ up W
 down S
 camera -167.5 3.7 -133.0 -173.0 3.0 -141.5
 wait 0.3
-log gravel_lock
+telemetry gravel_lock
 capture /tmp/trailforge_surfaces_gravel_lock_spray.png
 wait 0.3
 until speed_kmh < 0.5 8
 up S
-log gravel_stop
+telemetry gravel_stop
 expect surface == 9
 expect marks_s9 > 20             # displaced gravel tracks
 set spray_clear 1

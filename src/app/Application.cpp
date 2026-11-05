@@ -14,8 +14,6 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
-#include <imgui_impl_sdl3.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -28,54 +26,40 @@
 
 namespace tf {
 
-// ------------------------------------------------------------------ RAII helpers
+namespace {
 
-SdlContext::SdlContext() {
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
-        throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
-}
+namespace qapp = quench::app;
 
-SdlContext::~SdlContext() { SDL_Quit(); }
-
-Window::Window(const char* title, int w, int h) {
+// The window the engine created: TrailForge's title and icon, 1440 x 900 points times the primary display's content
+// scale (unless --window set another size), centered.
+void setUpWindow(qapp::App& app) {
+    SDL_Window* window = app.window();
+    SDL_SetWindowTitle(window, "TrailForge " TRAILFORGE_VERSION);
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     const float s = scale > 0.0f ? scale : 1.0f;
-    m_window = SDL_CreateWindow(title, int(w * s), int(h * s), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (!m_window) throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
-    SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    if (setAppIcon(m_window)) SDL_Log("App icon set");
+    const qapp::AppDesc& desc = app.desc();
+    if (s != 1.0f && app.windowWidth() == desc.width && app.windowHeight() == desc.height)
+        SDL_SetWindowSize(window, int(float(desc.width) * s), int(float(desc.height) * s));
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    if (setAppIcon(window)) SDL_Log("App icon set");
 }
 
-Window::~Window() { SDL_DestroyWindow(m_window); }
-
-ImGuiContextGuard::ImGuiContextGuard(SDL_Window* window, Renderer& renderer) : m_renderer(renderer) {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr; // do not write imgui.ini to the working directory
+// TrailForge's ImGui style: dark, sizes and fonts scaled by the primary display's content scale (the engine also
+// enlarges them on touch screens; TrailForge's menus and HUD are sized for that scale alone).
+void setUpImGuiStyle() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
     ImGui::StyleColorsDark();
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     if (scale > 0.0f) {
-        ImGui::GetStyle().ScaleAllSizes(scale);
-        ImGui::GetStyle().FontScaleDpi = scale;
+        style.ScaleAllSizes(scale);
+        style.FontScaleDpi = scale;
     }
-    ImGui_ImplSDL3_InitForOther(window);
-    renderer.initImGui();
 }
-
-ImGuiContextGuard::~ImGuiContextGuard() {
-    ImGui_ImplSDL3_Shutdown();
-    m_renderer.shutdownImGui();
-    ImGui::DestroyContext();
-}
-
-// ------------------------------------------------------------------ Application
-
-namespace {
 
 // Scenarios and the demo drive start in gameplay so existing scripts keep working; `menu ...` commands reach the menus.
-Screen initialScreen(const AppOptions& o) {
-    if (!o.scriptPath.empty() || o.demoDrive) return Screen::Playing;
+Screen initialScreen(const qapp::App& app, const AppOptions& o) {
+    if (app.scripted() || o.demoDrive) return Screen::Playing;
     return o.intro ? Screen::Intro : Screen::MainMenu;
 }
 
@@ -142,21 +126,17 @@ SimulationSettings simulationSettings(const std::vector<VehicleDefinition>& vehi
 
 } // namespace
 
-Application::Application(const AppOptions& options)
-    : m_options(options),
-      m_window("TrailForge " TRAILFORGE_VERSION, 1440, 900),
+Application::Application(qapp::App& app, const AppOptions& options)
+    : m_app(app),
+      m_options(options),
       m_vehicles(loadVehicles()),
       m_sim(simulationSettings(m_vehicles)),
       m_ui(m_sim.vehicleConfig()),
-      m_flow(initialScreen(options)),
+      m_flow(initialScreen(app, options)),
       m_clock(m_sim.fixedStep()) {
-#if defined(NDEBUG)
-    const bool debugDevice = false;
-#else
-    const bool debugDevice = true;
-#endif
-    m_renderer = std::make_unique<Renderer>(m_window.get(), debugDevice);
-    m_imgui = std::make_unique<ImGuiContextGuard>(m_window.get(), *m_renderer);
+    setUpWindow(m_app);
+    setUpImGuiStyle();
+    m_renderer = std::make_unique<Renderer>(m_app.device(), m_app.swapchainFormat());
     m_menu.load(*m_renderer, assetDirs("fonts"), assetDirs("images"));
     m_mapUI.setFonts(m_menu.bodyFont(), m_menu.headingFont());
     for (const std::string& dir : assetDirs("textures")) {
@@ -188,14 +168,11 @@ Application::Application(const AppOptions& options)
                 m_renderer->driverName(), m_renderer->shaderFormatName(), m_sim.track().geometry().triangleCount(),
                 m_trackMesh.vertexCount() / 3, m_sceneryMesh.vertexCount() / 3, bodyMesh.vertices.size() / 3,
                 m_vehicleVisual.parts.size(), 1000.0 * double(SDL_GetPerformanceCounter() - t0) / double(SDL_GetPerformanceFrequency()));
-    if (!options.scriptPath.empty()) {
-        m_scenario = Scenario::load(options.scriptPath);
-        if (!m_scenario) throw std::runtime_error("cannot load scenario " + options.scriptPath);
-    }
+    const bool scripted = m_app.scripted();
 
     // Settings: loaded from (and saved to) the user data directory, except in scenario mode where every run starts
     // from the defaults and nothing is written.
-    if (!m_scenario) {
+    if (!scripted) {
         const std::string dir = userDataDir();
         if (!dir.empty()) m_settingsPath = dir + "settings.cfg";
         int skipped = 0;
@@ -207,7 +184,7 @@ Application::Application(const AppOptions& options)
         m_settings.debugWindows = true; // scenario checks read and click the F1-F3 windows
     }
 
-    if (m_scenario) {
+    if (scripted) {
         m_bestLapsPath = (std::filesystem::temp_directory_path() / "trailforge_scenario_best_laps.cfg").string();
         std::error_code ec;
         std::filesystem::remove(m_bestLapsPath, ec);
@@ -216,7 +193,7 @@ Application::Application(const AppOptions& options)
     }
     if (!m_bestLapsPath.empty() && m_bestLaps.load(m_bestLapsPath))
         std::printf("Best laps: %zu loaded from %s\n", m_bestLaps.size(), m_bestLapsPath.c_str());
-    if (m_scenario) {
+    if (scripted) {
         m_bestDriftPath = (std::filesystem::temp_directory_path() / "trailforge_scenario_best_drift.cfg").string();
         std::error_code ec;
         std::filesystem::remove(m_bestDriftPath, ec);
@@ -229,7 +206,7 @@ Application::Application(const AppOptions& options)
     // Garage setups: <user data>/setups/<vehicle id>.json; scenario runs use a scratch directory that starts empty.
     if (!m_vehicles.empty()) {
         std::string setupDir;
-        if (m_scenario) {
+        if (scripted) {
             setupDir = (std::filesystem::temp_directory_path() / "trailforge_scenario_setups").string();
             std::error_code ec;
             std::filesystem::remove_all(setupDir, ec);
@@ -274,7 +251,7 @@ Application::Application(const AppOptions& options)
     m_flow.setLevels(m_levelIds);
     if (!options.levelId.empty()) m_settings.level = options.levelId;
     const std::string startLevel = !options.levelId.empty() ? options.levelId
-                                   : (m_scenario || options.demoDrive) ? std::string("proving_ground")
+                                   : (scripted || options.demoDrive) ? std::string("proving_ground")
                                                                        : m_settings.level;
     if (!selectLevel(startLevel)) {
         std::printf("Levels: no level '%s', using the proving ground\n", startLevel.c_str());
@@ -293,15 +270,13 @@ Application::Application(const AppOptions& options)
     m_gfx.settings.timeOfDay = m_settings.timeOfDay;
     m_gfx.changed = true;
     if (m_flow.menuActive()) enterMenuWorld(false);
-    SDL_AddEventWatch(&Application::onAppLifecycle, this);
+    beginInputFrame();
 }
 
+// Called from Game::shutdown, while the engine's GPU device still exists.
 Application::~Application() {
-    SDL_RemoveEventWatch(&Application::onAppLifecycle, this);
     m_audio.reset(); // stop the audio thread first
-    if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
-    if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
-    // Mesh GPU resources are released before the device is destroyed.
+    // Mesh GPU resources are released before the renderer and the engine's device.
     if (m_renderer) m_renderer->waitIdle();
     m_menu.release();
     if (m_mapJob.valid()) m_mapJob.wait();
@@ -309,33 +284,74 @@ Application::~Application() {
     for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_waterfallMesh, &m_bodyMesh, &m_wheelMesh, &m_rearWheelMesh, &m_springMesh,
                        &m_armMesh, &m_halfShaftMesh, &m_shockBodyMesh, &m_shockShaftMesh})
         m->release();
-    m_imgui.reset();
     m_renderer.reset();
 }
 
-void Application::processEvents() {
+void Application::printExitSummary() const {
+    const auto p = m_sim.currentSnapshot().body.position;
+    std::printf("TrailForge: exit after %.1f s, %llu physics ticks, body at (%.2f %.2f %.2f), %.0f FPS, dropped %.1f ms\n",
+                m_app.time(), static_cast<unsigned long long>(m_sim.timing().ticks), p.GetX(), p.GetY(), p.GetZ(),
+                m_app.stats().fps, m_clock.totalDropped() * 1000.0);
+}
+
+// The events of a frame arrive between two engine frames, so the input frame starts at the end of the previous one.
+void Application::beginInputFrame() {
     m_input.beginFrame();
     if (showsGameplayTime()) {
         // The TIME row and settings.cfg follow the live clock (time flow, the F2 time-lapse, scenario `time`).
         m_settings.timeOfDay = std::fmod(std::fmod(m_gfx.settings.timeOfDay, 24.0f) + 24.0f, 24.0f);
         m_applied.timeOfDay = m_settings.timeOfDay;
     }
-    if (m_scenario) updateScenario();
     updateTouchControls();
-    const ImGuiIO& io = ImGui::GetIO();
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        ImGui_ImplSDL3_ProcessEvent(&e);
-        if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e.window.windowID == SDL_GetWindowID(m_window.get()))
-            m_running = false;
-        if (m_scenario && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && io.WantCaptureKeyboard)
-            std::printf("SCENARIO: key %s arrived while ImGui owns the keyboard (only F1-F3 and Escape act)\n",
-                        SDL_GetScancodeName(e.key.scancode));
-        m_input.handleEvent(e, io.WantCaptureKeyboard, io.WantCaptureMouse);
-    }
-    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, float(std::min(m_frameDt, 0.1)));
+}
 
-    if (m_input.pressed(Action::Quit)) m_running = false;
+// Every SDL event, after the engine and ImGui have seen it. App lifecycle (iOS) events come at once, while the OS waits
+// in its callback: losing focus opens the pause menu; in the background the engine renders nothing (iOS ends apps that
+// use the GPU there), the simulation does not tick and the audio device is stopped.
+void Application::event(const SDL_Event& e) {
+    switch (e.type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        if (!m_app.scripted()) m_flow.pause();
+        return;
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+        if (m_inBackground) return;
+        m_inBackground = true;
+        if (m_audio) m_audio->setSuspended(true);
+        std::printf("App: entered the background (rendering, simulation and audio stopped)\n");
+        return;
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+        if (!m_inBackground) return;
+        m_inBackground = false;
+        m_clock.reset();
+        if (m_audio) m_audio->setSuspended(false);
+        std::printf("App: back in the foreground\n");
+        return;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        if (e.window.windowID == SDL_GetWindowID(m_app.window())) m_app.quit();
+        return;
+    default: break;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    if (m_app.scripted() && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && io.WantCaptureKeyboard)
+        std::printf("SCENARIO: key %s arrived while ImGui owns the keyboard (only F1-F3 and Escape act)\n",
+                    SDL_GetScancodeName(e.key.scancode));
+    m_input.handleEvent(e, io.WantCaptureKeyboard, io.WantCaptureMouse);
+}
+
+void Application::update(double frameDt) {
+    m_frameDt = frameDt;
+    m_frameTime = float(std::min(frameDt, 0.1));
+    pushQueuedEvents();
+    m_flow.update(std::min(frameDt, 0.1));
+    const ImGuiIO& io = ImGui::GetIO();
+    m_input.endEvents(io.WantCaptureKeyboard, io.WantCaptureMouse, m_frameTime);
+    handleInput();
+    stepSimulation(frameDt);
+    updateView(m_frameTime);
+}
+
+void Application::handleInput() {
+    if (m_input.pressed(Action::Quit)) m_app.quit();
     if (m_settings.debugWindows) {
         if (m_input.pressed(Action::ToggleDebugUI)) m_ui.visible = !m_ui.visible;
         if (m_input.pressed(Action::ToggleGraphicsUI)) m_gfx.visible = !m_gfx.visible;
@@ -384,44 +400,23 @@ void Application::processEvents() {
     if (m_options.demoDrive) {
         intent.autoReverse = false;
         // Slow circular drive through the start pad and the lane A bumps.
-        const double phase = std::fmod(m_time, 24.0);
+        const double phase = std::fmod(m_app.time(), 24.0);
         intent.throttle = phase < 20.0 ? 0.35f : 0.0f;
         intent.brake = phase >= 20.0 ? 0.5f : 0.0f;
-        intent.steer = m_time < 3.0 ? 0.0f : -0.45f;
+        intent.steer = m_app.time() < 3.0 ? 0.0f : -0.45f;
     }
     m_sim.setIntent(intent);
-}
-
-// App lifecycle (iOS): an event watch sees the events while the OS waits in its callback, before the next frame.
-// Losing focus opens the pause menu; in the background nothing is rendered (iOS ends apps that use the GPU there),
-// the simulation does not tick and the audio device is stopped.
-bool SDLCALL Application::onAppLifecycle(void* app, SDL_Event* event) {
-    Application& a = *static_cast<Application*>(app);
-    switch (event->type) {
-    case SDL_EVENT_WILL_ENTER_BACKGROUND:
-        if (!a.m_scenario) a.m_flow.pause();
-        break;
-    case SDL_EVENT_DID_ENTER_BACKGROUND:
-        if (a.m_inBackground) break;
-        a.m_inBackground = true;
-        if (a.m_audio) a.m_audio->setSuspended(true);
-        std::printf("App: entered the background (rendering, simulation and audio stopped)\n");
-        break;
-    case SDL_EVENT_WILL_ENTER_FOREGROUND:
-        if (!a.m_inBackground) break;
-        a.m_inBackground = false;
-        a.m_clock.reset();
-        if (a.m_audio) a.m_audio->setSuspended(false);
-        std::printf("App: back in the foreground\n");
-        break;
-    default: break;
-    }
-    return true;
 }
 
 void Application::setPaused(bool paused) {
     if (paused == m_paused) return;
     m_paused = paused;
+}
+
+void Application::setVSync(bool on) {
+    m_vsync = on;
+    // Without immediate presentation the engine keeps VSync.
+    m_app.setPresentMode(on ? quench::gpu::PresentMode::Vsync : quench::gpu::PresentMode::Immediate);
 }
 
 void Application::handleMenu() {
@@ -472,7 +467,7 @@ void Application::onMenuCommand(MenuCommand c) {
     case MenuCommand::QuitToMenu: enterMenuWorld(true); break;
     case MenuCommand::QuitGame:
         saveSettings();
-        m_running = false;
+        m_app.quit();
         break;
     case MenuCommand::SettingsChanged: applySettings(false); break;
     case MenuCommand::SettingsClosed: saveSettings(); break;
@@ -502,7 +497,7 @@ void Application::openGarage() {
 }
 
 void Application::closeGarage() {
-    SDL_StopTextInput(m_window.get());
+    m_app.stopTextInput();
     m_input.setModalCapture(false, false);
     m_flow.closeGarage();
     if (m_garageCameraMode != Camera::Mode::Free) m_camera.setMode(m_garageCameraMode);
@@ -521,7 +516,7 @@ std::string Application::currentVehicleId() const {
 void Application::updateBestLaps() {
     const LapTimer& lt = m_sim.lapTimer();
     if (lt.laps() > m_lapsSeen) {
-        const bool counts = m_sim.autopilotMode() == AutopilotMode::Off || (m_scenario && m_scenarioAutopilot);
+        const bool counts = m_sim.autopilotMode() == AutopilotMode::Off || (m_app.scripted() && m_scenarioAutopilot);
         if (counts && m_bestLaps.submit(currentLevelId(), currentVehicleId(), lt.lastLap())) {
             std::string error;
             if (!m_bestLapsPath.empty() && m_bestLaps.save(m_bestLapsPath, &error))
@@ -602,8 +597,8 @@ void Application::handleGarage() {
     const bool wasRenaming = m_garage->renaming();
     const GarageResult r = m_garage->handle(in);
     if (m_garage->renaming() != wasRenaming) {
-        if (m_garage->renaming()) SDL_StartTextInput(m_window.get());
-        else SDL_StopTextInput(m_window.get());
+        if (m_garage->renaming()) m_app.startTextInput();
+        else m_app.stopTextInput();
     }
     m_input.setModalCapture(m_garage->modal() != GarageModal::None, m_garage->renaming());
     switch (r.sound) {
@@ -676,7 +671,8 @@ void Application::applySettings(bool force) {
             m_gfx.changed = true;
         }
     }
-    if (force || s.vsync != m_applied.vsync) m_renderer->setVSync(s.vsync);
+    // At startup VSync on is the engine's present mode already (or its --present-mode flag): only VSync off is applied.
+    if (force ? !s.vsync : s.vsync != m_applied.vsync) setVSync(s.vsync);
     if (!force && s.stylizedTrees != m_applied.stylizedTrees && m_sim.level()) {
         // The tree style is part of the bake: the current level is baked again (as a level change; the vehicle
         // goes back to the spawn).
@@ -1130,9 +1126,9 @@ void Application::updateTouchControls() {
                         (m_touchMode == TouchMode::Auto && kTouchPlatform && !m_input.gamepadConnected());
     const bool active = wanted && m_flow.screen() == Screen::Playing && !m_scenarioAutopilot && !m_options.demoDrive;
     int w = 0, h = 0;
-    SDL_GetWindowSize(m_window.get(), &w, &h);
+    SDL_GetWindowSize(m_app.window(), &w, &h);
     SDL_Rect safe{0, 0, w, h};
-    if (!SDL_GetWindowSafeArea(m_window.get(), &safe) || safe.w <= 0 || safe.h <= 0) safe = SDL_Rect{0, 0, w, h};
+    if (!SDL_GetWindowSafeArea(m_app.window(), &safe) || safe.w <= 0 || safe.h <= 0) safe = SDL_Rect{0, 0, w, h};
     m_input.setTouchControls(active, touchLayout(float(w), float(h), float(safe.x), float(safe.y),
                                                  float(w - safe.x - safe.w), float(h - safe.y - safe.h)));
     m_ui.keyHints = !active;
@@ -1233,7 +1229,7 @@ void Application::stepSimulation(double frameTime) {
     m_stepsThisFrame = steps;
 }
 
-void Application::renderFrame(float frameTime) {
+void Application::updateView(float frameTime) {
     if (m_sim.level() != m_contentLevel) buildWorldContent();
     // ---- Pose interpolation between the last two physics ticks
     const float alpha = float(m_clock.alpha()); // constant while frozen: the accumulator does not change
@@ -1244,7 +1240,9 @@ void Application::renderFrame(float frameTime) {
         const glm::quat rot = glm::slerp(toGlm(p0.rotation), toGlm(p1.rotation), alpha);
         return poseMatrix(pos, rot);
     };
-    const glm::mat4 bodyM = interp(a.body, b.body);
+    m_bodyM = interp(a.body, b.body);
+    for (int i = 0; i < kWheelCount; ++i) m_wheelM[std::size_t(i)] = interp(a.wheels[i], b.wheels[i]);
+    const glm::mat4& bodyM = m_bodyM;
 
     // ---- Camera (read-only access to the world)
     CameraInput ci;
@@ -1275,7 +1273,7 @@ void Application::renderFrame(float frameTime) {
                     [this](const glm::vec3& from, const glm::vec3& to) {
                         return m_sim.castRayIgnoringVehicle(JPH::Vec3(from.x, from.y, from.z), JPH::Vec3(to.x, to.y, to.z));
                     });
-    if (m_scenario) {
+    if (m_app.scripted()) {
         // Camera height above the surface below it (downward ray; negative means the camera is underground).
         const glm::vec3 cp = m_camera.position();
         const JPH::Vec3 above(cp.x, cp.y + 30.0f, cp.z), below(cp.x, cp.y - 5.0f, cp.z);
@@ -1296,14 +1294,25 @@ void Application::renderFrame(float frameTime) {
         m_absSeen |= t.absActive;
         m_tcSeen |= t.tcActive;
     }
+    ensureVehicleVisual();
+}
 
-    // ---- UI
-    ImGui_ImplSDL3_NewFrame();
-    if (m_scenario && !m_perfActive) ImGui::GetIO().DeltaTime = float(m_frameDt); // menu animations on the scenario clock
-    ImGui::NewFrame();
+// The body and wheel meshes follow the wheel fit of the running vehicle (rebuilt when it changes).
+void Application::ensureVehicleVisual() {
+    const VehicleConfig& vc = m_sim.vehicleConfig();
+    if (!m_visualFit || !sameWheelFit(*m_visualFit, vc)) {
+        m_renderer->waitIdle();
+        rebuildVehicleVisual();
+    }
+}
+
+// ImGui windows (the engine starts and ends the ImGui frame), menus, what they change, and the per-frame cosmetics.
+void Application::ui() {
+    const float frameTime = m_frameTime;
     FrameStats stats;
-    stats.fps = m_fps;
-    stats.frameMs = m_frameMs;
+    const quench::app::FrameStats& appStats = m_app.stats();
+    stats.fps = float(appStats.fps);
+    stats.frameMs = float(appStats.frameMs);
     stats.stepsThisFrame = m_stepsThisFrame;
     stats.droppedLastMs = m_clock.lastDropped() * 1000.0;
     stats.droppedTotalMs = m_clock.totalDropped() * 1000.0;
@@ -1315,8 +1324,8 @@ void Application::renderFrame(float frameTime) {
     stats.shaderFormat = m_renderer->shaderFormatName();
     stats.gamepad = m_input.gamepadConnected() ? m_input.gamepadName() : "";
     const RenderStats& rs = m_renderer->stats();
-    stats.cpuFrameMs = m_cpuMs;
-    stats.gpuFrameMs = m_renderer->gpuTimingAvailable() ? rs.gpuMs : -1.0;
+    stats.cpuFrameMs = appStats.cpuMs;
+    stats.gpuFrameMs = appStats.gpuMs;
     stats.renderW = rs.renderW;
     stats.renderH = rs.renderH;
     stats.outputW = rs.outputW;
@@ -1355,11 +1364,10 @@ void Application::renderFrame(float frameTime) {
     view.vehicles = &m_vehicleCards;
     m_menu.draw(m_flow, m_settings, view);
     if (m_flow.screen() == Screen::Garage && m_garage) m_menu.drawGarage(*m_garage, m_sim.vehicle().telemetry(), view);
-    ImGui::Render();
     if (req.togglePause) setPaused(!m_paused);
     if (!m_audio->capturing()) publishAudio();
     if (req.stepOnce && m_paused) m_stepOnce = true;
-    if (req.setVSync) m_renderer->setVSync(req.vsync);
+    if (req.setVSync) setVSync(req.vsync);
     if (m_gfx.timeLapse) {
         // Cosmetic clock: runs in real time (also while the physics is paused), stopped with the UI pause button.
         m_gfx.settings.timeOfDay = std::fmod(m_gfx.settings.timeOfDay + m_gfx.timeLapseSpeed * frameTime, 24.0f);
@@ -1377,9 +1385,7 @@ void Application::renderFrame(float frameTime) {
         m_gfx.changed = false;
     }
 
-    // ---- Scene
-    std::array<glm::mat4, kWheelCount> wheelM;
-    for (int i = 0; i < kWheelCount; ++i) wheelM[i] = interp(a.wheels[i], b.wheels[i]);
+    // ---- Cosmetics
     updateCosmetics(frameTime);
     {
         WheelSpraySettings ss = m_spray.settings();
@@ -1397,7 +1403,34 @@ void Application::renderFrame(float frameTime) {
         }
         m_gfx.sprayLive = m_spray.size();
     }
-    buildDraws(bodyM, wheelM);
+    {
+        // Blur under the pause menu and under Settings / Controls opened from the start menu.
+        const float target = m_flow.screen() == Screen::Paused ? 1.0f
+                             : m_flow.screen() == Screen::MainMenu && m_flow.depth() > 1 &&
+                                       m_flow.page() != MenuPage::Vehicle ? 0.75f
+                                                                                         : 0.0f;
+        const float step = frameTime / 0.25f;
+        m_menuBlur = m_menuBlur < target ? std::min(target, m_menuBlur + step) : std::max(target, m_menuBlur - step);
+        // Depth of field on the vehicle: the start menu backdrop and the garage; optional (subtle) while driving.
+        const Screen sc = m_flow.screen();
+        const bool showcase = sc == Screen::Garage || (sc == Screen::MainMenu && target == 0.0f);
+        const float dofTarget = showcase && m_gfx.settings.dof ? 0.5f
+                                : sc == Screen::Playing ? 0.25f * m_gfx.settings.dofDriving
+                                                        : 0.0f;
+        const float dofStep = frameTime / 0.4f;
+        m_dofAmount = m_dofAmount < dofTarget ? std::min(dofTarget, m_dofAmount + dofStep)
+                                              : std::max(dofTarget, m_dofAmount - dofStep);
+    }
+    // The input of the next frame starts now: its events arrive before the engine's next frame.
+    beginInputFrame();
+}
+
+// The 3D frame into the engine's target (the swapchain, an offscreen capture or --frame-size texture); the engine
+// draws ImGui on top and presents.
+void Application::render(qapp::Frame& target) {
+    ensureVehicleVisual();
+    const glm::mat4& bodyM = m_bodyM;
+    buildDraws(bodyM, m_wheelM);
 
     m_debugDraw.clear();
     if (m_ui.drawPhysicsDebug && m_ui.debugWindows) {
@@ -1408,15 +1441,14 @@ void Application::renderFrame(float frameTime) {
         if (m_ui.debug.bodyAxes) m_debugDraw.axes(bodyM, 1.5f);
     }
 
-    int pw = 1, ph = 1;
-    SDL_GetWindowSizeInPixels(m_window.get(), &pw, &ph);
+    const std::uint32_t pw = std::max(1u, target.width), ph = std::max(1u, target.height);
     FrameDesc frame;
     frame.view = m_camera.view();
-    frame.proj = m_camera.projection(float(pw) / float(ph > 0 ? ph : 1));
+    frame.proj = m_camera.projection(float(pw) / float(ph));
     frame.cameraPos = m_camera.position();
     frame.fovYRadians = glm::radians(m_camera.fovYDeg);
     frame.nearPlane = m_camera.activeNearPlane();
-    frame.time = float(m_time);
+    frame.time = float(m_app.time());
     frame.draws = m_draws;
     frame.water = &m_waterMesh;
     frame.waterfalls = &m_waterfallMesh;
@@ -1457,35 +1489,10 @@ void Application::renderFrame(float frameTime) {
     frame.markGain = m_gfx.markGain;
     frame.lines = m_debugDraw.lines();
     frame.linesOnTop = m_ui.linesOnTop;
-    frame.ui = ImGui::GetDrawData();
-    {
-        // Blur under the pause menu and under Settings / Controls opened from the start menu.
-        const float target = m_flow.screen() == Screen::Paused ? 1.0f
-                             : m_flow.screen() == Screen::MainMenu && m_flow.depth() > 1 &&
-                                       m_flow.page() != MenuPage::Vehicle ? 0.75f
-                                                                                         : 0.0f;
-        const float step = frameTime / 0.25f;
-        m_menuBlur = m_menuBlur < target ? std::min(target, m_menuBlur + step) : std::max(target, m_menuBlur - step);
-        frame.blur = m_menuBlur;
-        // Depth of field on the vehicle: the start menu backdrop and the garage; optional (subtle) while driving.
-        const Screen sc = m_flow.screen();
-        const bool showcase = sc == Screen::Garage || (sc == Screen::MainMenu && target == 0.0f);
-        const float dofTarget = showcase && m_gfx.settings.dof ? 0.5f
-                                : sc == Screen::Playing ? 0.25f * m_gfx.settings.dofDriving
-                                                        : 0.0f;
-        const float dofStep = frameTime / 0.4f;
-        m_dofAmount = m_dofAmount < dofTarget ? std::min(dofTarget, m_dofAmount + dofStep)
-                                              : std::max(dofTarget, m_dofAmount - dofStep);
-        frame.dofAmount = m_dofAmount;
-        frame.dofFocus = m_dofAmount > 0.0f ? glm::length(glm::vec3(bodyM[3]) - m_camera.position()) : 0.0f;
-    }
-    if (!m_options.capturePath.empty() && !m_captured && m_time >= m_options.captureAtSeconds) {
-        frame.capturePath = m_options.capturePath.c_str();
-        m_captured = true;
-    }
-    if (!m_captureRequest.empty()) frame.capturePath = m_captureRequest.c_str();
-    m_renderer->drawFrame(frame);
-    m_captureRequest.clear();
+    frame.blur = m_menuBlur;
+    frame.dofAmount = m_dofAmount;
+    frame.dofFocus = m_dofAmount > 0.0f ? glm::length(glm::vec3(bodyM[3]) - m_camera.position()) : 0.0f;
+    m_renderer->drawFrame(frame, target.commands, target.target, target.width, target.height);
 }
 
 // Performance test: fills the whole ring with synthetic ribbons (random curves on the proving ground terrain,
@@ -1556,11 +1563,6 @@ void Application::rebuildVehicleVisual() {
 
 void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
     const VehicleConfig& vc = m_sim.vehicleConfig();
-    if (!m_visualFit || !sameWheelFit(*m_visualFit, vc)) {
-        m_renderer->waitIdle();
-        rebuildVehicleVisual();
-    }
-
     m_draws.clear();
     bool vehiclePart = false;
     auto add = [&](const GpuMesh& mesh, const glm::mat4& model, bool castsShadow = true, bool inReflection = true) {
@@ -1637,41 +1639,44 @@ void Application::updateCosmetics(float dt) {
     m_gfx.mud = std::clamp(m_gfx.mud + (gain - 0.002f) * dt, 0.0f, 1.0f);
 }
 
-void Application::endPerf() {
-    if (!m_perfActive) return;
-    m_perfActive = false;
-    std::vector<double> v = m_perfFrameMs;
-    if (v.empty()) return;
-    std::sort(v.begin(), v.end());
-    double sum = 0.0;
-    for (double x : v) sum += x;
-    const double avg = sum / double(v.size());
-    const double p95 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.95))];
-    const double p99 = v[std::min(v.size() - 1, std::size_t(double(v.size()) * 0.99))];
-    // Low percentiles: with other GPU work on the machine the fastest frames are the least disturbed ones.
-    const double p10 = v[std::size_t(double(v.size()) * 0.10)];
-    std::vector<double> g = m_perfGpuMs;
-    std::sort(g.begin(), g.end());
-    const double gpuMin = g.empty() ? -1.0 : g.front();
-    const double gpuP10 = g.empty() ? -1.0 : g[std::size_t(double(g.size()) * 0.10)];
+// Fields of the engine's perf line at a scenario's perf_end (the engine measures frame, CPU and GPU times).
+std::string Application::perfDetails() const {
     const RenderStats& rs = m_renderer->stats();
-    std::printf("PERF %-12s frames=%zu fps=%.1f frame_avg=%.2f ms p95=%.2f p99=%.2f max=%.2f cpu_avg=%.2f ms "
-                "gpu_avg=%.2f ms render=%ux%u output=%ux%u vsync=%d draws=%d grass=%.0fk frame_p10=%.2f gpu_min=%.2f "
-                "gpu_p10=%.2f\n",
-                m_perfLabel.c_str(), v.size(), 1000.0 / avg, avg, p95, p99, v.back(),
-                m_perfCpuSum / double(v.size()), m_perfGpuCount ? m_perfGpuSum / m_perfGpuCount : -1.0, rs.renderW,
-                rs.renderH, rs.outputW, rs.outputH, m_renderer->vsync() ? 1 : 0, rs.drawCalls,
-                double(rs.grassBlades) / 1000.0, p10, gpuMin, gpuP10);
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "render=%ux%u output=%ux%u vsync=%d draws=%d grass=%.0fk", rs.renderW, rs.renderH,
+                  rs.outputW, rs.outputH, m_vsync ? 1 : 0, rs.drawCalls, double(rs.grassBlades) / 1000.0);
+    return buf;
 }
 
 // ------------------------------------------------------------------ verification scenario
 
 void Application::queueEvent(const SDL_Event& e, int framesFromNow) {
-    m_queuedEvents.push_back({framesFromNow, e});
+    m_queuedEvents.push_back({m_app.frame() + std::uint64_t(std::max(0, framesFromNow)), e});
+}
+
+// Called after each game command and every frame from update: an event queued k frames from now is pushed in the k-th
+// frame after its command and reaches the game at the start of the frame after that.
+void Application::pushQueuedEvents() {
+    for (auto it = m_queuedEvents.begin(); it != m_queuedEvents.end();) {
+        if (it->frame <= m_app.frame()) {
+            SDL_Event e = it->event;
+            if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) e.key.timestamp = SDL_GetTicksNS();
+            else e.common.timestamp = SDL_GetTicksNS();
+            SDL_PushEvent(&e);
+            m_lastPushFrame = m_app.frame();
+            it = m_queuedEvents.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool Application::inputInFlight() const {
+    return !m_queuedEvents.empty() || (m_lastPushFrame && m_app.frame() < *m_lastPushFrame + 2);
 }
 
 void Application::queueTouch(float x, float y, float dx, float dy, int steps) {
-    const SDL_WindowID win = SDL_GetWindowID(m_window.get());
+    const SDL_WindowID win = SDL_GetWindowID(m_app.window());
     SDL_Event motion{};
     motion.type = SDL_EVENT_MOUSE_MOTION;
     motion.motion.windowID = win;
@@ -1705,7 +1710,7 @@ void Application::queueTouch(float x, float y, float dx, float dy, int steps) {
 }
 
 void Application::queueClick(float x, float y, bool textInput) {
-    const SDL_WindowID win = SDL_GetWindowID(m_window.get());
+    const SDL_WindowID win = SDL_GetWindowID(m_app.window());
     SDL_Event motion{};
     motion.type = SDL_EVENT_MOUSE_MOTION;
     motion.motion.windowID = win;
@@ -1749,68 +1754,35 @@ void Application::queueClick(float x, float y, bool textInput) {
     if (textInput) queueEvent(modUp, 4);
 }
 
-void Application::updateScenario() {
-    m_pushedThisFrame = false;
-    for (auto it = m_queuedEvents.begin(); it != m_queuedEvents.end();) {
-        if (it->frames-- <= 0) {
-            SDL_Event e = it->event;
-            if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) e.key.timestamp = SDL_GetTicksNS();
-            else e.common.timestamp = SDL_GetTicksNS();
-            SDL_PushEvent(&e);
-            m_pushedThisFrame = true;
-            it = m_queuedEvents.erase(it);
-        } else {
-            ++it;
-        }
+// The engine's scenario runner runs its own commands (wait, until, expect, keys, text, gamepad, resize, capture,
+// perf_begin/perf_end, ...) and passes the others here, before update. A command that queued input stays Busy until
+// the last event has been through a whole frame, so the next command sees its effect.
+qapp::ScenarioExec Application::scenarioCommand(const qapp::ScenarioCommand& c) {
+    using Exec = qapp::ScenarioExec;
+    if (inputInFlight()) return Exec::Busy;
+    if (m_inputCommandLine == c.line) {
+        m_inputCommandLine = -1;
+        return Exec::Done;
     }
     // Commands act on the world that is loaded, not on one still waiting for its first tick (the start level too).
-    if (m_sim.levelPending() && simulationRuns()) return;
-    const bool running = m_scenario->update(
-        m_time, [this] { return m_pushedThisFrame || !m_queuedEvents.empty(); },
-        [this](const std::string& n) { return scenarioValue(n); },
-        [this](const ScenarioCommand& c) { return execScenario(c); });
-    if (!running) {
-        std::printf("SCENARIO RESULT: %d passed, %d failed (%s)\n", m_scenario->passed(), m_scenario->failed(),
-                    m_options.scriptPath.c_str());
-        m_exitCode = m_scenario->failed() > 0 ? 1 : 0;
-        m_scenario.reset();
-        m_running = false;
+    if (m_sim.levelPending() && simulationRuns()) return Exec::Busy;
+    const Exec r = execScenario(c);
+    const bool queuedInput = !m_queuedEvents.empty();
+    pushQueuedEvents();
+    if (r == Exec::Done && queuedInput) {
+        m_inputCommandLine = c.line;
+        return Exec::Busy;
     }
+    return r;
 }
 
-Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
-    using Exec = Scenario::Exec;
-    const SDL_WindowID win = SDL_GetWindowID(m_window.get());
+qapp::ScenarioExec Application::execScenario(const qapp::ScenarioCommand& c) {
+    using Exec = qapp::ScenarioExec;
+    const SDL_WindowID win = SDL_GetWindowID(m_app.window());
     const std::string arg = c.args.empty() ? std::string() : c.args[0];
-    if (c.op == "down" || c.op == "up" || c.op == "tap") {
-        const SDL_Scancode sc = SDL_GetScancodeFromName(arg.c_str());
-        if (sc == SDL_SCANCODE_UNKNOWN) return Exec::Failed;
-        SDL_Event e{};
-        e.type = c.op == "up" ? SDL_EVENT_KEY_UP : SDL_EVENT_KEY_DOWN;
-        e.key.windowID = win;
-        e.key.scancode = sc;
-        e.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, true);
-        e.key.down = c.op != "up";
-        queueEvent(e, 0);
-        if (c.op == "tap") {
-            e.type = SDL_EVENT_KEY_UP;
-            e.key.down = false;
-            queueEvent(e, 1);
-        }
-        return Exec::Done;
-    }
-    if (c.op == "text") {
-        m_textStorage.push_back(arg);
-        SDL_Event e{};
-        e.type = SDL_EVENT_TEXT_INPUT;
-        e.text.windowID = win;
-        e.text.text = m_textStorage.back().c_str();
-        queueEvent(e, 0);
-        return Exec::Done;
-    }
     if (c.op == "menu") {
         // menu intro|main|start|pause|resume|settings|back|select ITEM: drive the game flow directly (key taps and
-        // `click menu:ITEM` go through the real input path instead).
+        // `click_item menu:ITEM` go through the real input path instead).
         const Screen before = m_flow.screen();
         if (arg == "intro") {
             std::vector<std::string> ids = m_flow.vehicles();
@@ -1884,69 +1856,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         }
         return Exec::Done;
     }
-    if (c.op == "gamepad") {
-        // gamepad attach | detach | axis leftx|lefty|rightx|righty|lt|rt V (-1..1, triggers 0..1): a virtual SDL gamepad,
-        // read by the input through SDL_GetGamepadAxis like a connected pad (stands in for a real pad in the checks).
-        if (arg == "attach") {
-            if (m_virtualPadId) return Exec::Done;
-            // Scenario runs often have no keyboard focus; SDL drops pad motion of unfocused windows by default.
-            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-            SDL_VirtualJoystickDesc d;
-            SDL_INIT_INTERFACE(&d);
-            d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-            d.naxes = SDL_GAMEPAD_AXIS_COUNT;
-            d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
-            d.name = "TrailForge scenario pad";
-            m_virtualPadId = SDL_AttachVirtualJoystick(&d);
-            m_virtualPad = m_virtualPadId ? SDL_OpenJoystick(m_virtualPadId) : nullptr;
-            if (!m_virtualPad) {
-                std::fprintf(stderr, "scenario: virtual gamepad: %s\n", SDL_GetError());
-                return Exec::Failed;
-            }
-            // Report the centred sticks first: SDL takes an axis' first report as its rest value.
-            for (int a = SDL_GAMEPAD_AXIS_LEFTX; a <= SDL_GAMEPAD_AXIS_RIGHTY; ++a) SDL_SetJoystickVirtualAxis(m_virtualPad, a, 0);
-            return Exec::Done;
-        }
-        if (arg == "detach") {
-            if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
-            if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
-            m_virtualPad = nullptr;
-            m_virtualPadId = 0;
-            return Exec::Done;
-        }
-        if (arg == "axis" && c.args.size() > 2 && m_virtualPad) {
-            const std::string& name = c.args[1];
-            const float v = std::clamp(float(std::atof(c.args[2].c_str())), -1.0f, 1.0f);
-            SDL_GamepadAxis axis = SDL_GAMEPAD_AXIS_INVALID;
-            if (name == "leftx") axis = SDL_GAMEPAD_AXIS_LEFTX;
-            else if (name == "lefty") axis = SDL_GAMEPAD_AXIS_LEFTY;
-            else if (name == "rightx") axis = SDL_GAMEPAD_AXIS_RIGHTX;
-            else if (name == "righty") axis = SDL_GAMEPAD_AXIS_RIGHTY;
-            else if (name == "lt") axis = SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
-            else if (name == "rt") axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
-            if (axis == SDL_GAMEPAD_AXIS_INVALID) return Exec::Failed;
-            const bool trigger = axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
-            // Triggers span the full raw range: -32768 released, 32767 fully pressed.
-            const float raw = trigger ? -32768.0f + 65535.0f * std::max(v, 0.0f) : 32767.0f * v;
-            return SDL_SetJoystickVirtualAxis(m_virtualPad, axis, Sint16(std::lround(raw))) ? Exec::Done : Exec::Failed;
-        }
-        if (arg == "button" && c.args.size() > 2 && m_virtualPad) {
-            // gamepad button south|east|west|north|lb|rb|back|start 1|0
-            static const std::pair<const char*, SDL_GamepadButton> kButtons[] = {
-                {"south", SDL_GAMEPAD_BUTTON_SOUTH}, {"east", SDL_GAMEPAD_BUTTON_EAST},
-                {"west", SDL_GAMEPAD_BUTTON_WEST},   {"north", SDL_GAMEPAD_BUTTON_NORTH},
-                {"lb", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {"rb", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
-                {"back", SDL_GAMEPAD_BUTTON_BACK},   {"start", SDL_GAMEPAD_BUTTON_START}};
-            for (const auto& [name, button] : kButtons)
-                if (c.args[1] == name)
-                    return SDL_SetJoystickVirtualButton(m_virtualPad, button, std::atoi(c.args[2].c_str()) != 0) ? Exec::Done
-                                                                                                                 : Exec::Failed;
-        }
-        return Exec::Failed;
-    }
     if (c.op == "garage") {
         // garage set KEY V | step KEY DIR | row KEY | save | save_new | rename NAME | delete | select NAME|factory |
-        // reset | kit ID|none | vehicle ID: the garage model directly (keys and `click garage:...` use the input path).
+        // reset | kit ID|none | vehicle ID: the garage model directly (keys and `click_item garage:...` use the input path).
         if (!m_garage) return Exec::Failed;
         const std::string a1 = c.args.size() > 1 ? c.args[1] : std::string();
         const std::string a2 = c.args.size() > 2 ? c.args[2] : std::string();
@@ -2018,8 +1930,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         else return Exec::Failed;
         return Exec::Done;
     }
-    if (c.op == "click" && arg.rfind("garage:", 0) == 0) {
-        // click garage:ROW[:FRACTION] - ROW: a parameter key, vehicle, setup, kit or an action (save, save_new,
+    if (c.op == "click_item" && arg.rfind("garage:", 0) == 0) {
+        // click_item garage:ROW[:FRACTION] - ROW: a parameter key, vehicle, setup, kit or an action (save, save_new,
         // rename, delete, reset, back); FRACTION 0..1 clicks a slider bar at that position.
         if (!m_garage || m_flow.screen() != Screen::Garage) return Exec::Failed;
         std::string rowName = arg.substr(7);
@@ -2075,8 +1987,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueClick(x, 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
-    if (c.op == "click" && arg.rfind("modal:", 0) == 0) {
-        // click modal:confirm|cancel - a button of the open modal dialog, through the real mouse path.
+    if (c.op == "click_item" && arg.rfind("modal:", 0) == 0) {
+        // click_item modal:confirm|cancel - a button of the open modal dialog, through the real mouse path.
         const int button = arg == "modal:confirm" ? 0 : arg == "modal:cancel" ? 1 : -1;
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!m_menu.modalButtonRect(button, x0, y0, x1, y1)) {
@@ -2115,7 +2027,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_sim.requestVehicleConfig(def.config);
         return Exec::Done;
     }
-    if (c.op == "click" && arg.rfind("vehicle_card:", 0) == 0) {
+    if (c.op == "click_item" && arg.rfind("vehicle_card:", 0) == 0) {
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!m_menu.vehicleCardRect(std::atoi(arg.c_str() + 13), x0, y0, x1, y1)) {
             std::printf("SCENARIO: vehicle card '%s' is not on screen\n", arg.c_str());
@@ -2124,8 +2036,8 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueClick(0.5f * (x0 + x1), 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
-    if (c.op == "touch" && arg.rfind("menu:", 0) == 0) {
-        // touch menu:ROW: a finger tap on a menu row (SDL's touch mouse), in the middle of its label.
+    if (c.op == "touch_item" && arg.rfind("menu:", 0) == 0) {
+        // touch_item menu:ROW: a finger tap on a menu row (SDL's touch mouse), in the middle of its label.
         const auto item = itemByName(arg.substr(5));
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!item || !m_menu.itemRect(*item, x0, y0, x1, y1)) {
@@ -2188,7 +2100,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         ev.tfinger.x = x / L.width;
         ev.tfinger.y = y / L.height;
         ev.tfinger.pressure = what == "up" ? 0.0f : 1.0f;
-        ev.tfinger.windowID = SDL_GetWindowID(m_window.get());
+        ev.tfinger.windowID = SDL_GetWindowID(m_app.window());
         return SDL_PushEvent(&ev) ? Exec::Done : Exec::Failed;
     }
     if (c.op == "touchdrag") {
@@ -2196,7 +2108,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         // the label of a menu row, else over the menu lists (a quarter across, half way down the window).
         std::vector<std::string> a = c.args;
         int ww = 0, wh = 0;
-        SDL_GetWindowSize(m_window.get(), &ww, &wh);
+        SDL_GetWindowSize(m_app.window(), &ww, &wh);
         float x = 0.25f * float(ww), y = 0.5f * float(wh);
         if (!a.empty() && a[0].rfind("menu:", 0) == 0) {
             const auto item = itemByName(a[0].substr(5));
@@ -2214,7 +2126,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueTouch(x, y, float(std::atof(a[0].c_str())), float(std::atof(a[1].c_str())), steps);
         return Exec::Done;
     }
-    if (c.op == "click" && arg.rfind("menu:", 0) == 0) {
+    if (c.op == "click_item" && arg.rfind("menu:", 0) == 0) {
         const auto item = itemByName(arg.substr(5));
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         if (!item || !m_menu.itemRect(*item, x0, y0, x1, y1)) {
@@ -2225,7 +2137,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueClick(x0 + 0.15f * (x1 - x0), 0.5f * (y0 + y1), false);
         return Exec::Done;
     }
-    if (c.op == "click" || c.op == "inputclick") {
+    if (c.op == "click_item" || c.op == "inputclick") {
         const UiItemRect* r = m_ui.item(arg);
         if (!r || !r->visible) {
             std::printf("SCENARIO: UI item '%s' is not visible\n", arg.c_str());
@@ -2273,9 +2185,9 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         queueEvent(wheel, 0);
         return Exec::Busy;
     }
-    if (c.op == "orbit" || c.op == "wheel") {
+    if (c.op == "orbit" || c.op == "wheel_center") {
         int ww = 0, wh = 0;
-        SDL_GetWindowSize(m_window.get(), &ww, &wh);
+        SDL_GetWindowSize(m_app.window(), &ww, &wh);
         const float x = 0.5f * ww, y = 0.5f * wh;
         SDL_Event motion{};
         motion.type = SDL_EVENT_MOUSE_MOTION;
@@ -2283,7 +2195,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         motion.motion.x = x;
         motion.motion.y = y;
         queueEvent(motion, 0);
-        if (c.op == "wheel") {
+        if (c.op == "wheel_center") {
             SDL_Event wheel{};
             wheel.type = SDL_EVENT_MOUSE_WHEEL;
             wheel.wheel.windowID = win;
@@ -2462,16 +2374,6 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_marker = {true, float(std::atof(c.args[0].c_str())), float(std::atof(c.args[1].c_str()))};
         return Exec::Done;
     }
-    if (c.op == "resize") {
-        if (c.args.size() < 2) return Exec::Failed;
-        return SDL_SetWindowSize(m_window.get(), std::atoi(c.args[0].c_str()), std::atoi(c.args[1].c_str()))
-                   ? Exec::Done
-                   : Exec::Failed;
-    }
-    if (c.op == "capture") {
-        m_captureRequest = arg;
-        return Exec::Done;
-    }
     if (c.op == "quality") {
         for (int p = 0; p < int(QualityPreset::Custom); ++p) {
             if (arg == presetName(QualityPreset(p))) {
@@ -2577,7 +2479,7 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
                 m_sim.requestAidControls(a);
             }
             else if (k == "graphics_ui") m_gfx.visible = v != 0.0f;
-            else if (k == "vsync") m_renderer->setVSync(v != 0.0f);
+            else if (k == "vsync") setVSync(v != 0.0f);
             else if (k == "marks") m_gfx.tireMarks = v != 0.0f;
             else if (k == "audio_ui") m_audioPanel.visible = v != 0.0f;
             else if (k == "audio_mute") m_audioPanel.settings.mute = v != 0.0f;
@@ -2686,19 +2588,6 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_camera.fovYDeg = 60.0f;
         return Exec::Done;
     }
-    if (c.op == "perf_begin") {
-        m_perfActive = true;
-        m_perfLabel = arg.empty() ? "perf" : arg;
-        m_perfFrameMs.clear();
-        m_perfGpuMs.clear();
-        m_perfCpuSum = m_perfGpuSum = 0.0;
-        m_perfGpuCount = 0;
-        return Exec::Done;
-    }
-    if (c.op == "perf_end") {
-        endPerf();
-        return Exec::Done;
-    }
     if (c.op == "reset_stats") {
         m_minCamClearance = 1e9f;
         m_maxAirWheels = 0;
@@ -2708,12 +2597,15 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         m_absSeen = m_tcSeen = false;
         return Exec::Done;
     }
-    if (c.op == "log") {
+    if (c.op == "telemetry") {
+        // telemetry [LABEL...]: one line of vehicle state (the engine's `log TEXT` prints only its text).
+        std::string label;
+        for (const std::string& a : c.args) label += (label.empty() ? "" : " ") + a;
         const auto& t = m_sim.vehicle().telemetry();
         const auto p = m_sim.currentSnapshot().body.position;
-        std::printf("SCENARIO log t=%.2f [%s] pos=(%.1f %.2f %.1f) v=%.1f km/h fwd=%+.1f gear=%d %s%s thr=%.2f brk=%.2f "
-                    "hb=%.2f steer=%+.2f tilt=%.1f cam=%.2f | ",
-                    m_time, arg.c_str(), p.GetX(), p.GetY(), p.GetZ(), t.speed * 3.6f, t.forwardSpeed * 3.6f, t.gear,
+        std::printf("SCENARIO telemetry t=%.2f [%s] pos=(%.1f %.2f %.1f) v=%.1f km/h fwd=%+.1f gear=%d %s%s thr=%.2f "
+                    "brk=%.2f hb=%.2f steer=%+.2f tilt=%.1f cam=%.2f | ",
+                    m_app.time(), label.c_str(), p.GetX(), p.GetY(), p.GetZ(), t.speed * 3.6f, t.forwardSpeed * 3.6f, t.gear,
                     t.direction == DriveDirection::Forward ? "D" : "R", t.lowRange ? " LOW" : "", t.command.throttle,
                     t.command.brake, t.command.handBrake, t.command.steer,
                     std::acos(std::fmin(1.0f, t.upDot)) * 57.2958f, m_camClearance);
@@ -2727,14 +2619,13 @@ Scenario::Exec Application::execScenario(const ScenarioCommand& c) {
         std::printf("msg='%s'\n", m_sim.lastMessage());
         return Exec::Done;
     }
-    return Exec::Failed;
+    return Exec::Unknown;
 }
 
 std::optional<double> Application::scenarioValue(const std::string& n) const {
     const VehicleTelemetry& t = m_sim.vehicle().telemetry();
     const auto p = m_sim.currentSnapshot().body.position;
     if (n.rfind("msg:", 0) == 0) return std::strstr(m_sim.lastMessage(), n.c_str() + 4) ? 1.0 : 0.0;
-    if (n == "time") return m_time;
     if (n == "speed_kmh") return t.speed * 3.6;
     if (n == "fwd_kmh") return t.forwardSpeed * 3.6;
     if (n == "throttle") return t.command.throttle;
@@ -2773,7 +2664,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "x") return p.GetX();
     if (n == "y") return p.GetY();
     if (n == "z") return p.GetZ();
-    if (n == "ticks") return double(m_sim.timing().ticks);
+    if (n == "sim_ticks") return double(m_sim.timing().ticks); // physics ticks (the engine's `ticks` counts its own)
     if (n == "paused") return simulationRuns() ? 0.0 : 1.0;
     if (n == "frozen") return m_paused ? 1.0 : 0.0;
     if (n == "menu_screen") return double(int(m_flow.screen())); // 0 intro, 1 main menu, 2 playing, 3 paused
@@ -2831,6 +2722,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "soc") return t.ev.soc;                       // 0..1 (electric)
     if (n == "motor_kw") return t.ev.motorPowerKW;         // both motors, + drive, - regen
     if (n == "battery_kw") return t.ev.batteryPowerKW;     // incl. the auxiliary load
+    if (n == "ev_loss_kw") return t.ev.batteryPowerKW - t.ev.motorPowerKW; // drive losses and the auxiliary load
     if (n == "motor_nm_f") return t.ev.motorTorque[0];
     if (n == "motor_nm_r") return t.ev.motorTorque[1];
     if (n == "motor_rpm_f") return t.ev.motorRPM[0];
@@ -2898,7 +2790,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         const glm::vec3 fwd = toGlm(m_sim.currentSnapshot().body.rotation) * glm::vec3(0.0f, 0.0f, 1.0f);
         const glm::vec3 flat = glm::normalize(glm::vec3(fwd.x, 0.0f, fwd.z));
         int pw = 0, ph = 0;
-        SDL_GetWindowSizeInPixels(m_window.get(), &pw, &ph);
+        SDL_GetWindowSizeInPixels(m_app.window(), &pw, &ph);
         const glm::mat4 vp = m_camera.projection(float(pw) / float(std::max(ph, 1))) * m_camera.view();
         const glm::vec3 cam = m_camera.position();
         const float front = m_sim.vehicle().bodyBounds().mMax.GetZ();
@@ -2932,7 +2824,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "tree_detail") return m_gfx.settings.treeDetailDistance;
     if (n == "tree_dist") return m_gfx.settings.treeDistance;
     if (n == "pad_connected") return m_input.gamepadConnected() ? 1.0 : 0.0;
-    if (n == "pad_virtual") return m_virtualPadId && m_input.gamepadId() == m_virtualPadId ? 1.0 : 0.0;
+    if (n == "pad_virtual") return m_input.gamepadId() && SDL_IsJoystickVirtual(m_input.gamepadId()) ? 1.0 : 0.0;
     if (n == "pad_right_x") return m_input.rightStick().x;
     if (n == "pad_right_y") return m_input.rightStick().y;
     if (n == "ui_visible") return m_ui.visible ? 1.0 : 0.0;
@@ -2985,7 +2877,7 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
             return garage ? m_garage->value(*sp) : setupValue(*sp, m_sim.vehicleConfig(), m_garage->kitBase());
         }
     }
-    if (n == "text_input") return SDL_TextInputActive(m_window.get()) ? 1.0 : 0.0;
+    if (n == "text_input") return SDL_TextInputActive(m_app.window()) ? 1.0 : 0.0;
     if (n == "layout") return double(int(t.layout));
     if (n == "transfer") return double(int(t.transfer));
     if (n == "front_driven") return t.frontDriven ? 1.0 : 0.0;
@@ -3048,10 +2940,6 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "static_grip") return m_sim.vehicleConfig().tuning.tireStaticGrip ? 1.0 : 0.0;
     if (n == "friction_ellipse") return m_sim.vehicleConfig().tuning.tireFrictionEllipse ? 1.0 : 0.0;
     if (n == "clutch_limit") return m_sim.vehicleConfig().tuning.launchClutchLimit ? 1.0 : 0.0;
-    if (n == "fps") return m_fps;
-    if (n == "frame_ms") return m_frameMs;
-    if (n == "cpu_ms") return m_cpuMs;
-    if (n == "gpu_ms") return m_renderer->stats().gpuMs;
     if (n == "mud") return m_gfx.mud;
     if (n == "body_mud_max") return m_bodyMud.maxAmount();
     if (n.rfind("body_mud_", 0) == 0) {
@@ -3199,17 +3087,17 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
     if (n == "depth_creations") return m_renderer->depthCreations();
     if (n == "depth_matches_window") {
         int w = 0, h = 0;
-        SDL_GetWindowSizeInPixels(m_window.get(), &w, &h);
+        SDL_GetWindowSizeInPixels(m_app.window(), &w, &h);
         return m_renderer->depthWidth() == std::uint32_t(w) && m_renderer->depthHeight() == std::uint32_t(h) ? 1.0 : 0.0;
     }
     if (n == "win_w" || n == "win_h") {
         int w = 0, h = 0;
-        SDL_GetWindowSize(m_window.get(), &w, &h);
+        SDL_GetWindowSize(m_app.window(), &w, &h);
         return n == "win_w" ? w : h;
     }
     if (n == "px_w" || n == "px_h") {
         int w = 0, h = 0;
-        SDL_GetWindowSizeInPixels(m_window.get(), &w, &h);
+        SDL_GetWindowSizeInPixels(m_app.window(), &w, &h);
         return n == "px_w" ? w : h;
     }
     if (n == "susp_spread" || n == "susp_min" || n == "susp_max") { // suspension lengths of the four wheels, m
@@ -3236,66 +3124,6 @@ std::optional<double> Application::scenarioValue(const std::string& n) const {
         return double(best);
     }
     return std::nullopt;
-}
-
-int Application::run() {
-    const double freq = double(SDL_GetPerformanceFrequency());
-    Uint64 last = SDL_GetPerformanceCounter();
-    while (m_running) {
-        const Uint64 now = SDL_GetPerformanceCounter();
-        const double realFrameTime = double(now - last) / freq;
-        last = now;
-        const bool fixedStep = m_scenario && !m_perfActive;
-        const double frameTime = fixedStep ? kScenarioFrameStep : realFrameTime;
-        m_frameDt = frameTime;
-        m_time += frameTime;
-
-        m_fpsAccum += float(realFrameTime);
-        ++m_fpsFrames;
-        if (m_fpsAccum >= 0.5f) {
-            m_fps = float(m_fpsFrames) / m_fpsAccum;
-            m_frameMs = 1000.0f * m_fpsAccum / float(m_fpsFrames);
-            m_fpsAccum = 0.0f;
-            m_fpsFrames = 0;
-        }
-
-        m_flow.update(std::min(frameTime, 0.1));
-        processEvents();
-        if (m_inBackground || (SDL_GetWindowFlags(m_window.get()) & SDL_WINDOW_MINIMIZED)) {
-            m_clock.reset();
-            SDL_Delay(16);
-            continue;
-        }
-        stepSimulation(frameTime);
-        renderFrame(float(std::min(frameTime, 0.1)));
-        // CPU frame cost: everything since the frame start except blocking on the swapchain (VSync/back-pressure).
-        const double workMs = 1000.0 * double(SDL_GetPerformanceCounter() - now) / freq;
-        m_cpuMs = std::max(0.0, workMs - m_renderer->stats().acquireWaitMs);
-        if (m_perfActive) {
-            m_perfFrameMs.push_back(realFrameTime * 1000.0);
-            m_perfCpuSum += m_cpuMs;
-            if (m_renderer->stats().gpuMs > 0.0) {
-                m_perfGpuSum += m_renderer->stats().gpuMs;
-                ++m_perfGpuCount;
-                m_perfGpuMs.push_back(m_renderer->stats().gpuMs);
-            }
-        }
-
-        if (fixedStep) {
-            // Never faster than real time (vsync off): background work such as tile streaming keeps its real pace.
-            const double spent = double(SDL_GetPerformanceCounter() - now) / freq;
-            if (spent < kScenarioFrameStep) SDL_DelayPrecise(Uint64((kScenarioFrameStep - spent) * 1e9));
-        }
-        if (m_options.quitAfterSeconds > 0.0 && m_time >= m_options.quitAfterSeconds) {
-            const auto p = m_sim.currentSnapshot().body.position;
-            std::printf("TrailForge: auto-quit after %.1f s, %llu physics ticks, body at (%.2f %.2f %.2f), "
-                        "%.0f FPS, dropped %.1f ms\n",
-                        m_time, m_sim.timing().ticks, p.GetX(), p.GetY(), p.GetZ(), m_fps,
-                        m_clock.totalDropped() * 1000.0);
-            m_running = false;
-        }
-    }
-    return m_exitCode;
 }
 
 } // namespace tf

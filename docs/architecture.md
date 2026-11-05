@@ -28,9 +28,11 @@ src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete acti
               labels, gamepad glyph names; no SDL), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,
               pause and Settings menus drawn with ImGui draw lists)
-src/app/      Application (lifecycle and main loop), GameFlow (screen / menu state machine, no SDL: intro, start
-              menu, playing, paused, garage; level and vehicle select pages can slot in as further pages), Garage
-              (setup model, no SDL), GameSettings (settings.cfg), Scenario (scenario mode), Paths (asset / user dirs), main
+src/app/      TrailForgeGame (the engine's game interface: TrailForge's flags, createGame), Application (the game
+              on the engine's frame: events, update, UI, render, scenario commands and values), GameFlow (screen /
+              menu state machine, no SDL: intro, start menu, playing, paused, garage; level and vehicle select pages
+              can slot in as further pages), Garage (setup model, no SDL), GameSettings (settings.cfg), Paths (asset /
+              user dirs)
 shaders/      scene.hlsl → SPIR-V, MSL / metallib, DXIL at build time, embedded into the binary
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only definitions
 tools/        SimProbe — headless measurements; scenarios/ — scripts for --script; audio/ — asset rebuild and capture analysis;
@@ -59,6 +61,13 @@ member order defines destruction order. There is no ECS, no plugins and no graph
 - Steering angle in the UI: positive is left.
 
 ### Loop
+
+The engine's app shell (Quench `quench_main`) owns `main` and the frame through SDL main callbacks: it handles the
+common flags, the window, the GPU device, ImGui, the scenario runner, captures and perf regions, and calls
+`TrailForgeGame` (`src/app/TrailForgeGame.cpp`) once per SDL event and per frame: `update` (input, menus,
+simulation ticks), `ui` (ImGui), `render` (the renderer draws into the frame target the engine gives it; the engine
+draws ImGui over it and presents). TrailForge keeps its own physics clock below; the engine's clock only sets the
+frame time.
 
 Fixed physics step of 1/120 s (60 or 240 Hz selectable in the UI) with a time accumulator.
 Frames longer than 0.25 s are clamped, and at most 12 steps run per frame. Dropped time is shown in the UI

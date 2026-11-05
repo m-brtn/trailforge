@@ -26,22 +26,22 @@ expect electric == 1
 expect mass > 2600
 capture /tmp/trailforge_ev_01_vehicle_page.png
 wait 0.3
-wheel 1                                 # wheel up = previous vehicle
+wheel_center 1                                 # wheel up = previous vehicle
 wait 0.8
 expect vehicle_choice == 0
 expect electric == 0
-wheel -1
+wheel_center -1
 wait 0.8
 expect vehicle_choice == 1
 expect electric == 1
-click vehicle_card:0
+click_item vehicle_card:0
 wait 0.8
 expect vehicle_choice == 0
-click vehicle_card:1
+click_item vehicle_card:1
 wait 0.8
 expect vehicle_choice == 1
 expect menu_page == 4
-click vehicle_card:1                    # clicking the selected card drives off
+click_item vehicle_card:1                    # clicking the selected card drives off
 wait 0.5
 expect menu_screen == 2
 expect electric == 1
@@ -63,13 +63,13 @@ expect ev_front_share < 0.45            # road split (0.40 front)
 mark soc
 mark energy_out_kwh
 mark marks
-log ev_launch
+telemetry ev_launch
 pedal throttle 1
 wait 2.0                                # TC trims the first 0.5 s of front-wheel spin, then hands back full torque
 expect motor_kw > 150                   # both motors pulling
 expect motor_nm_f > 100
 expect motor_nm_r > 100
-expect battery_kw > motor_kw            # drive losses: the pack supplies more than the motors deliver
+expect ev_loss_kw > 0                   # drive losses: the pack supplies more than the motors deliver
 expect fwd_kmh > 45
 expect d_soc < 0
 expect d_energy_out_kwh > 0.05
@@ -78,7 +78,7 @@ capture /tmp/trailforge_ev_02_launch.png
 wait 0.3
 pedal throttle 0
 wait 0.6
-log ev_liftoff
+telemetry ev_liftoff
 expect regen == 1                       # lift-off regen
 expect motor_kw < -5
 expect motor_nm_r < 0

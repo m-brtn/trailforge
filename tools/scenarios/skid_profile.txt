@@ -12,13 +12,13 @@ wait 1.5
 set marks_clear 1
 down W
 until z > 4 14
-log brake_start
+telemetry brake_start
 expect speed_kmh > 60
 up W
 down S
 until speed_kmh < 0.5 8
 up S
-log stopped
+telemetry stopped
 camera 42.0 30.0 17.0 42.0 0.0 17.01
 wait 0.8
 capture /tmp/trailforge_skid_profile.png

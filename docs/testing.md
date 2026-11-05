@@ -86,52 +86,68 @@ into the SDL queue (`SDL_PushEvent`), `Input` processes them, and they reach the
 `Input` tracks held keys from events rather than from `SDL_GetKeyboardState`,
 so synthetic and real key presses are handled identically.
 
-One command per line, `#` starts a comment:
+The runner is the engine's (Quench `quench::app`, its `docs/app.md`): it parses the script at startup (a malformed
+`wait`, `until` or `expect` stops the run before the window opens), runs its own commands and values first and
+passes the others to TrailForge (`Application::scenarioCommand` / `scenarioValue`); an unknown command fails at
+run time. Its output goes through the engine log (stderr, `scenario: ok line N: ...`, `scenario: FAIL line N: ...`,
+at the end `scenario: FILE: P passed, F failed`). Input the engine pushes reaches the game one frame later. A
+TrailForge command that queues input (`click_item`, `inputclick`, `touch_item`, `touchdrag`, `wheel_center`,
+`orbit`, `scrollto`, `mapclick`, `mapdrag`) stays busy until its last event has been through a whole frame.
+
+One command per line, `#` starts a comment. Engine commands:
 
 | Command | What it does |
 |---|---|
 | `down/up/tap KEY` | press / release / press and release (SDL name: `W`, `Space`, `Escape`, `Left`…) |
 | `wait S` | pause for S seconds of scenario time (see below) |
-| `until VAR OP VAL TIMEOUT` | wait for a condition (`< <= > >= == !=`); FAIL on timeout |
-| `expect VAR OP VAL` | check immediately |
+| `until VAR OP VAL [TIMEOUT]` | wait for a condition (`< <= > >= == !=`, default timeout 10 s); FAIL on timeout |
+| `expect VAR OP VAL` | check immediately (VAL is a number) |
 | `mark VAR` | remember a value; afterwards `d_VAR` = current − remembered |
-| `teleport N\|NAME` / `resize W H` / `capture file.png` | teleport to point N (or the first point whose name contains NAME, case-insensitive, e.g. `teleport mini`), `SDL_SetWindowSize`, save a frame |
-| `click KEY` / `inputclick KEY` / `scrollto KEY` / `text STR` | click an ImGui widget, Cmd+click (number input), scroll the Tuning window to a widget, type text |
-| `orbit DX DY` / `wheel DY` | camera orbit with the right mouse button / mouse wheel |
-| `log NAME` / `reset_stats` / `quit` | telemetry line to stdout / reset min/max counters / quit |
+| `resize W H` / `capture file.png` | `SDL_SetWindowSize` (points) / save the next frame with the UI as PNG |
+| `text STR` / `mouse X Y` / `click X Y [left\|right\|middle]` / `wheel DY` / `touch X Y [DX DY STEPS]` | type text / mouse input at window points (the wheel at the last mouse position) / an SDL finger tap or drag |
+| `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lefttrigger\|righttrigger V` / `gamepad button a\|b\|x\|y\|back\|start\|leftshoulder\|rightshoulder\|dpup\|… down\|up\|tap` | a virtual SDL gamepad (SDL names) that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`); sticks -1..1, triggers 0..1 |
+| `perf_begin LABEL` / `perf_end` | measure frames in real time; prints `perf: LABEL: N frames; frame ms avg p10 p50 p95 p99 max; cpu ms avg p50 p95 p99; gpu ms avg min p10 p50 p95 (N samples); render=WxH output=WxH vsync=0/1 draws=N grass=Nk` (the last fields from TrailForge; the low percentiles are the least disturbed frames when other GPU work runs on the machine) and sets the values `perf_frames`, `perf_frame_avg`, `perf_frame_p10` … `perf_gpu_p95` |
+| `log TEXT` / `quit` | print `scenario: TEXT` / end the script |
+
+TrailForge commands:
+
+| Command | What it does |
+|---|---|
+| `teleport N\|NAME` | teleport to point N (or the first point whose name contains NAME, case-insensitive, e.g. `teleport mini`) |
+| `click_item KEY` / `inputclick KEY` / `scrollto KEY` | click an ImGui widget, Cmd+click (number input), scroll the Tuning window to a widget |
+| `orbit DX DY` / `wheel_center DY` | camera orbit with the right mouse button / mouse wheel, both at the window centre |
+| `telemetry [LABEL]` / `reset_stats` | telemetry line to stdout (`SCENARIO telemetry t=...`) / reset min/max counters |
 | `quality Low\|Medium\|High\|Ultra` | apply a graphics preset |
 | `set KEY V` | graphics/look setting: `render_scale`, `msaa`, `fxaa`, `cascades`, `shadow_size`, `shadow_dist`, `shadow_filter`, `far_shadows` (0/1), `env_probe` (vehicle probe face size, 0 = off), `env_probe_faces`, `parallax` (level ground parallax steps, 0 = off), `reflections`, `refl_scale`, `bloom`, `grass`, `grass_dist` (m), `tree_detail` (m, tree mesh LOD distance), `tree_dist` (m, tree cull distance), `flowers` (0..1), `grass_detail` (0/1), `clouds`, `exposure`, `fog`, `auto_reverse` (0 — S only brakes), `tod` (hours), `sun_heading` (deg), `tod_speed` (h/s), `tod_run` (time-lapse 0/1), `mud`, `auto_mud`, `headlights`, `debug_lines`, `ui`, `hud`, `graphics_ui`, `vsync`, `minimap` / `compass` (0/1, session only), `debug_windows` (0/1, the Settings switch; scenarios start with 1), `time_flow` (0 off, 1 real time, 2 fast); tire marks: `marks` (draw 0/1), `marks_gen` (generate 0/1), `marks_max` (ring capacity), `marks_fade` (s), `marks_gain` (all surfaces), `marks_clear 1`, `marks_fill 1` (synthetic fill to the cap); wheel spray: `spray` (0/1), `spray_max` (cap), `spray_dust` (0/1), `spray_clear 1`, `spray_fill 1` (synthetic fill to the cap around the vehicle); body mud: `body_mud V` (wet coat V on every region), `body_mud_clear 1`; post effects (see [Post effects](rendering.md#post-effects)): `taa`, `ao` (0/1/2), `contact_shadows` (steps, 0 = off), `motion_blur`, `shafts`, `flare`, `auto_exposure`, `dof`, `dof_driving`, `tonemap` (0 ACES, 1 AgX), `grade`, `ao_strength`, `vignette`, `grain`, `chromatic`, `sharpen`, `water_refraction`, `water_ssr`; sky: `atmosphere` (0..1), `valley_fog` |
 | `post_bench PASS N` | repeat one post pass N times per frame for cost measurements (`lindepth`, `gtao`, `ao_blur`, `velocity`, `taa`, `motion_blur`, `dof`, `lum`, `shafts`, `bloom`, `tonemap`; `none` ends it) |
 | `set ground_tiling 0\|1\|2` | level ground texture tiling: plain repeats / macro tone / hex tiling + macro tone ([Terrain textures](rendering.md#terrain-textures)); `post_bench terrain N` draws the level terrain N times in the main pass (every visible terrain fragment is shaded N times, for the cost of the ground shader); `set ground_detail 0\|1` detail normals near the camera; `set ground_wet 0\|1` wet ground and puddles near water; `set ground_spec 0\|1` ground specular AA and occlusion; `set micro_shadows N` ground micro-shadow steps (0 = off) |
 | `time Dawn\|Noon\|Sunset\|Night\|HOURS` | set the time of day (preset or 0–24 h); stops the time-lapse |
 | `camera X Y Z TX TY TZ` / `camera follow` / `camera close` / `camera hood` | free camera at a pose looking at a target / back to the follow camera / the close follow camera / the hood camera (query `cam_mode`: 0 follow, 1 close follow, 2 hood, 3 free; `cam_behind` / `cam_height`: camera behind the rear bumper along the vehicle heading / above the body origin, m; `cam_road_ahead`: nearest ground point straight ahead of the front bumper that is in the view and not hidden by the vehicle's collision shape, m, -1 if none within 40 m) |
-| `gamepad attach\|detach` / `gamepad axis leftx\|lefty\|rightx\|righty\|lt\|rt V` / `gamepad button south\|east\|west\|north\|lb\|rb\|back\|start 1\|0` | a virtual SDL gamepad that the input reads like a connected pad and that takes over from a real one (right-stick camera checks, `tools/scenarios/camera.txt`; map buttons, `tools/scenarios/map_check.txt`) |
 | `tires offroad\|road\|slick` / `tires warm\|cold` / `tires ambient C` | fit a tire set through the garage parameter `tires.set` (rebuild in place, new tires at the air temperature) / put all four tires (surface and core) in the middle of the set's window or at the air temperature / set the air temperature live (`tools/scenarios/tires.txt`) |
 | `wheels R W` | tire radius and width (m) on both axles, as a tire kit would set them; rebuilds the vehicle in place (`tools/scenarios/wheel_fit.txt`) |
 | `camera vehicle side\|top\|front\|rear\|three_quarter\|three_quarter_rear\|roof [DIST] [FOV]` | free camera in the vehicle frame at DIST m (default 30) with FOV degrees (default: 6 m tall view); far + narrow = near-orthographic views (`tools/scenarios/car1_views.txt`) |
 | `camera local X Y Z TX TY TZ [FOV]` | free camera with position and target in the vehicle frame (+X left, +Y up, +Z forward, m; FOV default 60 deg) for close-ups of body details |
 | `menu intro\|main\|start\|pause\|resume\|settings\|back` | jump the menu flow: play the intro, open the start menu (its world and camera), start gameplay, open / close the pause menu, open Settings, go back one page |
-| `menu select ITEM` / `click menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `tree_style`, `time_of_day`, `time_preset`, `time_flow`, `debug_windows`, `back` |
+| `menu select ITEM` / `click_item menu:ITEM` | move the menu cursor to an item (no sound) / click it with the mouse through the SDL queue. Items: `start`, `settings`, `quit`, `resume`, `restart`, `quit_to_menu`, `quit_game`, `quality`, `render_scale`, `grass_distance`, `tree_distance`, `vsync`, `master`, `music`, `effects`, `ui`, `abs`, `tc`, `diff`, `auto_reverse`, `controls`, `drive_keys`, `pad_glyphs`, `map`, `minimap`, `minimap_size`, `minimap_orientation`, `compass`, `tree_style`, `time_of_day`, `time_preset`, `time_flow`, `debug_windows`, `back` |
 | `controls keyboard mac\|pc\|native` / `controls pad_type none\|xbox\|ps4\|ps5\|switch\|unknown\|real` | Controls page captures only: force the key cap wording / stand in for the connected pad seen by the automatic button names (not persisted) |
 | `menu garage` / `menu garage_close` | open the garage (from the start or the pause menu) / close it |
 | `garage set KEY V` / `garage step KEY ±1` / `garage row KEY` | set a garage parameter (stored units, clamped) / step it / move the cursor to its row (`vehicle`, `setup`, `kit` or a parameter key) |
 | `garage save` / `save_new` / `rename NAME` / `delete` / `select NAME\|factory` / `reset` / `kit ID\|none` / `vehicle ID` | setup operations of the garage model |
-| `click garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
-| `click modal:confirm` / `click modal:cancel` | click a button of the open modal dialog through the SDL queue |
+| `click_item garage:ROW[:F]` | click a garage row through the SDL queue (ROW: a parameter key, `vehicle`, `setup`, `kit`, `save`, `save_new`, `rename`, `delete`, `reset`, `back`); `:F` clicks a slider at fraction F (0..1) |
+| `click_item modal:confirm` / `click_item modal:cancel` | click a button of the open modal dialog through the SDL queue |
 | `transfer 2h\|4h\|4l` | select a transfer case mode (part-time 4WD) |
 | `pedal throttle\|brake V` | hold an analog pedal at V (0..1) like a gamepad trigger (not ramped; max with the keys) until set to 0 |
-| `perf_begin LABEL` / `perf_end` | collect frame times; prints `PERF LABEL fps frame_avg p95 p99 max cpu_avg gpu_avg … frame_p10 gpu_min gpu_p10` (the low percentiles are the least disturbed frames when other GPU work runs on the machine) |
 | `vehicle ID` / `soc V` | choose a catalog vehicle as the vehicle page does (respawns in place on the next tick; not saved in scenario mode) / set the battery state of charge of an electric vehicle (0..1) |
 | `vehicle_file PATH` | load a vehicle.json outside the catalog (e.g. `tests/data/vehicles/suv_glb_test/vehicle.json`, path relative to the working directory) and respawn it in place; the garage keeps its own vehicle, the next `vehicle ID` replaces it |
-| `menu vehicles` / `click vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
+| `menu vehicles` / `click_item vehicle_card:N` | open the vehicle page from the start menu / click vehicle card N through the SDL queue |
 | `level ID` / `place X Z [YAW]` | load a level (`exploration_peaks`, `suncoast_raceway`, `proving_ground`; not saved in scenario mode) / put the vehicle on the ground at X Z facing YAW degrees |
-| `touch menu:ROW` / `touchdrag [menu:ROW] DX DY [STEPS]` | a finger as SDL reports it on iOS (mouse events from `SDL_TOUCH_MOUSEID`): tap on a menu row's label; drag by DX DY points over STEPS frames (default 8), from a row's label or a quarter across / half way down the window |
+| `touch_item menu:ROW` / `touchdrag [menu:ROW] DX DY [STEPS]` | a finger as SDL reports it on iOS (mouse events from `SDL_TOUCH_MOUSEID`): tap on a menu row's label; drag by DX DY points over STEPS frames (default 8), from a row's label or a quarter across / half way down the window |
 | `drift on\|off\|level` | force drift scoring on / off for the session, or back to the level's `"drift"` setting (same as F1 → Simulation → Drift scoring) |
 | `autopilot drive\|off` / `reset` | the attract-drive autopilot drives the vehicle in gameplay (laps of a circuit) / gives it back to the input; press R (reset: on a circuit with a running lap to 4 m past the last gate passed) |
 | `map on\|off\|fit\|center` / `mapclick X Z` / `mapaim X Z` / `mapdrag DX DY` / `marker X Z\|clear` | open (waits for the map build) / close the full-screen map, fit the whole map / center on the vehicle; left click at world point X Z through the SDL queue; center the view there (the crosshair point of Space / gamepad A); drag the map by DX DY points; set or clear the waypoint directly |
 
-**Scenario clock.** While a script runs, every frame advances the game by a fixed 1/120 s (physics ticks, menu
-animation, ImGui, `wait`, `until` timeouts), and frames are paced to never run faster than real time. A condition
+**Scenario clock.** While a script runs, every frame advances the game by a fixed 1/120 s (the engine's
+deterministic frame step, set from TrailForge's physics step: physics ticks, menu animation, ImGui, `wait`, `until` timeouts), and frames are paced to never run faster than real time. A condition
 reached in `until` is therefore acted on after the same simulated time on a 60 Hz or a 120 Hz display, with or
 without VSync (before v0.14.0 the frame-counted input latency was ~67 ms at 60 Hz against ~33 ms at 120 Hz, enough
 to move braking points). `perf_begin` … `perf_end` uses the real frame time, and FPS / frame statistics are always
@@ -213,7 +229,11 @@ for comparison with Cars.png car #2, `/tmp/trailforge_car2_*.png`), `tools/scena
 temperature: cold slicks, warming on the mini track, slicks taken off warmers, the telemetry grid, the road set fitted
 on a 35 C day; `/tmp/trailforge_tires_*.png`).
 
-Variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `ticks`, `paused` (1 while the
+Engine variables: `time` (scenario clock, s), `frame`, `ticks` (the engine's fixed-step clock, not the physics),
+`fps`, `frame_ms`, `cpu_ms`, `gpu_ms` (-1 without GPU timing), `window_w/h` (points), `pixel_w/h`, `gamepad`, `fingers`,
+the `perf_*` values of the last `perf_end`, `action:NAME` (engine input actions; TrailForge has none).
+
+TrailForge variables: `speed_kmh`, `fwd_kmh`, `gear`, `rpm`, `dir`, `low`, `tilt`, `x/y/z`, `sim_ticks` (physics ticks), `paused` (1 while the
 simulation does not tick: pause menu or debug freeze), `frozen` (debug freeze, P), menus: `menu_screen` (0 intro,
 1 start menu, 2 playing, 3 paused, 4 garage, 5 map), `menu_page` (0 start, 1 pause, 2 Settings, 3 Controls, 4 vehicle page), `menu_depth`,
 `menu_cursor`, `menu_scroll` / `garage_scroll` (list offset in px), `menu_fade` (start menu fade-in 0..1), `menu_blur` (0..1), `menu_font`, `menu_logo` (assets loaded),
@@ -229,7 +249,7 @@ shown next to the spring frequency), `garage:<key>` (the garage's value of a set
 `layout` (0 RWD, 1 FWD, 2 AWD, 3 part-time, 4 on-demand), `transfer` (0 2H, 1 4H, 2 4L), `front_driven`,
 `rear_driven`, vehicles: `vehicle_index` (catalog index of the running vehicle, 0 = default), `vehicle_choice` (the
 vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (0 drive, 1 reverse), electric drive:
-`soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `motor_nm_f` /
+`soc` (0..1), `motor_kw` (both motors, negative = regen), `battery_kw` (with the auxiliary load), `ev_loss_kw` (battery − motor: losses and the auxiliary load), `motor_nm_f` /
 `motor_nm_r`, `motor_rpm_f` / `motor_rpm_r`, `regen` (0/1), `ev_mode` (0 NORMAL, 1 OFF-ROAD), `ev_front_share`,
 `energy_out_kwh` / `energy_in_kwh` (battery energy out / in since the spawn),
 `cam_free`, `ui_visible`, `ui_kb`, `ui_text`, `static_grip`, `clutch_limit` (Tuning toggles as applied to the vehicle), `air`, `max_air`, `max_tilt` (largest body tilt from upright since `reset_stats`, deg), `susp_spread` (longest minus shortest suspension length, m), `susp_min` / `susp_max` (shortest / longest of the four), `body_glb` (1 when the running vehicle has a body.glb), `body_parts` / `body_triangles` (drawn body model), `body_hulls` (body.glb collision pieces), `lowgrip_wheels`, `max_slip`, `load_sum`, `surface` (`SurfaceId` under most wheels in contact, −1 in the air),
@@ -238,7 +258,7 @@ vehicle page's choice), `vehicle_cards` (cards drawn), `electric`, `direction` (
 2 off-road), `diff_locks` (0–3), `front_diff` / `center_diff` / `rear_diff` (effective mode: 0 open, 1 LSD,
 2 locked), `abs_seen` / `tc_seen` (the aid acted in a sampled frame since `reset_stats`), `max_locked` (most locked
 wheels in one frame) and `lock_time` (locked wheel-seconds; locked = in contact, ground speed > 2 m/s, wheel surface
-speed below 20 % of it),  `win_w/h`, `px_w/h`, `fps`, `frame_ms`, `cpu_ms`, `gpu_ms`, `quality`, `msaa`, `render_w`, `draw_calls`,
+speed below 20 % of it),  `win_w/h`, `px_w/h`, `quality`, `msaa`, `render_w`, `draw_calls`,
 `grass_blades`, `reflection`, `mud`, `tod`, `tod_run`, `sun_el`, `sun_az` (deg), `trees`, `buildings` (placed on the
 level), `model_instances` / `model_tris` / `model_draws` (level models drawn, main view), `marks` (live segments),
 `marks_cap`, `marks_written`, `marks_drawn`, `marks_us` (CPU per tick), `marks_s<N>` (live segments on SurfaceId N:

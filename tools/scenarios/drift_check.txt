@@ -36,8 +36,8 @@ wait 0.3
 up A
 up W
 until drift_running == 0 10
-log drift_max_angle
-log drift_last
+telemetry drift_max_angle
+telemetry drift_last
 expect drift_judged == 1
 expect drift_max_angle > 15
 capture /tmp/trailforge_drift_03_result.png

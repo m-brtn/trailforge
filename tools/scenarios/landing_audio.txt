@@ -16,14 +16,14 @@ place 26 14 0
 wait 2.5
 mark audio_ev2
 mark audio_ev3
-log rocks_begin
+telemetry rocks_begin
 pedal throttle 0.15
 wait 6
 pedal throttle 0
 down S
 until speed_kmh < 0.5 8
 up S
-log rocks_end
+telemetry rocks_end
 expect d_audio_ev2 == 0
 expect d_audio_ev3 == 0
 
@@ -32,7 +32,7 @@ place 0 -38 0
 wait 2.5
 mark audio_ev2
 mark audio_ev3
-log bumps15_begin
+telemetry bumps15_begin
 down W
 until speed_kmh > 15 6
 up W
@@ -40,7 +40,7 @@ until z > -8 10
 down S
 until speed_kmh < 0.5 8
 up S
-log bumps15_end
+telemetry bumps15_end
 expect d_audio_ev2 == 0
 expect d_audio_ev3 == 0
 
@@ -48,7 +48,7 @@ expect d_audio_ev3 == 0
 place 0 -44 0
 wait 2.5
 mark audio_ev3
-log bumps30_begin
+telemetry bumps30_begin
 down W
 until speed_kmh > 30 8
 up W
@@ -58,21 +58,21 @@ pedal throttle 0
 down S
 until speed_kmh < 0.5 8
 up S
-log bumps30_end
+telemetry bumps30_end
 expect d_audio_ev3 >= 1
 
 # ---------------------------------------------------------------- steps 0.15 / 0.30 m up and off (full throttle;
 # the SUV cannot climb the 0.45 m step from there)
 place 26 -7.5 0
 wait 2.5
-log steps_begin
+telemetry steps_begin
 down W
 until z > 6 12
 up W
 down S
 until speed_kmh < 0.5 8
 up S
-log steps_end
+telemetry steps_end
 
 # ---------------------------------------------------------------- tube-frame buggy: bump sequence at ~30 km/h
 vehicle trailforge_patrol
@@ -80,7 +80,7 @@ wait 0.5
 place 0 -44 0
 wait 2.5
 mark audio_ev3
-log patrol_begin
+telemetry patrol_begin
 down W
 until speed_kmh > 30 8
 up W
@@ -90,7 +90,7 @@ pedal throttle 0
 down S
 until speed_kmh < 0.5 8
 up S
-log patrol_end
+telemetry patrol_end
 expect d_audio_ev3 >= 1
 expect audio_clipped == 0
 quit

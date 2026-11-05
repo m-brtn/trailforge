@@ -104,7 +104,7 @@ if [[ $SMOKE_WINDOW -eq 1 ]]; then
     step "smoke test: window (Vulkan)"
     LOG="$(mktemp)"
     (cd / && "$BIN" --no-ui --quit-after 4 --audio-capture "$LOG.wav") >"$LOG" 2>&1 || { cat "$LOG"; fail "window smoke run failed"; }
-    grep -E "GPU driver|sounds loaded|auto-quit after" "$LOG"
+    grep -E "GPU driver|sounds loaded|app: quit after" "$LOG"
     grep -F "sounds loaded from $FIRST_ASSETS" "$LOG" | grep -F "0 missing" || { cat "$LOG"; fail "assets did not load"; }
     grep -F "Audio: music $MUSIC_DIR/intro.mp3" "$LOG" || { cat "$LOG"; fail "music did not load"; }
     grep -E "^Menu: (font|logo) " "$LOG" || { cat "$LOG"; fail "menu font / logo did not load"; }

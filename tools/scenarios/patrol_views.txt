@@ -69,7 +69,7 @@ until z > -2.6 20
 pedal throttle 0
 down S
 wait 2.5
-log twister stop 1
+telemetry twister stop 1
 expect speed_kmh < 0.5
 expect susp_max > 0.49
 camera vehicle front 3.4 55
@@ -95,7 +95,7 @@ until z > 0.4 20
 pedal throttle 0
 down S
 wait 2.5
-log twister stop 2
+telemetry twister stop 2
 expect speed_kmh < 0.5
 expect susp_max > 0.49
 camera vehicle front 3.4 55
@@ -120,13 +120,13 @@ until susp_min < 0.20 25
 camera vehicle three_quarter 4.4 50
 wait 0.02
 capture /tmp/trailforge_patrol_bump_34.png
-log bump 1
+telemetry bump 1
 until susp_min > 0.25 10
 until susp_min < 0.20 25
 camera vehicle front 4.0 55
 wait 0.02
 capture /tmp/trailforge_patrol_bump_front.png
-log bump 2
+telemetry bump 2
 pedal throttle 0
 down S
 wait 1.5

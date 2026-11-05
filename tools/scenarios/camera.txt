@@ -12,7 +12,7 @@ wait 1.0
 # ---------------------------------------------------------------- C cycle: close follow, then the hood view of the SUV
 expect cam_mode == 0
 capture /tmp/trailforge_cam_00_follow_suv.png
-log follow_suv
+telemetry follow_suv
 tap C
 wait 1.5
 expect cam_mode == 1
@@ -24,7 +24,7 @@ expect cam_clearance > 2.6
 expect cam_clearance < 3.0
 expect cam_road_ahead >= 0       # the road ahead shows over the roof (collision shape, in the view)
 expect cam_road_ahead < 15
-log close_suv
+telemetry close_suv
 capture /tmp/trailforge_cam_10_close_suv.png
 wait 0.2
 pedal throttle 0.4
@@ -172,7 +172,7 @@ expect cam_clearance > 2.6
 expect cam_clearance < 3.0
 expect cam_road_ahead >= 0
 expect cam_road_ahead < 15
-log close_ev
+telemetry close_ev
 capture /tmp/trailforge_cam_13_close_ev.png
 wait 0.2
 camera hood
@@ -222,7 +222,7 @@ expect tilt > 5
 expect cam_clearance > 0.5
 expect cam_behind > 1.5
 expect min_cam_clearance > 0.3
-log close_suv_slope
+telemetry close_suv_slope
 pedal throttle 0
 pedal brake 1
 until speed_kmh < 0.5 8
@@ -244,7 +244,7 @@ expect tilt > 5
 expect cam_clearance > 0.5
 expect cam_behind > 1.5
 expect min_cam_clearance > 0.3
-log close_ev_slope
+telemetry close_ev_slope
 pedal throttle 0
 pedal brake 1
 until speed_kmh < 0.5 8
@@ -254,4 +254,4 @@ wait 1.0
 camera follow
 gamepad detach
 wait 1.0
-log camera_done
+telemetry camera_done

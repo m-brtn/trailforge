@@ -48,18 +48,18 @@ wait 2
 up S
 camera follow
 orbit -200 -30
-wheel 2
+wheel_center 2
 wait .5
 tap V
 down W
 wait 9
-log forest_approach
+telemetry forest_approach
 capture /tmp/trailforge_photo_forest_a.png
 wait 1
-log forest_edge
+telemetry forest_edge
 capture /tmp/trailforge_photo_forest_b.png
 wait 1
-log forest_rays
+telemetry forest_rays
 capture /tmp/trailforge_photo_forest_c.png
 wait .3
 up W

@@ -2,7 +2,7 @@
 # High preset, then GPU / CPU frame times per quality preset at every view (VSync off):
 #   ./build/release/trailforge --script tools/scenarios/beauty_views.txt --no-audio
 # Captures /tmp/trailforge_beauty_*.png (compare before / after with tools/render/compare_captures.py). Prints one
-# "PERF <preset>_<view> ..." line per run. The camera poses are absolute (terrain heights from the level bake).
+# "perf: <preset>_<view>: ..." line per run. The camera poses are absolute (terrain heights from the level bake).
 set ui 0
 set hud 0
 set auto_reverse 0

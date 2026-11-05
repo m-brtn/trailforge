@@ -146,9 +146,8 @@ if(TRAILFORGE_BUILD_APP)
     include(cmake/AppIcon.cmake)
 
     add_executable(trailforge
-        src/app/main.cpp
+        src/app/TrailForgeGame.cpp
         src/app/Application.cpp
-        src/app/Scenario.cpp
         src/app/AppIcon.cpp
         src/app/Paths.cpp
         src/audio/AudioSystem.cpp
@@ -168,9 +167,10 @@ if(TRAILFORGE_BUILD_APP)
         src/ui/MenuUI.cpp
         src/ui/MapUI.cpp
         ${TRAILFORGE_ICON_SOURCES})
-    # trailforge_audio brings trailforge_sim.
-    target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static quench_app quench_gpu
-                          quench_imgui glm_headers)
+    # trailforge_audio brings trailforge_sim. quench_main is the engine's main (SDL main callbacks driving
+    # quench::app::createGame, src/app/TrailForgeGame.cpp).
+    target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static quench_main
+                          quench_app quench_gpu quench_imgui glm_headers)
     # shaders/scene.hlsl: every entry point is compiled at build time (SPIR-V; metallib, or MSL without the Metal
     # toolchain, on Apple platforms; DXIL on Windows hosts) and embedded as quench::shaders::scene ("scene_shaders.h").
     # Resource counts are given where the pipelines are created (src/render/Renderer.cpp).

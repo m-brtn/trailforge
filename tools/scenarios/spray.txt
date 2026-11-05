@@ -15,7 +15,7 @@ down W
 wait 0.6
 up W
 wait 1.0
-log calm_roll
+telemetry calm_roll
 expect speed_kmh > 6
 expect spray < 12
 
@@ -27,7 +27,7 @@ down W
 wait 1.0
 camera -37.0 1.4 47.5 -41.5 0.6 42.0
 capture /tmp/trailforge_spray_mud.png
-log mud_spin
+telemetry mud_spin
 expect spray > 200
 up W
 wait 0.2
@@ -39,7 +39,7 @@ down W
 wait 1.0
 camera 4.5 1.4 15.5 0.0 0.6 21.0
 capture /tmp/trailforge_spray_dirt.png
-log dirt_spin
+telemetry dirt_spin
 expect spray > 40
 up W
 wait 0.2
@@ -51,7 +51,7 @@ down W
 wait 1.0
 camera 40.5 1.6 48.5 36.0 0.9 54.5
 capture /tmp/trailforge_spray_sand.png
-log sand_spin
+telemetry sand_spin
 expect spray > 150
 up W
 wait 0.2
@@ -63,7 +63,7 @@ down W
 wait 1.0
 camera 23.0 2.6 45.0 19.0 0.6 50.0
 capture /tmp/trailforge_spray_grass.png
-log grass_spin
+telemetry grass_spin
 expect spray > 50
 up W
 wait 0.2
@@ -76,7 +76,7 @@ down W
 until z > 54.5 6
 camera 9.5 2.0 51.5 4.9 0.4 56.0
 capture /tmp/trailforge_spray_puddle.png
-log puddle
+telemetry puddle
 expect spray > 40
 up W
 wait 0.2
@@ -92,7 +92,7 @@ down S
 wait 0.35
 camera -21.0 2.2 -40.5 -26.0 0.6 -35.5
 capture /tmp/trailforge_spray_locked.png
-log locked
+telemetry locked
 expect spray > 5
 up S
 wait 0.5

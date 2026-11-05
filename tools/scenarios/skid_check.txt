@@ -2,7 +2,7 @@
 # audible for lock-up and handbrake slides, never while the mud layer is active. Needs the mixer (a device or an offline capture):
 #   ./build/release/trailforge --script tools/scenarios/skid_check.txt --audio-capture /tmp/trailforge_skid_check.wav
 #   python3 tools/audio/analyze_capture.py /tmp/trailforge_skid_check.wav
-# The scenario samples audio_skid every 0.25 s; the capture CSV has the per-tick values ("log" lines print audio_t).
+# The scenario samples audio_skid every 0.25 s; the capture CSV has the per-tick values ("telemetry" lines print audio_t).
 # The headless CTest audio_skid_gating checks the same per tick at 60, 120 and 240 Hz.
 set ui 0
 set auto_reverse 0               # S only brakes: the stops hold the brake at a standstill
@@ -13,7 +13,7 @@ expect audio_active == 1
 # ---------------------------------------------------------------- skid strip (concrete): full-throttle launch
 teleport 9
 wait 3
-log launch_begin
+telemetry launch_begin
 expect audio_skid < 0.05
 down W
 wait 0.25
@@ -40,29 +40,29 @@ wait 0.25
 expect audio_skid < 0.05
 wait 0.25
 expect audio_skid < 0.05
-log launch_end
+telemetry launch_end
 expect speed_kmh > 35
 expect max_slip < 0.3            # the tires keep grip: no wheelspin on a straight launch
 
 # ---------------------------------------------------------------- brake tap: a short rear lock-up, a short squeal
 up W
-log tap_begin
+telemetry tap_begin
 down S
 wait 0.5
 up S
 wait 0.35
 expect audio_skid < 0.05         # the squeal (and the short squeal one-shot) ended with the slide
 wait 0.25
-log tap_end
+telemetry tap_end
 
 # ---------------------------------------------------------------- full brake: locked rear wheels squeal
 down S
 until audio_skid > 0.3 2
-log brake_squeal
+telemetry brake_squeal
 until speed_kmh < 0.5 8
 up S
 wait 1.0
-log brake_end
+telemetry brake_end
 expect audio_skid < 0.05
 
 # ---------------------------------------------------------------- skid strip: handbrake slide (locked rear wheels)
@@ -71,7 +71,7 @@ until speed_kmh > 40 6
 up W
 down Space
 until audio_skid > 0.3 1.5
-log handbrake_squeal
+telemetry handbrake_squeal
 until speed_kmh < 0.5 8
 up Space
 wait 1.0
@@ -84,7 +84,7 @@ down W
 wait 0.7
 up W
 down D
-log turn_begin
+telemetry turn_begin
 wait 0.25
 expect audio_skid < 0.05
 wait 0.25
@@ -97,7 +97,7 @@ wait 0.25
 expect audio_skid < 0.05
 wait 0.25
 expect audio_skid < 0.05
-log turn_end
+telemetry turn_end
 up D
 down S
 until speed_kmh < 0.5 6
@@ -112,7 +112,7 @@ wait 0.3
 down W
 down A
 until audio_mud > 0.3 4
-log mud_begin
+telemetry mud_begin
 expect audio_skid < 0.01
 wait 0.25
 expect audio_skid < 0.01
@@ -135,7 +135,7 @@ wait 0.25
 expect audio_skid < 0.01
 until speed_kmh < 0.5 8
 up S
-log mud_end
+telemetry mud_end
 expect audio_skid < 0.01
 tap L
 wait 0.3
