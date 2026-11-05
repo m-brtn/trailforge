@@ -1,9 +1,9 @@
 #include "track/Level.h"
 
-#include "core/Json.h"
 #include "core/ModelAsset.h"
 #include "track/LevelFiles.h"
 
+#include <quench/core/Json.h>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +21,7 @@
 
 namespace tf {
 
+namespace json = quench::json;
 using JPH::Float3;
 using JPH::Vec3;
 
@@ -2944,11 +2945,12 @@ bool LevelBaker::parseBaked(const json::Value& doc, std::string& err) {
     }
     std::stringstream ls;
     ls << lf.rdbuf();
-    json::Value lay;
-    if (!json::parse(ls.str(), lay, &err)) {
-        err = "level: layout: " + err;
+    const quench::Result<json::Value> parsedLayout = json::parse(ls.str());
+    if (!parsedLayout) {
+        err = "level: layout: " + parsedLayout.error();
         return false;
     }
+    const json::Value& lay = *parsedLayout;
     if (int(lay["format"].numberOr(0)) != 1) {
         err = "level: layout: unsupported format (expected 1)";
         return false;
@@ -3626,12 +3628,13 @@ void addLevelTrunk(TrackGeometry& g, const LevelTree& t, const std::vector<Level
 
 std::shared_ptr<const Level> Level::fromJsonText(const std::string& text, std::string* error, int threads,
                                                  const std::string& baseDir, bool modelTrees) {
-    json::Value doc;
-    std::string err;
-    if (!json::parse(text, doc, &err)) {
-        if (error) *error = "level: " + err;
+    const quench::Result<json::Value> parsed = json::parse(text);
+    if (!parsed) {
+        if (error) *error = "level: " + parsed.error();
         return nullptr;
     }
+    const json::Value& doc = *parsed;
+    std::string err;
     std::shared_ptr<Level> level(new Level());
     LevelBaker baker(*level, threads, baseDir, modelTrees);
     if (!baker.parse(doc, err)) {

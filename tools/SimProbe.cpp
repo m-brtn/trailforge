@@ -1836,7 +1836,7 @@ void levelMap(const char* path, const char* out) {
                 st.propTriangles, level->roads().size(), level->rivers().size());
     int surfaceCount[kSurfaceCount] = {};
     for (SurfaceId s : level->cellSurfaces()) ++surfaceCount[std::size_t(s)];
-    const JoltRuntime runtime; // SurfaceTable creates Jolt materials
+    const quench::JoltRuntime runtime; // SurfaceTable creates Jolt materials
     const SurfaceTable table;
     for (std::size_t i = 0; i < kSurfaceCount; ++i)
         std::printf("levelmap surface %-28s %5.1f %%\n", table.get(SurfaceId(i)).name,
@@ -3021,7 +3021,7 @@ BumpOutcome bumpRun(const VehicleConfig& cfg, const BumpRun& run, bool trace = f
     auto& bi = sim.world().bodies();
     const JPH::BodyID bumpId =
         bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(), JPH::RVec3::sZero(),
-                                                      JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::Static),
+                                                      JPH::Quat::sIdentity(), JPH::EMotionType::Static, quench::PhysicsLayers::kStatic),
                             JPH::EActivation::DontActivate);
     const JPH::BodyID vid = sim.vehicle().bodyId();
     const double dt = sim.fixedStep();
@@ -3296,7 +3296,7 @@ HillOutcome hillRun(const VehicleConfig& cfg, float H, float L, float kmh, const
     mats.push_back(sim.surfaces().material(SurfaceId::Concrete));
     auto& bi = sim.world().bodies();
     bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(), JPH::RVec3::sZero(),
-                                                  JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::Static),
+                                                  JPH::Quat::sIdentity(), JPH::EMotionType::Static, quench::PhysicsLayers::kStatic),
                         JPH::EActivation::DontActivate);
     const JPH::BodyID vid = sim.vehicle().bodyId();
     const double dt = sim.fixedStep();

@@ -215,8 +215,8 @@ void vehicleCatalogSweep() {
 void vehicleDefinitionValidation() {
     std::ifstream in(kTestData + "/rwd_test/vehicle.json");
     const std::string good((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    json::Value doc;
-    CHECK(json::parse(good, doc), "test document does not parse");
+    const json::Value doc = json::parse(good).valueOr({});
+    CHECK(doc.isObject(), "test document does not parse");
     auto expect = [&](const char* what, auto mutate, const char* needle) {
         json::Value d = doc;
         mutate(d);
@@ -551,8 +551,8 @@ void suvDefinitionMatchesBuiltin() {
 void electricDefinitionValidation() {
     std::ifstream in(kAssets + "/trailforge_ev/vehicle.json");
     const std::string good((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    json::Value doc;
-    CHECK(json::parse(good, doc), "EV document does not parse");
+    const json::Value doc = json::parse(good).valueOr({});
+    CHECK(doc.isObject(), "EV document does not parse");
     {
         VehicleDefinition def;
         std::vector<std::string> errors;
@@ -1099,7 +1099,7 @@ void bumpNoRollover() {
                 auto& bi = sim.world().bodies();
                 bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(),
                                                               JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
-                                                              JPH::EMotionType::Static, Layers::Static),
+                                                              JPH::EMotionType::Static, quench::PhysicsLayers::kStatic),
                                     JPH::EActivation::DontActivate);
                 float cruiseThrottle = -1.0f, minUp = 1.0f, maxRise = 0.0f, rest = 0.0f;
                 for (int i = 0; i < int(16.0 / sim.fixedStep()); ++i) {

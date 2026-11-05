@@ -10,9 +10,12 @@
 #include <string>
 #include <vector>
 
+namespace quench {
+class PhysicsWorld;
+}
+
 namespace tf {
 
-class PhysicsWorld;
 class Level;
 
 // Procedural static geometry: the same triangles go
@@ -95,10 +98,10 @@ struct WaterInfo {
 
 class TestTrack {
 public:
-    TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout);
+    TestTrack(quench::PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout);
     // Static props of an open-world level (the heightfield tiles are streamed separately); features: the level spawn
     // and its points of interest.
-    TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level);
+    TestTrack(quench::PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level);
     ~TestTrack();
     TestTrack(const TestTrack&) = delete;
     TestTrack& operator=(const TestTrack&) = delete;
@@ -135,7 +138,7 @@ private:
     void buildSlopeWithWheelPit();
     void createBody(const SurfaceTable& surfaces);
 
-    PhysicsWorld& m_world;
+    quench::PhysicsWorld& m_world;
     TrackLayout m_layout;
     TrackGeometry m_geometry;
     std::vector<TrackFeature> m_features;

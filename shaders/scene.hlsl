@@ -1,7 +1,7 @@
 // TrailForge shaders (HLSL). The single shader source for every backend: each entry point is compiled at build
-// time (tools/shaderc, see cmake/Shaders.cmake) to SPIR-V (Vulkan), MSL -> metallib (Metal) and, on Windows, DXIL
-// (D3D12). The build defines TF_ENTRY_<name> and TF_STAGE_VERTEX or TF_STAGE_FRAGMENT for each compile, so every
-// entry point declares only its own resources.
+// time (the engine's quench_add_shaders(), called in CMakeLists.txt) to SPIR-V (Vulkan), MSL -> metallib (Metal)
+// and, on Windows, DXIL (D3D12). The build defines QUENCH_ENTRY_<name> and QUENCH_STAGE_VERTEX or
+// QUENCH_STAGE_FRAGMENT for each compile, so every entry point declares only its own resources.
 // Resource binding follows the SDL GPU rules (SDL_CreateGPUShader):
 //   vertex:   textures t[n] + samplers s[n] in space0, read-only storage buffers t[samplers + i] in space0,
 //             uniform slot n -> b[n] in space1;
@@ -12,7 +12,7 @@
 // float4x4 members, so HLSL, std140/std430 and MSL layouts agree. Matrices are column-major (glm), mul(M, v).
 // Rendering is linear HDR; the tonemap pass converts to the (UNORM, non-sRGB) swapchain with a gamma curve.
 
-#if defined(TF_STAGE_VERTEX)
+#if defined(QUENCH_STAGE_VERTEX)
 #define TF_RES_SPACE space0
 #define TF_UBO_SPACE space1
 #else
@@ -115,15 +115,15 @@ struct DrawUniforms {
 
 // The frame uniforms are uniform slot 0 of almost every entry point. The entry points whose slot 0 holds other
 // uniforms do not read them; there `f` is parked on an unused slot and the compiler drops it.
-#if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs) || defined(TF_ENTRY_terrain_shadow_vs) || \
-    defined(TF_ENTRY_model_shadow_vs) || \
-    defined(TF_ENTRY_bloom_down_fs) || \
-    defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || defined(TF_ENTRY_fxaa_fs) || \
-    defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || defined(TF_ENTRY_blur_composite_fs) || \
-    defined(TF_ENTRY_lindepth_fs) || defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || \
-    defined(TF_ENTRY_velocity_fs) || defined(TF_ENTRY_velocity_obj_vs) || defined(TF_ENTRY_velocity_obj_fs) || \
-    defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || defined(TF_ENTRY_dof_blur_fs) || \
-    defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_lum_fs) || defined(TF_ENTRY_adapt_fs) || defined(TF_ENTRY_shafts_fs)
+#if defined(QUENCH_ENTRY_shadow_vs) || defined(QUENCH_ENTRY_tree_shadow_vs) || defined(QUENCH_ENTRY_terrain_shadow_vs) || \
+    defined(QUENCH_ENTRY_model_shadow_vs) || \
+    defined(QUENCH_ENTRY_bloom_down_fs) || \
+    defined(QUENCH_ENTRY_bloom_up_fs) || defined(QUENCH_ENTRY_tonemap_fs) || defined(QUENCH_ENTRY_fxaa_fs) || \
+    defined(QUENCH_ENTRY_blur_down_fs) || defined(QUENCH_ENTRY_blur_up_fs) || defined(QUENCH_ENTRY_blur_composite_fs) || \
+    defined(QUENCH_ENTRY_lindepth_fs) || defined(QUENCH_ENTRY_gtao_fs) || defined(QUENCH_ENTRY_ao_blur_fs) || \
+    defined(QUENCH_ENTRY_velocity_fs) || defined(QUENCH_ENTRY_velocity_obj_vs) || defined(QUENCH_ENTRY_velocity_obj_fs) || \
+    defined(QUENCH_ENTRY_taa_fs) || defined(QUENCH_ENTRY_motion_blur_fs) || defined(QUENCH_ENTRY_dof_blur_fs) || \
+    defined(QUENCH_ENTRY_dof_fs) || defined(QUENCH_ENTRY_lum_fs) || defined(QUENCH_ENTRY_adapt_fs) || defined(QUENCH_ENTRY_shafts_fs)
 ConstantBuffer<FrameUniforms> f : UBO(13);
 #else
 ConstantBuffer<FrameUniforms> f : UBO(0);
@@ -554,11 +554,11 @@ struct LitOut {
     [[vk::location(9)]] nointerpolation float3 soilExtra : TEXCOORD9; // x: grass flecks, y: adhesion, z: local probe
 };
 
-#if defined(TF_ENTRY_lit_vs) || defined(TF_ENTRY_shadow_vs)
+#if defined(QUENCH_ENTRY_lit_vs) || defined(QUENCH_ENTRY_shadow_vs)
 ConstantBuffer<DrawUniforms> draw : UBO(1);
 #endif
 
-#if defined(TF_ENTRY_lit_vs)
+#if defined(QUENCH_ENTRY_lit_vs)
 LitOut lit_vs(LitIn vin) {
     LitOut vout;
     const float4 world = mul(draw.model, float4(vin.position, 1.0));
@@ -890,7 +890,7 @@ float4 bodyMudCover(float3 P, float3 Nw, float receptivity, Texture2D<float4> no
     return float4(acc.col / acc.sum, acc.best);
 }
 
-#if defined(TF_ENTRY_lit_fs)
+#if defined(QUENCH_ENTRY_lit_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -1108,7 +1108,7 @@ float4 lit_fs(LitOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
 // the baked splat and the ground mask, sharpened by their heights. Without the textures (repository without
 // `git lfs pull`) the procedural terrainMaterial is used.
 
-#if defined(TF_ENTRY_terrain_fs)
+#if defined(QUENCH_ENTRY_terrain_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -1118,7 +1118,7 @@ SamplerState maskSampler : SMP(2);
 #endif
 
 // Layer sampling, shared with mark_fs (tire marks over the level ground).
-#if defined(TF_ENTRY_terrain_fs) || defined(TF_ENTRY_mark_fs)
+#if defined(QUENCH_ENTRY_terrain_fs) || defined(QUENCH_ENTRY_mark_fs)
 Texture2DArray<float4> layerAlbedo : TEX(3);
 SamplerState layerAlbedoSampler : SMP(3);
 Texture2DArray<float4> layerNra : TEX(4);
@@ -1130,7 +1130,7 @@ struct TerrainTextureUniforms {
     float4 tint[6];    // rgb albedo multiplier per layer
     float4 params;     // x: textures loaded (0 = procedural fallback), y: normal map strength, z: snow weight is asphalt
 };
-#if defined(TF_ENTRY_mark_fs)
+#if defined(QUENCH_ENTRY_mark_fs)
 ConstantBuffer<TerrainTextureUniforms> tt : UBO(2);
 #else
 ConstantBuffer<TerrainTextureUniforms> tt : UBO(1);
@@ -1470,7 +1470,7 @@ float3 groundDetailDn(int layer, GroundCtx c, float dist, float Ny) {
 }
 #endif
 
-#if defined(TF_ENTRY_terrain_fs)
+#if defined(QUENCH_ENTRY_terrain_fs)
 
 // Height (albedo alpha) of one layer at plane position p: plain repeats, or the dominant hex patch of the fragment
 // (the marches below stay within a few cm, inside one patch almost everywhere).
@@ -1714,17 +1714,17 @@ struct ShadowUniforms {
     float4x4 lightViewProj;
 };
 
-#if defined(TF_ENTRY_shadow_vs) || defined(TF_ENTRY_tree_shadow_vs)
+#if defined(QUENCH_ENTRY_shadow_vs) || defined(QUENCH_ENTRY_tree_shadow_vs)
 ConstantBuffer<ShadowUniforms> su : UBO(0);
 #endif
 
-#if defined(TF_ENTRY_shadow_vs)
+#if defined(QUENCH_ENTRY_shadow_vs)
 float4 shadow_vs(LitIn vin) : SV_Position {
     return mul(su.lightViewProj, mul(draw.model, float4(vin.position, 1.0)));
 }
 #endif
 
-#if defined(TF_ENTRY_shadow_fs)
+#if defined(QUENCH_ENTRY_shadow_fs)
 void shadow_fs() {}
 #endif
 
@@ -1750,12 +1750,12 @@ float3 treeWorld(TreeInstance t, float3 lp, float time) {
     return t.baseHeight.xyz + p;
 }
 
-#if defined(TF_ENTRY_tree_vs) || defined(TF_ENTRY_tree_shadow_vs)
+#if defined(QUENCH_ENTRY_tree_vs) || defined(QUENCH_ENTRY_tree_shadow_vs)
 ConstantBuffer<TreeUniforms> tu : UBO(1);
 StructuredBuffer<TreeInstance> trees : TEX(0);
 #endif
 
-#if defined(TF_ENTRY_tree_vs)
+#if defined(QUENCH_ENTRY_tree_vs)
 LitOut tree_vs(LitIn vin, uint iid : SV_InstanceID) {
     const TreeInstance t = trees[uint(tu.info.x) + iid];
     LitOut vout;
@@ -1780,7 +1780,7 @@ LitOut tree_vs(LitIn vin, uint iid : SV_InstanceID) {
 }
 #endif
 
-#if defined(TF_ENTRY_tree_shadow_vs)
+#if defined(QUENCH_ENTRY_tree_shadow_vs)
 float4 tree_shadow_vs(LitIn vin, uint iid : SV_InstanceID) : SV_Position {
     const TreeInstance t = trees[uint(tu.info.x) + iid];
     return mul(su.lightViewProj, float4(treeWorld(t, vin.position, tu.info.y), 1.0));
@@ -1828,7 +1828,7 @@ struct ModelOut {
 float3 modelRotate(float3 v, float c, float s) { return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
 float3 modelPitch(float3 v, float c, float s) { return float3(v.x, c * v.y - s * v.z, s * v.y + c * v.z); }
 
-#if defined(TF_ENTRY_model_vs) || defined(TF_ENTRY_model_shadow_vs) || defined(TF_ENTRY_impostor_vs)
+#if defined(QUENCH_ENTRY_model_vs) || defined(QUENCH_ENTRY_model_shadow_vs) || defined(QUENCH_ENTRY_impostor_vs)
 ConstantBuffer<ModelUniforms> mu : UBO(1);
 StructuredBuffer<ModelInstance> modelInstances : TEX(0);
 
@@ -1845,11 +1845,11 @@ float3 modelWind(float3 world, float2 w, float3 origin, float height) {
 }
 #endif
 
-#if defined(TF_ENTRY_model_shadow_vs)
+#if defined(QUENCH_ENTRY_model_shadow_vs)
 ConstantBuffer<ShadowUniforms> su : UBO(0);
 #endif
 
-#if defined(TF_ENTRY_model_vs) || defined(TF_ENTRY_model_shadow_vs)
+#if defined(QUENCH_ENTRY_model_vs) || defined(QUENCH_ENTRY_model_shadow_vs)
 ModelOut modelTransform(ModelIn vin, uint iid, float4x4 viewProj) {
     const ModelInstance m = modelInstances[uint(mu.info.x) + iid];
     const float c = cos(m.scaleYaw.w), s = sin(m.scaleYaw.w), cp = cos(m.tilt.x), sp = sin(m.tilt.x);
@@ -1866,18 +1866,18 @@ ModelOut modelTransform(ModelIn vin, uint iid, float4x4 viewProj) {
 }
 #endif
 
-#if defined(TF_ENTRY_model_vs)
+#if defined(QUENCH_ENTRY_model_vs)
 ModelOut model_vs(ModelIn vin, uint iid : SV_InstanceID) { return modelTransform(vin, iid, f.viewProj); }
 #endif
 
-#if defined(TF_ENTRY_model_shadow_vs)
+#if defined(QUENCH_ENTRY_model_shadow_vs)
 ModelOut model_shadow_vs(ModelIn vin, uint iid : SV_InstanceID) { return modelTransform(vin, iid, su.lightViewProj); }
 #endif
 
 // Impostor card (6 vertices per instance, no vertex buffer): upright, turned toward the camera about the trunk axis,
 // width 2 x radius, height = model height (scaled). The atlas view nearest to the camera direction is chosen in the
 // fragment shader from the card's facing.
-#if defined(TF_ENTRY_impostor_vs)
+#if defined(QUENCH_ENTRY_impostor_vs)
 ModelOut impostor_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const ModelInstance m = modelInstances[uint(mu.info.x) + iid];
     const float2 corners[6] = {float2(-1, 0), float2(1, 0), float2(1, 1), float2(-1, 0), float2(1, 1), float2(-1, 1)};
@@ -1908,7 +1908,7 @@ bool modelDitherDiscard(float code, float2 pixel) {
     return code < 1.5 ? d >= code : d < code - 2.0;
 }
 
-#if defined(TF_ENTRY_model_fs) || defined(TF_ENTRY_impostor_fs) || defined(TF_ENTRY_model_shadow_fs)
+#if defined(QUENCH_ENTRY_model_fs) || defined(QUENCH_ENTRY_impostor_fs) || defined(QUENCH_ENTRY_model_shadow_fs)
 ConstantBuffer<ModelMaterialUniforms> mm : UBO(1);
 
 // Alpha-tested coverage: with alpha to coverage the edge is sharpened to about one pixel (the MSAA samples blend it);
@@ -1924,7 +1924,7 @@ float modelCoverage(float a) {
 }
 #endif
 
-#if defined(TF_ENTRY_model_shadow_fs)
+#if defined(QUENCH_ENTRY_model_shadow_fs)
 Texture2D<float4> modelAlbedo : TEX(0);
 SamplerState modelAlbedoSampler : SMP(0);
 void model_shadow_fs(ModelOut vin) {
@@ -1932,7 +1932,7 @@ void model_shadow_fs(ModelOut vin) {
 }
 #endif
 
-#if defined(TF_ENTRY_model_fs) || defined(TF_ENTRY_impostor_fs)
+#if defined(QUENCH_ENTRY_model_fs) || defined(QUENCH_ENTRY_impostor_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -1975,7 +1975,7 @@ float3 modelHue(float3 albedo, float hue) {
 }
 #endif
 
-#if defined(TF_ENTRY_model_fs)
+#if defined(QUENCH_ENTRY_model_fs)
 float4 model_fs(ModelOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
     if (modelDitherDiscard(vin.fadeHue.x, vin.position.xy)) discard;
     const float4 a = modelAlbedo.Sample(modelAlbedoSampler, vin.uv);
@@ -2000,7 +2000,7 @@ float4 model_fs(ModelOut vin, bool front : SV_IsFrontFace) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_impostor_fs)
+#if defined(QUENCH_ENTRY_impostor_fs)
 // Atlas: mu.params.z views side by side; view k was rendered from the azimuth a = 2 pi k / views (camera along
 // (sin a, 0, cos a) in model space, card +u along (cos a, 0, -sin a)). Normals in the atlas: x along the card's +u,
 // y up, z toward the viewer. mm.params.w: number of views.
@@ -2029,7 +2029,7 @@ float4 impostor_fs(ModelOut vin) : SV_Target0 {
 // One shared patch of 64 x 64 cells (+ skirt) drawn per quadtree chunk. LitIn.position = (column, skirt 0/1, row).
 // The heights are read with Load at the grid samples, so at step 1 the triangles are the physics heightfield
 // (same diagonal: per cell {00, 01, 11} and {00, 11, 10}).
-#if defined(TF_ENTRY_terrain_vs) || defined(TF_ENTRY_terrain_shadow_vs)
+#if defined(QUENCH_ENTRY_terrain_vs) || defined(QUENCH_ENTRY_terrain_shadow_vs)
 ConstantBuffer<DrawUniforms> draw : UBO(1); // params: first column, first row, step (samples), skirt depth (m); tint: samples, origin, cell
 Texture2D<float> terrainHeight : TEX(0);
 SamplerState terrainHeightSampler : SMP(0);
@@ -2052,7 +2052,7 @@ float3 terrainWorld(float3 lp, int2 ij) {
 }
 #endif
 
-#if defined(TF_ENTRY_terrain_vs)
+#if defined(QUENCH_ENTRY_terrain_vs)
 LitOut terrain_vs(LitIn vin) {
     const int2 ij = terrainIndex(vin.position);
     const float3 world = terrainWorld(vin.position, ij);
@@ -2080,7 +2080,7 @@ LitOut terrain_vs(LitIn vin) {
 }
 #endif
 
-#if defined(TF_ENTRY_terrain_shadow_vs)
+#if defined(QUENCH_ENTRY_terrain_shadow_vs)
 ConstantBuffer<ShadowUniforms> su : UBO(0);
 float4 terrain_shadow_vs(LitIn vin) : SV_Position {
     return mul(su.lightViewProj, float4(terrainWorld(vin.position, terrainIndex(vin.position)), 1.0));
@@ -2094,7 +2094,7 @@ struct FullscreenOut {
     [[vk::location(0)]] float2 uv : TEXCOORD0;
 };
 
-#if defined(TF_ENTRY_fullscreen_vs)
+#if defined(QUENCH_ENTRY_fullscreen_vs)
 FullscreenOut fullscreen_vs(uint vid : SV_VertexID) {
     FullscreenOut vout;
     const float2 p = float2((vid << 1) & 2, vid & 2);
@@ -2169,7 +2169,7 @@ float4 mountains(float3 dir) {
     return float4(col, cover);
 }
 
-#if defined(TF_ENTRY_sky_fs)
+#if defined(QUENCH_ENTRY_sky_fs)
 Texture2D<float4> noiseTex : TEX(0);
 SamplerState ns : SMP(0);
 
@@ -2268,7 +2268,7 @@ float rippleHeight(Texture2D<float4> noiseTex, SamplerState ns, float2 p, float 
            0.35 * noiseTex.Sample(ns, p * 0.37 - float2(t * 0.011, -t * 0.008)).g;
 }
 
-#if defined(TF_ENTRY_water_fs)
+#if defined(QUENCH_ENTRY_water_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -2436,7 +2436,7 @@ float4 water_fs(LitOut vin) : SV_Target0 {
 // Mesh from render/LevelScene buildLevelWaterfallMesh: color.xy piece coordinates, color.z kind (0 sheet, 1 foam,
 // 2 mist); material x: drop (m), y: river width (m), z: seed. Premultiplied alpha, no depth write.
 
-#if defined(TF_ENTRY_waterfall_fs)
+#if defined(QUENCH_ENTRY_waterfall_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -2583,7 +2583,7 @@ struct GrassOut {
     [[vk::location(8)]] nointerpolation float ao : TEXCOORD8; // root occlusion of this clump (0 none .. 1 dense)
 };
 
-#if defined(TF_ENTRY_grass_vs)
+#if defined(QUENCH_ENTRY_grass_vs)
 ConstantBuffer<GrassUniforms> g : UBO(1);
 Texture2D<float4> heightTex : TEX(0);
 SamplerState cs : SMP(0);
@@ -2871,7 +2871,7 @@ GrassOut grass_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 }
 #endif
 
-#if defined(TF_ENTRY_grass_fs)
+#if defined(QUENCH_ENTRY_grass_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 
@@ -3035,11 +3035,11 @@ struct MarkCorner {
 
 static const float2 kMarkCorners[6] = {float2(0, -1), float2(1, -1), float2(1, 1), float2(0, -1), float2(1, 1), float2(0, 1)};
 
-#if defined(TF_ENTRY_mark_vs) || defined(TF_ENTRY_mark_mask_vs) || defined(TF_ENTRY_mark_fs)
+#if defined(QUENCH_ENTRY_mark_vs) || defined(QUENCH_ENTRY_mark_mask_vs) || defined(QUENCH_ENTRY_mark_fs)
 ConstantBuffer<MarkUniforms> mu : UBO(1);
 #endif
 
-#if defined(TF_ENTRY_mark_vs) || defined(TF_ENTRY_mark_mask_vs)
+#if defined(QUENCH_ENTRY_mark_vs) || defined(QUENCH_ENTRY_mark_mask_vs)
 StructuredBuffer<TireMarkSegment> segs : TEX(0);
 
 MarkCorner markCorner(uint vid, uint iid) {
@@ -3081,7 +3081,7 @@ struct MarkOut {
     [[vk::location(7)]] nointerpolation float4 soil : TEXCOORD7;
 };
 
-#if defined(TF_ENTRY_mark_vs)
+#if defined(QUENCH_ENTRY_mark_vs)
 MarkOut mark_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const MarkCorner c = markCorner(vid, iid);
     MarkOut vout;
@@ -3110,7 +3110,7 @@ float treadLugs(float u, float tv) {
 // Decal over the ground: the fragment reconstructs the ground material underneath, modifies it per surface (rubber,
 // compacted or churned soil, wet rut with raised edges, pressed or torn grass) and lights it like the ground. The
 // relief exists only in the shading normal; the collision ground stays flat.
-#if defined(TF_ENTRY_mark_fs)
+#if defined(QUENCH_ENTRY_mark_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -3384,7 +3384,7 @@ struct MarkMaskOut {
     [[vk::location(1)]] float v : TEXCOORD1;
 };
 
-#if defined(TF_ENTRY_mark_mask_vs)
+#if defined(QUENCH_ENTRY_mark_mask_vs)
 MarkMaskOut mark_mask_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     const MarkCorner c = markCorner(vid, iid);
     const bool soft = softSurface(c.surface);
@@ -3397,7 +3397,7 @@ MarkMaskOut mark_mask_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 }
 #endif
 
-#if defined(TF_ENTRY_mark_mask_fs)
+#if defined(QUENCH_ENTRY_mark_mask_fs)
 float4 mark_mask_fs(MarkMaskOut vin) : SV_Target0 {
     const float edge = 1.0 - smoothstep(0.75, 1.0, abs(vin.v));
     return float4(saturate(vin.amount.x * 1.5) * edge, saturate(vin.amount.y * 2.0) * edge, 0.0, 1.0);
@@ -3428,7 +3428,7 @@ struct SprayOut {
     [[vk::location(10)]] nointerpolation float4 dustFog : TEXCOORD10;
 };
 
-#if defined(TF_ENTRY_spray_vs)
+#if defined(QUENCH_ENTRY_spray_vs)
 cbuffer SprayInfo : UBO(1) {
     float4 info;
 };
@@ -3505,7 +3505,7 @@ SprayOut spray_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
 }
 #endif
 
-#if defined(TF_ENTRY_spray_fs)
+#if defined(QUENCH_ENTRY_spray_fs)
 Texture2DArray<float> shadowMap : TEX(0);
 SamplerComparisonState shadowSampler : SMP(0);
 Texture2D<float4> noiseTex : TEX(1);
@@ -3586,7 +3586,7 @@ struct LineOut {
     [[vk::location(0)]] float4 color : TEXCOORD0;
 };
 
-#if defined(TF_ENTRY_line_vs)
+#if defined(QUENCH_ENTRY_line_vs)
 LineOut line_vs(LineIn vin) {
     LineOut vout;
     vout.position = mul(f.viewProj, float4(vin.position, 1.0));
@@ -3604,7 +3604,7 @@ float inverseAces(float y) {
     return (-B + sqrt(max(B * B - 4.0 * A * C, 0.0))) / (2.0 * A);
 }
 
-#if defined(TF_ENTRY_line_fs)
+#if defined(QUENCH_ENTRY_line_fs)
 float4 line_fs(LineOut vin) : SV_Target0 {
     const float3 display = pow(saturate(vin.color.rgb), ((float3)(2.2)));
     const float3 hdr = float3(inverseAces(display.r), inverseAces(display.g), inverseAces(display.b)) /
@@ -3625,9 +3625,9 @@ struct PostUniforms {
     float4 look3;   // tonemap: x: grain seed (changes every frame)
 };
 
-#if defined(TF_ENTRY_bloom_down_fs) || defined(TF_ENTRY_bloom_up_fs) || defined(TF_ENTRY_tonemap_fs) || \
-    defined(TF_ENTRY_fxaa_fs) || defined(TF_ENTRY_blur_down_fs) || defined(TF_ENTRY_blur_up_fs) || \
-    defined(TF_ENTRY_blur_composite_fs)
+#if defined(QUENCH_ENTRY_bloom_down_fs) || defined(QUENCH_ENTRY_bloom_up_fs) || defined(QUENCH_ENTRY_tonemap_fs) || \
+    defined(QUENCH_ENTRY_fxaa_fs) || defined(QUENCH_ENTRY_blur_down_fs) || defined(QUENCH_ENTRY_blur_up_fs) || \
+    defined(QUENCH_ENTRY_blur_composite_fs)
 ConstantBuffer<PostUniforms> p : UBO(0);
 Texture2D<float4> src : TEX(0);
 SamplerState ls : SMP(0);
@@ -3635,7 +3635,7 @@ SamplerState ls : SMP(0);
 
 float3 karisWeight(float3 c) { return c / (1.0 + luminance(c)); }
 
-#if defined(TF_ENTRY_bloom_down_fs)
+#if defined(QUENCH_ENTRY_bloom_down_fs)
 float4 bloom_down_fs(FullscreenOut vin) : SV_Target0 {
     const float2 uv = vin.uv * p.extra.zw;
     const float2 t = p.texel.xy;
@@ -3666,7 +3666,7 @@ float4 bloom_down_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_bloom_up_fs)
+#if defined(QUENCH_ENTRY_bloom_up_fs)
 float4 bloom_up_fs(FullscreenOut vin) : SV_Target0 {
     const float2 t = p.texel.xy;
     const float2 uv = vin.uv;
@@ -3714,7 +3714,7 @@ float3 agx(float3 c) {
 float3 tmap(float3 c) { return c / (1.0 + max(c.r, max(c.g, c.b))); }
 float3 itmap(float3 c) { return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-4); }
 
-#if defined(TF_ENTRY_tonemap_fs)
+#if defined(QUENCH_ENTRY_tonemap_fs)
 Texture2D<float4> bloom : TEX(1);
 SamplerState bs : SMP(1);
 Texture2D<float4> adaptTex : TEX(2);
@@ -3820,16 +3820,16 @@ struct VelocityUniforms {
     float4x4 prevModel;
 };
 
-#if defined(TF_ENTRY_lindepth_fs) || defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || \
-    defined(TF_ENTRY_velocity_fs) || defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || \
-    defined(TF_ENTRY_dof_blur_fs) || defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_lum_fs) || \
-    defined(TF_ENTRY_adapt_fs) || defined(TF_ENTRY_shafts_fs)
+#if defined(QUENCH_ENTRY_lindepth_fs) || defined(QUENCH_ENTRY_gtao_fs) || defined(QUENCH_ENTRY_ao_blur_fs) || \
+    defined(QUENCH_ENTRY_velocity_fs) || defined(QUENCH_ENTRY_taa_fs) || defined(QUENCH_ENTRY_motion_blur_fs) || \
+    defined(QUENCH_ENTRY_dof_blur_fs) || defined(QUENCH_ENTRY_dof_fs) || defined(QUENCH_ENTRY_lum_fs) || \
+    defined(QUENCH_ENTRY_adapt_fs) || defined(QUENCH_ENTRY_shafts_fs)
 ConstantBuffer<PostFxUniforms> px : UBO(0);
 #endif
 
-#if defined(TF_ENTRY_gtao_fs) || defined(TF_ENTRY_ao_blur_fs) || defined(TF_ENTRY_velocity_fs) || \
-    defined(TF_ENTRY_taa_fs) || defined(TF_ENTRY_motion_blur_fs) || defined(TF_ENTRY_dof_blur_fs) || \
-    defined(TF_ENTRY_dof_fs) || defined(TF_ENTRY_shafts_fs)
+#if defined(QUENCH_ENTRY_gtao_fs) || defined(QUENCH_ENTRY_ao_blur_fs) || defined(QUENCH_ENTRY_velocity_fs) || \
+    defined(QUENCH_ENTRY_taa_fs) || defined(QUENCH_ENTRY_motion_blur_fs) || defined(QUENCH_ENTRY_dof_blur_fs) || \
+    defined(QUENCH_ENTRY_dof_fs) || defined(QUENCH_ENTRY_shafts_fs)
 // View-space position in screen axes (x right, y down, z forward = view distance) from uv and linear depth.
 float3 viewPosSS(float2 uv, float z) {
     const float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -3850,7 +3850,7 @@ float2 clipToUV(float4 c) {
 // Interleaved gradient noise (Jimenez).
 float ign(float2 pix) { return frac(52.9829189 * frac(dot(pix, float2(0.06711056, 0.00583715)))); }
 
-#if defined(TF_ENTRY_lindepth_fs)
+#if defined(QUENCH_ENTRY_lindepth_fs)
 Texture2D<float4> depthTex : TEX(0);
 SamplerState dps : SMP(0);
 
@@ -3861,7 +3861,7 @@ float4 lindepth_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_gtao_fs)
+#if defined(QUENCH_ENTRY_gtao_fs)
 Texture2D<float4> depthLin : TEX(0);
 SamplerState pts : SMP(0);
 Texture2D<float4> sceneTex : TEX(1); // opaque scene, light split in alpha (grass blades < 0)
@@ -3975,7 +3975,7 @@ float4 gtao_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_ao_blur_fs)
+#if defined(QUENCH_ENTRY_ao_blur_fs)
 Texture2D<float4> aoTex : TEX(0);
 SamplerState aps : SMP(0);
 Texture2D<float4> depthLin : TEX(1);
@@ -4020,7 +4020,7 @@ float4 ao_blur_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_velocity_fs)
+#if defined(QUENCH_ENTRY_velocity_fs)
 Texture2D<float4> depthLin : TEX(0);
 SamplerState dls : SMP(0);
 
@@ -4039,7 +4039,7 @@ struct VelocityOut {
     [[vk::location(1)]] float4 prev : TEXCOORD1;
 };
 
-#if defined(TF_ENTRY_velocity_obj_vs)
+#if defined(QUENCH_ENTRY_velocity_obj_vs)
 ConstantBuffer<VelocityUniforms> vu : UBO(0);
 
 // Moving meshes (vehicle body, spinning wheels) over the camera velocity, with their previous model matrix.
@@ -4053,13 +4053,13 @@ VelocityOut velocity_obj_vs(LitIn vin) {
 }
 #endif
 
-#if defined(TF_ENTRY_velocity_obj_fs)
+#if defined(QUENCH_ENTRY_velocity_obj_fs)
 float4 velocity_obj_fs(VelocityOut vin) : SV_Target0 {
     return float4(clipToUV(vin.cur) - clipToUV(vin.prev), 0.0, 1.0);
 }
 #endif
 
-#if defined(TF_ENTRY_taa_fs)
+#if defined(QUENCH_ENTRY_taa_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 Texture2D<float4> hist : TEX(1);
@@ -4136,7 +4136,7 @@ float4 taa_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_motion_blur_fs)
+#if defined(QUENCH_ENTRY_motion_blur_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 Texture2D<float4> velTex : TEX(1);
@@ -4179,7 +4179,7 @@ float4 motion_blur_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_dof_blur_fs) || defined(TF_ENTRY_dof_fs)
+#if defined(QUENCH_ENTRY_dof_blur_fs) || defined(QUENCH_ENTRY_dof_fs)
 // Circle of confusion (target pixels) at view distance z: params x: focus distance (m), y: aperture (blur at
 // infinity, share of the max radius), z: max radius (half-res pixels), w: near blur scale.
 float dofCoc(float z) {
@@ -4188,7 +4188,7 @@ float dofCoc(float z) {
 }
 #endif
 
-#if defined(TF_ENTRY_dof_blur_fs)
+#if defined(QUENCH_ENTRY_dof_blur_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 Texture2D<float4> depthLin : TEX(1);
@@ -4219,7 +4219,7 @@ float4 dof_blur_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_dof_fs)
+#if defined(QUENCH_ENTRY_dof_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 Texture2D<float4> blurred : TEX(1);
@@ -4236,7 +4236,7 @@ float4 dof_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_lum_fs)
+#if defined(QUENCH_ENTRY_lum_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 
@@ -4252,7 +4252,7 @@ float4 lum_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_adapt_fs)
+#if defined(QUENCH_ENTRY_adapt_fs)
 Texture2D<float4> lumTex : TEX(0);
 SamplerState lls : SMP(0);
 Texture2D<float4> prevTex : TEX(1);
@@ -4276,7 +4276,7 @@ float4 adapt_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_shafts_fs)
+#if defined(QUENCH_ENTRY_shafts_fs)
 Texture2D<float4> cur : TEX(0);
 SamplerState cls : SMP(0);
 Texture2D<float4> depthLin : TEX(1);
@@ -4307,7 +4307,7 @@ float4 shafts_fs(FullscreenOut vin) : SV_Target0 {
 #endif
 
 // FXAA (simplified 3.11 "quality" variant with 5 edge steps).
-#if defined(TF_ENTRY_fxaa_fs)
+#if defined(QUENCH_ENTRY_fxaa_fs)
 float4 fxaa_fs(FullscreenOut vin) : SV_Target0 {
     const float2 uv = vin.uv;
     const float2 t = p.texel.xy;
@@ -4366,7 +4366,7 @@ float4 fxaa_fs(FullscreenOut vin) : SV_Target0 {
 
 // ---------------------------------------------------------------- menu blur (dual Kawase, display-referred LDR)
 
-#if defined(TF_ENTRY_blur_down_fs)
+#if defined(QUENCH_ENTRY_blur_down_fs)
 // Half-resolution step: centre plus four diagonal taps at half-texel offsets (p.texel.xy: 1/source size,
 // p.params.x: offset scale).
 float4 blur_down_fs(FullscreenOut vin) : SV_Target0 {
@@ -4379,7 +4379,7 @@ float4 blur_down_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_blur_up_fs)
+#if defined(QUENCH_ENTRY_blur_up_fs)
 // Double-resolution step: eight taps on a diamond around the pixel.
 float4 blur_up_fs(FullscreenOut vin) : SV_Target0 {
     const float2 uv = vin.uv;
@@ -4392,7 +4392,7 @@ float4 blur_up_fs(FullscreenOut vin) : SV_Target0 {
 }
 #endif
 
-#if defined(TF_ENTRY_blur_composite_fs)
+#if defined(QUENCH_ENTRY_blur_composite_fs)
 Texture2D<float4> blurred : TEX(1);
 SamplerState bls : SMP(1);
 

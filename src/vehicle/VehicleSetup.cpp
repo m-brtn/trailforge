@@ -321,12 +321,12 @@ std::string writeSetupFile(const SetupFile& f) {
 }
 
 bool parseSetupFile(const std::string& text, SetupFile& out, std::string* error) {
-    json::Value root;
-    std::string e;
-    if (!json::parse(text, root, &e)) {
-        if (error) *error = "invalid JSON: " + e;
+    quench::Result<json::Value> parsed = json::parse(text);
+    if (!parsed) {
+        if (error) *error = "invalid JSON: " + parsed.error();
         return false;
     }
+    json::Value root = std::move(*parsed);
     const double schema = root.isObject() ? root["schema"].numberOr(0) : 0;
     if (!root.isObject() || (schema != 1 && schema != kSetupSchema) ||
         root["vehicle"].type != json::Value::Type::String || !root["setups"].isArray()) {

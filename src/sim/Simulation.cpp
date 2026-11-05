@@ -25,7 +25,7 @@ float approach(float current, float target, float rate, float dt) {
 } // namespace
 
 Simulation::Simulation(const SimulationSettings& settings) : m_settings(settings), m_tireMarks(settings.tireMarks) {
-    m_world = std::make_unique<PhysicsWorld>(settings.physics);
+    m_world = std::make_unique<quench::PhysicsWorld>(settings.physics);
     m_world->system().SetContactListener(&m_impactListener);
     buildWorld();
     spawnVehicle(settings.vehicle, m_track->spawn());

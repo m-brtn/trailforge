@@ -3,10 +3,8 @@
 // terrain texture files (KTX2 container, shipped BC7 maps) and the building kit (collision pieces vs render LODs,
 // materials vs assets/textures/buildings).
 
-#include "core/Json.h"
 #include "core/Ktx2.h"
 #include "core/TerrainTextureSet.h"
-#include "physics/PhysicsWorld.h"
 #include "sim/Simulation.h"
 #include "track/BuildingKit.h"
 #include "track/Level.h"
@@ -21,6 +19,8 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
+#include <quench/core/Json.h>
+#include <quench/physics/PhysicsWorld.h>
 
 #include <algorithm>
 #include <array>
@@ -101,8 +101,8 @@ void levelHeightfieldSampling() {
     CHECK(bad == 0, "%d samples differ from the grid", bad);
 
     // Physics tiles: rays straight down hit the heightfield at heightAt() and report the cell's surface.
-    JoltRuntime runtime;
-    PhysicsWorld world;
+    quench::JoltRuntime runtime;
+    quench::PhysicsWorld world;
     SurfaceTable surfaces;
     TerrainTiles::Settings ts;
     ts.async = false;
@@ -204,8 +204,8 @@ void levelHeightfieldSampling() {
 }
 
 void levelTileStreaming() {
-    JoltRuntime runtime;
-    PhysicsWorld world;
+    quench::JoltRuntime runtime;
+    quench::PhysicsWorld world;
     SurfaceTable surfaces;
     TerrainTiles::Settings ts;
     TerrainTiles tiles(world, surfaces, level(), ts);
@@ -344,8 +344,8 @@ void levelRoadCarving() {
             const float depth = w ? *w - L.heightAt(s.x, s.z) : 0.0f;
             CHECK(depth < 0.45f, "%s ford depth %.2f at %.0f %.0f", r.name.c_str(), depth, s.x, s.z);
         }
-    JoltRuntime runtime;
-    PhysicsWorld world;
+    quench::JoltRuntime runtime;
+    quench::PhysicsWorld world;
     SurfaceTable surfaces;
     TestTrack props(world, surfaces, L);
     world.optimizeBroadPhase();
@@ -373,8 +373,8 @@ void levelRoadEmbankment() {
     std::ifstream in(kLevel);
     std::stringstream text;
     text << in.rdbuf();
-    json::Value doc;
-    CHECK(json::parse(text.str(), doc), "level.json");
+    json::Value doc = json::parse(text.str()).valueOr({});
+    CHECK(doc.isObject(), "level.json");
     doc.object.erase("roads");
     doc.object.erase("attractRoute");
     std::string err;
@@ -553,7 +553,7 @@ int wheelsInContact(const Simulation& sim) {
 
 // The vehicle body shape touches static geometry (both triangle faces count; the wheels are casts, not part of it).
 bool chassisTouches(Simulation& sim) {
-    PhysicsWorld& w = sim.world();
+    quench::PhysicsWorld& w = sim.world();
     const JPH::BodyID id = sim.vehicle().bodyId();
     JPH::RefConst<JPH::Shape> shape;
     JPH::RMat44 xf;
@@ -1369,9 +1369,10 @@ void buildingKitMaterials() {
     std::ifstream f(dir + "/buildings.json");
     std::stringstream ss;
     ss << f.rdbuf();
-    json::Value doc;
+    const quench::Result<json::Value> parsed = json::parse(ss.str());
+    CHECK(parsed, "buildings.json: %s", parsed.error().c_str());
+    const json::Value doc = parsed.valueOr({});
     std::string err;
-    CHECK(json::parse(ss.str(), doc, &err), "buildings.json: %s", err.c_str());
     CHECK(!doc["heightInAlpha"].boolOr(true), "buildings.json must set heightInAlpha false");
     int textured = 0;
     for (int m = 0; m < kKitMatCount; ++m) {
@@ -1631,8 +1632,8 @@ void levelWoodland() {
         mature += t.height > 15;
     }
     CHECK(outside == 0 && young > 30 && mature > 30, "outside %d young %d mature %d", outside, young, mature);
-    json::Value doc;
-    CHECK(json::parse(source, doc), "parse woodland fixture");
+    json::Value doc = json::parse(source).valueOr({});
+    CHECK(doc.isObject(), "parse woodland fixture");
     doc.object.erase("woodlands");
     doc.object.erase("terraces");
     auto bare = Level::fromJsonText(json::write(doc), &err, 1);
@@ -1645,10 +1646,12 @@ void levelWoodland() {
                     changed += a->heightAt(float(x), float(z)) != bare->heightAt(float(x), float(z));
         CHECK(changed == 0, "local terraces changed %d remote samples", changed);
     }
-    CHECK(json::parse(source, doc), "parse invalid fixture");
+    doc = json::parse(source).valueOr({});
+    CHECK(doc.isObject(), "parse invalid fixture");
     doc.object["woodlands"].array[0].object["fade"] = json::Value::makeNumber(0);
     CHECK(!Level::fromJsonText(json::write(doc), &err), "zero woodland fade accepted");
-    CHECK(json::parse(source, doc), "parse invalid terrace fixture");
+    doc = json::parse(source).valueOr({});
+    CHECK(doc.isObject(), "parse invalid terrace fixture");
     doc.object["terraces"].array[0].object["radiusX"] = json::Value::makeNumber(-1);
     CHECK(!Level::fromJsonText(json::write(doc), &err), "negative terrace radius accepted");
 }
@@ -1755,8 +1758,9 @@ void levelBakedLayout() {
     std::ifstream lf(TRAILFORGE_SOURCE_DIR "/assets/levels/suncoast_raceway/layout.json");
     std::stringstream ls;
     ls << lf.rdbuf();
-    json::Value lay;
-    CHECK(json::parse(ls.str(), lay, &err), "layout: %s", err.c_str());
+    const quench::Result<json::Value> parsedLayout = json::parse(ls.str());
+    CHECK(parsedLayout, "layout: %s", parsedLayout.error().c_str());
+    const json::Value lay = parsedLayout.valueOr({});
     const float lo = float(lay["grid"]["heightMin"].numberOr(0)), hi = float(lay["grid"]["heightMax"].numberOr(0));
     int off = 0;
     for (std::size_t k = 0; k < hm.data.size() && k < lv.heights().size(); ++k)
@@ -1768,8 +1772,8 @@ void levelBakedLayout() {
     CHECK(wet == 0, "%d road samples under water", wet);
     // Physics tiles: rays onto the heightfield hit the baked surface.
     {
-        JoltRuntime runtime;
-        PhysicsWorld world;
+        quench::JoltRuntime runtime;
+        quench::PhysicsWorld world;
         SurfaceTable surfaces;
         TerrainTiles::Settings ts;
         ts.async = false;
@@ -1831,8 +1835,8 @@ void levelBakedTrackSmooth() {
         if (r.name == lv.circuit().road) road = &r;
     CHECK(road && road->samples.size() > 100, "circuit road");
     if (!road) return;
-    JoltRuntime runtime;
-    PhysicsWorld world;
+    quench::JoltRuntime runtime;
+    quench::PhysicsWorld world;
     SurfaceTable surfaces;
     TerrainTiles::Settings ts;
     ts.async = false;

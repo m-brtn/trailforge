@@ -11,8 +11,9 @@
 #include "input/ControlLayout.h"
 #include "input/TouchControls.h"
 #include "track/Level.h"
-#include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
+
+#include <quench/core/FixedStepClock.h>
 
 #include <cmath>
 #include <cstdio>
@@ -506,7 +507,7 @@ void vehiclePage() {
 // The pause menu freezes the simulation: no ticks, the same body position and accumulator; resume continues.
 void pauseFreezesTicks() {
     Simulation sim{SimulationSettings{}};
-    FixedStepClock clock(sim.fixedStep());
+    quench::FixedStepClock clock(sim.fixedStep());
     GameFlow flow(Screen::Playing);
     const double frame = 1.0 / 60.0;
     auto runFrames = [&](int n, const DriverIntent& in) {

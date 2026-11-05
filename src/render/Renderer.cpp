@@ -3,8 +3,8 @@
 #include "core/ModelAsset.h"
 #include "core/TerrainTextureSet.h"
 #include "render/GroundMaps.h"
-#include "render/ShaderBlobs.h"
 #include "render/TimeOfDay.h"
+#include "scene_shaders.h"
 #include "sim/TireMarks.h"
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
@@ -141,7 +141,7 @@ void GpuMesh::release() {
 Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
     // Offer every format that was compiled into this build (shaders/scene.hlsl -> SPIR-V everywhere, metallib or MSL
     // on macOS, DXIL on Windows). SDL tries Metal, then D3D12, then Vulkan; SDL_GPU_DRIVER overrides the choice.
-    const ShaderBlob* probe = findShaderBlob("lit_vs");
+    const quench::ShaderBlob* probe = quench::shaders::scene.find("lit_vs");
     if (!probe) throw std::runtime_error("no embedded shaders");
     SDL_GPUShaderFormat formats = 0;
     if (probe->spirv.data) formats |= SDL_GPU_SHADERFORMAT_SPIRV;
@@ -400,9 +400,9 @@ SDL_GPUShader* Renderer::createShader(const char* entry, SDL_GPUShaderStage stag
     info.num_uniform_buffers = uniformBuffers;
     info.num_samplers = samplers;
     info.num_storage_buffers = storageBuffers;
-    const ShaderBlob* blob = findShaderBlob(entry);
+    const quench::ShaderBlob* blob = quench::shaders::scene.find(entry);
     if (!blob) throw std::runtime_error(std::string("shader entry point not embedded: ") + entry);
-    const ShaderCode code = m_shaderFormat == SDL_GPU_SHADERFORMAT_METALLIB ? blob->metallib
+    const quench::ShaderCode code = m_shaderFormat == SDL_GPU_SHADERFORMAT_METALLIB ? blob->metallib
                             : m_shaderFormat == SDL_GPU_SHADERFORMAT_MSL    ? blob->msl
                             : m_shaderFormat == SDL_GPU_SHADERFORMAT_DXIL   ? blob->dxil
                                                                             : blob->spirv;

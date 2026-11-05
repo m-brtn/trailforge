@@ -1,6 +1,5 @@
 #pragma once
 
-#include "physics/PhysicsWorld.h"
 #include "sim/Autopilot.h"
 #include "sim/BodyImpacts.h"
 #include "sim/DriftScore.h"
@@ -16,6 +15,7 @@
 #include "vehicle/VehicleConfig.h"
 
 #include <Jolt/Jolt.h>
+#include <quench/physics/PhysicsWorld.h>
 
 #include <array>
 #include <memory>
@@ -80,7 +80,7 @@ struct SimulationSettings {
     WaterFlow waterFlow;
     double fixedStep = 1.0 / 120.0; // s
     int collisionSteps = 1;
-    PhysicsWorld::Settings physics;
+    quench::PhysicsWorld::Settings physics;
     VehicleConfig vehicle;
     InputSmoothing smoothing;
     AutoReverseSettings autoReverse;
@@ -180,7 +180,7 @@ public:
     InputSmoothing& smoothing() { return m_settings.smoothing; }
     AutoReverseSettings& autoReverse() { return m_settings.autoReverse; }
 
-    PhysicsWorld& world() { return *m_world; }
+    quench::PhysicsWorld& world() { return *m_world; }
     SurfaceTable& surfaces() { return m_surfaces; }
     const TestTrack& track() const { return *m_track; }
     // The open-world level and its physics tiles (nullptr on the proving ground and the test layouts).
@@ -251,11 +251,11 @@ private:
     void updateDrift(const JPH::Vec3& before, float dt);
     TrackFeature gateResetPoint(int gate) const;
 
-    JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
+    quench::JoltRuntime m_joltRuntime; // first: SurfaceTable creates Jolt objects
     SimulationSettings m_settings;
     SurfaceTable m_surfaces;
     BodyImpactListener m_impactListener; // before m_world: registered with its PhysicsSystem
-    std::unique_ptr<PhysicsWorld> m_world;
+    std::unique_ptr<quench::PhysicsWorld> m_world;
     std::unique_ptr<TestTrack> m_track;
     std::unique_ptr<TerrainTiles> m_terrain;
     std::unique_ptr<Vehicle> m_vehicle; // after the track and tiles: destroyed first

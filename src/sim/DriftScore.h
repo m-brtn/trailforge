@@ -3,11 +3,13 @@
 #include <string>
 #include <vector>
 
-namespace tf {
-
-namespace json {
+namespace quench::json {
 struct Value;
 }
+
+namespace tf {
+
+namespace json = quench::json;
 
 // Drift scoring: a small judge fed with the body motion of every physics tick. Pure logic, no physics; it only reads
 // simulation data (body heading and velocity, wheel contact, body impacts) and never feeds back.

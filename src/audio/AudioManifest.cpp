@@ -1,11 +1,13 @@
 #include "audio/AudioManifest.h"
 
-#include "core/Json.h"
+#include <quench/core/Json.h>
 
 #include <fstream>
 #include <sstream>
 
 namespace tf {
+
+namespace json = quench::json;
 
 const std::array<const char*, kSoundCount> kSoundNames = {
     "engine_exhaust_idle_loop", "engine_exhaust_offload_mid_loop", "engine_exhaust_offload_high_loop",
@@ -40,12 +42,12 @@ bool loadAudioManifest(const std::string& path, AudioManifest& out, std::string*
     }
     std::stringstream ss;
     ss << in.rdbuf();
-    json::Value doc;
-    std::string err;
-    if (!json::parse(ss.str(), doc, &err)) {
-        if (error) *error = path + ": " + err;
+    const quench::Result<json::Value> parsed = json::parse(ss.str());
+    if (!parsed) {
+        if (error) *error = path + ": " + parsed.error();
         return false;
     }
+    const json::Value& doc = *parsed;
     out = AudioManifest{};
     out.sampleRate = int(doc["format"]["sample_rate"].numberOr(48000));
     for (const json::Value& s : doc["sounds"].array) {

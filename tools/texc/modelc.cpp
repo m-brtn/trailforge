@@ -41,7 +41,7 @@
 static const char* const kToolName = "trailforge_modelc";
 #include "TexCore.h"
 
-#include "core/Json.h"
+#include <quench/core/Json.h>
 
 #include <array>
 #include <cstdint>
@@ -50,7 +50,7 @@ static const char* const kToolName = "trailforge_modelc";
 #include <sstream>
 
 using namespace texcore;
-namespace json = tf::json;
+namespace json = quench::json;
 
 namespace {
 
@@ -1040,9 +1040,9 @@ int main(int argc, char** argv) {
     if (!in) die(std::string("cannot read ") + argv[2]);
     std::stringstream ss;
     ss << in.rdbuf();
-    json::Value spec;
-    std::string error;
-    if (!json::parse(ss.str(), spec, &error)) die(std::string(argv[2]) + ": " + error);
+    const quench::Result<json::Value> parsedSpec = json::parse(ss.str());
+    if (!parsedSpec) die(std::string(argv[2]) + ": " + parsedSpec.error());
+    const json::Value& spec = *parsedSpec;
     const std::string id = spec["id"].stringOr("model"), kind = spec["kind"].stringOr("rock");
     const std::string outDir = spec["out"].stringOr(".");
     const std::string gltfPath = spec["gltf"].stringOr("");

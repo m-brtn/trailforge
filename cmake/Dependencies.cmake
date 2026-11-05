@@ -140,3 +140,16 @@ if(TRAILFORGE_BUILD_APP)
         GLM_FORCE_DEPTH_ZERO_TO_ONE   # SDL GPU (Metal/D3D12/Vulkan): NDC z in [0, 1]
         GLM_FORCE_RADIANS)
 endif()
+
+# ---------------------------------------------------------------- Quench (the engine)
+# Added after the dependencies above: the engine declares SDL, Jolt, ImGui and GLM with the same pins and options, and
+# the first declaration wins, so both use the same sources (with the patches above). Used so far: quench_core
+# (FixedStepClock, JSON), quench_physics (PhysicsWorld) and the shader build (quench_add_shaders, quench_shaderc).
+# Without the app only the engine's headless modules are configured, and SDL is not fetched.
+include(${CMAKE_CURRENT_LIST_DIR}/Quench.cmake)
+if(TRAILFORGE_BUILD_APP)
+    set(QUENCH_HEADLESS OFF CACHE BOOL "" FORCE)
+else()
+    set(QUENCH_HEADLESS ON CACHE BOOL "" FORCE)
+endif()
+FetchContent_MakeAvailable(quench)

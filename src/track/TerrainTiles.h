@@ -13,9 +13,12 @@
 #include <thread>
 #include <vector>
 
+namespace quench {
+class PhysicsWorld;
+}
+
 namespace tf {
 
-class PhysicsWorld;
 class SurfaceTable;
 
 struct TerrainStreamingStats {
@@ -46,9 +49,9 @@ public:
         bool async = true;             // false: build everything on the calling thread (deterministic tests)
     };
 
-    TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level,
+    TerrainTiles(quench::PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level,
                  const Settings& settings);
-    TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level)
+    TerrainTiles(quench::PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level)
         : TerrainTiles(world, surfaces, std::move(level), Settings{}) {}
     ~TerrainTiles();
     TerrainTiles(const TerrainTiles&) = delete;
@@ -92,7 +95,7 @@ private:
     void workerLoop();
     void drainFinished();
 
-    PhysicsWorld& m_world;
+    quench::PhysicsWorld& m_world;
     const SurfaceTable& m_surfaces;
     std::shared_ptr<const Level> m_level;
     Settings m_settings;

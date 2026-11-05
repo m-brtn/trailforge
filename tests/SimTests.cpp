@@ -5,17 +5,17 @@
 #include "sim/BodyMud.h"
 #include "sim/DriftScore.h"
 #include "sim/Autopilot.h"
-#include "sim/FixedStepClock.h"
 #include "sim/LapTimer.h"
 #include "sim/Simulation.h"
 #include "sim/WheelSpray.h"
 #include "track/MiniTrack.h"
 #include "track/TestTrack.h"
 #include "vehicle/VehicleDefinition.h"
-#include "core/Json.h"
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <quench/core/FixedStepClock.h>
+#include <quench/core/Json.h>
 
 #include <algorithm>
 #include <array>
@@ -260,7 +260,7 @@ struct ScheduleResult { JPH::Vec3 pos; JPH::Quat rot; float speed; };
 ScheduleResult runSchedule(const std::function<double(int)>& frameTime, unsigned long long totalTicks) {
     SimulationSettings s = settingsFor(TrackLayout::ProvingGround);
     Simulation sim(s);
-    FixedStepClock clock(sim.fixedStep());
+    quench::FixedStepClock clock(sim.fixedStep());
     clock.maxStepsPerFrame = 1000; // nothing is dropped in the test
     clock.maxFrameTime = 10.0;
     for (int frame = 0; sim.timing().ticks < totalTicks; ++frame) {
@@ -1795,9 +1795,12 @@ void driftScoreLogic() {
 
 void driftConfigParse() {
     auto parse = [](const char* text, DriftConfig& c, std::string& err) {
-        json::Value v;
-        if (!json::parse(text, v, &err)) return false;
-        return parseDriftConfig(v, c, err);
+        const quench::Result<json::Value> v = json::parse(text);
+        if (!v) {
+            err = v.error();
+            return false;
+        }
+        return parseDriftConfig(*v, c, err);
     };
     DriftConfig c;
     std::string err;
@@ -1931,7 +1934,7 @@ void hillCrestLanding() {
         auto& bi = sim.world().bodies();
         bi.CreateAndAddBody(JPH::BodyCreationSettings(JPH::MeshShapeSettings(tris, mats).Create().Get(),
                                                       JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
-                                                      JPH::EMotionType::Static, Layers::Static),
+                                                      JPH::EMotionType::Static, quench::PhysicsLayers::kStatic),
                             JPH::EActivation::DontActivate);
         const JPH::BodyID vid = sim.vehicle().bodyId();
         const float target = hill.kmh / 3.6f;

@@ -10,8 +10,9 @@
 
 #include "BodySource.h"
 
-#include "core/Json.h"
 #include "vehicle/VehicleDefinition.h"
+
+#include <quench/core/Json.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -29,12 +30,12 @@ bool loadDefinition(const std::string& path, VehicleDefinition& def) {
     std::ifstream f(path, std::ios::binary);
     std::stringstream ss;
     ss << f.rdbuf();
-    json::Value doc;
-    std::string err;
-    if (!f || !json::parse(ss.str(), doc, &err)) {
-        std::fprintf(stderr, "%s: cannot read (%s)\n", path.c_str(), err.c_str());
+    quench::Result<json::Value> parsed = json::parse(ss.str());
+    if (!f || !parsed) {
+        std::fprintf(stderr, "%s: cannot read (%s)\n", path.c_str(), f ? parsed.error().c_str() : "cannot open");
         return false;
     }
+    json::Value doc = std::move(*parsed);
     if (doc.has("body")) {
         doc.object["body"].object.erase("model");
         doc.object["body"].object.erase("paint");

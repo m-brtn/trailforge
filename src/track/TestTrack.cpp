@@ -1,12 +1,12 @@
 #include "track/TestTrack.h"
 
-#include "physics/PhysicsWorld.h"
 #include "track/Level.h"
 #include "track/MiniTrack.h"
 
 #include <Jolt/Geometry/Triangle.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <quench/physics/PhysicsWorld.h>
 
 #include <algorithm>
 #include <array>
@@ -383,7 +383,7 @@ float TestTrack::provingGroundHeight(float x, float z) {
     return h;
 }
 
-TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout)
+TestTrack::TestTrack(quench::PhysicsWorld& world, const SurfaceTable& surfaces, TrackLayout layout)
     : m_world(world), m_layout(layout) {
     switch (layout) {
     case TrackLayout::ProvingGround: buildProvingGround(); break;
@@ -398,7 +398,7 @@ TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, TrackLay
     createBody(surfaces);
 }
 
-TestTrack::TestTrack(PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level)
+TestTrack::TestTrack(quench::PhysicsWorld& world, const SurfaceTable& surfaces, const Level& level)
     : m_world(world), m_layout(TrackLayout::Level) {
     m_geometry = level.props().geometry;
     m_features = level.features();
@@ -423,7 +423,7 @@ void TestTrack::createBody(const SurfaceTable& surfaces) {
         throw std::runtime_error(std::string("MeshShape: ") + result.GetError().c_str());
 
     JPH::BodyCreationSettings bcs(result.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
-                                  JPH::EMotionType::Static, Layers::Static);
+                                  JPH::EMotionType::Static, quench::PhysicsLayers::kStatic);
     bcs.mFriction = 0.8f; // body-ground friction (not tires; tires are handled by VehicleConstraint)
     m_body = m_world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
     m_world.optimizeBroadPhase();

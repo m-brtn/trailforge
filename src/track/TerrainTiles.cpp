@@ -1,6 +1,5 @@
 #include "track/TerrainTiles.h"
 
-#include "physics/PhysicsWorld.h"
 #include "track/SurfaceProperties.h"
 
 #include <Jolt/Geometry/Triangle.h>
@@ -9,6 +8,7 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <quench/physics/PhysicsWorld.h>
 
 #include <algorithm>
 #include <chrono>
@@ -27,7 +27,7 @@ double msSince(Clock::time_point t0) { return std::chrono::duration<double, std:
 constexpr float kMinHeight = -64.0f, kMaxHeight = 448.0f;
 } // namespace
 
-TerrainTiles::TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level,
+TerrainTiles::TerrainTiles(quench::PhysicsWorld& world, const SurfaceTable& surfaces, std::shared_ptr<const Level> level,
                            const Settings& settings)
     : m_world(world), m_surfaces(surfaces), m_level(std::move(level)), m_settings(settings) {
     const Level& L = *m_level;
@@ -81,7 +81,7 @@ TerrainTiles::TerrainTiles(PhysicsWorld& world, const SurfaceTable& surfaces, st
         JPH::ShapeSettings::ShapeResult sr = scene.Create();
         if (sr.HasError()) throw std::runtime_error(std::string("StaticCompoundShape (static scene): ") + sr.GetError().c_str());
         JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                      Layers::Static);
+                                      quench::PhysicsLayers::kStatic);
         bcs.mFriction = 0.8f;
         m_staticScene = m_world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
     }
@@ -193,7 +193,7 @@ void TerrainTiles::addBodies(Built&& b) {
     Tile& t = m_tiles[std::size_t(b.index)];
     auto make = [&](const JPH::Shape* shape) {
         JPH::BodyCreationSettings bcs(shape, JPH::RVec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                      Layers::Static);
+                                      quench::PhysicsLayers::kStatic);
         bcs.mFriction = 0.8f;
         return m_world.bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
     };

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "core/Json.h"
 #include "vehicle/VehicleConfig.h"
+
+#include <quench/core/Json.h>
 
 #include <map>
 #include <string>
@@ -12,6 +13,8 @@
 // the form "<file>: <path>: <problem>".
 
 namespace tf {
+
+namespace json = quench::json;
 
 struct ParamRange {
     float min = 0.0f, max = 0.0f;

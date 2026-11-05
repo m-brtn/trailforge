@@ -39,6 +39,13 @@ runtime); the device build links but has never run on a real iPhone or iPad, and
 (`docs/building.md` "iOS"). Dependencies are fetched by CMake FetchContent as pinned archives
 with SHA256 checks (internet is needed for the first configure).
 
+The game builds on the Quench engine (https://github.com/m-brtn/Quench, local checkout `/Users/mbrtn/Projects/engine`),
+fetched like the other dependencies at the commit pinned in `cmake/Quench.cmake`. So far it uses the engine's
+`quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json` and shader build; the rest of the game still has its
+own code (the engine's `docs/migration.md` lists the order). For work on the engine and the game together, configure
+with `-DFETCHCONTENT_SOURCE_DIR_QUENCH=/Users/mbrtn/Projects/engine`; a game change must also build against the pinned
+commit. An engine change is committed and pushed first, then the pin here is updated (commit and archive SHA256).
+
 ## Build and test
 
 ```sh
@@ -49,7 +56,7 @@ cmake --build --preset release
 cmake --preset debug
 cmake --build --preset debug
 
-# headless physics, audio and model tests (CTest, 112 tests, 101 in the headless preset; no window, no audio device)
+# headless physics, audio and model tests (CTest, 115 tests, 104 in the headless preset; no window, no audio device)
 ctest --preset release
 ctest --preset debug
 
@@ -68,13 +75,13 @@ cmake --preset windows-release && cmake --build --preset windows-release && ctes
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 ```
 
-Shaders: `shaders/scene.hlsl` is the only shader source (49 entry points, each guarded by `TF_ENTRY_<name>`, SDL GPU
-register/space conventions; see `docs/rendering.md` "Shader pipeline"). `cmake/Shaders.cmake` compiles every entry with the host
-tool `trailforge_shaderc` (`tools/shaderc`: glslang HLSL -> SPIR-V -> SPIRV-Tools legalize/validate -> SPIRV-Cross
-MSL, pinned in `cmake/ShaderToolchain.cmake`), then `xcrun metal` -> metallib on macOS and the pinned prebuilt DXC ->
-DXIL on Windows hosts only; `cmake/EmbedShaders.cmake` embeds the blobs. When adding a shader entry, add it to
-`TRAILFORGE_SHADER_ENTRIES` and keep the resource counts in the renderer's pipeline creation in sync (the tool
-prints them). Visual changes to Metal output can be measured with `tools/render/compare_captures.py BEFORE AFTER`.
+Shaders: `shaders/scene.hlsl` is the only shader source (49 entry points, each guarded by `QUENCH_ENTRY_<name>`, SDL
+GPU register/space conventions; see `docs/rendering.md` "Shader pipeline"). The engine's `quench_add_shaders()`
+(called in `CMakeLists.txt`) compiles every entry with the engine's host tool `quench_shaderc` (glslang HLSL -> SPIR-V
+-> SPIRV-Tools legalize/validate -> SPIRV-Cross MSL), then `xcrun metal` -> metallib on macOS and the pinned prebuilt
+DXC -> DXIL on Windows hosts only, and embeds the blobs as the table `quench::shaders::scene` (`scene_shaders.h`).
+When adding a shader entry, add it to that `quench_add_shaders` list and keep the resource counts in the renderer's
+pipeline creation in sync (the compiled counts are in the table, `quench::ShaderBlob::resources`). Visual changes to Metal output can be measured with `tools/render/compare_captures.py BEFORE AFTER`.
 Captures differ slightly between runs of the same binary (timing), so identity claims need a same-process A/B.
 
 Build output goes to `build/<preset>/`. Binaries: `trailforge` (app), `trailforge_tests`, `trailforge_vehicle_tests`, `trailforge_app_tests`,
@@ -174,12 +181,13 @@ hardware" in the release notes.
 ## Layout
 
 ```
-src/physics/  PhysicsWorld - RAII wrapper over Jolt (allocator, factory, job system, layers)
+(engine)      from Quench (cmake/Quench.cmake): quench::PhysicsWorld and JoltRuntime (Jolt wrapper),
+              quench::FixedStepClock, quench::json (reader, writer), the shader build (quench_add_shaders)
 src/track/    SurfaceProperties (materials, grip), TestTrack (procedural proving ground + MeshShape), Level (level.json
               bake: heights, surfaces, render-only water, trees, rocks, POIs, buildings), BuildingKit (procedural buildings:
               render LODs + convex collision pieces from the same solid parts), TerrainTiles (streamed HeightFieldShape tiles),
               LevelFiles (baked level files: 16-bit / 8-bit PGM), MiniTrack (proving ground mini handling track)
-src/core/     Json (reader, writer, merge), Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip)
+src/core/     Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip), ModelAsset (converted glb)
 src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, controller, drivetrain layouts, telemetry),
               WheelContact (contact samples), ElectricDrive (dual-motor envelope, split, regen blend, battery; ElectricVehicleController
  in Vehicle.cpp), VehicleBlueprint (traced body for bodyShape "traced": distance fields, wheelhouses, collision
@@ -188,7 +196,7 @@ src/vehicle/  VehicleConfig/VehicleTuning (per axle), Vehicle (constraint, contr
               factor only), TireModel (tire sets, 2-node tire temperature and its grip factor), VehicleDefinition (vehicle.json loader + validation, kits), VehicleSetup (garage
               parameters, setup files), WheelSweep (space a tire sweeps over travel + steering), VehicleBody (body.glb
               reader / writer, roles, validation against every config; no SDL)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual-only ring),
+src/sim/      Simulation (physics + track + vehicle, input on ticks), TireMarks (visual-only ring),
               BodyImpacts (chassis contact listener for impact sounds), LapTimer (gates, checkpoints, sectors; pure logic),
               DriftScore (drift judge: slip x speed x time, clipping zones, level.json "drift" parser; pure logic),
               WaterForces (buoyancy, pressure drag, bow lift and tire drag on the vehicle from the water surface; no SDL)
@@ -196,7 +204,7 @@ src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure ma
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
 src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
               materials, panels, lights, accessories, wheels), VehicleModel (named parts per model), Scenery,
-              LevelScene (level props, water, horizon ring), GroundMaps, Mesh, Camera, DebugDraw, ShaderBlobs.h (embedded shader table), GpuTimingMetal.m (macOS only)
+              LevelScene (level props, water, horizon ring), GroundMaps, Mesh, Camera, DebugDraw, GpuTimingMetal.m (macOS only)
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)
@@ -204,13 +212,14 @@ src/app/      Application (lifecycle, main loop), GameFlow (menu state machine),
               GameSettings (settings.cfg), BestLaps (best_laps.cfg: best lap per level and vehicle),
               Scenario (scenario mode), Paths (assets via SDL_GetBasePath, user
               dir via SDL_GetPrefPath), main
-shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time, embedded in the binary
+shaders/      scene.hlsl -> SPIR-V, MSL/metallib (macOS), DXIL (Windows hosts) at build time (quench_add_shaders),
+              embedded in the binary
 tests/        CTest physics, vehicle, app and audio tests (no window, no audio device); data/vehicles/ test-only
               definitions (rwd_test; suv_glb_test = SUV with a Blender body.glb + its source export), swept by
               vehicle_catalog_sweep together with assets/vehicles
 tools/        SimProbe (headless measurements), scenarios/ (scripts for --script), audio/ (asset rebuild, capture analysis),
               release/ (package_macos.sh: .app, zip, GitHub release; package_windows.ps1, package_linux.sh: CI
-              packages), ios/ (run_simulator.sh: boot, install and launch the iOS Simulator build), shaderc/ (build-time HLSL compiler), render/compare_captures.py (pixel diff statistics),
+              packages), ios/ (run_simulator.sh: boot, install and launch the iOS Simulator build), render/compare_captures.py (pixel diff statistics),
               texc/ (BC7 KTX2 encoder, standalone CMake project), textures/fetch_textures.py (terrain and building texture rebuild),
  cars/ (trace_blueprint.py + <id>.keypoints.json hand corrections, compare_silhouettes.py IoU / half-half images,
  ModelExport -> trailforge_model_export OBJ; vehiclec + BodySource: trailforge_vehiclec Blender glTF -> body.glb;

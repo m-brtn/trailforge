@@ -34,10 +34,10 @@ Trying Windows or Linux (please report what happens):
 
 - macOS: Xcode Command Line Tools with the Metal toolchain (`xcrun -sdk macosx -f metal` must find the compiler).
   Without it the build still succeeds: the shaders are compiled from the embedded MSL source at startup.
-  CMake ≥ 3.24 and Ninja: `brew install cmake ninja`.
-- Windows: Visual Studio 2022 or newer with the C++ x64 tools (MSVC), CMake ≥ 3.24 and Ninja (both ship with
+  CMake ≥ 3.28 and Ninja: `brew install cmake ninja`.
+- Windows: Visual Studio 2022 or newer with the C++ x64 tools (MSVC), CMake ≥ 3.28 and Ninja (both ship with
   Visual Studio); configure from an "x64 Native Tools" prompt.
-- Linux: gcc or clang with C++20, CMake ≥ 3.24, Ninja and the SDL3 build dependencies (on Ubuntu:
+- Linux: gcc or clang with C++20, CMake ≥ 3.28, Ninja and the SDL3 build dependencies (on Ubuntu:
   `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev
   libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev libasound2-dev
   libpulse-dev libudev-dev libdbus-1-dev`, the list used in `.github/workflows/ci.yml`).
@@ -49,13 +49,14 @@ Trying Windows or Linux (please report what happens):
 
 | Dependency | Version | Commit |
 |---|---|---|
+| Quench (the engine: `quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, the shader build; `cmake/Quench.cmake`) | 0.1.0 + `tools/check_games.sh` | `dc22eeb9` |
 | SDL | release-3.4.18 | `829a65d7` |
 | Jolt Physics | v5.6.0 | `e77f1755` |
 | Dear ImGui | v1.92.9b | `f1cc2ae1` |
 | GLM | 1.0.3 | `8d1fd52e` |
 | miniaudio | 0.11.25 | `9634bedb` |
-| SPIRV-Headers, SPIRV-Tools, glslang, SPIRV-Cross (shader compiler, host tool only) | Vulkan SDK tag vulkan-sdk-1.4.357.0 | `29981f65`, `9a49b088`, `168d452a`, `6c09849f` |
-| DXC (prebuilt, Windows hosts only) | v1.9.2609 | release zip `dxc_2026_09_29.zip` |
+| SPIRV-Headers, SPIRV-Tools, glslang, SPIRV-Cross (the engine's shader compiler, host tool only; pinned by the engine) | Vulkan SDK tag vulkan-sdk-1.4.357.0 | `29981f65`, `9a49b088`, `168d452a`, `6c09849f` |
+| DXC (prebuilt, Windows hosts only; pinned by the engine) | v1.9.2609 | release zip `dxc_2026_09_29.zip` |
 | bc7enc_rdo, stb_image (texture encoder `tools/texc`, only for `fetch_textures.py`) | master snapshots | `b9438627`, `003501f6` |
 
 ## Build and run
@@ -78,6 +79,9 @@ cmake --preset headless && cmake --build --preset headless && ctest --preset hea
 cmake --preset windows-release && cmake --build --preset windows-release && ctest --preset windows-release
 cmake --preset linux-release && cmake --build --preset linux-release && ctest --preset linux-release
 # (windows-debug / linux-debug likewise)
+
+# against a local checkout of the Quench engine instead of the pinned archive (any preset)
+cmake --preset release -DFETCHCONTENT_SOURCE_DIR_QUENCH=/path/to/engine
 ```
 
 `trailforge --paths` prints the asset lookup directories and the user data directory (`SDL_GetPrefPath`, e.g.
@@ -158,7 +162,7 @@ iOS 27.0 runtime; there was no iOS 26 runtime on the test Mac, so iOS 26 itself 
 the iOS SDKs (`xcrun -sdk iphonesimulator -f metal`), CMake and Ninja.
 
 ```sh
-# 1) host tools: trailforge_shaderc for macOS (cross builds cannot run a compiler built for iOS)
+# 1) host tools: the engine's quench_shaderc for macOS (cross builds cannot run a compiler built for iOS)
 cmake --preset host-tools && cmake --build --preset host-tools
 # 2) the app for the Simulator (arm64) -> build/ios-sim-release/TrailForge.app (ad-hoc signed)
 cmake --preset ios-sim-release && cmake --build --preset ios-sim-release
@@ -180,11 +184,12 @@ setups and best laps go to the app container (`simctl get_app_container <udid> c
 
 How the build works:
 
-- Presets `host-tools` (macOS, builds only `trailforge_shaderc`), `ios-sim-release` and `ios-device-release`
+- Presets `host-tools` (macOS, builds only the engine's `quench_shaderc`), `ios-sim-release` and `ios-device-release`
   (`CMAKE_SYSTEM_NAME=iOS`, `CMAKE_OSX_DEPLOYMENT_TARGET=26.0`, arm64, Ninja). Only the app is built for iOS: the
   tests, the probe, `trailforge_vehiclec` and the model exporter stay on macOS, and `TRAILFORGE_PACKAGED` is forced on
   (assets only from the bundle). `texc` / `modelc` are not needed: the assets in the repository are already converted.
-- Shaders: the host `trailforge_shaderc` (`TRAILFORGE_HOST_SHADERC`) translates SPIR-V to MSL with SPIRV-Cross's iOS
+- Shaders: the host `quench_shaderc` (`QUENCH_HOST_SHADERC`, `build/host-tools/_deps/quench-build/quench_shaderc`)
+  translates SPIR-V to MSL with SPIRV-Cross's iOS
   options (`--msl-platform ios`), and `xcrun -sdk iphonesimulator|iphoneos metal` compiles the metallibs for the
   deployment target.
 - `cmake/IosBundle.cmake`: `TrailForge.app` with `Info.plist` from `cmake/Info.ios.plist.in` (bundle id
@@ -236,7 +241,7 @@ scheme, `trailforge`, whose Run action uses the Release configuration (Debug Jol
 real iPhone or iPad yet.
 
 ```sh
-cmake --preset host-tools && cmake --build --preset host-tools   # once: macOS trailforge_shaderc
+cmake --preset host-tools && cmake --build --preset host-tools   # once: macOS quench_shaderc
 cmake --preset ios-xcode -DTRAILFORGE_IOS_TEAM=<team id>         # team optional, see below
 open build/ios-xcode/TrailForge.xcodeproj
 ```

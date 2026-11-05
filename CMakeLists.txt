@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28) # the Quench engine needs 3.28
 # macOS deployment target (binary minos and Info.plist LSMinimumSystemVersion). Without it the toolchain defaults to
 # the SDK version, newer than many Macs the app runs on. 14.0 matches the metallib target (MSL 3.0 needs 13+).
 # iOS presets set their own target (26.0).
@@ -10,6 +10,8 @@ project(TrailForge VERSION 0.32.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++20 modules: skip the dependency scan (CMake 3.28 policy CMP0155).
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TRAILFORGE_BUILD_APP "Build the windowed application (SDL3/SDL GPU/ImGui)" ON)
@@ -23,7 +25,8 @@ if(APPLE)
 endif()
 
 # iOS (presets ios-sim-release / ios-device-release, docs/building.md "iOS"): only the app is built; the tests, the
-# probe and the asset tools stay on the host, and the shaders are compiled by a host trailforge_shaderc.
+# probe and the asset tools stay on the host, and the shaders are compiled by a host quench_shaderc
+# (QUENCH_HOST_SHADERC).
 set(TRAILFORGE_IOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(TRAILFORGE_IOS ON)
@@ -40,11 +43,9 @@ include(cmake/Dependencies.cmake)
 # ------------------------------------------------------------------ simulation
 # Physics, vehicle, proving ground. Does not depend on SDL/rendering, runs headless.
 add_library(trailforge_sim STATIC
-    src/core/Json.cpp
     src/core/Ktx2.cpp
     src/core/ModelAsset.cpp
     src/core/TerrainTextureSet.cpp
-    src/physics/PhysicsWorld.cpp
     src/track/SurfaceProperties.cpp
     src/track/TestTrack.cpp
     src/track/MiniTrack.cpp
@@ -86,7 +87,8 @@ add_custom_command(
     VERBATIM)
 target_sources(trailforge_sim PRIVATE ${CMAKE_BINARY_DIR}/generated/vehicle_blueprints.cpp)
 target_include_directories(trailforge_sim PUBLIC src)
-target_link_libraries(trailforge_sim PUBLIC Jolt)
+# quench_physics brings quench_core and Jolt.
+target_link_libraries(trailforge_sim PUBLIC quench_physics)
 target_include_directories(trailforge_sim SYSTEM PRIVATE ${cgltf_SOURCE_DIR})
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(trailforge_sim PRIVATE -Wall -Wextra)
@@ -141,7 +143,6 @@ endif()
 
 # ------------------------------------------------------------------ application
 if(TRAILFORGE_BUILD_APP)
-    include(cmake/Shaders.cmake)
     include(cmake/AppIcon.cmake)
 
     add_executable(trailforge
@@ -166,10 +167,23 @@ if(TRAILFORGE_BUILD_APP)
         src/ui/DebugUI.cpp
         src/ui/MenuUI.cpp
         src/ui/MapUI.cpp
-        ${TRAILFORGE_SHADER_SOURCES}
         ${TRAILFORGE_ICON_SOURCES})
     # trailforge_audio brings trailforge_sim.
     target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static imgui glm_headers)
+    # shaders/scene.hlsl: every entry point is compiled at build time (SPIR-V; metallib, or MSL without the Metal
+    # toolchain, on Apple platforms; DXIL on Windows hosts) and embedded as quench::shaders::scene ("scene_shaders.h").
+    # Resource counts are given where the pipelines are created (src/render/Renderer.cpp).
+    quench_add_shaders(trailforge NAME scene SOURCE shaders/scene.hlsl ENTRIES
+        lit_vs:vertex lit_fs:fragment shadow_vs:vertex shadow_fs:fragment tree_vs:vertex tree_shadow_vs:vertex
+        fullscreen_vs:vertex sky_fs:fragment water_fs:fragment waterfall_fs:fragment grass_vs:vertex grass_fs:fragment
+        mark_vs:vertex mark_fs:fragment mark_mask_vs:vertex mark_mask_fs:fragment spray_vs:vertex spray_fs:fragment
+        line_vs:vertex line_fs:fragment bloom_down_fs:fragment bloom_up_fs:fragment tonemap_fs:fragment
+        fxaa_fs:fragment blur_down_fs:fragment blur_up_fs:fragment blur_composite_fs:fragment terrain_vs:vertex
+        terrain_shadow_vs:vertex terrain_fs:fragment model_vs:vertex model_fs:fragment model_shadow_vs:vertex
+        model_shadow_fs:fragment impostor_vs:vertex impostor_fs:fragment lindepth_fs:fragment gtao_fs:fragment
+        ao_blur_fs:fragment velocity_fs:fragment velocity_obj_vs:vertex velocity_obj_fs:fragment taa_fs:fragment
+        motion_blur_fs:fragment dof_blur_fs:fragment dof_fs:fragment lum_fs:fragment adapt_fs:fragment
+        shafts_fs:fragment)
     if(APPLE)
         target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
         target_link_libraries(trailforge PRIVATE "-framework Metal")
@@ -177,8 +191,7 @@ if(TRAILFORGE_BUILD_APP)
     if(TRAILFORGE_IOS)
         target_compile_definitions(trailforge PRIVATE TRAILFORGE_IOS=1)
     endif()
-    target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_SHADER_DEFINES} ${TRAILFORGE_ICON_DEFINES}
-                                                  TRAILFORGE_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(trailforge PRIVATE ${TRAILFORGE_ICON_DEFINES} TRAILFORGE_VERSION="${PROJECT_VERSION}")
     if(TRAILFORGE_PACKAGED)
         target_compile_definitions(trailforge PRIVATE TRAILFORGE_PACKAGED=1)
     else()

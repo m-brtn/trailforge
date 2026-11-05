@@ -1,14 +1,15 @@
 #include "core/ModelAsset.h"
 
-#include "core/Json.h"
-
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
+#include <quench/core/Json.h>
 
 #include <cstring>
 #include <memory>
 
 namespace tf {
+
+namespace json = quench::json;
 
 namespace {
 
@@ -48,9 +49,10 @@ bool ModelAsset::load(const std::string& path, bool withMeshes, std::string* err
     std::unique_ptr<cgltf_data, DataDeleter> data(raw);
     if (cgltf_load_buffers(&opts, raw, path.c_str()) != cgltf_result_success) return fail("cannot load buffers");
 
-    json::Value extras;
-    std::string err;
-    if (!raw->extras.data || !json::parse(raw->extras.data, extras, &err)) return fail("no model extras " + err);
+    if (!raw->extras.data) return fail("no model extras");
+    const quench::Result<json::Value> parsed = json::parse(raw->extras.data);
+    if (!parsed) return fail("no model extras " + parsed.error());
+    const json::Value& extras = *parsed;
     kind = extras["kind"].stringOr("");
     height = float(extras["height"].numberOr(0.0));
     radius = float(extras["radius"].numberOr(0.0));

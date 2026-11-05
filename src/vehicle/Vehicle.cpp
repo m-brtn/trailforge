@@ -1,6 +1,5 @@
 #include "vehicle/Vehicle.h"
 
-#include "physics/PhysicsWorld.h"
 #include "vehicle/VehicleBlueprint.h"
 #include "vehicle/VehicleShape.h"
 
@@ -9,6 +8,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <quench/physics/PhysicsWorld.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -174,7 +174,7 @@ const char* transferModeName(TransferMode m) {
     return "";
 }
 
-Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const VehicleConfig& config,
+Vehicle::Vehicle(quench::PhysicsWorld& world, const SurfaceTable& surfaces, const VehicleConfig& config,
                  JPH::RVec3Arg position, JPH::QuatArg rotation)
     : m_world(world), m_surfaces(surfaces), m_config(config) {
     using namespace JPH;
@@ -228,7 +228,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
         mp.mInertia = Mat44::sScale(Vec3::sReplicate(c.inertiaScale)) * mp.mInertia;
     mp.mInertia(3, 3) = 1.0f;
 
-    BodyCreationSettings bcs(bodyShape, position, rotation, EMotionType::Dynamic, Layers::Moving);
+    BodyCreationSettings bcs(bodyShape, position, rotation, EMotionType::Dynamic, quench::PhysicsLayers::kMoving);
     bcs.mOverrideMassProperties = EOverrideMassProperties::MassAndInertiaProvided;
     bcs.mMassPropertiesOverride = mp;
     bcs.mFriction = c.bodyFriction; // body friction (when grounding the underbody / rolling over)
@@ -334,7 +334,7 @@ Vehicle::Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const Vehicl
     }
 
     // Cylinder shape cast for the wheel (available in Jolt 5.6).
-    m_tester = new VehicleCollisionTesterCastCylinder(Layers::Moving, 0.1f);
+    m_tester = new VehicleCollisionTesterCastCylinder(quench::PhysicsLayers::kMoving, 0.1f);
     m_constraint->SetVehicleCollisionTester(m_tester);
     m_constraint->SetPostCollideCallback(
         [this](VehicleConstraint&, const PhysicsStepListenerContext& context) { updateSuspension(context.mDeltaTime); });

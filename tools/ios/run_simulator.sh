@@ -39,7 +39,7 @@ APP="$ROOT/build/ios-sim-release/TrailForge.app"
 
 if [[ $BUILD -eq 1 ]]; then
     cd "$ROOT"
-    if [[ ! -x build/host-tools/trailforge_shaderc ]]; then
+    if [[ ! -x build/host-tools/_deps/quench-build/quench_shaderc ]]; then
         cmake --preset host-tools
         cmake --build --preset host-tools
     fi

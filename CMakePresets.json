@@ -1,6 +1,6 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
   "configurePresets": [
     {
       "name": "base",
@@ -35,7 +35,7 @@
     },
     {
       "name": "host-tools",
-      "displayName": "macOS host tools for cross builds (trailforge_shaderc only)",
+      "displayName": "macOS host tools for cross builds (the engine's quench_shaderc only)",
       "inherits": "base",
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "TRAILFORGE_BUILD_TESTS": "OFF" }
@@ -50,7 +50,7 @@
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0",
         "TRAILFORGE_BUILD_TESTS": "OFF",
-        "TRAILFORGE_HOST_SHADERC": "${sourceDir}/build/host-tools/trailforge_shaderc"
+        "QUENCH_HOST_SHADERC": "${sourceDir}/build/host-tools/_deps/quench-build/quench_shaderc"
       }
     },
     {
@@ -119,7 +119,7 @@
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "headless", "configurePreset": "headless" },
-    { "name": "host-tools", "configurePreset": "host-tools", "targets": ["trailforge_shaderc"] },
+    { "name": "host-tools", "configurePreset": "host-tools", "targets": ["quench_shaderc"] },
     { "name": "ios-sim-release", "configurePreset": "ios-sim-release" },
     { "name": "ios-device-release", "configurePreset": "ios-device-release" },
     {

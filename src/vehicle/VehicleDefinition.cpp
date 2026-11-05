@@ -664,11 +664,12 @@ bool parseVehicleDefinition(const std::string& text, const std::string& source, 
     const std::size_t errorsBefore = errors.size();
     VehicleDefinition d;
     d.sourcePath = source;
-    std::string parseError;
-    if (!json::parse(text, d.document, &parseError)) {
-        errors.push_back(source + ": invalid JSON: " + parseError);
+    quench::Result<json::Value> parsed = json::parse(text);
+    if (!parsed) {
+        errors.push_back(source + ": invalid JSON: " + parsed.error());
         return false;
     }
+    d.document = std::move(*parsed);
     if (!parseVehicleConfig(d.document, source, d.config, errors)) return false;
     d.id = d.config.id;
     d.name = d.config.name;

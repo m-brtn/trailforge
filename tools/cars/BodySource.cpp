@@ -1,9 +1,8 @@
 #include "BodySource.h"
 
-#include "core/Json.h"
-
 #include <cgltf.h>
 #include <meshoptimizer.h>
+#include <quench/core/Json.h>
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +11,7 @@
 #include <set>
 
 namespace tf {
+namespace json = quench::json;
 namespace {
 
 struct DataDeleter {
@@ -19,9 +19,9 @@ struct DataDeleter {
 };
 
 json::Value extrasOf(const cgltf_extras& e) {
-    json::Value v;
-    if (e.data) json::parse(e.data, v);
-    return v;
+    if (!e.data) return {};
+    quench::Result<json::Value> parsed = json::parse(e.data);
+    return parsed ? std::move(*parsed) : json::Value{};
 }
 
 bool startsWith(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }

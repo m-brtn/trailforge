@@ -1,6 +1,5 @@
 #include "vehicle/VehicleBody.h"
 
-#include "core/Json.h"
 #include "vehicle/VehicleConfig.h"
 #include "vehicle/VehicleDefinition.h"
 #include "vehicle/VehicleSetup.h"
@@ -10,6 +9,7 @@
 
 #include <Jolt/Geometry/ConvexHullBuilder.h>
 #include <cgltf.h>
+#include <quench/core/Json.h>
 
 #include <algorithm>
 #include <climits>
@@ -52,9 +52,9 @@ const cgltf_accessor* attribute(const cgltf_primitive& p, cgltf_attribute_type t
 }
 
 json::Value extrasOf(const cgltf_extras& e) {
-    json::Value v;
-    if (e.data) json::parse(e.data, v);
-    return v;
+    if (!e.data) return {};
+    quench::Result<json::Value> parsed = json::parse(e.data);
+    return parsed ? std::move(*parsed) : json::Value{};
 }
 
 std::array<float, 3> vec3Of(const json::Value& v, std::array<float, 3> fallback) {

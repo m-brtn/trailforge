@@ -1,11 +1,12 @@
 #include "sim/DriftScore.h"
 
-#include "core/Json.h"
+#include <quench/core/Json.h>
 
 #include <algorithm>
 #include <cmath>
 
 namespace tf {
+namespace json = quench::json;
 namespace {
 
 constexpr float kRadToDeg = 57.2957795f;

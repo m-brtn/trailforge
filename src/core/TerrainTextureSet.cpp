@@ -1,11 +1,13 @@
 #include "core/TerrainTextureSet.h"
 
-#include "core/Json.h"
+#include <quench/core/Json.h>
 
 #include <fstream>
 #include <sstream>
 
 namespace tf {
+
+namespace json = quench::json;
 
 namespace {
 const char* const kLayerOrder[TerrainTextureSet::kLayers] = {"grass", "soil", "road", "rock", "sand", "snow"};
@@ -20,11 +22,12 @@ bool loadTerrainTextureSet(const std::string& dir, TerrainTextureSet& out, std::
     }
     std::stringstream ss;
     ss << in.rdbuf();
-    json::Value doc;
-    if (!json::parse(ss.str(), doc, &error)) {
-        error = path + ": " + error;
+    const quench::Result<json::Value> parsed = json::parse(ss.str());
+    if (!parsed) {
+        error = path + ": " + parsed.error();
         return false;
     }
+    const json::Value& doc = *parsed;
     out = TerrainTextureSet{};
     out.albedoSize = std::uint32_t(doc["albedoSize"].numberOr(0));
     out.nraSize = std::uint32_t(doc["nraSize"].numberOr(0));

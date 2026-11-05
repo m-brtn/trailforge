@@ -104,22 +104,23 @@ vehicle, the procedural SUV and the EV, and that the flare is still there at sun
 ### Shader pipeline
 
 `shaders/scene.hlsl` holds all 49 entry points (16 vertex, 33 fragment). Each entry's resources are declared inside
-`#if defined(TF_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage buffers
-in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
-fragment stage `space2` / `space3`. At build time (`cmake/Shaders.cmake`) every entry is compiled separately:
+`#if defined(QUENCH_ENTRY_<name>)` with the SDL GPU slot conventions: vertex stage textures / samplers / storage
+buffers in `space0` (`t`/`s` registers, storage buffers after the sampled textures) and uniform buffers in `space1`;
+fragment stage `space2` / `space3`. The shader build is the Quench engine's (`quench_add_shaders()` in its
+`cmake/QuenchShaders.cmake`, called in `CMakeLists.txt` with the entry list); every entry is compiled separately:
 
-- `trailforge_shaderc` (`tools/shaderc`, a host tool built from source): glslang HLSL front end → SPIR-V 1.0 for
-  Vulkan 1.0 → SPIRV-Tools legalization and validation → `.spv`; on macOS also SPIRV-Cross → MSL 3.0 with the
-  resources remapped to SDL GPU's Metal slots (`buffer(n)` uniforms, storage buffers after them, `texture(n)` /
-  `sampler(n)`, vertex buffers from `buffer(14)`). It checks that every resource is in the descriptor set of its
-  stage and prints the slot counts.
+- the engine's `quench_shaderc` (a host tool built from source; it came from TrailForge's own `trailforge_shaderc`):
+  glslang HLSL front end → SPIR-V 1.0 for Vulkan 1.0 → SPIRV-Tools legalization and validation → `.spv`; on macOS
+  also SPIRV-Cross → MSL 3.0 with the resources remapped to SDL GPU's Metal slots (`buffer(n)` uniforms, storage
+  buffers after them, `texture(n)` / `sampler(n)`, vertex buffers from `buffer(14)`). It checks that every resource
+  is in the descriptor set of its stage and records the slot counts.
 - macOS: `xcrun metal` + `metallib` → one `.metallib` per entry (falls back to embedding the MSL source when the
   Metal toolchain is missing).
 - Windows hosts: the pinned prebuilt DXC (`vs_6_0` / `ps_6_0`) → `.dxil`. DXC has no macOS release, so macOS and
   Linux builds carry no DXIL (SDL picks Vulkan / SPIR-V there).
-- `cmake/EmbedShaders.cmake` writes every blob into `generated/shaders/shader_blobs.cpp` (table in
-  `src/render/ShaderBlobs.h`). Nothing generated is committed; the toolchain is fetched as pinned archives with
-  SHA256 like the other dependencies.
+- The blobs and the slot counts are embedded as the table `quench::shaders::scene` (`scene_shaders.h`, generated in
+  `build/<preset>/quench_shaders/scene/`; the row type is the engine's `quench::ShaderBlob`). Nothing generated is
+  committed; the toolchain is fetched as pinned archives with SHA256 like the other dependencies.
 
 Why not SDL_shadercross: its HLSL input goes through DXC, which is not available on macOS arm64. glslang's HLSL
 front end is officially deprecated upstream (it still works, and CMake prints a deprecation warning while

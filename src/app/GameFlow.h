@@ -1,7 +1,8 @@
 #pragma once
 
 #include "app/GameSettings.h"
-#include "sim/FixedStepClock.h"
+
+#include <quench/core/FixedStepClock.h>
 
 #include <string>
 #include <vector>
@@ -84,7 +85,7 @@ public:
     // also when opened from the pause menu.
     bool simulationRuns() const { return m_screen != Screen::Paused && m_screen != Screen::Map; }
     // Physics ticks for this frame: 0 (accumulator untouched) unless the simulation runs.
-    int stepsForFrame(FixedStepClock& clock, double frameTime) const {
+    int stepsForFrame(quench::FixedStepClock& clock, double frameTime) const {
         return simulationRuns() ? clock.advance(frameTime) : 0;
     }
 

@@ -15,9 +15,11 @@
 
 #include <array>
 
-namespace tf {
-
+namespace quench {
 class PhysicsWorld;
+}
+
+namespace tf {
 
 inline constexpr int kWheelCount = 4;
 inline constexpr const char* kWheelNames[kWheelCount] = {"FL", "FR", "RL", "RR"};
@@ -141,7 +143,7 @@ class CompliantController;
 // (except when spawning at the start position).
 class Vehicle {
 public:
-    Vehicle(PhysicsWorld& world, const SurfaceTable& surfaces, const VehicleConfig& config,
+    Vehicle(quench::PhysicsWorld& world, const SurfaceTable& surfaces, const VehicleConfig& config,
             JPH::RVec3Arg position, JPH::QuatArg rotation);
     ~Vehicle();
     Vehicle(const Vehicle&) = delete;
@@ -222,7 +224,7 @@ private:
     void prePhysicsElectric(const DriverCommand& cmd, float dt);
     void updateTireThermal(float dt);
 
-    PhysicsWorld& m_world;
+    quench::PhysicsWorld& m_world;
     const SurfaceTable& m_surfaces;
     VehicleConfig m_config;
     VehicleTuning m_tireTuning; // m_config.tuning with the tire set applied to the tire fields

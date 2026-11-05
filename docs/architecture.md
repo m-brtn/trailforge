@@ -3,26 +3,28 @@
 Source layout, coordinate system and units, the main loop. All documentation: [index](README.md).
 
 ```
-src/physics/  PhysicsWorld — RAII wrapper over Jolt (allocator, factory, job system, layers)
+(engine)      from the Quench engine (cmake/Quench.cmake): quench::PhysicsWorld and JoltRuntime (RAII wrapper over
+              Jolt: allocator, factory, job system, layers), quench::FixedStepClock, quench::json (reader, writer;
+              used by the vehicle data, the setups, the levels and the audio manifest), the shader build
 src/track/    SurfaceProperties (materials and grip), TestTrack (procedural proving ground + MeshShape),
               Level (level.json bake: heights, surfaces, water, trees, rocks, POIs, buildings), BuildingKit
               (procedural buildings: render LODs + convex collision pieces), TerrainTiles (streamed
               HeightFieldShape tiles + per-tile trunk / rock colliders)
-src/core/     Json (reader, writer, merge; used by the vehicle data, the setups and the audio manifest), Ktx2 (BC7 KTX2
-              reader / writer), TerrainTextureSet (terrain.json, level skip per texture size)
+src/core/     Ktx2 (BC7 KTX2 reader / writer), TerrainTextureSet (terrain.json, level skip per texture size),
+              ModelAsset (converted glb models)
 src/vehicle/  VehicleConfig/VehicleTuning, Vehicle (constraint, controller, layouts, telemetry), WheelContact (per-tick contact samples),
               DrivingAids (ABS / traction control: per-wheel brake torque and a throttle factor),
               ElectricDrive (motor envelope, torque split, regen blend, battery; used by the electric controller in Vehicle.cpp),
               VehicleDefinition (vehicle.json loader and validation, kits), VehicleSetup (garage parameters, setup files),
               VehicleBlueprint (traced concept body for bodyShape "traced": distance fields, wheelhouses, collision hulls)
-src/sim/      Simulation (physics + track + vehicle, input on ticks), FixedStepClock, TireMarks (visual mark ribbons),
+src/sim/      Simulation (physics + track + vehicle, input on ticks), TireMarks (visual mark ribbons),
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
-              VehicleAudioFeed (per-tick frame and events), AudioManifest + Json, AudioSystem (miniaudio device / WAV capture)
+              VehicleAudioFeed (per-tick frame and events), AudioManifest, AudioSystem (miniaudio device / WAV capture)
 src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
               Scenery (backdrop terrain, pine meshes and instances), LevelScene (level props, water, horizon ring,
               tree instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
-              GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only), ShaderBlobs.h (embedded shader table)
+              GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only)
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,

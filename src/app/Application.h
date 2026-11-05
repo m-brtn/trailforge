@@ -12,7 +12,6 @@
 #include "render/DebugDraw.h"
 #include "render/Renderer.h"
 #include "render/VehicleModel.h"
-#include "sim/FixedStepClock.h"
 #include "sim/Simulation.h"
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
@@ -23,6 +22,7 @@
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
+#include <quench/core/FixedStepClock.h>
 
 #include <array>
 #include <deque>
@@ -216,7 +216,7 @@ private:
     const Level* m_attractStartLevel = nullptr;
     float m_menuBlur = 0.0f;          // eased blur of the 3D frame under the pause / settings menus
     float m_dofAmount = 0.0f;         // eased depth of field amount (menus, garage, optional while driving)
-    FixedStepClock m_clock;
+    quench::FixedStepClock m_clock;
     // Audio: the feed turns every physics tick into sound parameters and events; the system owns the device
     // (or the offline capture) and the mixer that runs on the audio thread.
     VehicleAudioFeed m_audioFeed;

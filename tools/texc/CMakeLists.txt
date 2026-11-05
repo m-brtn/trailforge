@@ -1,10 +1,11 @@
 # trailforge_texc: offline texture encoder for the terrain materials (JPEG / PNG -> BC7 KTX2 with mips).
 # Standalone project, built only by tools/textures/fetch_textures.py; the game build does not need it because the
 # encoded textures are stored in the repository (Git LFS, assets/textures/).
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28) # the Quench engine needs 3.28
 project(trailforge_texc LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -35,6 +36,10 @@ FetchContent_Declare(meshoptimizer
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR no-cmake)
 FetchContent_MakeAvailable(stb bc7enc cgltf meshoptimizer)
+# The Quench engine at the game's pin (../../cmake/Quench.cmake): quench_core for JSON in trailforge_modelc.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Quench.cmake)
+set(QUENCH_HEADLESS ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(quench)
 
 add_executable(trailforge_texc
     main.cpp
@@ -52,11 +57,10 @@ file(GLOB TF_MESHOPT_SOURCES ${meshoptimizer_SOURCE_DIR}/src/*.cpp)
 add_executable(trailforge_modelc
     modelc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/Ktx2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/core/Json.cpp
     ${TF_MESHOPT_SOURCES}
     ${bc7enc_SOURCE_DIR}/bc7enc.cpp
     ${bc7enc_SOURCE_DIR}/bc7decomp.cpp)
 target_include_directories(trailforge_modelc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_include_directories(trailforge_modelc SYSTEM PRIVATE ${stb_SOURCE_DIR} ${bc7enc_SOURCE_DIR} ${cgltf_SOURCE_DIR}
     ${meshoptimizer_SOURCE_DIR}/src)
-target_link_libraries(trailforge_modelc PRIVATE Threads::Threads)
+target_link_libraries(trailforge_modelc PRIVATE quench_core Threads::Threads)
