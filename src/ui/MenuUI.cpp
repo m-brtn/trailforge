@@ -5,6 +5,7 @@
 
 #include <SDL3/SDL_surface.h>
 #include <imgui.h>
+#include <quench/app/ImGuiRenderer.h>
 
 #include <algorithm>
 #include <array>
@@ -249,14 +250,10 @@ void faceGlyph(ImDrawList* dl, ImFont* font, ImVec2 c, float r, PadControl b, Pa
 
 MenuUI::~MenuUI() { release(); }
 
-void MenuUI::release() {
-    if (m_renderer && m_logo) m_renderer->releaseImage(m_logo);
-    m_logo = nullptr;
-}
+void MenuUI::release() { m_logo.reset(); }
 
 void MenuUI::load(Renderer& renderer, const std::vector<std::string>& fontDirs,
                   const std::vector<std::string>& imageDirs) {
-    m_renderer = &renderer;
     ImGuiIO& io = ImGui::GetIO();
     if (io.Fonts->Fonts.empty()) io.Fonts->AddFontDefault(); // the diagnostics keep ImGui's default font
     const std::string body = findFile(fontDirs, "Rajdhani-Medium.ttf");
@@ -304,7 +301,7 @@ void MenuUI::drawLogo(float cx, float cy, float width, float alpha) {
     const float h = width / m_logoAspect;
     const ImVec2 a(cx - width * 0.5f, cy - h * 0.5f), b(cx + width * 0.5f, cy + h * 0.5f);
     if (m_logo) {
-        dl->AddImage(ImTextureRef(ImTextureID(reinterpret_cast<std::intptr_t>(m_logo))), a, b,
+        dl->AddImage(ImTextureRef(ImTextureID(quench::app::imguiTexture(m_logo))), a, b,
                      ImVec2(m_logoUv[0], m_logoUv[1]), ImVec2(m_logoUv[2], m_logoUv[3]), col(ImVec4(1, 1, 1, 1), alpha));
         return;
     }

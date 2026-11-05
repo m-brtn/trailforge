@@ -5,13 +5,14 @@
 #include "app/GameSettings.h"
 #include "input/ControlLayout.h"
 
+#include <quench/gpu/Resources.h>
+
 #include <array>
 #include <string>
 #include <vector>
 
 struct ImDrawList;
 struct ImFont;
-struct SDL_GPUTexture;
 
 namespace tf {
 
@@ -102,7 +103,7 @@ public:
     // controller outline), measured with the real font.
     int controlsCallouts() const { return m_controlsCallouts; }
     int controlsOverlaps() const { return m_controlsOverlaps; }
-    bool logoLoaded() const { return m_logo != nullptr; }
+    bool logoLoaded() const { return bool(m_logo); }
 
 private:
     struct Row {
@@ -141,10 +142,9 @@ private:
                       float viewH, bool follow);
     void drawScrollMarks(float x0, float x1, float top, float bottom, float scroll, float maxScroll, float alpha);
 
-    Renderer* m_renderer = nullptr;
     ImFont* m_body = nullptr;    // Rajdhani Medium
     ImFont* m_heading = nullptr; // Rajdhani SemiBold
-    SDL_GPUTexture* m_logo = nullptr;
+    quench::gpu::Texture m_logo;
     float m_logoAspect = 3.0f;          // content width / height
     std::array<float, 4> m_logoUv{0, 0, 1, 1}; // content box in the image (transparent margins cut away)
     std::vector<Row> m_rows;

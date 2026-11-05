@@ -15,7 +15,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
-#include <imgui_impl_sdlgpu3.h>
 
 #include <algorithm>
 #include <cctype>
@@ -49,7 +48,7 @@ Window::Window(const char* title, int w, int h) {
 
 Window::~Window() { SDL_DestroyWindow(m_window); }
 
-ImGuiContextGuard::ImGuiContextGuard(SDL_Window* window, const Renderer& renderer) {
+ImGuiContextGuard::ImGuiContextGuard(SDL_Window* window, Renderer& renderer) : m_renderer(renderer) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -60,17 +59,13 @@ ImGuiContextGuard::ImGuiContextGuard(SDL_Window* window, const Renderer& rendere
         ImGui::GetStyle().ScaleAllSizes(scale);
         ImGui::GetStyle().FontScaleDpi = scale;
     }
-    ImGui_ImplSDL3_InitForSDLGPU(window);
-    ImGui_ImplSDLGPU3_InitInfo info{};
-    info.Device = renderer.device();
-    info.ColorTargetFormat = renderer.swapchainFormat();
-    info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
-    ImGui_ImplSDLGPU3_Init(&info);
+    ImGui_ImplSDL3_InitForOther(window);
+    renderer.initImGui();
 }
 
 ImGuiContextGuard::~ImGuiContextGuard() {
     ImGui_ImplSDL3_Shutdown();
-    ImGui_ImplSDLGPU3_Shutdown();
+    m_renderer.shutdownImGui();
     ImGui::DestroyContext();
 }
 
@@ -307,7 +302,7 @@ Application::~Application() {
     if (m_virtualPad) SDL_CloseJoystick(m_virtualPad);
     if (m_virtualPadId) SDL_DetachVirtualJoystick(m_virtualPadId);
     // Mesh GPU resources are released before the device is destroyed.
-    if (m_renderer) SDL_WaitForGPUIdle(m_renderer->device());
+    if (m_renderer) m_renderer->waitIdle();
     m_menu.release();
     if (m_mapJob.valid()) m_mapJob.wait();
     m_mapUI.release();
@@ -856,7 +851,7 @@ bool Application::selectLevel(const std::string& requested) {
 
 void Application::buildWorldContent() {
     const Uint64 t0 = SDL_GetPerformanceCounter();
-    SDL_WaitForGPUIdle(m_renderer->device());
+    m_renderer->waitIdle();
     for (GpuMesh* m : {&m_trackMesh, &m_sceneryMesh, &m_waterMesh, &m_waterfallMesh}) m->release();
     const Level* level = m_sim.level();
     m_contentLevel = level;
@@ -1303,7 +1298,6 @@ void Application::renderFrame(float frameTime) {
     }
 
     // ---- UI
-    ImGui_ImplSDLGPU3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     if (m_scenario && !m_perfActive) ImGui::GetIO().DeltaTime = float(m_frameDt); // menu animations on the scenario clock
     ImGui::NewFrame();
@@ -1563,7 +1557,7 @@ void Application::rebuildVehicleVisual() {
 void Application::buildDraws(const glm::mat4& bodyM, const std::array<glm::mat4, kWheelCount>& wheelM) {
     const VehicleConfig& vc = m_sim.vehicleConfig();
     if (!m_visualFit || !sameWheelFit(*m_visualFit, vc)) {
-        SDL_WaitForGPUIdle(m_renderer->device());
+        m_renderer->waitIdle();
         rebuildVehicleVisual();
     }
 

@@ -3,6 +3,7 @@
 #include "render/Renderer.h"
 
 #include <imgui.h>
+#include <quench/app/ImGuiRenderer.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -115,14 +116,10 @@ void dashedLine(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float width, floa
 
 MapUI::~MapUI() { release(); }
 
-void MapUI::release() {
-    if (m_renderer && m_texture) m_renderer->releaseImage(m_texture);
-    m_texture = nullptr;
-}
+void MapUI::release() { m_texture.reset(); }
 
 void MapUI::setMap(Renderer& renderer, MapData data) {
     release();
-    m_renderer = &renderer;
     m_data = std::move(data);
     if (m_data.raster.size > 0)
         m_texture = renderer.createImage(m_data.raster.rgba.data(), std::uint32_t(m_data.raster.size),
@@ -168,7 +165,7 @@ void MapUI::drawRaster(ImDrawList* dl, const MapView& v, float x0, float y0, flo
     const float ix0 = std::max(x0, a.x), iy0 = std::max(y0, a.y), ix1 = std::min(x1, b.x), iy1 = std::min(y1, b.y);
     if (ix0 >= ix1 || iy0 >= iy1) return;
     const MapPoint w0 = v.toWorld(ix0, iy0), w1 = v.toWorld(ix1, iy1);
-    dl->AddImage(ImTextureRef(ImTextureID(reinterpret_cast<std::intptr_t>(m_texture))), ImVec2(ix0, iy0), ImVec2(ix1, iy1),
+    dl->AddImage(ImTextureRef(ImTextureID(quench::app::imguiTexture(m_texture))), ImVec2(ix0, iy0), ImVec2(ix1, iy1),
                  ImVec2((w0.x - r.x0) / S, (w0.y - r.z0) / S), ImVec2((w1.x - r.x0) / S, (w1.y - r.z0) / S));
 }
 
@@ -470,7 +467,7 @@ void MapUI::drawMinimap(float cx, float cy, float radius, float rangeM, bool nor
             return ImVec2((w.x - r.x0) / S, (w.y - r.z0) / S);
         };
         constexpr int kSeg = 72;
-        dl->PushTexture(ImTextureRef(ImTextureID(reinterpret_cast<std::intptr_t>(m_texture))));
+        dl->PushTexture(ImTextureRef(ImTextureID(quench::app::imguiTexture(m_texture))));
         dl->PrimReserve(kSeg * 3, kSeg + 1);
         const ImDrawIdx base = ImDrawIdx(dl->_VtxCurrentIdx);
         dl->PrimWriteVtx(ImVec2(cx, cy), uv(cx, cy), IM_COL32_WHITE);

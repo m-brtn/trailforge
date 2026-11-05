@@ -202,9 +202,10 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), TireMarks 
               WaterForces (buoyancy, pressure drag, bow lift and tire drag on the vehicle from the water surface; no SDL)
 src/audio/    AudioMixer (sound model + mixer, no device), AudioMapping (pure mappings), VehicleAudioFeed (per-tick
               frame + events), AudioManifest; AudioSystem (app only: miniaudio device / offline WAV capture)
-src/render/   Renderer (SDL GPU passes, shader format choice), RenderSettings, TimeOfDay, StyleKit (shared vehicle
-              materials, panels, lights, accessories, wheels), VehicleModel (named parts per model), Scenery,
-              LevelScene (level props, water, horizon ring), GroundMaps, Mesh, Camera, DebugDraw, GpuTimingMetal.m (macOS only)
+src/render/   Renderer (render passes over the engine's quench::gpu, ImGui through quench::app::ImGuiRenderer),
+              RenderSettings, TimeOfDay, StyleKit (shared vehicle materials, panels, lights, accessories, wheels),
+              VehicleModel (named parts per model), Scenery, LevelScene (level props, water, horizon ring), GroundMaps,
+              Mesh, Camera, DebugDraw
 src/input/    Input (keyboard, mouse, gamepad -> DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL, in trailforge_flow), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics panel, audio panel), MenuUI (intro, menus)

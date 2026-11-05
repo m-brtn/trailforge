@@ -4,13 +4,15 @@
 #include "render/RenderSettings.h"
 #include "track/SurfaceProperties.h"
 
-#include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_video.h>
 #include <glm/glm.hpp>
+#include <quench/app/ImGuiRenderer.h>
+#include <quench/gpu/Device.h>
 
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -171,24 +173,21 @@ struct MarkUniforms {
 class GpuMesh {
 public:
     GpuMesh() = default;
-    GpuMesh(SDL_GPUDevice* device, SDL_GPUBuffer* buffer, std::uint32_t vertexCount, const glm::vec3& bmin,
-            const glm::vec3& bmax)
-        : m_device(device), m_buffer(buffer), m_count(vertexCount), m_min(bmin), m_max(bmax) {}
-    ~GpuMesh() { release(); }
+    GpuMesh(quench::gpu::Buffer buffer, std::uint32_t vertexCount, const glm::vec3& bmin, const glm::vec3& bmax)
+        : m_buffer(std::move(buffer)), m_count(vertexCount), m_min(bmin), m_max(bmax) {}
     GpuMesh(GpuMesh&& o) noexcept { *this = std::move(o); }
     GpuMesh& operator=(GpuMesh&& o) noexcept;
     GpuMesh(const GpuMesh&) = delete;
     GpuMesh& operator=(const GpuMesh&) = delete;
 
-    SDL_GPUBuffer* buffer() const { return m_buffer; }
+    const quench::gpu::Buffer& buffer() const { return m_buffer; }
     std::uint32_t vertexCount() const { return m_count; }
     const glm::vec3& boundsMin() const { return m_min; }
     const glm::vec3& boundsMax() const { return m_max; }
     void release();
 
 private:
-    SDL_GPUDevice* m_device = nullptr;
-    SDL_GPUBuffer* m_buffer = nullptr;
+    quench::gpu::Buffer m_buffer;
     std::uint32_t m_count = 0;
     glm::vec3 m_min{0.0f}, m_max{0.0f};
 };
@@ -276,7 +275,7 @@ struct RenderStats {
     bool trampleUpdated = false;              // grass trample mask re-rendered this frame
     double gpuMs = 0.0;                       // last completed frame (command buffer GPU time)
     double gpuMsAvg = 0.0;                    // exponential average
-    double acquireWaitMs = 0.0;               // CPU time blocked in SDL_WaitAndAcquireGPUSwapchainTexture
+    double acquireWaitMs = 0.0;               // CPU time blocked acquiring the swapchain texture
     int terrainChunks = 0;                    // level terrain chunks drawn (main view)
     std::uint64_t terrainTriangles = 0;
     std::array<int, 4> terrainLod{};          // chunks per LOD (step 1, 2, 4, 8 samples)
@@ -316,9 +315,10 @@ struct TerrainSource {
     bool asphalt = false;                     // the snow weight draws asphalt (level.json asphaltLayer)
 };
 
-// SDL GPU renderer (Metal). Passes: sun/moon shadow cascades -> grass trample mask -> puddle reflection -> HDR scene
-// (lit, instanced trees, tire marks, grass, sky with mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale)
-// -> FXAA -> menu blur (dual Kawase, only with FrameDesc::blur) -> ImGui.
+// Renderer on the engine's GPU layer (quench::gpu: SDL GPU, Metal on Apple platforms). Passes: sun/moon shadow
+// cascades -> grass trample mask -> puddle reflection -> HDR scene (lit, instanced trees, tire marks, grass, sky with
+// mountains, water, lines) -> bloom -> tonemap (+ render-scale upscale) -> FXAA -> menu blur (dual Kawase, only with
+// FrameDesc::blur) -> ImGui.
 class Renderer {
 public:
     explicit Renderer(SDL_Window* window, bool debugDevice);
@@ -326,9 +326,13 @@ public:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    SDL_GPUDevice* device() const { return m_device; }
-    SDL_GPUTextureFormat swapchainFormat() const;
-    const char* driverName() const { return m_driver; }
+    // ImGui draws through the engine's ImGuiRenderer: initImGui after the ImGui context and its platform backend are
+    // set up, shutdownImGui before the context is destroyed.
+    void initImGui();
+    void shutdownImGui();
+    // Waits until the GPU has finished all submitted work.
+    void waitIdle() { m_device.waitIdle(); }
+    const char* driverName() const { return m_device.caps().driver.c_str(); }
     const char* shaderFormatName() const { return m_shaderFormatName; }
     // GPU frame time is measured only on the Metal backend; elsewhere it is reported as unavailable.
     bool gpuTimingAvailable() const { return m_gpuTiming; }
@@ -353,10 +357,9 @@ public:
     // Draws a frame. Returns false if the swapchain texture is unavailable (window minimized).
     bool drawFrame(const FrameDesc& frame);
 
-    // RGBA8 image (sRGB-encoded, straight alpha) with a full mip chain, for ImGui (ImTextureID = SDL_GPUTexture*).
-    // The caller releases it with releaseImage before the renderer goes away.
-    SDL_GPUTexture* createImage(const void* rgba, std::uint32_t w, std::uint32_t h);
-    void releaseImage(SDL_GPUTexture* tex);
+    // RGBA8 image (sRGB-encoded, straight alpha) with a full mip chain, for ImGui (quench::app::imguiTexture).
+    // The caller releases it before the renderer goes away.
+    quench::gpu::Texture createImage(const void* rgba, std::uint32_t w, std::uint32_t h);
 
     void setVSync(bool on);
     bool vsync() const { return m_vsync; }
@@ -379,44 +382,42 @@ public:
 private:
     int supportedMsaa(int n) const; // highest supported sample count <= n
     struct Texture {
-        SDL_GPUTexture* tex = nullptr;
+        quench::gpu::Texture tex;
         std::uint32_t w = 0, h = 0;
     };
     struct GrassChunk {
         float x0, z0, minY, maxY;
     };
-    struct PendingFence {
-        SDL_GPUFence* fence;
-    };
 
-    SDL_GPUShader* createShader(const char* entry, SDL_GPUShaderStage stage, std::uint32_t uniformBuffers,
-                                std::uint32_t samplers = 0, std::uint32_t storageBuffers = 0);
-    SDL_GPUGraphicsPipeline* createPipeline(const char* vs, const char* fs, std::uint32_t vsUniforms,
-                                            std::uint32_t fsUniforms, std::uint32_t vsSamplers,
-                                            std::uint32_t fsSamplers, std::uint32_t vsStorage, int vertexLayout,
-                                            SDL_GPUTextureFormat color, SDL_GPUSampleCount samples, bool depthTest,
-                                            bool depthWrite, SDL_GPUCullMode cull, SDL_GPUFrontFace front, int blend,
-                                            SDL_GPUPrimitiveType prim = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-                                            int depthBias = 0);
+    // depthTarget: the pipeline is used in passes with the scene depth target even without depth test and write.
+    quench::gpu::GraphicsPipeline createPipeline(const char* vs, const char* fs, int vertexLayout,
+                                                 quench::gpu::TextureFormat color, int samples, bool depthTest,
+                                                 bool depthWrite, quench::gpu::CullMode cull,
+                                                 quench::gpu::FrontFace front, int blend,
+                                                 quench::gpu::PrimitiveType prim =
+                                                     quench::gpu::PrimitiveType::TriangleList,
+                                                 int depthBias = 0, bool depthTarget = false);
     void createStaticPipelines();
     void createScenePipelines();
     void releaseScenePipelines();
     void ensureTargets(std::uint32_t outW, std::uint32_t outH);
     void releaseTargets();
-    Texture makeTexture(std::uint32_t w, std::uint32_t h, SDL_GPUTextureFormat fmt, SDL_GPUTextureUsageFlags usage,
-                        SDL_GPUSampleCount samples = SDL_GPU_SAMPLECOUNT_1, std::uint32_t layers = 1,
-                        std::uint32_t levels = 1, SDL_GPUTextureType type = SDL_GPU_TEXTURETYPE_2D);
+    Texture makeTexture(std::uint32_t w, std::uint32_t h, quench::gpu::TextureFormat fmt,
+                        quench::gpu::TextureUsage usage, int samples = 1, std::uint32_t layers = 1,
+                        std::uint32_t levels = 1,
+                        quench::gpu::TextureType type = quench::gpu::TextureType::Texture2D);
     void releaseTexture(Texture& t);
-    void uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_t w, std::uint32_t h,
-                       std::uint32_t bytesPerPixel);
+    // Level 0, layer 0 (all slices of a 3D texture: depth > 1), tightly packed rows.
+    void uploadTexture(const Texture& t, const void* data, std::uint32_t w, std::uint32_t h,
+                       std::uint32_t bytesPerPixel, std::uint32_t depth = 1);
     void ensureLineCapacity(std::uint32_t bytes);
     // Copies the tire mark segments written since the last call into the GPU ring (inside an open copy pass).
-    std::uint32_t uploadMarks(SDL_GPUCopyPass* copy, const TireMarks& marks);
+    std::uint32_t uploadMarks(quench::gpu::CopyPass& copy, const TireMarks& marks);
     void ensureMarkCapacity(std::uint32_t segments);
     void clearTrample();
     void pollGpuTiming();
-    double gpuFenceMs(SDL_GPUFence* fence) const;
-    bool saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::uint32_t w, std::uint32_t h, const char* path);
+    bool saveCapture(quench::gpu::CommandBuffer& cmd, const quench::gpu::TextureRef& src, std::uint32_t w,
+                     std::uint32_t h, const char* path);
 
     void computeCascades(const FrameDesc& frame, float aspect, FrameUniforms& fu, glm::mat4* lightViewProj);
     void fillLighting(const FrameDesc& frame, FrameUniforms& fu, float& exposure, float& bloomMul) const;
@@ -436,14 +437,14 @@ private:
                        std::vector<TerrainChunk>& out) const;
 
     SDL_Window* m_window = nullptr;
-    SDL_GPUDevice* m_device = nullptr;
-    const char* m_driver = "";
+    // Declared before every GPU resource, so they are all released before the device is destroyed.
+    quench::gpu::Device m_device;
+    std::optional<quench::app::ImGuiRenderer> m_imgui;
     const char* m_shaderFormatName = "";
     bool m_gpuTiming = false;
-    SDL_GPUShaderFormat m_shaderFormat = SDL_GPU_SHADERFORMAT_INVALID;
-    SDL_GPUTextureFormat m_colorFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
-    static constexpr SDL_GPUTextureFormat kHdrFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
-    static constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+    quench::gpu::TextureFormat m_colorFormat = quench::gpu::TextureFormat::Invalid;
+    static constexpr quench::gpu::TextureFormat kHdrFormat = quench::gpu::TextureFormat::Rgba16Float;
+    static constexpr quench::gpu::TextureFormat kDepthFormat = quench::gpu::TextureFormat::Depth32Float;
     bool m_vsync = true;
     int m_maxMsaa = 1;
     bool m_msaa2 = false;
@@ -453,46 +454,46 @@ private:
     bool m_targetsDirty = true;
 
     // Static pipelines (single-sample targets).
-    SDL_GPUGraphicsPipeline* m_shadowPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_reflLitPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_reflSkyPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_bloomDownPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_bloomUpPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_tonemapPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_fxaaPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_treeShadowPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_reflTreePipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_tramplePipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_blurDownPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_blurUpPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_blurCompositePipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_terrainShadowPipe = nullptr;
+    quench::gpu::GraphicsPipeline m_shadowPipe;
+    quench::gpu::GraphicsPipeline m_reflLitPipe;
+    quench::gpu::GraphicsPipeline m_reflSkyPipe;
+    quench::gpu::GraphicsPipeline m_bloomDownPipe;
+    quench::gpu::GraphicsPipeline m_bloomUpPipe;
+    quench::gpu::GraphicsPipeline m_tonemapPipe;
+    quench::gpu::GraphicsPipeline m_fxaaPipe;
+    quench::gpu::GraphicsPipeline m_treeShadowPipe;
+    quench::gpu::GraphicsPipeline m_reflTreePipe;
+    quench::gpu::GraphicsPipeline m_tramplePipe;
+    quench::gpu::GraphicsPipeline m_blurDownPipe;
+    quench::gpu::GraphicsPipeline m_blurUpPipe;
+    quench::gpu::GraphicsPipeline m_blurCompositePipe;
+    quench::gpu::GraphicsPipeline m_terrainShadowPipe;
     // Post effects on the single-sample scene (static).
-    SDL_GPUGraphicsPipeline* m_linDepthPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_gtaoPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_aoBlurPipe = nullptr;      // multiplies onto the HDR scene
-    SDL_GPUGraphicsPipeline* m_velocityPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_velocityObjPipe = nullptr; // depth-tested against the scene depth
-    SDL_GPUGraphicsPipeline* m_taaPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_motionBlurPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_dofBlurPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_dofPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_lumPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_adaptPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_shaftsPipe = nullptr;
+    quench::gpu::GraphicsPipeline m_linDepthPipe;
+    quench::gpu::GraphicsPipeline m_gtaoPipe;
+    quench::gpu::GraphicsPipeline m_aoBlurPipe;      // multiplies onto the HDR scene
+    quench::gpu::GraphicsPipeline m_velocityPipe;
+    quench::gpu::GraphicsPipeline m_velocityObjPipe; // depth-tested against the scene depth
+    quench::gpu::GraphicsPipeline m_taaPipe;
+    quench::gpu::GraphicsPipeline m_motionBlurPipe;
+    quench::gpu::GraphicsPipeline m_dofBlurPipe;
+    quench::gpu::GraphicsPipeline m_dofPipe;
+    quench::gpu::GraphicsPipeline m_lumPipe;
+    quench::gpu::GraphicsPipeline m_adaptPipe;
+    quench::gpu::GraphicsPipeline m_shaftsPipe;
     // Scene pipelines (depend on the MSAA sample count).
     int m_sceneMsaa = 0;
-    SDL_GPUGraphicsPipeline* m_litPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_skyPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_grassPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_waterPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_waterfallPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_linePipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_lineOnTopPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_treePipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_markPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_sprayPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_terrainPipe = nullptr;
+    quench::gpu::GraphicsPipeline m_litPipe;
+    quench::gpu::GraphicsPipeline m_skyPipe;
+    quench::gpu::GraphicsPipeline m_grassPipe;
+    quench::gpu::GraphicsPipeline m_waterPipe;
+    quench::gpu::GraphicsPipeline m_waterfallPipe;
+    quench::gpu::GraphicsPipeline m_linePipe;
+    quench::gpu::GraphicsPipeline m_lineOnTopPipe;
+    quench::gpu::GraphicsPipeline m_treePipe;
+    quench::gpu::GraphicsPipeline m_markPipe;
+    quench::gpu::GraphicsPipeline m_sprayPipe;
+    quench::gpu::GraphicsPipeline m_terrainPipe;
 
     // Frame targets.
     std::uint32_t m_outW = 0, m_outH = 0;
@@ -506,9 +507,9 @@ private:
     Texture m_blurSrc;
     std::vector<Texture> m_blur;
     // Post effects (single-sample scene only).
-    static constexpr SDL_GPUTextureFormat kLinDepthFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
-    static constexpr SDL_GPUTextureFormat kVelocityFormat = SDL_GPU_TEXTUREFORMAT_R16G16_FLOAT;
-    static constexpr SDL_GPUTextureFormat kAoFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
+    static constexpr quench::gpu::TextureFormat kLinDepthFormat = quench::gpu::TextureFormat::R32Float;
+    static constexpr quench::gpu::TextureFormat kVelocityFormat = quench::gpu::TextureFormat::Rg16Float;
+    static constexpr quench::gpu::TextureFormat kAoFormat = quench::gpu::TextureFormat::Rgba16Float;
     Texture m_linDepth, m_velocity, m_ao, m_sceneCopy;
     std::array<Texture, 2> m_taa; // history ping-pong
     std::array<Texture, 2> m_fx;  // motion blur / DOF outputs
@@ -517,7 +518,7 @@ private:
     std::array<Texture, 2> m_adapt; // 1 x 1 adapted log luminance, ping-pong
     Texture m_lut;                // 32^3 colour grade
     Texture m_farDepth;           // 1 x 1 linear depth "far" for passes without a depth buffer
-    SDL_GPUSampler* m_pointSampler = nullptr;
+    quench::gpu::Sampler m_pointSampler;
     int m_taaIndex = 0, m_adaptIndex = 0;
     bool m_historyValid = false, m_adaptValid = false;
     std::uint32_t m_frameIndex = 0;
@@ -529,14 +530,14 @@ private:
     std::vector<std::pair<const GpuMesh*, glm::mat4>> m_curModels;
     int m_benchPass = -1, m_benchRepeat = 1;
     int m_benchTerrain = 1; // post_bench terrain N: main-pass terrain draws
-    SDL_GPUTransferBuffer* m_adaptReadback = nullptr;
+    quench::gpu::TransferBuffer m_adaptReadback;
     void buildGradeLut();
 
     // Static textures and samplers.
     Texture m_noise, m_mask, m_height;
-    SDL_GPUSampler* m_cmpSampler = nullptr;
-    SDL_GPUSampler* m_repeatSampler = nullptr;
-    SDL_GPUSampler* m_clampSampler = nullptr;
+    quench::gpu::Sampler m_cmpSampler;
+    quench::gpu::Sampler m_repeatSampler;
+    quench::gpu::Sampler m_clampSampler;
     glm::vec4 m_groundRect{0.0f};
     float m_waterLevel = 0.0f;
 
@@ -562,9 +563,9 @@ private:
     std::vector<TerrainChunk> m_farShadowChunks;
     // Vehicle environment probe: a small HDR cube around the vehicle (without it), a few faces per frame.
     Texture m_envCube, m_envDepth, m_envDummy;
-    SDL_GPUSampler* m_envSampler = nullptr;
-    SDL_GPUGraphicsPipeline* m_envTerrainPipe = nullptr;
-    SDL_GPUGraphicsPipeline* m_envModelPipe = nullptr;
+    quench::gpu::Sampler m_envSampler;
+    quench::gpu::GraphicsPipeline m_envTerrainPipe;
+    quench::gpu::GraphicsPipeline m_envModelPipe;
     bool m_envValid = false;
     int m_envFace = 0;
     glm::vec3 m_envCenter{0.0f};
@@ -572,7 +573,7 @@ private:
     // Terrain material textures (BC7 arrays, one layer per material) or 1 x 1 placeholders.
     void updateTerrainTextures();
     Texture m_terrainAlbedo, m_terrainNra;
-    SDL_GPUSampler* m_terrainSampler = nullptr;
+    quench::gpu::Sampler m_terrainSampler;
     std::string m_terrainTexDir;
     int m_terrainTexWanted = -1; // size the arrays were loaded for (-1: not tried)
     TerrainTextureUniforms m_terrainTexUniforms{};
@@ -585,8 +586,8 @@ private:
     std::vector<GrassBucket> m_grassBuckets;
     std::vector<GrassChunk> m_grassChunks;
     std::vector<glm::vec4> m_grassScratch;
-    SDL_GPUBuffer* m_grassBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_grassTransfer = nullptr;
+    quench::gpu::Buffer m_grassBuffer;
+    quench::gpu::TransferBuffer m_grassTransfer;
     static constexpr std::uint32_t kMaxGrassChunks = 8192;
 
     // Trees (static instance list; the visible subsets are uploaded every frame).
@@ -595,15 +596,15 @@ private:
     std::vector<TreeInstance> m_treeScratch;
     std::array<std::vector<TreeInstance>, 4> m_treeLod;
     static constexpr float kTreeFadeBand = 0.12f; // share of a LOD boundary distance over which trees cross-fade
-    SDL_GPUBuffer* m_treeBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_treeTransfer = nullptr;
+    quench::gpu::Buffer m_treeBuffer;
+    quench::gpu::TransferBuffer m_treeTransfer;
     std::uint32_t m_treeCapacity = 0; // instances
 
     // Level models. Instances are sorted into square buckets for culling; every frame the visible ones are sorted by
     // (model, LOD) into m_modelScratch (main view, then the shadow cascades) and drawn per material.
     struct GpuModelLod {
-        SDL_GPUBuffer* vertices = nullptr;
-        SDL_GPUBuffer* indices = nullptr;
+        quench::gpu::Buffer vertices;
+        quench::gpu::Buffer indices;
         struct Primitive {
             std::uint32_t firstIndex, indexCount;
             int material;
@@ -664,29 +665,29 @@ private:
     std::vector<ModelDraw> m_modelDraws;
     std::array<std::vector<ModelDraw>, 4> m_modelShadowDraws;
     std::vector<ModelDraw> m_modelEnvDraws;
-    SDL_GPUBuffer* m_modelBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_modelTransfer = nullptr;
+    quench::gpu::Buffer m_modelBuffer;
+    quench::gpu::TransferBuffer m_modelTransfer;
     std::uint32_t m_modelCapacity = 0; // instances
-    SDL_GPUGraphicsPipeline* m_modelShadowPipe = nullptr; // static
-    SDL_GPUGraphicsPipeline* m_modelPipe = nullptr;       // scene: opaque, back faces culled
-    SDL_GPUGraphicsPipeline* m_modelFoliagePipe = nullptr; // scene: alpha tested, two-sided, alpha to coverage
-    SDL_GPUGraphicsPipeline* m_impostorPipe = nullptr;    // scene
+    quench::gpu::GraphicsPipeline m_modelShadowPipe;  // static
+    quench::gpu::GraphicsPipeline m_modelPipe;        // scene: opaque, back faces culled
+    quench::gpu::GraphicsPipeline m_modelFoliagePipe; // scene: alpha tested, two-sided, alpha to coverage
+    quench::gpu::GraphicsPipeline m_impostorPipe;     // scene
     bool m_modelA2C = false;
 
     // Wheel spray: all live particles are uploaded every frame (at most kMaxSpray).
     static constexpr std::uint32_t kMaxSpray = 8192;
-    SDL_GPUBuffer* m_sprayBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_sprayTransfer = nullptr;
+    quench::gpu::Buffer m_sprayBuffer;
+    quench::gpu::TransferBuffer m_sprayTransfer;
 
     // Tire marks: GPU copy of the simulation's segment ring (same capacity and indices).
-    SDL_GPUBuffer* m_markBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_markTransfer = nullptr;
+    quench::gpu::Buffer m_markBuffer;
+    quench::gpu::TransferBuffer m_markTransfer;
     std::uint32_t m_markCapacity = 0; // segments
     std::uint64_t m_markWritten = 0;
     std::uint64_t m_markGeneration = ~0ull;
     // Grass trample mask over the ground rect (R: flattened, G: torn), rendered from the mark segments.
     static constexpr float kTrampleTexel = 0.1f; // m
-    static constexpr SDL_GPUTextureFormat kTrampleFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+    static constexpr quench::gpu::TextureFormat kTrampleFormat = quench::gpu::TextureFormat::Rg8Unorm;
     Texture m_trample;
     glm::vec4 m_trampleRect{0.0f};
     bool m_trampleWindowed = false; // the mask is a window that follows the camera (large ground maps)
@@ -697,11 +698,11 @@ private:
     bool m_trampleEmpty = true;
 
     // Debug lines.
-    SDL_GPUBuffer* m_lineBuffer = nullptr;
-    SDL_GPUTransferBuffer* m_lineTransfer = nullptr;
+    quench::gpu::Buffer m_lineBuffer;
+    quench::gpu::TransferBuffer m_lineTransfer;
     std::uint32_t m_lineCapacity = 0;
 
-    std::deque<PendingFence> m_fences;
+    std::deque<quench::gpu::Fence> m_fences;
     RenderStats m_stats;
 };
 

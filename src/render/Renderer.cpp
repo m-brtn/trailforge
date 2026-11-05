@@ -9,11 +9,11 @@
 #include "sim/BodyMud.h"
 #include "sim/WheelSpray.h"
 
-#include <SDL3/SDL.h>
+#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_surface.h>
+#include <SDL3/SDL_timer.h>
 #include <imgui.h>
-#include <imgui_impl_sdlgpu3.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -24,18 +24,37 @@
 #include <cstring>
 #include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
-
-#if defined(__APPLE__)
-extern "C" double tf_metal_fence_gpu_ms(const void* fence);
-#endif
 
 namespace tf {
 namespace {
 
-[[noreturn]] void fail(const std::string& what) {
-    throw std::runtime_error(what + ": " + SDL_GetError());
+namespace gpu = quench::gpu;
+
+template <class T>
+T take(quench::Result<T> result, const std::string& what) {
+    if (!result) throw std::runtime_error(what + ": " + result.error());
+    return std::move(*result);
+}
+
+gpu::CommandBuffer acquireCommands(gpu::Device& device) {
+    gpu::CommandBuffer cmd = device.acquireCommandBuffer();
+    if (!cmd) throw std::runtime_error("no GPU command buffer");
+    return cmd;
+}
+
+constexpr quench::ShaderStage kVertex = quench::ShaderStage::Vertex;
+constexpr quench::ShaderStage kFragment = quench::ShaderStage::Fragment;
+
+void bindVertexStorage(gpu::RenderPass& pass, const gpu::Buffer& buffer) {
+    const gpu::BufferRef ref = buffer;
+    pass.bindStorageBuffers(kVertex, 0, {&ref, 1});
+}
+
+void submit(gpu::CommandBuffer& cmd) {
+    if (const quench::Result<void> r = cmd.submit(); !r) SDL_Log("TrailForge: %s", r.error().c_str());
 }
 
 enum VertexLayout { kLayoutLit = 0, kLayoutLine = 1, kLayoutNone = 2, kLayoutModel = 3 };
@@ -72,9 +91,7 @@ constexpr float kAutoExposureKey = 0.18f;
 constexpr float kAutoExposureStrength = 0.6f;
 constexpr float kAutoExposureRange = 1.5f;
 
-SDL_GPUSampleCount sampleCount(int n) {
-    return n >= 4 ? SDL_GPU_SAMPLECOUNT_4 : n == 2 ? SDL_GPU_SAMPLECOUNT_2 : SDL_GPU_SAMPLECOUNT_1;
-}
+int sampleCount(int n) { return n >= 4 ? 4 : n == 2 ? 2 : 1; }
 
 struct Frustum {
     glm::vec4 planes[6];
@@ -117,157 +134,120 @@ void drawSphere(const DrawItem& d, glm::vec3& center, float& radius) {
 
 GpuMesh& GpuMesh::operator=(GpuMesh&& o) noexcept {
     if (this != &o) {
-        release();
-        m_device = o.m_device;
-        m_buffer = o.m_buffer;
-        m_count = o.m_count;
+        m_buffer = std::move(o.m_buffer);
+        m_count = std::exchange(o.m_count, 0);
         m_min = o.m_min;
         m_max = o.m_max;
-        o.m_device = nullptr;
-        o.m_buffer = nullptr;
-        o.m_count = 0;
     }
     return *this;
 }
 
 void GpuMesh::release() {
-    if (m_device && m_buffer) SDL_ReleaseGPUBuffer(m_device, m_buffer);
-    m_buffer = nullptr;
+    m_buffer.reset();
     m_count = 0;
 }
 
 // ---------------------------------------------------------------- setup
 
-Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
-    // Offer every format that was compiled into this build (shaders/scene.hlsl -> SPIR-V everywhere, metallib or MSL
-    // on macOS, DXIL on Windows). SDL tries Metal, then D3D12, then Vulkan; SDL_GPU_DRIVER overrides the choice.
-    const quench::ShaderBlob* probe = quench::shaders::scene.find("lit_vs");
-    if (!probe) throw std::runtime_error("no embedded shaders");
-    SDL_GPUShaderFormat formats = 0;
-    if (probe->spirv.data) formats |= SDL_GPU_SHADERFORMAT_SPIRV;
-    if (probe->msl.data) formats |= SDL_GPU_SHADERFORMAT_MSL;
-    if (probe->metallib.data) formats |= SDL_GPU_SHADERFORMAT_METALLIB;
-    if (probe->dxil.data) formats |= SDL_GPU_SHADERFORMAT_DXIL;
-    m_device = SDL_CreateGPUDevice(formats, debugDevice, nullptr);
-    if (!m_device) fail("SDL_CreateGPUDevice");
-    m_driver = SDL_GetGPUDeviceDriver(m_device);
+// The engine offers every shader format its shader build embeds (shaders/scene.hlsl -> SPIR-V everywhere, metallib or
+// MSL on macOS, DXIL on Windows). SDL tries Metal, then D3D12, then Vulkan; its driver environment variable overrides
+// the choice.
+Renderer::Renderer(SDL_Window* window, bool debugDevice)
+    : m_window(window), m_device(take(gpu::Device::create({.debug = debugDevice}), "GPU device")) {
+    if (!quench::shaders::scene.find("lit_vs")) throw std::runtime_error("no embedded shaders");
+    if (const quench::Result<void> r = m_device.claimWindow(m_window, gpu::PresentMode::Vsync); !r)
+        throw std::runtime_error("claim window: " + r.error());
+    m_colorFormat = m_device.swapchainFormat(m_window);
 
-    if (!SDL_ClaimWindowForGPUDevice(m_device, m_window)) {
-        SDL_DestroyGPUDevice(m_device);
-        fail("SDL_ClaimWindowForGPUDevice");
+    const gpu::Caps& caps = m_device.caps();
+    switch (caps.shaderFormat) {
+    case gpu::ShaderFormat::Metallib: m_shaderFormatName = "metallib (precompiled)"; break;
+    case gpu::ShaderFormat::Msl: m_shaderFormatName = "MSL source (runtime compile)"; break;
+    case gpu::ShaderFormat::Dxil: m_shaderFormatName = "DXIL"; break;
+    case gpu::ShaderFormat::Spirv: m_shaderFormatName = "SPIR-V"; break;
     }
-    SDL_SetGPUSwapchainParameters(m_device, m_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC);
-    m_colorFormat = swapchainFormat();
+    m_gpuTiming = caps.gpuTiming;
 
-    const SDL_GPUShaderFormat supported = SDL_GetGPUShaderFormats(m_device) & formats;
-    if (supported & SDL_GPU_SHADERFORMAT_METALLIB) {
-        m_shaderFormat = SDL_GPU_SHADERFORMAT_METALLIB;
-        m_shaderFormatName = "metallib (precompiled)";
-    } else if (supported & SDL_GPU_SHADERFORMAT_MSL) {
-        m_shaderFormat = SDL_GPU_SHADERFORMAT_MSL;
-        m_shaderFormatName = "MSL source (runtime compile)";
-    } else if (supported & SDL_GPU_SHADERFORMAT_DXIL) {
-        m_shaderFormat = SDL_GPU_SHADERFORMAT_DXIL;
-        m_shaderFormatName = "DXIL";
-    } else if (supported & SDL_GPU_SHADERFORMAT_SPIRV) {
-        m_shaderFormat = SDL_GPU_SHADERFORMAT_SPIRV;
-        m_shaderFormatName = "SPIR-V";
-    } else {
-        fail("No supported shader format");
-    }
-#if defined(__APPLE__)
-    m_gpuTiming = std::strcmp(m_driver, "metal") == 0;
-#endif
-
-    if (!SDL_GPUTextureSupportsFormat(m_device, kDepthFormat, SDL_GPU_TEXTURETYPE_2D_ARRAY,
-                                      SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER))
-        fail("D32 depth textures are required");
+    if (!m_device.supportsFormat(kDepthFormat, gpu::TextureType::Texture2DArray,
+                                 gpu::TextureUsage::DepthStencilTarget | gpu::TextureUsage::Sampled))
+        throw std::runtime_error("D32 depth textures are required");
     // Sample counts are not a ladder: Mesa lavapipe, for example, supports 1x and 4x but not 2x.
     m_maxMsaa = 1;
     for (int n : {2, 4}) {
-        const bool ok = SDL_GPUTextureSupportsSampleCount(m_device, kHdrFormat, sampleCount(n)) &&
-                        SDL_GPUTextureSupportsSampleCount(m_device, kDepthFormat, sampleCount(n));
+        const bool ok = m_device.supportsSampleCount(kHdrFormat, std::uint32_t(n)) &&
+                        m_device.supportsSampleCount(kDepthFormat, std::uint32_t(n));
         m_msaa2 = m_msaa2 || (ok && n == 2);
         if (ok) m_maxMsaa = n;
     }
     // SDL's Vulkan backend does not enable the depthBiasClamp device feature, so the clamp must stay 0 there.
-    m_shadowBiasClamp = std::strcmp(m_driver, "vulkan") == 0 ? 0.0f : 0.01f;
+    m_shadowBiasClamp = caps.depthBiasClamp ? 0.01f : 0.0f;
 
-    // Samplers.
+    // Samplers. Level 0 only (maxLod 0) where no mip level is set.
     {
-        SDL_GPUSamplerCreateInfo si{};
-        si.min_filter = SDL_GPU_FILTER_LINEAR;
-        si.mag_filter = SDL_GPU_FILTER_LINEAR;
-        si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-        si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        si.enable_compare = true;
-        si.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-        m_cmpSampler = SDL_CreateGPUSampler(m_device, &si);
+        gpu::SamplerDesc si;
+        si.minFilter = si.magFilter = gpu::Filter::Linear;
+        si.mipmapMode = gpu::MipmapMode::Nearest;
+        si.addressU = si.addressV = si.addressW = gpu::AddressMode::ClampToEdge;
+        si.compare = true;
+        si.compareOp = gpu::CompareOp::LessOrEqual;
+        si.maxLod = 0.0f;
+        m_cmpSampler = take(m_device.createSampler(si), "samplers");
 
-        si.enable_compare = false;
-        m_clampSampler = SDL_CreateGPUSampler(m_device, &si);
+        si.compare = false;
+        m_clampSampler = take(m_device.createSampler(si), "samplers");
 
-        si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
-        si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
-        si.enable_anisotropy = true;
-        si.max_anisotropy = 8.0f;
-        si.max_lod = 16.0f;
-        m_repeatSampler = SDL_CreateGPUSampler(m_device, &si);
-        m_terrainSampler = SDL_CreateGPUSampler(m_device, &si);
+        si.mipmapMode = gpu::MipmapMode::Linear;
+        si.addressU = si.addressV = si.addressW = gpu::AddressMode::Repeat;
+        si.maxAnisotropy = 8.0f;
+        si.maxLod = 16.0f;
+        m_repeatSampler = take(m_device.createSampler(si), "samplers");
+        m_terrainSampler = take(m_device.createSampler(si), "samplers");
 
-        SDL_GPUSamplerCreateInfo pi{};
-        pi.min_filter = pi.mag_filter = SDL_GPU_FILTER_NEAREST;
-        pi.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-        pi.address_mode_u = pi.address_mode_v = pi.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        m_pointSampler = SDL_CreateGPUSampler(m_device, &pi);
-        SDL_GPUSamplerCreateInfo ei{};
-        ei.min_filter = ei.mag_filter = SDL_GPU_FILTER_LINEAR;
-        ei.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR;
-        ei.address_mode_u = ei.address_mode_v = ei.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        ei.max_lod = 16.0f;
-        m_envSampler = SDL_CreateGPUSampler(m_device, &ei);
-        if (!m_cmpSampler || !m_clampSampler || !m_repeatSampler || !m_terrainSampler || !m_pointSampler || !m_envSampler)
-            fail("samplers");
+        gpu::SamplerDesc pi;
+        pi.minFilter = pi.magFilter = gpu::Filter::Nearest;
+        pi.mipmapMode = gpu::MipmapMode::Nearest;
+        pi.addressU = pi.addressV = pi.addressW = gpu::AddressMode::ClampToEdge;
+        pi.maxLod = 0.0f;
+        m_pointSampler = take(m_device.createSampler(pi), "samplers");
+        gpu::SamplerDesc ei;
+        ei.minFilter = ei.magFilter = gpu::Filter::Linear;
+        ei.mipmapMode = gpu::MipmapMode::Linear;
+        ei.addressU = ei.addressV = ei.addressW = gpu::AddressMode::ClampToEdge;
+        ei.maxLod = 16.0f;
+        m_envSampler = take(m_device.createSampler(ei), "samplers");
     }
 
     // Grass chunk storage buffer.
     {
-        SDL_GPUBufferCreateInfo bi{};
-        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        bi.size = kMaxGrassChunks * sizeof(glm::vec4);
-        m_grassBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-        SDL_GPUTransferBufferCreateInfo ti{};
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = bi.size;
-        m_grassTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-        if (!m_grassBuffer || !m_grassTransfer) fail("grass buffers");
+        const std::uint32_t size = kMaxGrassChunks * sizeof(glm::vec4);
+        m_grassBuffer = take(m_device.createBuffer({gpu::BufferUsage::GraphicsStorageRead, size}), "grass buffers");
+        m_grassTransfer = take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, size}), "grass buffers");
     }
 
     // 1x1 placeholders until setGround() is called.
     {
         const std::uint8_t px[4] = {128, 128, 128, 255};
         const float h = 0.0f;
-        m_noise = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        m_mask = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        m_height = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        uploadTexture(m_noise.tex, px, 1, 1, 4);
+        m_noise = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled);
+        m_mask = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled);
+        m_height = makeTexture(1, 1, gpu::TextureFormat::R32Float, gpu::TextureUsage::Sampled);
+        uploadTexture(m_noise, px, 1, 1, 4);
         const std::uint8_t noWheat[4] = {128, 128, 128, 0};
-        uploadTexture(m_mask.tex, noWheat, 1, 1, 4);
-        uploadTexture(m_height.tex, &h, 1, 1, 4);
-        m_trample = makeTexture(1, 1, kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+        uploadTexture(m_mask, noWheat, 1, 1, 4);
+        uploadTexture(m_height, &h, 1, 1, 4);
+        m_trample = makeTexture(1, 1, kTrampleFormat, gpu::TextureUsage::Sampled | gpu::TextureUsage::ColorTarget);
         clearTrample();
-        m_terrainAlbedo = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
-                                      SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
-        m_terrainNra = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
-                                   SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
-        uploadTexture(m_terrainAlbedo.tex, px, 1, 1, 4);
-        uploadTexture(m_terrainNra.tex, px, 1, 1, 4);
+        m_terrainAlbedo = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled, 1, 1, 1,
+                                      gpu::TextureType::Texture2DArray);
+        m_terrainNra = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled, 1, 1, 1,
+                                   gpu::TextureType::Texture2DArray);
+        uploadTexture(m_terrainAlbedo, px, 1, 1, 4);
+        uploadTexture(m_terrainNra, px, 1, 1, 4);
         const float far = 1e9f;
-        m_farDepth = makeTexture(1, 1, kLinDepthFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        uploadTexture(m_farDepth.tex, &far, 1, 1, 4);
+        m_farDepth = makeTexture(1, 1, kLinDepthFormat, gpu::TextureUsage::Sampled);
+        uploadTexture(m_farDepth, &far, 1, 1, 4);
         // Bound in the vehicle probe's slot while the probe is off or being rendered (never sampled then).
-        m_envDummy = makeTexture(1, 1, kHdrFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, 6, 1,
-                                 SDL_GPU_TEXTURETYPE_CUBE);
+        m_envDummy = makeTexture(1, 1, kHdrFormat, gpu::TextureUsage::Sampled, 1, 6, 1, gpu::TextureType::Cube);
     }
     buildGradeLut();
 
@@ -277,62 +257,24 @@ Renderer::Renderer(SDL_Window* window, bool debugDevice) : m_window(window) {
     createScenePipelines();
 }
 
-Renderer::~Renderer() {
-    if (!m_device) return;
-    SDL_WaitForGPUIdle(m_device);
-    for (PendingFence& f : m_fences) SDL_ReleaseGPUFence(m_device, f.fence);
-    m_fences.clear();
-    releaseTargets();
-    releaseScenePipelines();
-    for (SDL_GPUGraphicsPipeline* p : {m_shadowPipe, m_reflLitPipe, m_reflSkyPipe, m_bloomDownPipe, m_bloomUpPipe,
-                                       m_tonemapPipe, m_fxaaPipe, m_treeShadowPipe, m_reflTreePipe, m_tramplePipe,
-                                       m_blurDownPipe, m_blurUpPipe, m_blurCompositePipe, m_terrainShadowPipe,
-                                       m_modelShadowPipe, m_linDepthPipe, m_gtaoPipe, m_aoBlurPipe, m_velocityPipe,
-                                       m_velocityObjPipe, m_taaPipe, m_motionBlurPipe, m_dofBlurPipe, m_dofPipe,
-                                       m_lumPipe, m_adaptPipe, m_shaftsPipe, m_envTerrainPipe, m_envModelPipe})
-        if (p) SDL_ReleaseGPUGraphicsPipeline(m_device, p);
-    releaseTexture(m_lut);
-    releaseTexture(m_farDepth);
-    releaseTexture(m_envDummy);
-    if (m_adaptReadback) SDL_ReleaseGPUTransferBuffer(m_device, m_adaptReadback);
-    for (GpuMesh& m : m_treeMeshes) m.release();
-    releaseModels();
-    m_terrainPatch.release();
-    releaseTexture(m_terrainHeight);
-    releaseTexture(m_terrainSplat);
-    releaseTexture(m_terrainAlbedo);
-    releaseTexture(m_terrainNra);
-    if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
-    if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
-    if (m_sprayBuffer) SDL_ReleaseGPUBuffer(m_device, m_sprayBuffer);
-    if (m_sprayTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_sprayTransfer);
-    releaseTexture(m_trample);
-    if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
-    if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
-    releaseTexture(m_noise);
-    releaseTexture(m_mask);
-    releaseTexture(m_height);
-    for (SDL_GPUSampler* s : {m_cmpSampler, m_repeatSampler, m_clampSampler, m_terrainSampler, m_pointSampler, m_envSampler})
-        if (s) SDL_ReleaseGPUSampler(m_device, s);
-    if (m_grassBuffer) SDL_ReleaseGPUBuffer(m_device, m_grassBuffer);
-    if (m_grassTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_grassTransfer);
-    if (m_lineBuffer) SDL_ReleaseGPUBuffer(m_device, m_lineBuffer);
-    if (m_lineTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_lineTransfer);
-    SDL_ReleaseWindowFromGPUDevice(m_device, m_window);
-    SDL_DestroyGPUDevice(m_device);
+// The members release their GPU resources before the device (declared first) waits for the GPU and goes away.
+Renderer::~Renderer() { m_device.waitIdle(); }
+
+void Renderer::initImGui() {
+    m_imgui = take(quench::app::ImGuiRenderer::create(m_device), "ImGui renderer");
 }
 
-SDL_GPUTextureFormat Renderer::swapchainFormat() const {
-    return SDL_GetGPUSwapchainTextureFormat(m_device, m_window);
+void Renderer::shutdownImGui() {
+    if (!m_imgui) return;
+    m_device.waitIdle();
+    m_imgui->shutdown();
+    m_imgui.reset();
 }
 
 void Renderer::setVSync(bool on) {
     m_vsync = on;
-    SDL_SetGPUSwapchainParameters(m_device, m_window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
-                                  on ? SDL_GPU_PRESENTMODE_VSYNC
-                                     : (SDL_WindowSupportsGPUPresentMode(m_device, m_window, SDL_GPU_PRESENTMODE_IMMEDIATE)
-                                            ? SDL_GPU_PRESENTMODE_IMMEDIATE
-                                            : SDL_GPU_PRESENTMODE_VSYNC));
+    // Without immediate presentation the engine keeps VSync.
+    m_device.setPresentMode(m_window, on ? gpu::PresentMode::Vsync : gpu::PresentMode::Immediate);
 }
 
 int Renderer::supportedMsaa(int n) const {
@@ -391,268 +333,232 @@ void Renderer::setSettings(const RenderSettings& in) {
     if (targets) m_targetsDirty = true;
 }
 
-SDL_GPUShader* Renderer::createShader(const char* entry, SDL_GPUShaderStage stage, std::uint32_t uniformBuffers,
-                                      std::uint32_t samplers, std::uint32_t storageBuffers) {
-    SDL_GPUShaderCreateInfo info{};
-    info.entrypoint = entry;
-    info.format = m_shaderFormat;
-    info.stage = stage;
-    info.num_uniform_buffers = uniformBuffers;
-    info.num_samplers = samplers;
-    info.num_storage_buffers = storageBuffers;
-    const quench::ShaderBlob* blob = quench::shaders::scene.find(entry);
-    if (!blob) throw std::runtime_error(std::string("shader entry point not embedded: ") + entry);
-    const quench::ShaderCode code = m_shaderFormat == SDL_GPU_SHADERFORMAT_METALLIB ? blob->metallib
-                            : m_shaderFormat == SDL_GPU_SHADERFORMAT_MSL    ? blob->msl
-                            : m_shaderFormat == SDL_GPU_SHADERFORMAT_DXIL   ? blob->dxil
-                                                                            : blob->spirv;
-    info.code = code.data;
-    info.code_size = code.size;
-    SDL_GPUShader* s = SDL_CreateGPUShader(m_device, &info);
-    if (!s) fail(std::string("SDL_CreateGPUShader ") + entry);
-    return s;
-}
+gpu::GraphicsPipeline Renderer::createPipeline(const char* vsName, const char* fsName, int vertexLayout,
+                                               gpu::TextureFormat color, int samples, bool depthTest, bool depthWrite,
+                                               gpu::CullMode cull, gpu::FrontFace front, int blend,
+                                               gpu::PrimitiveType prim, int depthBias, bool depthTarget) {
+    // The resource counts of each shader come from the shader build (quench::ShaderBlob::resources).
+    const quench::ShaderBlob* vs = quench::shaders::scene.find(vsName);
+    const quench::ShaderBlob* fs = quench::shaders::scene.find(fsName);
+    if (!vs || !fs) throw std::runtime_error(std::string("shader entry point not embedded: ") + (vs ? fsName : vsName));
 
-SDL_GPUGraphicsPipeline* Renderer::createPipeline(const char* vsName, const char* fsName, std::uint32_t vsUniforms,
-                                                  std::uint32_t fsUniforms, std::uint32_t vsSamplers,
-                                                  std::uint32_t fsSamplers, std::uint32_t vsStorage, int vertexLayout,
-                                                  SDL_GPUTextureFormat color, SDL_GPUSampleCount samples,
-                                                  bool depthTest, bool depthWrite, SDL_GPUCullMode cull,
-                                                  SDL_GPUFrontFace front, int blend, SDL_GPUPrimitiveType prim,
-                                                  int depthBias) {
-    SDL_GPUShader* vs = createShader(vsName, SDL_GPU_SHADERSTAGE_VERTEX, vsUniforms, vsSamplers, vsStorage);
-    SDL_GPUShader* fs = createShader(fsName, SDL_GPU_SHADERSTAGE_FRAGMENT, fsUniforms, fsSamplers);
-
-    SDL_GPUVertexBufferDescription vb{};
+    gpu::VertexBufferLayout vb{};
     vb.slot = 0;
-    vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-    SDL_GPUVertexAttribute attrs[4]{};
+    vb.rate = gpu::VertexInputRate::PerVertex;
+    gpu::VertexAttribute attrs[4]{};
     std::uint32_t numAttrs = 0;
     if (vertexLayout == kLayoutLit) {
-        vb.pitch = sizeof(LitVertex);
-        attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, position))};
-        attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, normal))};
-        attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LitVertex, color))};
-        attrs[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, std::uint32_t(offsetof(LitVertex, material))};
+        vb.stride = sizeof(LitVertex);
+        attrs[0] = {0, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(LitVertex, position))};
+        attrs[1] = {1, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(LitVertex, normal))};
+        attrs[2] = {2, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(LitVertex, color))};
+        attrs[3] = {3, 0, gpu::VertexFormat::Float4, std::uint32_t(offsetof(LitVertex, material))};
         numAttrs = 4;
     } else if (vertexLayout == kLayoutLine) {
-        vb.pitch = sizeof(LineVertex);
-        attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(LineVertex, position))};
-        attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, std::uint32_t(offsetof(LineVertex, color))};
+        vb.stride = sizeof(LineVertex);
+        attrs[0] = {0, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(LineVertex, position))};
+        attrs[1] = {1, 0, gpu::VertexFormat::Float4, std::uint32_t(offsetof(LineVertex, color))};
         numAttrs = 2;
     } else if (vertexLayout == kLayoutModel) {
-        vb.pitch = sizeof(ModelVertex);
-        attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(ModelVertex, pos))};
-        attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, std::uint32_t(offsetof(ModelVertex, normal))};
-        attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, std::uint32_t(offsetof(ModelVertex, uv))};
-        attrs[3] = {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, std::uint32_t(offsetof(ModelVertex, wind))};
+        vb.stride = sizeof(ModelVertex);
+        attrs[0] = {0, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(ModelVertex, pos))};
+        attrs[1] = {1, 0, gpu::VertexFormat::Float3, std::uint32_t(offsetof(ModelVertex, normal))};
+        attrs[2] = {2, 0, gpu::VertexFormat::Float2, std::uint32_t(offsetof(ModelVertex, uv))};
+        attrs[3] = {3, 0, gpu::VertexFormat::Float2, std::uint32_t(offsetof(ModelVertex, wind))};
         numAttrs = 4;
     }
 
-    SDL_GPUColorTargetDescription ct{};
+    gpu::ColorTargetDesc ct{};
     ct.format = color;
-    SDL_GPUColorTargetBlendState& b = ct.blend_state;
+    gpu::BlendState& b = ct.blend;
     if (blend != kBlendNone && blend != kBlendCoverage) {
-        b.enable_blend = true;
-        b.color_blend_op = SDL_GPU_BLENDOP_ADD;
-        b.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+        b.enabled = true;
+        b.colorOp = gpu::BlendOp::Add;
+        b.alphaOp = gpu::BlendOp::Add;
         if (blend == kBlendAlpha || blend == kBlendDecal) {
             const bool keepAlpha = blend == kBlendDecal;
-            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
-            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            b.src_alpha_blendfactor = keepAlpha ? SDL_GPU_BLENDFACTOR_ZERO : SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_alpha_blendfactor = keepAlpha ? SDL_GPU_BLENDFACTOR_ONE : SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            b.srcColor = gpu::BlendFactor::SrcAlpha;
+            b.dstColor = gpu::BlendFactor::OneMinusSrcAlpha;
+            b.srcAlpha = keepAlpha ? gpu::BlendFactor::Zero : gpu::BlendFactor::One;
+            b.dstAlpha = keepAlpha ? gpu::BlendFactor::One : gpu::BlendFactor::OneMinusSrcAlpha;
         } else if (blend == kBlendPremultiplied) {
-            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            b.srcColor = gpu::BlendFactor::One;
+            b.dstColor = gpu::BlendFactor::OneMinusSrcAlpha;
+            b.srcAlpha = gpu::BlendFactor::One;
+            b.dstAlpha = gpu::BlendFactor::OneMinusSrcAlpha;
         } else {
-            b.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            b.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-            if (blend == kBlendMax) b.color_blend_op = b.alpha_blend_op = SDL_GPU_BLENDOP_MAX;
+            b.srcColor = gpu::BlendFactor::One;
+            b.dstColor = gpu::BlendFactor::One;
+            b.srcAlpha = gpu::BlendFactor::One;
+            b.dstAlpha = gpu::BlendFactor::One;
+            if (blend == kBlendMax) b.colorOp = b.alphaOp = gpu::BlendOp::Max;
         }
     }
 
-    SDL_GPUGraphicsPipelineCreateInfo pi{};
-    pi.vertex_shader = vs;
-    pi.fragment_shader = fs;
+    gpu::GraphicsPipelineDesc pi;
+    pi.vertexShader = vs;
+    pi.fragmentShader = fs;
     if (numAttrs > 0) {
-        pi.vertex_input_state.vertex_buffer_descriptions = &vb;
-        pi.vertex_input_state.num_vertex_buffers = 1;
-        pi.vertex_input_state.vertex_attributes = attrs;
-        pi.vertex_input_state.num_vertex_attributes = numAttrs;
+        pi.vertexBuffers = {&vb, 1};
+        pi.vertexAttributes = {attrs, numAttrs};
     }
-    pi.primitive_type = prim;
-    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-    pi.rasterizer_state.cull_mode = cull;
-    pi.rasterizer_state.front_face = front;
+    pi.primitive = prim;
+    pi.rasterizer.fill = gpu::FillMode::Fill;
+    pi.rasterizer.cull = cull;
+    pi.rasterizer.frontFace = front;
     // Shadow casters behind the light near plane are clamped.
-    pi.rasterizer_state.enable_depth_clip = depthBias != kBiasShadow;
+    pi.rasterizer.depthClip = depthBias != kBiasShadow;
     if (depthBias == kBiasShadow) {
-        pi.rasterizer_state.enable_depth_bias = true;
-        pi.rasterizer_state.depth_bias_constant_factor = 1.0f;
-        pi.rasterizer_state.depth_bias_slope_factor = 1.75f;
-        pi.rasterizer_state.depth_bias_clamp = m_shadowBiasClamp;
+        pi.rasterizer.depthBias = true;
+        pi.rasterizer.depthBiasConstant = 1.0f;
+        pi.rasterizer.depthBiasSlope = 1.75f;
+        pi.rasterizer.depthBiasClamp = m_shadowBiasClamp;
     } else if (depthBias == kBiasDecal) {
-        pi.rasterizer_state.enable_depth_bias = true;
-        pi.rasterizer_state.depth_bias_constant_factor = 2.0f; // toward the camera in reversed depth
-        pi.rasterizer_state.depth_bias_slope_factor = 2.0f;
-        pi.rasterizer_state.depth_bias_clamp = 0.0f;
+        pi.rasterizer.depthBias = true;
+        pi.rasterizer.depthBiasConstant = 2.0f; // toward the camera in reversed depth
+        pi.rasterizer.depthBiasSlope = 2.0f;
+        pi.rasterizer.depthBiasClamp = 0.0f;
     }
-    pi.multisample_state.sample_count = samples;
-    pi.multisample_state.enable_alpha_to_coverage = blend == kBlendCoverage;
-    pi.depth_stencil_state.enable_depth_test = depthTest;
-    pi.depth_stencil_state.enable_depth_write = depthWrite;
-    pi.depth_stencil_state.compare_op =
-        depthBias == kBiasShadow ? SDL_GPU_COMPAREOP_LESS_OR_EQUAL : SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
-    pi.target_info.color_target_descriptions = color != SDL_GPU_TEXTUREFORMAT_INVALID ? &ct : nullptr;
-    pi.target_info.num_color_targets = color != SDL_GPU_TEXTUREFORMAT_INVALID ? 1 : 0;
-    const bool hasDepth = depthTest || depthWrite;
-    pi.target_info.depth_stencil_format = hasDepth ? kDepthFormat : SDL_GPU_TEXTUREFORMAT_INVALID;
-    pi.target_info.has_depth_stencil_target = hasDepth;
-    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(m_device, &pi);
-    SDL_ReleaseGPUShader(m_device, vs);
-    SDL_ReleaseGPUShader(m_device, fs);
-    if (!p) fail(std::string("pipeline ") + vsName + "/" + fsName);
-    return p;
+    pi.sampleCount = std::uint32_t(samples);
+    pi.alphaToCoverage = blend == kBlendCoverage;
+    pi.depth.test = depthTest;
+    pi.depth.write = depthWrite;
+    pi.depth.compare = depthBias == kBiasShadow ? gpu::CompareOp::LessOrEqual : gpu::CompareOp::GreaterOrEqual;
+    if (color != gpu::TextureFormat::Invalid) pi.colorTargets = {&ct, 1};
+    const bool hasDepth = depthTest || depthWrite || depthTarget;
+    pi.depthFormat = hasDepth ? kDepthFormat : gpu::TextureFormat::Invalid;
+    return take(m_device.createPipeline(pi), std::string("pipeline ") + vsName + "/" + fsName);
 }
 
 void Renderer::createStaticPipelines() {
-    const auto none = SDL_GPU_TEXTUREFORMAT_INVALID;
-    const auto s1 = SDL_GPU_SAMPLECOUNT_1;
-    const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-    m_shadowPipe = createPipeline("shadow_vs", "shadow_fs", 2, 0, 0, 0, 0, kLayoutLit, none, s1, true, true,
-                                  SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
+    const auto none = gpu::TextureFormat::Invalid;
+    const int s1 = 1;
+    const auto ccw = gpu::FrontFace::CounterClockwise;
+    const auto cw = gpu::FrontFace::Clockwise;
+    const auto cullNone = gpu::CullMode::None;
+    const auto cullBack = gpu::CullMode::Back;
+    const auto triangles = gpu::PrimitiveType::TriangleList;
+    m_shadowPipe = createPipeline("shadow_vs", "shadow_fs", kLayoutLit, none, s1, true, true, cullNone, ccw, kBlendNone,
+                                  triangles, kBiasShadow);
     // Mirrored view: the winding flips, so front faces are clockwise.
-    m_reflLitPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, s1, true, true,
-                                   SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
-    m_reflSkyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, true, false,
-                                   SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_bloomDownPipe = createPipeline("fullscreen_vs", "bloom_down_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1,
-                                     false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_bloomUpPipe = createPipeline("fullscreen_vs", "bloom_up_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, s1, false,
-                                   false, SDL_GPU_CULLMODE_NONE, ccw, kBlendAdd);
-    m_tonemapPipe = createPipeline("fullscreen_vs", "tonemap_fs", 0, 1, 0, 5, 0, kLayoutNone, m_colorFormat, s1, false,
-                                   false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false, false,
-                                SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_treeShadowPipe = createPipeline("tree_shadow_vs", "shadow_fs", 2, 0, 0, 0, 1, kLayoutLit, none, s1, true, true,
-                                      SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
-    m_reflTreePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 4, 1, kLayoutLit, kHdrFormat, s1, true, true,
-                                    SDL_GPU_CULLMODE_BACK, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
-    m_tramplePipe = createPipeline("mark_mask_vs", "mark_mask_fs", 2, 0, 0, 0, 1, kLayoutNone, kTrampleFormat, s1,
-                                   false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendMax);
-    m_blurDownPipe = createPipeline("fullscreen_vs", "blur_down_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1,
-                                    false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_blurUpPipe = createPipeline("fullscreen_vs", "blur_up_fs", 0, 1, 0, 1, 0, kLayoutNone, m_colorFormat, s1, false,
-                                  false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_blurCompositePipe = createPipeline("fullscreen_vs", "blur_composite_fs", 0, 1, 0, 2, 0, kLayoutNone,
-                                         m_colorFormat, s1, false, false, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_terrainShadowPipe = createPipeline("terrain_shadow_vs", "shadow_fs", 2, 0, 1, 0, 0, kLayoutLit, none, s1, true,
-                                         true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone,
-                                         SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasShadow);
-    m_modelShadowPipe = createPipeline("model_shadow_vs", "model_shadow_fs", 2, 2, 0, 1, 1, kLayoutModel, none, s1, true,
-                                       true, SDL_GPU_CULLMODE_NONE, ccw, kBlendNone, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-                                       kBiasShadow);
+    m_reflLitPipe = createPipeline("lit_vs", "lit_fs", kLayoutLit, kHdrFormat, s1, true, true, cullBack, cw, kBlendNone);
+    m_reflSkyPipe = createPipeline("fullscreen_vs", "sky_fs", kLayoutNone, kHdrFormat, s1, true, false, cullNone, ccw,
+                                   kBlendNone);
+    m_bloomDownPipe = createPipeline("fullscreen_vs", "bloom_down_fs", kLayoutNone, kHdrFormat, s1, false, false,
+                                     cullNone, ccw, kBlendNone);
+    m_bloomUpPipe = createPipeline("fullscreen_vs", "bloom_up_fs", kLayoutNone, kHdrFormat, s1, false, false, cullNone,
+                                   ccw, kBlendAdd);
+    m_tonemapPipe = createPipeline("fullscreen_vs", "tonemap_fs", kLayoutNone, m_colorFormat, s1, false, false,
+                                   cullNone, ccw, kBlendNone);
+    m_fxaaPipe = createPipeline("fullscreen_vs", "fxaa_fs", kLayoutNone, m_colorFormat, s1, false, false, cullNone, ccw,
+                                kBlendNone);
+    m_treeShadowPipe = createPipeline("tree_shadow_vs", "shadow_fs", kLayoutLit, none, s1, true, true, cullNone, ccw,
+                                      kBlendNone, triangles, kBiasShadow);
+    m_reflTreePipe = createPipeline("tree_vs", "lit_fs", kLayoutLit, kHdrFormat, s1, true, true, cullBack, cw,
+                                    kBlendNone);
+    m_tramplePipe = createPipeline("mark_mask_vs", "mark_mask_fs", kLayoutNone, kTrampleFormat, s1, false, false,
+                                   cullNone, ccw, kBlendMax);
+    m_blurDownPipe = createPipeline("fullscreen_vs", "blur_down_fs", kLayoutNone, m_colorFormat, s1, false, false,
+                                    cullNone, ccw, kBlendNone);
+    m_blurUpPipe = createPipeline("fullscreen_vs", "blur_up_fs", kLayoutNone, m_colorFormat, s1, false, false,
+                                  cullNone, ccw, kBlendNone);
+    m_blurCompositePipe = createPipeline("fullscreen_vs", "blur_composite_fs", kLayoutNone, m_colorFormat, s1, false,
+                                         false, cullNone, ccw, kBlendNone);
+    m_terrainShadowPipe = createPipeline("terrain_shadow_vs", "shadow_fs", kLayoutLit, none, s1, true, true, cullNone,
+                                         ccw, kBlendNone, triangles, kBiasShadow);
+    m_modelShadowPipe = createPipeline("model_shadow_vs", "model_shadow_fs", kLayoutModel, none, s1, true, true,
+                                       cullNone, ccw, kBlendNone, triangles, kBiasShadow);
     // Vehicle probe faces: the cube's face basis is mirrored like the puddle reflection (front faces clockwise).
-    m_envTerrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, s1, true, true,
-                                      SDL_GPU_CULLMODE_NONE, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
-    m_envModelPipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, s1, true, true,
-                                    SDL_GPU_CULLMODE_NONE, SDL_GPU_FRONTFACE_CLOCKWISE, kBlendNone);
-    auto post = [&](const char* fs, std::uint32_t samplers, SDL_GPUTextureFormat fmt, int blend = kBlendNone) {
-        return createPipeline("fullscreen_vs", fs, 0, 1, 0, samplers, 0, kLayoutNone, fmt, s1, false, false,
-                              SDL_GPU_CULLMODE_NONE, ccw, blend);
+    m_envTerrainPipe = createPipeline("terrain_vs", "terrain_fs", kLayoutLit, kHdrFormat, s1, true, true, cullNone, cw,
+                                      kBlendNone);
+    m_envModelPipe = createPipeline("model_vs", "model_fs", kLayoutModel, kHdrFormat, s1, true, true, cullNone, cw,
+                                    kBlendNone);
+    auto post = [&](const char* fs, gpu::TextureFormat fmt, int blend = kBlendNone) {
+        return createPipeline("fullscreen_vs", fs, kLayoutNone, fmt, s1, false, false, cullNone, ccw, blend);
     };
-    m_linDepthPipe = post("lindepth_fs", 1, kLinDepthFormat);
-    m_gtaoPipe = post("gtao_fs", 2, kAoFormat);
-    m_aoBlurPipe = post("ao_blur_fs", 3, kHdrFormat);
-    m_velocityPipe = post("velocity_fs", 1, kVelocityFormat);
-    m_velocityObjPipe = createPipeline("velocity_obj_vs", "velocity_obj_fs", 1, 0, 0, 0, 0, kLayoutLit, kVelocityFormat,
-                                       s1, true, false, SDL_GPU_CULLMODE_BACK, ccw, kBlendNone,
-                                       SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
-    m_taaPipe = post("taa_fs", 4, kHdrFormat);
-    m_motionBlurPipe = post("motion_blur_fs", 3, kHdrFormat);
-    m_dofBlurPipe = post("dof_blur_fs", 2, kHdrFormat);
-    m_dofPipe = post("dof_fs", 3, kHdrFormat);
-    m_lumPipe = post("lum_fs", 1, kLinDepthFormat);
-    m_adaptPipe = post("adapt_fs", 2, kLinDepthFormat);
-    m_shaftsPipe = post("shafts_fs", 2, kHdrFormat);
+    m_linDepthPipe = post("lindepth_fs", kLinDepthFormat);
+    m_gtaoPipe = post("gtao_fs", kAoFormat);
+    m_aoBlurPipe = post("ao_blur_fs", kHdrFormat);
+    m_velocityPipe = post("velocity_fs", kVelocityFormat);
+    m_velocityObjPipe = createPipeline("velocity_obj_vs", "velocity_obj_fs", kLayoutLit, kVelocityFormat, s1, true,
+                                       false, cullBack, ccw, kBlendNone, triangles, kBiasDecal);
+    m_taaPipe = post("taa_fs", kHdrFormat);
+    m_motionBlurPipe = post("motion_blur_fs", kHdrFormat);
+    m_dofBlurPipe = post("dof_blur_fs", kHdrFormat);
+    m_dofPipe = post("dof_fs", kHdrFormat);
+    m_lumPipe = post("lum_fs", kLinDepthFormat);
+    m_adaptPipe = post("adapt_fs", kLinDepthFormat);
+    m_shaftsPipe = post("shafts_fs", kHdrFormat);
 }
 
 void Renderer::createScenePipelines() {
-    const SDL_GPUSampleCount sc = sampleCount(m_settings.msaa);
-    const auto ccw = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-    m_litPipe = createPipeline("lit_vs", "lit_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, true,
-                               SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
-    m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", 0, 1, 0, 1, 0, kLayoutNone, kHdrFormat, sc, true, false,
-                               SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_grassPipe = createPipeline("grass_vs", "grass_fs", 2, 1, 4, 1, 1, kLayoutNone, kHdrFormat, sc, true, true,
-                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
-    m_markPipe = createPipeline("mark_vs", "mark_fs", 2, 3, 0, 6, 1, kLayoutNone, kHdrFormat, sc, true, false,
-                                SDL_GPU_CULLMODE_NONE, ccw, kBlendDecal, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, kBiasDecal);
-    m_sprayPipe = createPipeline("spray_vs", "spray_fs", 2, 1, 0, 3, 1, kLayoutNone, kHdrFormat, sc, true, false,
-                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha);
-    m_waterPipe = createPipeline("lit_vs", "water_fs", 2, 1, 0, 6, 0, kLayoutLit, kHdrFormat, sc, true, false,
-                                 SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
-    m_waterfallPipe = createPipeline("lit_vs", "waterfall_fs", 2, 1, 0, 4, 0, kLayoutLit, kHdrFormat, sc, true, false,
-                                     SDL_GPU_CULLMODE_NONE, ccw, kBlendPremultiplied);
-    m_linePipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, true, false,
-                                SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
-    m_lineOnTopPipe = createPipeline("line_vs", "line_fs", 1, 1, 0, 0, 0, kLayoutLine, kHdrFormat, sc, false, false,
-                                     SDL_GPU_CULLMODE_NONE, ccw, kBlendAlpha, SDL_GPU_PRIMITIVETYPE_LINELIST);
-    m_treePipe = createPipeline("tree_vs", "lit_fs", 2, 1, 0, 4, 1, kLayoutLit, kHdrFormat, sc, true, true,
-                                SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
+    const int sc = sampleCount(m_settings.msaa);
+    const auto ccw = gpu::FrontFace::CounterClockwise;
+    const auto cullNone = gpu::CullMode::None;
+    const auto cullBack = gpu::CullMode::Back;
+    const auto triangles = gpu::PrimitiveType::TriangleList;
+    const auto lines = gpu::PrimitiveType::LineList;
+    m_litPipe = createPipeline("lit_vs", "lit_fs", kLayoutLit, kHdrFormat, sc, true, true, cullBack, ccw, kBlendNone);
+    m_skyPipe = createPipeline("fullscreen_vs", "sky_fs", kLayoutNone, kHdrFormat, sc, true, false, cullNone, ccw,
+                               kBlendNone);
+    m_grassPipe = createPipeline("grass_vs", "grass_fs", kLayoutNone, kHdrFormat, sc, true, true, cullNone, ccw,
+                                 kBlendNone);
+    m_markPipe = createPipeline("mark_vs", "mark_fs", kLayoutNone, kHdrFormat, sc, true, false, cullNone, ccw,
+                                kBlendDecal, triangles, kBiasDecal);
+    m_sprayPipe = createPipeline("spray_vs", "spray_fs", kLayoutNone, kHdrFormat, sc, true, false, cullNone, ccw,
+                                 kBlendAlpha);
+    m_waterPipe = createPipeline("lit_vs", "water_fs", kLayoutLit, kHdrFormat, sc, true, false, cullNone, ccw,
+                                 kBlendPremultiplied);
+    m_waterfallPipe = createPipeline("lit_vs", "waterfall_fs", kLayoutLit, kHdrFormat, sc, true, false, cullNone, ccw,
+                                     kBlendPremultiplied);
+    m_linePipe = createPipeline("line_vs", "line_fs", kLayoutLine, kHdrFormat, sc, true, false, cullNone, ccw,
+                                kBlendAlpha, lines);
+    // No depth test, but drawn in the scene pass, whose depth target the pipeline must declare.
+    m_lineOnTopPipe = createPipeline("line_vs", "line_fs", kLayoutLine, kHdrFormat, sc, false, false, cullNone, ccw,
+                                     kBlendAlpha, lines, kBiasNone, true);
+    m_treePipe = createPipeline("tree_vs", "lit_fs", kLayoutLit, kHdrFormat, sc, true, true, cullBack, ccw, kBlendNone);
     // Skirts hang down from both sides of a chunk edge, so the terrain is drawn without culling.
-    m_terrainPipe = createPipeline("terrain_vs", "terrain_fs", 2, 2, 2, 5, 0, kLayoutLit, kHdrFormat, sc, true, true,
-                                   SDL_GPU_CULLMODE_NONE, ccw, kBlendNone);
+    m_terrainPipe = createPipeline("terrain_vs", "terrain_fs", kLayoutLit, kHdrFormat, sc, true, true, cullNone, ccw,
+                                   kBlendNone);
     m_modelA2C = m_settings.msaa > 1;
     const int foliageBlend = m_modelA2C ? kBlendCoverage : kBlendNone;
-    m_modelPipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, sc, true, true,
-                                 SDL_GPU_CULLMODE_BACK, ccw, kBlendNone);
-    m_modelFoliagePipe = createPipeline("model_vs", "model_fs", 2, 2, 0, 4, 1, kLayoutModel, kHdrFormat, sc, true, true,
-                                        SDL_GPU_CULLMODE_NONE, ccw, foliageBlend);
-    m_impostorPipe = createPipeline("impostor_vs", "impostor_fs", 2, 2, 0, 4, 1, kLayoutNone, kHdrFormat, sc, true, true,
-                                    SDL_GPU_CULLMODE_NONE, ccw, foliageBlend);
+    m_modelPipe = createPipeline("model_vs", "model_fs", kLayoutModel, kHdrFormat, sc, true, true, cullBack, ccw,
+                                 kBlendNone);
+    m_modelFoliagePipe = createPipeline("model_vs", "model_fs", kLayoutModel, kHdrFormat, sc, true, true, cullNone, ccw,
+                                        foliageBlend);
+    m_impostorPipe = createPipeline("impostor_vs", "impostor_fs", kLayoutNone, kHdrFormat, sc, true, true, cullNone,
+                                    ccw, foliageBlend);
     m_sceneMsaa = m_settings.msaa;
 }
 
 void Renderer::releaseScenePipelines() {
-    for (SDL_GPUGraphicsPipeline** p :
+    for (gpu::GraphicsPipeline* p :
          {&m_litPipe, &m_skyPipe, &m_grassPipe, &m_waterPipe, &m_linePipe, &m_lineOnTopPipe, &m_treePipe, &m_markPipe,
-          &m_sprayPipe, &m_terrainPipe, &m_modelPipe, &m_modelFoliagePipe, &m_impostorPipe, &m_waterfallPipe}) {
-        if (*p) SDL_ReleaseGPUGraphicsPipeline(m_device, *p);
-        *p = nullptr;
-    }
+          &m_sprayPipe, &m_terrainPipe, &m_modelPipe, &m_modelFoliagePipe, &m_impostorPipe, &m_waterfallPipe})
+        p->reset();
     m_sceneMsaa = 0;
 }
 
-Renderer::Texture Renderer::makeTexture(std::uint32_t w, std::uint32_t h, SDL_GPUTextureFormat fmt,
-                                        SDL_GPUTextureUsageFlags usage, SDL_GPUSampleCount samples,
-                                        std::uint32_t layers, std::uint32_t levels, SDL_GPUTextureType type) {
-    SDL_GPUTextureCreateInfo ti{};
+Renderer::Texture Renderer::makeTexture(std::uint32_t w, std::uint32_t h, gpu::TextureFormat fmt,
+                                        gpu::TextureUsage usage, int samples, std::uint32_t layers,
+                                        std::uint32_t levels, gpu::TextureType type) {
+    gpu::TextureDesc ti;
     ti.type = type;
     ti.format = fmt;
     ti.usage = usage;
     ti.width = std::max<std::uint32_t>(w, 1);
     ti.height = std::max<std::uint32_t>(h, 1);
-    ti.layer_count_or_depth = layers;
-    ti.num_levels = levels;
-    ti.sample_count = samples;
+    ti.layers = layers;
+    ti.mipLevels = levels;
+    ti.sampleCount = std::uint32_t(samples);
     Texture t;
-    t.tex = SDL_CreateGPUTexture(m_device, &ti);
-    if (!t.tex) fail("texture");
+    t.tex = take(m_device.createTexture(ti), "texture");
     t.w = ti.width;
     t.h = ti.height;
     return t;
 }
 
-void Renderer::releaseTexture(Texture& t) {
-    if (t.tex) SDL_ReleaseGPUTexture(m_device, t.tex);
-    t = {};
-}
+void Renderer::releaseTexture(Texture& t) { t = {}; }
 
 void Renderer::releaseTargets() {
     releaseTexture(m_hdrMsaa);
@@ -678,7 +584,7 @@ void Renderer::releaseTargets() {
 
 void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
     if (!m_targetsDirty && outW == m_outW && outH == m_outH && m_sceneMsaa == m_settings.msaa) return;
-    SDL_WaitForGPUIdle(m_device);
+    m_device.waitIdle();
     if (m_sceneMsaa != m_settings.msaa) {
         releaseScenePipelines();
         createScenePipelines();
@@ -687,10 +593,10 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
     const RenderSettings& s = m_settings;
     const std::uint32_t rw = std::max<std::uint32_t>(16, std::uint32_t(std::lround(outW * s.renderScale)));
     const std::uint32_t rh = std::max<std::uint32_t>(16, std::uint32_t(std::lround(outH * s.renderScale)));
-    const SDL_GPUSampleCount sc = sampleCount(s.msaa);
-    const auto colorRT = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
-    const auto sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    const auto depthRT = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    const int sc = sampleCount(s.msaa);
+    const auto colorRT = gpu::TextureUsage::ColorTarget;
+    const auto sampled = gpu::TextureUsage::Sampled;
+    const auto depthRT = gpu::TextureUsage::DepthStencilTarget;
     if (s.msaa > 1) m_hdrMsaa = makeTexture(rw, rh, kHdrFormat, colorRT, sc);
     m_hdr = makeTexture(rw, rh, kHdrFormat, colorRT | sampled);
     m_depth = makeTexture(rw, rh, kDepthFormat, s.msaa == 1 ? depthRT | sampled : depthRT, sc);
@@ -720,14 +626,13 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
         m_reflDepth = makeTexture(fw, fh, kDepthFormat, depthRT);
     }
     m_shadow = makeTexture(std::uint32_t(s.shadowMapSize), std::uint32_t(s.shadowMapSize), kDepthFormat,
-                           depthRT | sampled, SDL_GPU_SAMPLECOUNT_1,
-                           std::uint32_t(std::max(1, s.shadowCascades + (s.farShadows ? 1 : 0))), 1,
-                           SDL_GPU_TEXTURETYPE_2D_ARRAY);
+                           depthRT | sampled, 1, std::uint32_t(std::max(1, s.shadowCascades + (s.farShadows ? 1 : 0))),
+                           1, gpu::TextureType::Texture2DArray);
     m_farShadowValid = false;
     if (s.envProbe > 0) {
         const std::uint32_t e = std::uint32_t(s.envProbe);
-        m_envCube = makeTexture(e, e, kHdrFormat, colorRT | sampled, SDL_GPU_SAMPLECOUNT_1, 6,
-                                std::uint32_t(std::bit_width(e)), SDL_GPU_TEXTURETYPE_CUBE);
+        m_envCube = makeTexture(e, e, kHdrFormat, colorRT | sampled, 1, 6, std::uint32_t(std::bit_width(e)),
+                                gpu::TextureType::Cube);
         m_envDepth = makeTexture(e, e, kDepthFormat, depthRT);
     }
     m_envValid = false;
@@ -757,31 +662,16 @@ void Renderer::ensureTargets(std::uint32_t outW, std::uint32_t outH) {
     m_targetsDirty = false;
 }
 
-void Renderer::uploadTexture(SDL_GPUTexture* tex, const void* data, std::uint32_t w, std::uint32_t h,
-                             std::uint32_t bytesPerPixel) {
-    const std::uint32_t bytes = w * h * bytesPerPixel;
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = bytes;
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!tb) fail("texture transfer buffer");
-    std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), data, bytes);
-    SDL_UnmapGPUTransferBuffer(m_device, tb);
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    SDL_GPUTextureTransferInfo src{};
-    src.transfer_buffer = tb;
-    src.pixels_per_row = w;
-    src.rows_per_layer = h;
-    SDL_GPUTextureRegion dst{};
-    dst.texture = tex;
-    dst.w = w;
-    dst.h = h;
-    dst.d = 1;
-    SDL_UploadToGPUTexture(copy, &src, &dst, false);
-    SDL_EndGPUCopyPass(copy);
-    SDL_SubmitGPUCommandBuffer(cmd);
-    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+void Renderer::uploadTexture(const Texture& t, const void* data, std::uint32_t w, std::uint32_t h,
+                             std::uint32_t bytesPerPixel, std::uint32_t depth) {
+    const std::size_t bytes = std::size_t(w) * h * depth * bytesPerPixel;
+    gpu::TextureRegion dst;
+    dst.texture = t.tex;
+    dst.width = w;
+    dst.height = h;
+    dst.depth = depth;
+    const quench::Result<void> r = m_device.upload(dst, {static_cast<const std::byte*>(data), bytes});
+    if (!r) throw std::runtime_error("texture upload: " + r.error());
 }
 
 // 32^3 colour grade in display space toward the key art (external_assets/images/Banner.png): cool blue-violet
@@ -809,28 +699,9 @@ void Renderer::buildGradeLut() {
                 o[2] = std::uint8_t(std::lround(c.b * 255.0f));
                 o[3] = 255;
             }
-    m_lut = makeTexture(N, N, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, N,
-                        1, SDL_GPU_TEXTURETYPE_3D);
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = std::uint32_t(px.size());
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!tb) fail("LUT transfer buffer");
-    std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), px.data(), px.size());
-    SDL_UnmapGPUTransferBuffer(m_device, tb);
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    SDL_GPUTextureTransferInfo src{};
-    src.transfer_buffer = tb;
-    src.pixels_per_row = N;
-    src.rows_per_layer = N;
-    SDL_GPUTextureRegion dst{};
-    dst.texture = m_lut.tex;
-    dst.w = dst.h = dst.d = N;
-    SDL_UploadToGPUTexture(copy, &src, &dst, false);
-    SDL_EndGPUCopyPass(copy);
-    SDL_SubmitGPUCommandBuffer(cmd);
-    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+    m_lut = makeTexture(N, N, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled, 1, N, 1,
+                        gpu::TextureType::Texture3D);
+    uploadTexture(m_lut, px.data(), N, N, 4, N);
 }
 
 const char* const Renderer::kPostPassNames[] = {"lindepth", "gtao", "ao_blur", "velocity", "taa", "motion_blur",
@@ -844,46 +715,42 @@ void Renderer::setPostBench(const std::string& pass, int repeat) {
         if (pass == kPostPassNames[i]) m_benchPass = i;
 }
 
-SDL_GPUTexture* Renderer::createImage(const void* rgba, std::uint32_t w, std::uint32_t h) {
+gpu::Texture Renderer::createImage(const void* rgba, std::uint32_t w, std::uint32_t h) {
     std::uint32_t levels = 1;
     while ((std::max(w, h) >> levels) > 0) ++levels;
     // Mip generation needs the texture to be a color target as well.
-    Texture t = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                            SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_SAMPLECOUNT_1, 1,
-                            levels);
-    uploadTexture(t.tex, rgba, w, h, 4);
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GenerateMipmapsForGPUTexture(cmd, t.tex);
-    SDL_SubmitGPUCommandBuffer(cmd);
-    return t.tex;
-}
-
-void Renderer::releaseImage(SDL_GPUTexture* tex) {
-    if (tex) SDL_ReleaseGPUTexture(m_device, tex);
+    Texture t = makeTexture(w, h, gpu::TextureFormat::Rgba8Unorm,
+                            gpu::TextureUsage::Sampled | gpu::TextureUsage::ColorTarget, 1, 1, levels);
+    uploadTexture(t, rgba, w, h, 4);
+    if (levels > 1) {
+        gpu::CommandBuffer cmd = acquireCommands(m_device);
+        cmd.generateMipmaps(t.tex);
+        submit(cmd);
+    }
+    return std::move(t.tex);
 }
 
 void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
-    SDL_WaitForGPUIdle(m_device);
+    m_device.waitIdle();
     releaseTexture(m_noise);
     releaseTexture(m_mask);
     releaseTexture(m_height);
     const std::uint32_t ns = std::uint32_t(maps.noiseSize);
     std::uint32_t levels = 1;
     while ((ns >> levels) > 0) ++levels;
-    m_noise = makeTexture(ns, ns, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                          SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_SAMPLECOUNT_1, 1,
-                          levels);
-    uploadTexture(m_noise.tex, maps.noise.data(), ns, ns, 4);
-    {
-        SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-        SDL_GenerateMipmapsForGPUTexture(cmd, m_noise.tex);
-        SDL_SubmitGPUCommandBuffer(cmd);
+    m_noise = makeTexture(ns, ns, gpu::TextureFormat::Rgba8Unorm,
+                          gpu::TextureUsage::Sampled | gpu::TextureUsage::ColorTarget, 1, 1, levels);
+    uploadTexture(m_noise, maps.noise.data(), ns, ns, 4);
+    if (levels > 1) {
+        gpu::CommandBuffer cmd = acquireCommands(m_device);
+        cmd.generateMipmaps(m_noise.tex);
+        submit(cmd);
     }
     const std::uint32_t w = std::uint32_t(maps.width), h = std::uint32_t(maps.height);
-    m_mask = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    uploadTexture(m_mask.tex, maps.mask.data(), w, h, 4);
-    m_height = makeTexture(w, h, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    uploadTexture(m_height.tex, maps.heights.data(), w, h, 4);
+    m_mask = makeTexture(w, h, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled);
+    uploadTexture(m_mask, maps.mask.data(), w, h, 4);
+    m_height = makeTexture(w, h, gpu::TextureFormat::R32Float, gpu::TextureUsage::Sampled);
+    uploadTexture(m_height, maps.heights.data(), w, h, 4);
     // Texel centers sit on the grid points: uv = (xz - x0 + texel/2) / (n * texel).
     const float half = maps.texel * 0.5f;
     m_groundRect = glm::vec4(maps.x0 - half, maps.z0 - half, 1.0f / (float(w) * maps.texel),
@@ -896,7 +763,7 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
     m_trampleWindowed = std::max(sizeX, sizeZ) / kTrampleTexel > 4096.0f;
     const float tw = m_trampleWindowed ? kTrampleWindow : sizeX, th = m_trampleWindowed ? kTrampleWindow : sizeZ;
     m_trample = makeTexture(std::uint32_t(std::ceil(tw / kTrampleTexel)), std::uint32_t(std::ceil(th / kTrampleTexel)),
-                            kTrampleFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+                            kTrampleFormat, gpu::TextureUsage::Sampled | gpu::TextureUsage::ColorTarget);
     m_trampleRect = m_trampleWindowed ? glm::vec4(-1e6f, -1e6f, 1.0f / tw, 1.0f / th) : m_groundRect;
     m_trampleCenter = glm::vec2(1e9f);
     clearTrample();
@@ -942,7 +809,7 @@ void Renderer::setGround(const GroundMaps& maps, float waterLevel) {
 }
 
 void Renderer::setTerrain(const TerrainSource* src) {
-    SDL_WaitForGPUIdle(m_device);
+    m_device.waitIdle();
     releaseTexture(m_terrainHeight);
     releaseTexture(m_terrainSplat);
     m_terrainPatch.release();
@@ -959,12 +826,12 @@ void Renderer::setTerrain(const TerrainSource* src) {
     m_terrainOrigin = src->origin;
     m_terrainCell = src->cell;
     m_terrainRoots = cells / rootCells;
-    m_terrainHeight = makeTexture(std::uint32_t(n), std::uint32_t(n), SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
-                                  SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    uploadTexture(m_terrainHeight.tex, src->heights, std::uint32_t(n), std::uint32_t(n), 4);
-    m_terrainSplat = makeTexture(std::uint32_t(cells), std::uint32_t(cells), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                                 SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    uploadTexture(m_terrainSplat.tex, src->splat, std::uint32_t(cells), std::uint32_t(cells), 4);
+    m_terrainHeight = makeTexture(std::uint32_t(n), std::uint32_t(n), gpu::TextureFormat::R32Float,
+                                  gpu::TextureUsage::Sampled);
+    uploadTexture(m_terrainHeight, src->heights, std::uint32_t(n), std::uint32_t(n), 4);
+    m_terrainSplat = makeTexture(std::uint32_t(cells), std::uint32_t(cells), gpu::TextureFormat::Rgba8Unorm,
+                                 gpu::TextureUsage::Sampled);
+    uploadTexture(m_terrainSplat, src->splat, std::uint32_t(cells), std::uint32_t(cells), 4);
 
     // Height bounds per node: finest level (step 1, 64 cells) from the samples, coarser levels from their children.
     for (int level = kTerrainLevels - 1; level >= 0; --level) {
@@ -1081,27 +948,19 @@ void Renderer::selectTerrain(const glm::vec3& cam, const glm::mat4* viewProj, fl
 }
 
 void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const TreeInstance> instances) {
-    SDL_WaitForGPUIdle(m_device);
+    m_device.waitIdle();
     for (int i = 0; i < 4; ++i) {
         m_treeMeshes[i].release();
         m_treeMeshes[i] = upload(lods[i]);
     }
     m_trees.assign(instances.begin(), instances.end());
-    if (m_treeBuffer) SDL_ReleaseGPUBuffer(m_device, m_treeBuffer);
-    if (m_treeTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_treeTransfer);
-    m_treeBuffer = nullptr;
-    m_treeTransfer = nullptr;
+    m_treeBuffer.reset();
+    m_treeTransfer.reset();
     // Main view (twice: LOD cross-fade copies), reflection, shadow and probe lists can each hold every tree.
     m_treeCapacity = std::max<std::uint32_t>(1, std::uint32_t(m_trees.size()) * 5);
-    SDL_GPUBufferCreateInfo bi{};
-    bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-    bi.size = m_treeCapacity * sizeof(TreeInstance);
-    m_treeBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = bi.size;
-    m_treeTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!m_treeBuffer || !m_treeTransfer) fail("tree buffers");
+    const std::uint32_t size = m_treeCapacity * sizeof(TreeInstance);
+    m_treeBuffer = take(m_device.createBuffer({gpu::BufferUsage::GraphicsStorageRead, size}), "tree buffers");
+    m_treeTransfer = take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, size}), "tree buffers");
     SDL_Log("TrailForge: %zu trees, LOD triangles %u / %u / %u / %u", m_trees.size(), m_treeMeshes[0].vertexCount() / 3,
             m_treeMeshes[1].vertexCount() / 3, m_treeMeshes[2].vertexCount() / 3, m_treeMeshes[3].vertexCount() / 3);
 }
@@ -1109,11 +968,6 @@ void Renderer::setTrees(const std::array<MeshData, 4>& lods, std::span<const Tre
 // ---------------------------------------------------------------- level models
 
 void Renderer::releaseModels() {
-    for (GpuModel& m : m_models)
-        for (GpuModelLod& l : m.lods) {
-            if (l.vertices) SDL_ReleaseGPUBuffer(m_device, l.vertices);
-            if (l.indices) SDL_ReleaseGPUBuffer(m_device, l.indices);
-        }
     m_models.clear();
     for (Texture& t : m_modelTextures) releaseTexture(t);
     m_modelTextures.clear();
@@ -1122,10 +976,8 @@ void Renderer::releaseModels() {
     m_modelScratch.clear();
     m_modelDraws.clear();
     for (auto& d : m_modelShadowDraws) d.clear();
-    if (m_modelBuffer) SDL_ReleaseGPUBuffer(m_device, m_modelBuffer);
-    if (m_modelTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_modelTransfer);
-    m_modelBuffer = nullptr;
-    m_modelTransfer = nullptr;
+    m_modelBuffer.reset();
+    m_modelTransfer.reset();
     m_modelCapacity = 0;
     m_stats.models = 0;
     m_stats.modelGpuBytes = 0;
@@ -1145,56 +997,50 @@ int Renderer::loadModelTexture(const std::string& path, bool srgb, std::uint64_t
     std::size_t keep = 0;
     while (keep < img.levels.size() && img.levels[keep].width >= 4 && img.levels[keep].height >= 4) ++keep;
     img.levels.resize(std::max<std::size_t>(keep, 1));
-    const auto fmt = srgb ? SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB : SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM;
-    Texture t = makeTexture(img.width, img.height, fmt, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1, 1,
+    const auto fmt = srgb ? gpu::TextureFormat::Bc7RgbaUnormSrgb : gpu::TextureFormat::Bc7RgbaUnorm;
+    Texture t = makeTexture(img.width, img.height, fmt, gpu::TextureUsage::Sampled, 1, 1,
                             std::uint32_t(img.levels.size()));
     std::size_t total = 0;
     for (const ktx2::Level& lv : img.levels) total += lv.data.size();
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = std::uint32_t(total);
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!tb) fail("model texture transfer buffer");
-    auto* mapped = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, tb, false));
+    gpu::TransferBuffer tb = take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, std::uint32_t(total)}),
+                                  "model texture transfer buffer");
+    auto* mapped = reinterpret_cast<std::uint8_t*>(tb.map().data());
     std::size_t offset = 0;
     for (const ktx2::Level& lv : img.levels) {
         std::memcpy(mapped + offset, lv.data.data(), lv.data.size());
         offset += lv.data.size();
     }
-    SDL_UnmapGPUTransferBuffer(m_device, tb);
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    offset = 0;
-    for (std::size_t level = 0; level < img.levels.size(); ++level) {
-        const ktx2::Level& lv = img.levels[level];
-        SDL_GPUTextureTransferInfo src{};
-        src.transfer_buffer = tb;
-        src.offset = std::uint32_t(offset);
-        SDL_GPUTextureRegion region{};
-        region.texture = t.tex;
-        region.mip_level = std::uint32_t(level);
-        region.w = lv.width;
-        region.h = lv.height;
-        region.d = 1;
-        SDL_UploadToGPUTexture(copy, &src, &region, false);
-        offset += lv.data.size();
+    tb.unmap();
+    gpu::CommandBuffer cmd = acquireCommands(m_device);
+    {
+        gpu::CopyPass copy = cmd.beginCopyPass();
+        offset = 0;
+        for (std::size_t level = 0; level < img.levels.size(); ++level) {
+            const ktx2::Level& lv = img.levels[level];
+            gpu::TextureRegion region;
+            region.texture = t.tex;
+            region.mipLevel = std::uint32_t(level);
+            region.width = lv.width;
+            region.height = lv.height;
+            region.depth = 1;
+            copy.upload(tb, std::uint32_t(offset), region);
+            offset += lv.data.size();
+        }
     }
-    SDL_EndGPUCopyPass(copy);
-    SDL_SubmitGPUCommandBuffer(cmd);
-    SDL_ReleaseGPUTransferBuffer(m_device, tb);
+    submit(cmd);
     bytes += total;
-    m_modelTextures.push_back(t);
+    m_modelTextures.push_back(std::move(t));
     return int(m_modelTextures.size()) - 1;
 }
 
 int Renderer::setModels(std::span<const std::string> paths, std::span<const ModelPlacement> placements,
                          std::span<const ModelAsset* const> assets, const std::string& assetTextureDir) {
-    SDL_WaitForGPUIdle(m_device);
+    m_device.waitIdle();
     releaseModels();
     if (paths.empty() && assets.empty()) return 0;
     const Uint64 start = SDL_GetPerformanceCounter();
-    constexpr auto kAlbedoFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB;
-    if (!SDL_GPUTextureSupportsFormat(m_device, kAlbedoFmt, SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
+    constexpr auto kAlbedoFmt = gpu::TextureFormat::Bc7RgbaUnormSrgb;
+    if (!m_device.supportsFormat(kAlbedoFmt, gpu::TextureType::Texture2D, gpu::TextureUsage::Sampled)) {
         SDL_Log("TrailForge: level models unavailable (BC7 textures are not supported by this GPU)");
         return 0;
     }
@@ -1202,9 +1048,9 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
     {
         const std::uint8_t white[4] = {255, 255, 255, 255}, flat[4] = {128, 128, 230, 255};
         for (const std::uint8_t* px : {white, flat}) {
-            Texture t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-            uploadTexture(t.tex, px, 1, 1, 4);
-            m_modelTextures.push_back(t);
+            Texture t = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled);
+            uploadTexture(t, px, 1, 1, 4);
+            m_modelTextures.push_back(std::move(t));
         }
     }
     std::uint64_t bytes = 0;
@@ -1216,26 +1062,10 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
         textures[path] = i;
         return i;
     };
-    auto buffer = [&](SDL_GPUBufferUsageFlags usage, const void* data, std::size_t size) {
-        SDL_GPUBufferCreateInfo bi{};
-        bi.usage = usage;
-        bi.size = std::uint32_t(size);
-        SDL_GPUBuffer* b = SDL_CreateGPUBuffer(m_device, &bi);
-        SDL_GPUTransferBufferCreateInfo ti{};
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = bi.size;
-        SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-        if (!b || !tb) fail("model buffers");
-        std::memcpy(SDL_MapGPUTransferBuffer(m_device, tb, false), data, size);
-        SDL_UnmapGPUTransferBuffer(m_device, tb);
-        SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-        SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-        SDL_GPUTransferBufferLocation src{tb, 0};
-        SDL_GPUBufferRegion region{b, 0, bi.size};
-        SDL_UploadToGPUBuffer(copy, &src, &region, false);
-        SDL_EndGPUCopyPass(copy);
-        SDL_SubmitGPUCommandBuffer(cmd);
-        SDL_ReleaseGPUTransferBuffer(m_device, tb);
+    auto buffer = [&](gpu::BufferUsage usage, const void* data, std::size_t size) {
+        gpu::Buffer b = take(m_device.createBuffer({usage, std::uint32_t(size)}), "model buffers");
+        const quench::Result<void> r = m_device.upload(b, 0, {static_cast<const std::byte*>(data), size});
+        if (!r) throw std::runtime_error("model buffers: " + r.error());
         bytes += size;
         return b;
     };
@@ -1247,9 +1077,9 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
         const auto it = roughnessTextures.find(key);
         if (it != roughnessTextures.end()) return it->second;
         const std::uint8_t px[4] = {128, 128, std::uint8_t(key), 255};
-        Texture t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        uploadTexture(t.tex, px, 1, 1, 4);
-        m_modelTextures.push_back(t);
+        Texture t = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled);
+        uploadTexture(t, px, 1, 1, 4);
+        m_modelTextures.push_back(std::move(t));
         return roughnessTextures[key] = int(m_modelTextures.size()) - 1;
     };
 
@@ -1292,8 +1122,8 @@ int Renderer::setModels(std::span<const std::string> paths, std::span<const Mode
         }
         for (const ModelLod& lod : a.lods) {
             GpuModelLod gl;
-            gl.vertices = buffer(SDL_GPU_BUFFERUSAGE_VERTEX, lod.vertices.data(), lod.vertices.size() * sizeof(ModelVertex));
-            gl.indices = buffer(SDL_GPU_BUFFERUSAGE_INDEX, lod.indices.data(), lod.indices.size() * sizeof(std::uint32_t));
+            gl.vertices = buffer(gpu::BufferUsage::Vertex, lod.vertices.data(), lod.vertices.size() * sizeof(ModelVertex));
+            gl.indices = buffer(gpu::BufferUsage::Index, lod.indices.data(), lod.indices.size() * sizeof(std::uint32_t));
             for (const ModelPrimitive& p : lod.primitives)
                 if (p.material >= 0 && std::size_t(p.material) < g.materials.size())
                     gl.primitives.push_back({p.firstIndex, p.indexCount, p.material});
@@ -1519,52 +1349,43 @@ std::uint32_t Renderer::cullModels(const FrameDesc& frame, const glm::mat4& view
 
     const std::uint32_t total = std::uint32_t(m_modelScratch.size());
     if (total > m_modelCapacity) {
-        if (m_modelBuffer) SDL_ReleaseGPUBuffer(m_device, m_modelBuffer);
-        if (m_modelTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_modelTransfer);
+        m_modelBuffer.reset();
+        m_modelTransfer.reset();
         m_modelCapacity = std::max<std::uint32_t>(4096, total + total / 2);
-        SDL_GPUBufferCreateInfo bi{};
-        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        bi.size = m_modelCapacity * std::uint32_t(sizeof(ModelInstance));
-        m_modelBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-        SDL_GPUTransferBufferCreateInfo ti{};
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = bi.size;
-        m_modelTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-        if (!m_modelBuffer || !m_modelTransfer) fail("model instance buffers");
+        const std::uint32_t size = m_modelCapacity * std::uint32_t(sizeof(ModelInstance));
+        m_modelBuffer =
+            take(m_device.createBuffer({gpu::BufferUsage::GraphicsStorageRead, size}), "model instance buffers");
+        m_modelTransfer =
+            take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, size}), "model instance buffers");
     }
     return total;
 }
 
 void Renderer::clearTrample() {
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GPUColorTargetInfo ct{};
+    gpu::CommandBuffer cmd = acquireCommands(m_device);
+    gpu::ColorTarget ct;
     ct.texture = m_trample.tex;
-    ct.load_op = SDL_GPU_LOADOP_CLEAR;
-    ct.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr));
-    SDL_SubmitGPUCommandBuffer(cmd);
+    ct.load = gpu::LoadOp::Clear;
+    ct.store = gpu::StoreOp::Store;
+    ct.clear = {0.0f, 0.0f, 0.0f, 0.0f};
+    cmd.beginRenderPass(ct).end();
+    submit(cmd);
     m_trampleEmpty = true;
     m_trampleGeneration = ~0ull;
 }
 
 void Renderer::ensureMarkCapacity(std::uint32_t segments) {
     if (segments == m_markCapacity && m_markBuffer) return;
-    if (m_markBuffer) SDL_ReleaseGPUBuffer(m_device, m_markBuffer);
-    if (m_markTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_markTransfer);
-    SDL_GPUBufferCreateInfo bi{};
-    bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-    bi.size = segments * std::uint32_t(sizeof(TireMarkSegment));
-    m_markBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = bi.size;
-    m_markTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!m_markBuffer || !m_markTransfer) fail("tire mark buffers");
+    m_markBuffer.reset();
+    m_markTransfer.reset();
+    const std::uint32_t size = segments * std::uint32_t(sizeof(TireMarkSegment));
+    m_markBuffer = take(m_device.createBuffer({gpu::BufferUsage::GraphicsStorageRead, size}), "tire mark buffers");
+    m_markTransfer = take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, size}), "tire mark buffers");
     m_markCapacity = segments;
     m_markGeneration = ~0ull; // forces a full upload
 }
 
-std::uint32_t Renderer::uploadMarks(SDL_GPUCopyPass* copy, const TireMarks& marks) {
+std::uint32_t Renderer::uploadMarks(gpu::CopyPass& copy, const TireMarks& marks) {
     const std::uint32_t cap = std::uint32_t(marks.capacity());
     const bool full = marks.generation() != m_markGeneration || marks.written() - m_markWritten >= cap;
     const std::uint32_t fresh = full ? cap : std::uint32_t(marks.written() - m_markWritten);
@@ -1576,18 +1397,12 @@ std::uint32_t Renderer::uploadMarks(SDL_GPUCopyPass* copy, const TireMarks& mark
     const std::uint32_t start = full ? 0 : (head + cap - fresh) % cap;
     const std::uint32_t run0 = std::min(fresh, cap - start), run1 = fresh - run0;
     constexpr std::uint32_t kSeg = sizeof(TireMarkSegment);
-    auto* dst = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, m_markTransfer, true));
+    auto* dst = reinterpret_cast<std::uint8_t*>(m_markTransfer.map(true).data());
     std::memcpy(dst, marks.data() + start, std::size_t(run0) * kSeg);
     if (run1 > 0) std::memcpy(dst + std::size_t(run0) * kSeg, marks.data(), std::size_t(run1) * kSeg);
-    SDL_UnmapGPUTransferBuffer(m_device, m_markTransfer);
-    SDL_GPUTransferBufferLocation src0{m_markTransfer, 0};
-    SDL_GPUBufferRegion region0{m_markBuffer, start * kSeg, run0 * kSeg};
-    SDL_UploadToGPUBuffer(copy, &src0, &region0, false);
-    if (run1 > 0) {
-        SDL_GPUTransferBufferLocation src1{m_markTransfer, run0 * kSeg};
-        SDL_GPUBufferRegion region1{m_markBuffer, 0, run1 * kSeg};
-        SDL_UploadToGPUBuffer(copy, &src1, &region1, false);
-    }
+    m_markTransfer.unmap();
+    copy.upload(m_markTransfer, 0, m_markBuffer, start * kSeg, run0 * kSeg);
+    if (run1 > 0) copy.upload(m_markTransfer, run0 * kSeg, m_markBuffer, 0, run1 * kSeg);
     return fresh * kSeg;
 }
 
@@ -1595,17 +1410,10 @@ void Renderer::ensureLineCapacity(std::uint32_t bytes) {
     if (bytes <= m_lineCapacity) return;
     std::uint32_t cap = m_lineCapacity ? m_lineCapacity : 64 * 1024;
     while (cap < bytes) cap *= 2;
-    if (m_lineBuffer) SDL_ReleaseGPUBuffer(m_device, m_lineBuffer);
-    if (m_lineTransfer) SDL_ReleaseGPUTransferBuffer(m_device, m_lineTransfer);
-    SDL_GPUBufferCreateInfo bi{};
-    bi.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-    bi.size = cap;
-    m_lineBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = cap;
-    m_lineTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!m_lineBuffer || !m_lineTransfer) fail("line buffers");
+    m_lineBuffer.reset();
+    m_lineTransfer.reset();
+    m_lineBuffer = take(m_device.createBuffer({gpu::BufferUsage::Vertex, cap}), "line buffers");
+    m_lineTransfer = take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, cap}), "line buffers");
     m_lineCapacity = cap;
 }
 
@@ -1617,52 +1425,23 @@ GpuMesh Renderer::upload(const MeshData& mesh) {
         bmin = glm::min(bmin, v.position);
         bmax = glm::max(bmax, v.position);
     }
-    SDL_GPUBufferCreateInfo bi{};
-    bi.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
-    bi.size = bytes;
-    SDL_GPUBuffer* buffer = SDL_CreateGPUBuffer(m_device, &bi);
-    if (!buffer) fail("vertex buffer");
-
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    ti.size = bytes;
-    SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!transfer) fail("transfer buffer");
-    void* dst = SDL_MapGPUTransferBuffer(m_device, transfer, false);
-    std::memcpy(dst, mesh.vertices.data(), bytes);
-    SDL_UnmapGPUTransferBuffer(m_device, transfer);
-
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    SDL_GPUTransferBufferLocation src{transfer, 0};
-    SDL_GPUBufferRegion region{buffer, 0, bytes};
-    SDL_UploadToGPUBuffer(copy, &src, &region, false);
-    SDL_EndGPUCopyPass(copy);
-    SDL_SubmitGPUCommandBuffer(cmd);
-    SDL_ReleaseGPUTransferBuffer(m_device, transfer); // SDL defers the release until the commands complete
-    return GpuMesh(m_device, buffer, std::uint32_t(mesh.vertices.size()), bmin, bmax);
+    gpu::Buffer buffer = take(m_device.createBuffer({gpu::BufferUsage::Vertex, bytes}), "vertex buffer");
+    const quench::Result<void> r =
+        m_device.upload(buffer, 0, {reinterpret_cast<const std::byte*>(mesh.vertices.data()), bytes});
+    if (!r) throw std::runtime_error("vertex buffer: " + r.error());
+    return GpuMesh(std::move(buffer), std::uint32_t(mesh.vertices.size()), bmin, bmax);
 }
 
-// GPU time of a completed command buffer. SDL GPU has no timestamp queries; only the Metal backend exposes the
-// command buffer times (GpuTimingMetal.m). Elsewhere the GPU time is reported as unavailable.
-double Renderer::gpuFenceMs(SDL_GPUFence* fence) const {
-#if defined(__APPLE__)
-    if (m_gpuTiming) return tf_metal_fence_gpu_ms(fence);
-#endif
-    (void)fence;
-    return -1.0;
-}
-
+// GPU time of completed frames. SDL GPU has no timestamp queries; the engine reads the command buffer times on Metal
+// only (gpu::Caps::gpuTiming). Elsewhere the GPU time is reported as unavailable.
 void Renderer::pollGpuTiming() {
     while (!m_fences.empty()) {
-        SDL_GPUFence* f = m_fences.front().fence;
-        if (!SDL_QueryGPUFence(m_device, f)) break;
-        const double ms = gpuFenceMs(f);
-        if (ms >= 0.0) {
-            m_stats.gpuMs = ms;
-            m_stats.gpuMsAvg = m_stats.gpuMsAvg <= 0.0 ? ms : m_stats.gpuMsAvg * 0.9 + ms * 0.1;
+        const gpu::Fence& f = m_fences.front();
+        if (!m_device.isSignaled(f)) break;
+        if (const std::optional<double> ms = m_device.gpuMilliseconds(f)) {
+            m_stats.gpuMs = *ms;
+            m_stats.gpuMsAvg = m_stats.gpuMsAvg <= 0.0 ? *ms : m_stats.gpuMsAvg * 0.9 + *ms * 0.1;
         }
-        SDL_ReleaseGPUFence(m_device, f);
         m_fences.pop_front();
     }
 }
@@ -1904,9 +1683,9 @@ void Renderer::updateTerrainTextures() {
         releaseTexture(m_terrainNra);
         const std::uint8_t px[4] = {128, 128, 128, 255};
         for (Texture* t : {&m_terrainAlbedo, &m_terrainNra}) {
-            *t = makeTexture(1, 1, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
-                             SDL_GPU_SAMPLECOUNT_1, 1, 1, SDL_GPU_TEXTURETYPE_2D_ARRAY);
-            uploadTexture(t->tex, px, 1, 1, 4);
+            *t = makeTexture(1, 1, gpu::TextureFormat::Rgba8Unorm, gpu::TextureUsage::Sampled, 1, 1, 1,
+                             gpu::TextureType::Texture2DArray);
+            uploadTexture(*t, px, 1, 1, 4);
         }
         m_terrainTexUniforms.params.x = 0.0f;
         m_stats.terrainTexAlbedo = m_stats.terrainTexNra = 0;
@@ -1917,17 +1696,15 @@ void Renderer::updateTerrainTextures() {
         return;
     }
 
-    constexpr auto kAlbedoFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM_SRGB;
-    constexpr auto kNraFmt = SDL_GPU_TEXTUREFORMAT_BC7_RGBA_UNORM;
+    constexpr auto kAlbedoFmt = gpu::TextureFormat::Bc7RgbaUnormSrgb;
+    constexpr auto kNraFmt = gpu::TextureFormat::Bc7RgbaUnorm;
     constexpr int kLayers = TerrainTextureSet::kLayers;
     TerrainTextureSet set;
     std::string error = "no texture folder";
     std::array<ktx2::Image, kLayers> albedo, nra;
     bool ok = !m_terrainTexDir.empty() && loadTerrainTextureSet(m_terrainTexDir, set, error);
-    if (ok && !(SDL_GPUTextureSupportsFormat(m_device, kAlbedoFmt, SDL_GPU_TEXTURETYPE_2D_ARRAY,
-                                             SDL_GPU_TEXTUREUSAGE_SAMPLER) &&
-                SDL_GPUTextureSupportsFormat(m_device, kNraFmt, SDL_GPU_TEXTURETYPE_2D_ARRAY,
-                                             SDL_GPU_TEXTUREUSAGE_SAMPLER))) {
+    if (ok && !(m_device.supportsFormat(kAlbedoFmt, gpu::TextureType::Texture2DArray, gpu::TextureUsage::Sampled) &&
+                m_device.supportsFormat(kNraFmt, gpu::TextureType::Texture2DArray, gpu::TextureUsage::Sampled))) {
         ok = false;
         error = "BC7 textures are not supported by this GPU";
     }
@@ -1952,48 +1729,43 @@ void Renderer::updateTerrainTextures() {
 
     // One upload per layer: all mip levels of that layer in one transfer buffer.
     std::uint64_t bytes = 0;
-    const auto build = [&](const std::array<ktx2::Image, kLayers>& images, SDL_GPUTextureFormat fmt, Texture& dst) {
+    const auto build = [&](const std::array<ktx2::Image, kLayers>& images, gpu::TextureFormat fmt, Texture& dst) {
         releaseTexture(dst);
         const ktx2::Image& first = images[0];
-        dst = makeTexture(first.width, first.height, fmt, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPU_SAMPLECOUNT_1,
-                          kLayers, std::uint32_t(first.levels.size()), SDL_GPU_TEXTURETYPE_2D_ARRAY);
+        dst = makeTexture(first.width, first.height, fmt, gpu::TextureUsage::Sampled, 1, kLayers,
+                          std::uint32_t(first.levels.size()), gpu::TextureType::Texture2DArray);
         for (int layer = 0; layer < kLayers; ++layer) {
             const ktx2::Image& img = images[std::size_t(layer)];
             std::size_t total = 0;
             for (const ktx2::Level& lv : img.levels) total += lv.data.size();
-            SDL_GPUTransferBufferCreateInfo ti{};
-            ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-            ti.size = std::uint32_t(total);
-            SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-            if (!tb) fail("terrain texture transfer buffer");
-            auto* mapped = static_cast<std::uint8_t*>(SDL_MapGPUTransferBuffer(m_device, tb, false));
+            gpu::TransferBuffer tb =
+                take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, std::uint32_t(total)}),
+                     "terrain texture transfer buffer");
+            auto* mapped = reinterpret_cast<std::uint8_t*>(tb.map().data());
             std::size_t offset = 0;
             for (const ktx2::Level& lv : img.levels) {
                 std::memcpy(mapped + offset, lv.data.data(), lv.data.size());
                 offset += lv.data.size();
             }
-            SDL_UnmapGPUTransferBuffer(m_device, tb);
-            SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-            offset = 0;
-            for (std::size_t level = 0; level < img.levels.size(); ++level) {
-                const ktx2::Level& lv = img.levels[level];
-                SDL_GPUTextureTransferInfo src{};
-                src.transfer_buffer = tb;
-                src.offset = std::uint32_t(offset);
-                SDL_GPUTextureRegion region{};
-                region.texture = dst.tex;
-                region.mip_level = std::uint32_t(level);
-                region.layer = std::uint32_t(layer);
-                region.w = lv.width;
-                region.h = lv.height;
-                region.d = 1;
-                SDL_UploadToGPUTexture(copy, &src, &region, false);
-                offset += lv.data.size();
+            tb.unmap();
+            gpu::CommandBuffer cmd = acquireCommands(m_device);
+            {
+                gpu::CopyPass copy = cmd.beginCopyPass();
+                offset = 0;
+                for (std::size_t level = 0; level < img.levels.size(); ++level) {
+                    const ktx2::Level& lv = img.levels[level];
+                    gpu::TextureRegion region;
+                    region.texture = dst.tex;
+                    region.mipLevel = std::uint32_t(level);
+                    region.layer = std::uint32_t(layer);
+                    region.width = lv.width;
+                    region.height = lv.height;
+                    region.depth = 1;
+                    copy.upload(tb, std::uint32_t(offset), region);
+                    offset += lv.data.size();
+                }
             }
-            SDL_EndGPUCopyPass(copy);
-            SDL_SubmitGPUCommandBuffer(cmd);
-            SDL_ReleaseGPUTransferBuffer(m_device, tb);
+            submit(cmd);
             bytes += total;
         }
     };
@@ -2021,24 +1793,22 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     pollGpuTiming();
     if (m_adaptReadback && m_adaptValid) {
         float v = 0.0f;
-        std::memcpy(&v, SDL_MapGPUTransferBuffer(m_device, m_adaptReadback, false), 4);
-        SDL_UnmapGPUTransferBuffer(m_device, m_adaptReadback);
+        std::memcpy(&v, m_adaptReadback.map(false).data(), 4);
+        m_adaptReadback.unmap();
         m_stats.sceneLogLum = v;
         m_stats.autoExposureEv = std::clamp(std::log2(kAutoExposureKey) - v, -kAutoExposureRange, kAutoExposureRange) *
                                  kAutoExposureStrength;
     }
     updateTerrainTextures();
-    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!cmd) fail("SDL_AcquireGPUCommandBuffer");
+    gpu::CommandBuffer cmd = acquireCommands(m_device);
 
-    SDL_GPUTexture* swapchain = nullptr;
-    std::uint32_t w = 0, h = 0;
     const Uint64 acquireStart = SDL_GetPerformanceCounter();
-    const bool acquired = SDL_WaitAndAcquireGPUSwapchainTexture(cmd, m_window, &swapchain, &w, &h);
+    const gpu::TextureRef swapchain = cmd.acquireSwapchainTexture(m_window);
+    const std::uint32_t w = swapchain.desc.width, h = swapchain.desc.height;
     m_stats.acquireWaitMs =
         1000.0 * double(SDL_GetPerformanceCounter() - acquireStart) / double(SDL_GetPerformanceFrequency());
-    if (!acquired || !swapchain || w == 0 || h == 0) {
-        SDL_SubmitGPUCommandBuffer(cmd);
+    if (!swapchain || w == 0 || h == 0) {
+        submit(cmd);
         return false;
     }
     ensureTargets(w, h);
@@ -2049,19 +1819,19 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     m_stats.shadowDraws = 0;
 
     // The swapchain cannot be read back, so a capture frame is rendered into an offscreen texture.
-    SDL_GPUTexture* target = swapchain;
-    SDL_GPUTexture* captureTex = nullptr;
+    gpu::TextureRef target = swapchain;
+    gpu::Texture captureTex;
     if (frame.capturePath) {
-        SDL_GPUTextureCreateInfo ci{};
-        ci.type = SDL_GPU_TEXTURETYPE_2D;
+        gpu::TextureDesc ci;
+        ci.type = gpu::TextureType::Texture2D;
         ci.format = m_colorFormat;
-        ci.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        ci.usage = gpu::TextureUsage::ColorTarget | gpu::TextureUsage::Sampled;
         ci.width = w;
         ci.height = h;
-        ci.layer_count_or_depth = 1;
-        ci.num_levels = 1;
-        captureTex = SDL_CreateGPUTexture(m_device, &ci);
-        if (captureTex) target = captureTex;
+        if (quench::Result<gpu::Texture> created = m_device.createTexture(ci)) {
+            captureTex = std::move(*created);
+            target = captureTex;
+        }
     }
 
     // ---- Frame uniforms
@@ -2188,68 +1958,49 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         frame.spray ? std::uint32_t(std::min<std::size_t>(frame.spray->size(), kMaxSpray)) : 0;
     m_stats.sprayParticles = sprayCount;
     if (sprayCount > 0 && !m_sprayBuffer) {
-        SDL_GPUBufferCreateInfo bi{};
-        bi.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        bi.size = kMaxSpray * std::uint32_t(sizeof(SprayInstance));
-        m_sprayBuffer = SDL_CreateGPUBuffer(m_device, &bi);
-        SDL_GPUTransferBufferCreateInfo ti{};
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = bi.size;
-        m_sprayTransfer = SDL_CreateGPUTransferBuffer(m_device, &ti);
-        if (!m_sprayBuffer || !m_sprayTransfer) fail("wheel spray buffers");
+        const std::uint32_t size = kMaxSpray * std::uint32_t(sizeof(SprayInstance));
+        m_sprayBuffer = take(m_device.createBuffer({gpu::BufferUsage::GraphicsStorageRead, size}), "wheel spray buffers");
+        m_sprayTransfer =
+            take(m_device.createTransferBuffer({gpu::TransferDirection::Upload, size}), "wheel spray buffers");
     }
     if (lineBytes > 0 || grassTotal > 0 || treeTotal > 0 || modelTotal > 0 || markSync || sprayCount > 0) {
-        SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
+        gpu::CopyPass copy = cmd.beginCopyPass();
         if (markSync) m_stats.markUploadBytes = uploadMarks(copy, *marks);
         if (sprayCount > 0) {
-            auto* dst = static_cast<SprayInstance*>(SDL_MapGPUTransferBuffer(m_device, m_sprayTransfer, true));
+            auto* dst = reinterpret_cast<SprayInstance*>(m_sprayTransfer.map(true).data());
             frame.spray->write(dst, sprayCount);
-            SDL_UnmapGPUTransferBuffer(m_device, m_sprayTransfer);
-            SDL_GPUTransferBufferLocation src{m_sprayTransfer, 0};
-            SDL_GPUBufferRegion region{m_sprayBuffer, 0, sprayCount * std::uint32_t(sizeof(SprayInstance))};
-            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+            m_sprayTransfer.unmap();
+            copy.upload(m_sprayTransfer, 0, m_sprayBuffer, 0, sprayCount * std::uint32_t(sizeof(SprayInstance)), true);
         }
         if (lineBytes > 0) {
             ensureLineCapacity(lineBytes);
-            void* dst = SDL_MapGPUTransferBuffer(m_device, m_lineTransfer, true);
-            std::memcpy(dst, frame.lines.data(), lineBytes);
-            SDL_UnmapGPUTransferBuffer(m_device, m_lineTransfer);
-            SDL_GPUTransferBufferLocation src{m_lineTransfer, 0};
-            SDL_GPUBufferRegion region{m_lineBuffer, 0, lineBytes};
-            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+            std::memcpy(m_lineTransfer.map(true).data(), frame.lines.data(), lineBytes);
+            m_lineTransfer.unmap();
+            copy.upload(m_lineTransfer, 0, m_lineBuffer, 0, lineBytes, true);
         }
         if (grassTotal > 0) {
             const std::uint32_t bytes = grassTotal * sizeof(glm::vec4);
-            void* dst = SDL_MapGPUTransferBuffer(m_device, m_grassTransfer, true);
-            std::memcpy(dst, m_grassScratch.data(), bytes);
-            SDL_UnmapGPUTransferBuffer(m_device, m_grassTransfer);
-            SDL_GPUTransferBufferLocation src{m_grassTransfer, 0};
-            SDL_GPUBufferRegion region{m_grassBuffer, 0, bytes};
-            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+            std::memcpy(m_grassTransfer.map(true).data(), m_grassScratch.data(), bytes);
+            m_grassTransfer.unmap();
+            copy.upload(m_grassTransfer, 0, m_grassBuffer, 0, bytes, true);
         }
         if (treeTotal > 0) {
             const std::uint32_t bytes = treeTotal * sizeof(TreeInstance);
-            void* dst = SDL_MapGPUTransferBuffer(m_device, m_treeTransfer, true);
-            std::memcpy(dst, m_treeScratch.data(), bytes);
-            SDL_UnmapGPUTransferBuffer(m_device, m_treeTransfer);
-            SDL_GPUTransferBufferLocation src{m_treeTransfer, 0};
-            SDL_GPUBufferRegion region{m_treeBuffer, 0, bytes};
-            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+            std::memcpy(m_treeTransfer.map(true).data(), m_treeScratch.data(), bytes);
+            m_treeTransfer.unmap();
+            copy.upload(m_treeTransfer, 0, m_treeBuffer, 0, bytes, true);
         }
         if (modelTotal > 0) {
             const std::uint32_t bytes = modelTotal * std::uint32_t(sizeof(ModelInstance));
-            void* dst = SDL_MapGPUTransferBuffer(m_device, m_modelTransfer, true);
-            std::memcpy(dst, m_modelScratch.data(), bytes);
-            SDL_UnmapGPUTransferBuffer(m_device, m_modelTransfer);
-            SDL_GPUTransferBufferLocation src{m_modelTransfer, 0};
-            SDL_GPUBufferRegion region{m_modelBuffer, 0, bytes};
-            SDL_UploadToGPUBuffer(copy, &src, &region, true);
+            std::memcpy(m_modelTransfer.map(true).data(), m_modelScratch.data(), bytes);
+            m_modelTransfer.unmap();
+            copy.upload(m_modelTransfer, 0, m_modelBuffer, 0, bytes, true);
         }
-        SDL_EndGPUCopyPass(copy);
+        copy.end();
     }
-    if (frame.ui) ImGui_ImplSDLGPU3_PrepareDrawData(frame.ui, cmd);
+    if (frame.ui && m_imgui) m_imgui->prepare(cmd, frame.ui);
 
-    auto drawLit = [&](SDL_GPURenderPass* pass, const DrawItem& d) {
+    auto drawLit = [&](gpu::RenderPass& pass, const DrawItem& d) {
         DrawUniforms du{};
         du.model = d.model;
         du.normalMatrix = glm::transpose(glm::inverse(d.model));
@@ -2257,20 +2008,18 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         du.params = glm::vec4(d.mud, d.wheelMud ? 1.0f : 0.0f, d.soilWetness, d.wheelRadius);
         du.soil = d.soil;
         du.soilExtra = glm::vec4(d.soilFlecks, d.soilStick, d.vehicle && envOn ? 1.0f : 0.0f, 0.0f);
-        SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
-        SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-        SDL_DrawGPUPrimitives(pass, d.mesh->vertexCount(), 1, 0, 0);
+        cmd.pushUniforms(kVertex, 1, du);
+        pass.bindVertexBuffer(0, {d.mesh->buffer(), 0});
+        pass.draw(d.mesh->vertexCount(), 1, 0, 0);
     };
     // Instanced trees; the pipeline (and its vertex uniform slot 0) must already be bound.
-    auto drawTrees = [&](SDL_GPURenderPass* pass, const GpuMesh& mesh, std::uint32_t first, std::uint32_t count) {
+    auto drawTrees = [&](gpu::RenderPass& pass, const GpuMesh& mesh, std::uint32_t first, std::uint32_t count) {
         if (count == 0 || mesh.vertexCount() == 0) return;
         TreeUniforms tu{glm::vec4(float(first), frame.time, 0, 0)};
-        SDL_PushGPUVertexUniformData(cmd, 1, &tu, sizeof(tu));
-        SDL_BindGPUVertexStorageBuffers(pass, 0, &m_treeBuffer, 1);
-        SDL_GPUBufferBinding binding{mesh.buffer(), 0};
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-        SDL_DrawGPUPrimitives(pass, mesh.vertexCount(), count, 0, 0);
+        cmd.pushUniforms(kVertex, 1, tu);
+        bindVertexStorage(pass, m_treeBuffer);
+        pass.bindVertexBuffer(0, {mesh.buffer(), 0});
+        pass.draw(mesh.vertexCount(), count, 0, 0);
     };
     // Level models: the pipeline's vertex / fragment uniform slot 0 must already be set. Draws the primitives of one
     // kind (opaque or alpha-tested) of every listed (model, LOD); impostor entries only with impostors = true.
@@ -2279,9 +2028,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         ModelUniforms mu{glm::vec4(float(d.first), frame.time, fu.options.z, g.height),
                          glm::vec4(tree ? 0.010f : bush ? 0.020f : 0.0f, tree || bush ? 0.035f : 0.0f,
                                    float(g.impostorViews), g.radius)};
-        SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
+        cmd.pushUniforms(kVertex, 1, mu);
     };
-    auto drawModels = [&](SDL_GPURenderPass* pass, const std::vector<ModelDraw>& draws, bool alphaTested,
+    auto drawModels = [&](gpu::RenderPass& pass, const std::vector<ModelDraw>& draws, bool alphaTested,
                           bool shadow) {
         int drawn = 0;
         for (const ModelDraw& d : draws) {
@@ -2294,11 +2043,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                 if (!shadow && mat.alphaTest != alphaTested) continue;
                 if (!bound) {
                     modelUniforms(g, d);
-                    SDL_BindGPUVertexStorageBuffers(pass, 0, &m_modelBuffer, 1);
-                    SDL_GPUBufferBinding vb{lod.vertices, 0};
-                    SDL_BindGPUVertexBuffers(pass, 0, &vb, 1);
-                    SDL_GPUBufferBinding ib{lod.indices, 0};
-                    SDL_BindGPUIndexBuffer(pass, &ib, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+                    bindVertexStorage(pass, m_modelBuffer);
+                    pass.bindVertexBuffer(0, {lod.vertices, 0});
+                    pass.bindIndexBuffer({lod.indices, 0}, gpu::IndexFormat::Uint32);
                     bound = true;
                 }
                 const bool kit = g.kind == "building" || g.kind == "prop";
@@ -2309,38 +2056,38 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                 ModelMaterialUniforms mm{glm::vec4(mat.alphaTest ? 1.0f : 0.0f, mat.alphaTest ? 1.0f : 0.0f,
                                                    m_modelA2C ? 1.0f : 0.0f, 1.0f),
                                          glm::vec4(mat.tint, hue)};
-                SDL_PushGPUFragmentUniformData(cmd, 1, &mm, sizeof(mm));
-                const SDL_GPUTextureSamplerBinding albedo{m_modelTextures[std::size_t(mat.albedo)].tex, m_repeatSampler};
+                cmd.pushUniforms(kFragment, 1, mm);
+                const gpu::TextureSamplerBinding albedo{m_modelTextures[std::size_t(mat.albedo)].tex, m_repeatSampler};
                 if (shadow) {
-                    SDL_BindGPUFragmentSamplers(pass, 0, &albedo, 1);
+                    pass.bindSamplers(kFragment, 0, std::span(&albedo, 1));
                 } else {
-                    const SDL_GPUTextureSamplerBinding tex[4] = {
+                    const gpu::TextureSamplerBinding tex[4] = {
                         {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, albedo,
                         {m_modelTextures[std::size_t(mat.nra)].tex, m_repeatSampler}};
-                    SDL_BindGPUFragmentSamplers(pass, 0, tex, 4);
+                    pass.bindSamplers(kFragment, 0, std::span(tex, 4));
                 }
-                SDL_DrawGPUIndexedPrimitives(pass, p.indexCount, d.count, p.firstIndex, 0, 0);
+                pass.drawIndexed(p.indexCount, d.count, p.firstIndex, 0, 0);
                 ++drawn;
             }
         }
         return drawn;
     };
-    auto drawImpostors = [&](SDL_GPURenderPass* pass) {
+    auto drawImpostors = [&](gpu::RenderPass& pass) {
         int drawn = 0;
         for (const ModelDraw& d : m_modelDraws) {
             if (d.lod >= 0) continue;
             const GpuModel& g = m_models[std::size_t(d.model)];
             modelUniforms(g, d);
-            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_modelBuffer, 1);
+            bindVertexStorage(pass, m_modelBuffer);
             ModelMaterialUniforms mm{glm::vec4(1.0f, 1.0f, m_modelA2C ? 1.0f : 0.0f, float(g.impostorViews)),
                                      glm::vec4(1.0f, 1.0f, 1.0f, 0.6f)};
-            SDL_PushGPUFragmentUniformData(cmd, 1, &mm, sizeof(mm));
-            const SDL_GPUTextureSamplerBinding tex[4] = {
+            cmd.pushUniforms(kFragment, 1, mm);
+            const gpu::TextureSamplerBinding tex[4] = {
                 {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler},
                 {m_modelTextures[std::size_t(g.impostorAlbedo)].tex, m_clampSampler},
                 {m_modelTextures[std::size_t(g.impostorNra)].tex, m_clampSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, tex, 4);
-            SDL_DrawGPUPrimitives(pass, 6, d.count, 0, 0);
+            pass.bindSamplers(kFragment, 0, std::span(tex, 4));
+            pass.draw(6, d.count, 0, 0);
             ++drawn;
         }
         return drawn;
@@ -2357,13 +2104,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     for (const TerrainChunk& c : m_terrainScratch) ++m_stats.terrainLod[std::size_t(std::countr_zero(unsigned(c.step)))];
     m_stats.terrainTriangles = std::uint64_t(m_terrainScratch.size()) * (m_terrainPatch.vertexCount() / 3);
     // samplers: 2 for the main view (heights, splat), 1 for the shadow pass (heights).
-    auto drawTerrain = [&](SDL_GPURenderPass* pass, const std::vector<TerrainChunk>& chunks, std::uint32_t samplers,
+    auto drawTerrain = [&](gpu::RenderPass& pass, const std::vector<TerrainChunk>& chunks, std::uint32_t samplers,
                            const glm::mat4* lightViewProj) {
         if (chunks.empty() || m_terrainPatch.vertexCount() == 0) return 0;
-        SDL_GPUTextureSamplerBinding vt[2] = {{m_terrainHeight.tex, m_clampSampler}, {m_terrainSplat.tex, m_clampSampler}};
-        SDL_BindGPUVertexSamplers(pass, 0, vt, samplers);
-        SDL_GPUBufferBinding binding{m_terrainPatch.buffer(), 0};
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+        gpu::TextureSamplerBinding vt[2] = {{m_terrainHeight.tex, m_clampSampler}, {m_terrainSplat.tex, m_clampSampler}};
+        pass.bindSamplers(kVertex, 0, std::span(vt, samplers));
+        pass.bindVertexBuffer(0, {m_terrainPatch.buffer(), 0});
         int drawn = 0;
         for (const TerrainChunk& c : chunks) {
             const float size = float(kTerrainPatch * c.step) * m_terrainCell;
@@ -2382,8 +2128,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             DrawUniforms du{};
             du.params = glm::vec4(float(c.i0), float(c.j0), float(c.step), 1.0f + 1.5f * float(c.step) * m_terrainCell);
             du.tint = glm::vec4(float(m_terrainSamples), m_terrainOrigin, m_terrainCell, 0.0f);
-            SDL_PushGPUVertexUniformData(cmd, 1, &du, sizeof(du));
-            SDL_DrawGPUPrimitives(pass, m_terrainPatch.vertexCount(), 1, 0, 0);
+            cmd.pushUniforms(kVertex, 1, du);
+            pass.draw(m_terrainPatch.vertexCount(), 1, 0, 0);
             ++drawn;
         }
         return drawn;
@@ -2391,37 +2137,37 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
     // ---- 1. Sun shadow cascades (the far terrain layer after them keeps its content between updates)
     if (m_stats.farShadows && !m_farShadowValid) {
-        SDL_GPUDepthStencilTargetInfo dt{};
+        gpu::DepthTarget dt;
         dt.texture = m_shadow.tex;
-        dt.clear_depth = 1.0f;
-        dt.load_op = SDL_GPU_LOADOP_CLEAR;
-        dt.store_op = SDL_GPU_STOREOP_STORE;
-        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.clearDepth = 1.0f;
+        dt.load = gpu::LoadOp::Clear;
+        dt.store = gpu::StoreOp::Store;
+        dt.stencilLoad = gpu::LoadOp::DontCare;
+        dt.stencilStore = gpu::StoreOp::DontCare;
         dt.layer = std::uint8_t(s.shadowCascades);
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
-        SDL_BindGPUGraphicsPipeline(pass, m_terrainShadowPipe);
+        gpu::RenderPass pass = cmd.beginRenderPass(std::span<const gpu::ColorTarget>(), &dt);
+        pass.bindPipeline(m_terrainShadowPipe);
         ShadowUniforms su{m_farShadowViewProj};
-        SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+        cmd.pushUniforms(kVertex, 0, su);
         m_stats.shadowDraws += drawTerrain(pass, m_farShadowChunks, 1, nullptr);
-        SDL_EndGPURenderPass(pass);
+        pass.end();
         m_farShadowValid = true;
         ++m_stats.farShadowUpdates;
     }
     for (int c = 0; c < s.shadowCascades; ++c) {
-        SDL_GPUDepthStencilTargetInfo dt{};
+        gpu::DepthTarget dt;
         dt.texture = m_shadow.tex;
-        dt.clear_depth = 1.0f;
-        dt.load_op = SDL_GPU_LOADOP_CLEAR;
-        dt.store_op = SDL_GPU_STOREOP_STORE;
-        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.clearDepth = 1.0f;
+        dt.load = gpu::LoadOp::Clear;
+        dt.store = gpu::StoreOp::Store;
+        dt.stencilLoad = gpu::LoadOp::DontCare;
+        dt.stencilStore = gpu::StoreOp::DontCare;
         dt.layer = std::uint8_t(c);
         dt.cycle = c == 0 && !m_stats.farShadows;
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &dt);
-        SDL_BindGPUGraphicsPipeline(pass, m_shadowPipe);
+        gpu::RenderPass pass = cmd.beginRenderPass(std::span<const gpu::ColorTarget>(), &dt);
+        pass.bindPipeline(m_shadowPipe);
         ShadowUniforms su{lightViewProj[c]};
-        SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+        cmd.pushUniforms(kVertex, 0, su);
         const glm::mat4 lv = lightViewProj[c];
         for (const DrawItem& d : frame.draws) {
             if (!d.mesh || d.mesh->vertexCount() == 0 || !d.castsShadow) continue;
@@ -2437,30 +2183,30 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             ++m_stats.shadowDraws;
         }
         if (!m_terrainShadowScratch.empty()) {
-            SDL_BindGPUGraphicsPipeline(pass, m_terrainShadowPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+            pass.bindPipeline(m_terrainShadowPipe);
+            cmd.pushUniforms(kVertex, 0, su);
             m_stats.shadowDraws += drawTerrain(pass, m_terrainShadowScratch, 1, &lightViewProj[c]);
         }
         if (trees.shadowCount > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_treeShadowPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
+            pass.bindPipeline(m_treeShadowPipe);
+            cmd.pushUniforms(kVertex, 0, su);
             drawTrees(pass, m_treeMeshes[1], trees.shadowFirst, trees.shadowCount);
             ++m_stats.shadowDraws;
         }
         if (!m_modelShadowDraws[std::size_t(c)].empty()) {
-            SDL_BindGPUGraphicsPipeline(pass, m_modelShadowPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &su, sizeof(su));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &su, sizeof(su));
+            pass.bindPipeline(m_modelShadowPipe);
+            cmd.pushUniforms(kVertex, 0, su);
+            cmd.pushUniforms(kFragment, 0, su);
             m_stats.shadowDraws += drawModels(pass, m_modelShadowDraws[std::size_t(c)], false, true);
         }
-        SDL_EndGPURenderPass(pass);
+        pass.end();
     }
 
     // ---- 1b. Vehicle environment probe: a few cube faces per frame around the vehicle, without it (terrain, track
     // and scenery meshes, the coarsest level model LODs and tree meshes within kEnvProbeRadius, sky without the sun
     // disc, which the sun specular already draws), then box-filtered mips for the rougher materials.
     m_stats.envProbeFaces = m_stats.envProbeDraws = 0;
-    const SDL_GPUTextureSamplerBinding envDummy{m_envDummy.tex, m_envSampler};
+    const gpu::TextureSamplerBinding envDummy{m_envDummy.tex, m_envSampler};
     if (envOn) {
         // A jump (teleport, reset, vehicle change) renders every face at once.
         const bool all = !m_envValid || glm::length(envCenter - m_envCenter) > 8.0f;
@@ -2481,7 +2227,7 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         static const glm::vec3 kFwd[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         static const glm::vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
         const glm::mat4 eproj = reverse * glm::perspective(glm::half_pi<float>(), 1.0f, 0.05f, 6000.0f);
-        const SDL_GPUTextureSamplerBinding envLitTex[4] = {
+        const gpu::TextureSamplerBinding envLitTex[4] = {
             {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler}, envDummy};
         for (int k = 0; k < faces; ++k) {
             const int face = (m_envFace + k) % 6;
@@ -2496,37 +2242,37 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             ef.viewProj = eproj * view;
             ef.invViewProj = glm::inverse(ef.viewProj);
 
-            SDL_GPUColorTargetInfo ct{};
+            gpu::ColorTarget ct;
             ct.texture = m_envCube.tex;
-            ct.layer_or_depth_plane = std::uint32_t(face);
-            ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
-            ct.store_op = SDL_GPU_STOREOP_STORE;
-            SDL_GPUDepthStencilTargetInfo dt{};
+            ct.layer = std::uint32_t(face);
+            ct.load = gpu::LoadOp::DontCare;
+            ct.store = gpu::StoreOp::Store;
+            gpu::DepthTarget dt;
             dt.texture = m_envDepth.tex;
-            dt.clear_depth = 0.0f;
-            dt.load_op = SDL_GPU_LOADOP_CLEAR;
-            dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
-            dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-            dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+            dt.clearDepth = 0.0f;
+            dt.load = gpu::LoadOp::Clear;
+            dt.store = gpu::StoreOp::DontCare;
+            dt.stencilLoad = gpu::LoadOp::DontCare;
+            dt.stencilStore = gpu::StoreOp::DontCare;
+            gpu::RenderPass pass = cmd.beginRenderPass(ct, &dt);
             int draws = 0;
             selectTerrain(envCenter, &ef.viewProj, 1e9f, 0.3f, m_envTerrainScratch);
             if (!m_envTerrainScratch.empty()) {
-                SDL_BindGPUGraphicsPipeline(pass, m_envTerrainPipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+                pass.bindPipeline(m_envTerrainPipe);
+                cmd.pushUniforms(kVertex, 0, ef);
+                cmd.pushUniforms(kFragment, 0, ef);
                 m_terrainTexUniforms.params.z = m_terrainAsphalt ? 1.0f : 0.0f;
-                SDL_PushGPUFragmentUniformData(cmd, 1, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
-                const SDL_GPUTextureSamplerBinding terrainTex[5] = {envLitTex[0], envLitTex[1], envLitTex[2],
+                cmd.pushUniforms(kFragment, 1, m_terrainTexUniforms);
+                const gpu::TextureSamplerBinding terrainTex[5] = {envLitTex[0], envLitTex[1], envLitTex[2],
                                                                     {m_terrainAlbedo.tex, m_terrainSampler},
                                                                     {m_terrainNra.tex, m_terrainSampler}};
-                SDL_BindGPUFragmentSamplers(pass, 0, terrainTex, 5);
+                pass.bindSamplers(kFragment, 0, std::span(terrainTex, 5));
                 draws += drawTerrain(pass, m_envTerrainScratch, 2, nullptr);
             }
-            SDL_BindGPUGraphicsPipeline(pass, m_reflLitPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
-            SDL_BindGPUFragmentSamplers(pass, 0, envLitTex, 4);
+            pass.bindPipeline(m_reflLitPipe);
+            cmd.pushUniforms(kVertex, 0, ef);
+            cmd.pushUniforms(kFragment, 0, ef);
+            pass.bindSamplers(kFragment, 0, std::span(envLitTex, 4));
             const Frustum fr(ef.viewProj);
             for (const DrawItem& d : frame.draws) {
                 if (!d.mesh || d.mesh->vertexCount() == 0 || d.vehicle) continue;
@@ -2538,30 +2284,30 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                 ++draws;
             }
             if (!m_modelEnvDraws.empty()) {
-                SDL_BindGPUGraphicsPipeline(pass, m_envModelPipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
+                pass.bindPipeline(m_envModelPipe);
+                cmd.pushUniforms(kVertex, 0, ef);
+                cmd.pushUniforms(kFragment, 0, ef);
                 draws += drawModels(pass, m_modelEnvDraws, false, false);
                 draws += drawModels(pass, m_modelEnvDraws, true, false);
             }
             if (trees.envCount > 0) {
-                SDL_BindGPUGraphicsPipeline(pass, m_reflTreePipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &ef, sizeof(ef));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
-                SDL_BindGPUFragmentSamplers(pass, 0, envLitTex, 4);
+                pass.bindPipeline(m_reflTreePipe);
+                cmd.pushUniforms(kVertex, 0, ef);
+                cmd.pushUniforms(kFragment, 0, ef);
+                pass.bindSamplers(kFragment, 0, std::span(envLitTex, 4));
                 drawTrees(pass, m_treeMeshes[2], trees.envFirst, trees.envCount);
                 ++draws;
             }
-            SDL_BindGPUGraphicsPipeline(pass, m_reflSkyPipe);
-            SDL_PushGPUFragmentUniformData(cmd, 0, &ef, sizeof(ef));
-            const SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
-            SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
-            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-            SDL_EndGPURenderPass(pass);
+            pass.bindPipeline(m_reflSkyPipe);
+            cmd.pushUniforms(kFragment, 0, ef);
+            const gpu::TextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+            pass.bindSamplers(kFragment, 0, std::span(&skyTex, 1));
+            pass.draw(3, 1, 0, 0);
+            pass.end();
             m_stats.envProbeDraws += draws + 1;
         }
         m_envFace = (m_envFace + faces) % 6;
-        SDL_GenerateMipmapsForGPUTexture(cmd, m_envCube.tex);
+        cmd.generateMipmaps(m_envCube.tex);
         m_envValid = true;
         m_stats.envProbeFaces = faces;
         const float levels = float(std::bit_width(unsigned(s.envProbe)));
@@ -2570,9 +2316,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
     m_stats.envProbe = envOn;
 
     // Shared fragment resources of the lit pipelines.
-    const SDL_GPUTextureSamplerBinding litTex[4] = {
+    const gpu::TextureSamplerBinding litTex[4] = {
         {m_shadow.tex, m_cmpSampler}, {m_noise.tex, m_repeatSampler}, {m_mask.tex, m_clampSampler},
-        envOn ? SDL_GPUTextureSamplerBinding{m_envCube.tex, m_envSampler} : envDummy};
+        envOn ? gpu::TextureSamplerBinding{m_envCube.tex, m_envSampler} : envDummy};
 
     MarkUniforms mu{};
     if (marks) {
@@ -2599,19 +2345,20 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                                                                       marks->generation() != m_trampleGeneration));
         const bool due = markCount > 0 && (changed || frame.simTime - m_trampleTime > 0.5);
         if (due || (markCount == 0 && !m_trampleEmpty)) {
-            SDL_GPUColorTargetInfo ct{};
+            gpu::ColorTarget ct;
             ct.texture = m_trample.tex;
-            ct.load_op = SDL_GPU_LOADOP_CLEAR;
-            ct.store_op = SDL_GPU_STOREOP_STORE;
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
+            ct.load = gpu::LoadOp::Clear;
+            ct.store = gpu::StoreOp::Store;
+            ct.clear = {0.0f, 0.0f, 0.0f, 0.0f};
+            gpu::RenderPass pass = cmd.beginRenderPass(ct);
             if (markCount > 0) {
-                SDL_BindGPUGraphicsPipeline(pass, m_tramplePipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-                SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
-                SDL_BindGPUVertexStorageBuffers(pass, 0, &m_markBuffer, 1);
-                SDL_DrawGPUPrimitives(pass, 6, markCount, 0, 0);
+                pass.bindPipeline(m_tramplePipe);
+                cmd.pushUniforms(kVertex, 0, fu);
+                cmd.pushUniforms(kVertex, 1, mu);
+                bindVertexStorage(pass, m_markBuffer);
+                pass.draw(6, markCount, 0, 0);
             }
-            SDL_EndGPURenderPass(pass);
+            pass.end();
             m_trampleEmpty = markCount == 0;
             m_trampleCount = markCount;
             m_trampleWritten = marks ? marks->written() : 0;
@@ -2636,24 +2383,24 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         rf.groundFx = glm::vec4(std::min(fu.groundFx.x, 1.0f), 0.0f, 0.0f, 0.0f);
         rf.groundShadow = glm::vec4(0.0f);
 
-        SDL_GPUColorTargetInfo ct{};
+        gpu::ColorTarget ct;
         ct.texture = m_reflColor.tex;
-        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
-        ct.store_op = SDL_GPU_STOREOP_STORE;
+        ct.load = gpu::LoadOp::DontCare;
+        ct.store = gpu::StoreOp::Store;
         ct.cycle = true;
-        SDL_GPUDepthStencilTargetInfo dt{};
+        gpu::DepthTarget dt;
         dt.texture = m_reflDepth.tex;
-        dt.clear_depth = 0.0f;
-        dt.load_op = SDL_GPU_LOADOP_CLEAR;
-        dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
-        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.clearDepth = 0.0f;
+        dt.load = gpu::LoadOp::Clear;
+        dt.store = gpu::StoreOp::DontCare;
+        dt.stencilLoad = gpu::LoadOp::DontCare;
+        dt.stencilStore = gpu::StoreOp::DontCare;
         dt.cycle = true;
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
-        SDL_BindGPUGraphicsPipeline(pass, m_reflLitPipe);
-        SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
-        SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
-        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
+        gpu::RenderPass pass = cmd.beginRenderPass(ct, &dt);
+        pass.bindPipeline(m_reflLitPipe);
+        cmd.pushUniforms(kVertex, 0, rf);
+        cmd.pushUniforms(kFragment, 0, rf);
+        pass.bindSamplers(kFragment, 0, std::span(litTex, 4));
         const Frustum fr(rf.viewProj);
         for (const DrawItem& d : frame.draws) {
             if (!d.mesh || d.mesh->vertexCount() == 0 || !d.inReflection) continue;
@@ -2665,39 +2412,40 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             ++m_stats.drawCalls;
         }
         if (trees.reflCount > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_reflTreePipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &rf, sizeof(rf));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
+            pass.bindPipeline(m_reflTreePipe);
+            cmd.pushUniforms(kVertex, 0, rf);
+            cmd.pushUniforms(kFragment, 0, rf);
+            pass.bindSamplers(kFragment, 0, std::span(litTex, 4));
             drawTrees(pass, m_treeMeshes[1], trees.reflFirst, trees.reflCount);
             ++m_stats.drawCalls;
         }
-        SDL_BindGPUGraphicsPipeline(pass, m_reflSkyPipe);
-        SDL_PushGPUFragmentUniformData(cmd, 0, &rf, sizeof(rf));
-        SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
-        SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
-        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        pass.bindPipeline(m_reflSkyPipe);
+        cmd.pushUniforms(kFragment, 0, rf);
+        gpu::TextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+        pass.bindSamplers(kFragment, 0, std::span(&skyTex, 1));
+        pass.draw(3, 1, 0, 0);
         ++m_stats.drawCalls;
-        SDL_EndGPURenderPass(pass);
+        pass.end();
     }
 
     // Fullscreen pass; `bench` names the pass for setPostBench (the whole render pass is repeated there: repeated
     // opaque draws inside one pass would be removed by tile-based hidden surface removal).
-    auto fullscreen = [&](SDL_GPUTexture* dst, SDL_GPULoadOp load, SDL_GPUGraphicsPipeline* pipe, const auto& pu,
-                          const SDL_GPUTextureSamplerBinding* tex, std::uint32_t numTex, int bench = -1) {
+    auto fullscreen = [&](const gpu::TextureRef& dst, gpu::LoadOp load, const gpu::GraphicsPipeline& pipe,
+                          const auto& pu, const gpu::TextureSamplerBinding* tex, std::uint32_t numTex, int bench = -1) {
         const int n = bench >= 0 && bench == m_benchPass ? m_benchRepeat : 1;
         for (int i = 0; i < n; ++i) {
-            SDL_GPUColorTargetInfo ct{};
+            gpu::ColorTarget ct;
             ct.texture = dst;
-            ct.load_op = load;
-            ct.store_op = SDL_GPU_STOREOP_STORE;
-            ct.cycle = i == 0 && load != SDL_GPU_LOADOP_LOAD && dst != target;
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
-            SDL_BindGPUGraphicsPipeline(pass, pipe);
-            SDL_PushGPUFragmentUniformData(cmd, 0, &pu, sizeof(pu));
-            SDL_BindGPUFragmentSamplers(pass, 0, tex, numTex);
-            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-            SDL_EndGPURenderPass(pass);
+            ct.load = load;
+            ct.store = gpu::StoreOp::Store;
+            ct.clear = {0.0f, 0.0f, 0.0f, 0.0f};
+            ct.cycle = i == 0 && load != gpu::LoadOp::Load && dst.native != target.native;
+            gpu::RenderPass pass = cmd.beginRenderPass(ct);
+            pass.bindPipeline(pipe);
+            cmd.pushUniforms(kFragment, 0, pu);
+            pass.bindSamplers(kFragment, 0, std::span(tex, numTex));
+            pass.draw(3, 1, 0, 0);
+            pass.end();
         }
     };
     enum { kBenchLinDepth, kBenchGtao, kBenchAoBlur, kBenchVelocity, kBenchTaa, kBenchMotionBlur, kBenchDof, kBenchLum,
@@ -2715,14 +2463,14 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         const float zf = frame.proj[2][2] * zn / (1.0f + frame.proj[2][2]);
         pf.depthParams = glm::vec4(zn * zf, zn, zf - zn, zf);
     }
-    const SDL_GPUTextureSamplerBinding linDepthTex{depthFx ? m_linDepth.tex : m_farDepth.tex, m_pointSampler};
+    const gpu::TextureSamplerBinding linDepthTex{depthFx ? m_linDepth.tex : m_farDepth.tex, m_pointSampler};
 
     // Linear depth, then GTAO multiplied onto the opaque scene (before water, waterfalls and spray are drawn).
     auto depthPasses = [&]() {
         PostFxUniforms u = pf;
         u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(rw), 1.0f / float(rh));
-        const SDL_GPUTextureSamplerBinding depthTex{m_depth.tex, m_pointSampler};
-        fullscreen(m_linDepth.tex, SDL_GPU_LOADOP_DONT_CARE, m_linDepthPipe, u, &depthTex, 1, kBenchLinDepth);
+        const gpu::TextureSamplerBinding depthTex{m_depth.tex, m_pointSampler};
+        fullscreen(m_linDepth.tex, gpu::LoadOp::DontCare, m_linDepthPipe, u, &depthTex, 1, kBenchLinDepth);
         m_stats.ao = s.ao > 0 && m_ao.tex && s.aoStrength > 0.0f;
         m_stats.contactShadows = s.contactShadows > 0 && m_ao.tex;
         if (!m_stats.ao && !m_stats.contactShadows) return;
@@ -2735,13 +2483,13 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         const glm::vec3 lv = glm::vec3(frame.view * glm::vec4(glm::vec3(fu.sunDir), 0.0f));
         u.sun = glm::vec4(lv.x, -lv.y, -lv.z, 0.45f);
         u.sunColor = glm::vec4(m_stats.contactShadows ? float(s.contactShadows) : 0.0f, 80.0f, 0, 0);
-        const SDL_GPUTextureSamplerBinding gtaoTex[2] = {linDepthTex, {m_hdr.tex, m_pointSampler}};
-        fullscreen(m_ao.tex, SDL_GPU_LOADOP_DONT_CARE, m_gtaoPipe, u, gtaoTex, 2, kBenchGtao);
+        const gpu::TextureSamplerBinding gtaoTex[2] = {linDepthTex, {m_hdr.tex, m_pointSampler}};
+        fullscreen(m_ao.tex, gpu::LoadOp::DontCare, m_gtaoPipe, u, gtaoTex, 2, kBenchGtao);
         // The scene is read and written to the copy, which then becomes the HDR target.
         u.params = glm::vec4(m_stats.ao ? s.aoStrength : 0.0f, 0.04f, 0, 0);
-        const SDL_GPUTextureSamplerBinding blurTex[3] = {
+        const gpu::TextureSamplerBinding blurTex[3] = {
             {m_ao.tex, m_pointSampler}, linDepthTex, {m_hdr.tex, m_pointSampler}};
-        fullscreen(m_sceneCopy.tex, SDL_GPU_LOADOP_DONT_CARE, m_aoBlurPipe, u, blurTex, 3, kBenchAoBlur);
+        fullscreen(m_sceneCopy.tex, gpu::LoadOp::DontCare, m_aoBlurPipe, u, blurTex, 3, kBenchAoBlur);
         std::swap(m_hdr, m_sceneCopy);
     };
     m_stats.depthEffects = depthFx;
@@ -2749,49 +2497,49 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
     // ---- 3. Main HDR scene
     {
-        SDL_GPUColorTargetInfo ct{};
+        gpu::ColorTarget ct;
         if (s.msaa > 1) {
             ct.texture = m_hdrMsaa.tex;
-            ct.resolve_texture = m_hdr.tex;
-            ct.store_op = SDL_GPU_STOREOP_RESOLVE;
-            ct.cycle_resolve_texture = true;
+            ct.resolveTexture = m_hdr.tex;
+            ct.store = gpu::StoreOp::Resolve;
+            ct.cycleResolve = true;
         } else {
             ct.texture = m_hdr.tex;
-            ct.store_op = SDL_GPU_STOREOP_STORE;
+            ct.store = gpu::StoreOp::Store;
         }
-        ct.load_op = SDL_GPU_LOADOP_DONT_CARE;
+        ct.load = gpu::LoadOp::DontCare;
         ct.cycle = true;
-        SDL_GPUDepthStencilTargetInfo dt{};
+        gpu::DepthTarget dt;
         dt.texture = m_depth.tex;
-        dt.clear_depth = 0.0f;
-        dt.load_op = SDL_GPU_LOADOP_CLEAR;
-        dt.store_op = depthFx ? SDL_GPU_STOREOP_STORE : SDL_GPU_STOREOP_DONT_CARE;
-        dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        dt.clearDepth = 0.0f;
+        dt.load = gpu::LoadOp::Clear;
+        dt.store = depthFx ? gpu::StoreOp::Store : gpu::StoreOp::DontCare;
+        dt.stencilLoad = gpu::LoadOp::DontCare;
+        dt.stencilStore = gpu::StoreOp::DontCare;
         dt.cycle = true;
-        SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
+        gpu::RenderPass pass = cmd.beginRenderPass(ct, &dt);
 
         // Level terrain first (the largest occluder).
         if (!m_terrainScratch.empty()) {
-            SDL_BindGPUGraphicsPipeline(pass, m_terrainPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+            pass.bindPipeline(m_terrainPipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
             m_terrainTexUniforms.params.z = m_terrainAsphalt ? 1.0f : 0.0f;
-            SDL_PushGPUFragmentUniformData(cmd, 1, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
-            const SDL_GPUTextureSamplerBinding terrainTex[5] = {litTex[0], litTex[1], litTex[2],
+            cmd.pushUniforms(kFragment, 1, m_terrainTexUniforms);
+            const gpu::TextureSamplerBinding terrainTex[5] = {litTex[0], litTex[1], litTex[2],
                                                                 {m_terrainAlbedo.tex, m_terrainSampler},
                                                                 {m_terrainNra.tex, m_terrainSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, terrainTex, 5);
+            pass.bindSamplers(kFragment, 0, std::span(terrainTex, 5));
             // post_bench terrain N: the same draw again passes the depth test (GREATER_OR_EQUAL) on every visible
             // terrain fragment, so N draws cost N times the terrain shading.
             for (int i = 0; i < m_benchTerrain; ++i) m_stats.drawCalls += drawTerrain(pass, m_terrainScratch, 2, nullptr);
         }
 
         // Opaque meshes.
-        SDL_BindGPUGraphicsPipeline(pass, m_litPipe);
-        SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-        SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-        SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
+        pass.bindPipeline(m_litPipe);
+        cmd.pushUniforms(kVertex, 0, fu);
+        cmd.pushUniforms(kFragment, 0, fu);
+        pass.bindSamplers(kFragment, 0, std::span(litTex, 4));
         const Frustum fr(viewProj);
         for (const DrawItem& d : frame.draws) {
             if (!d.mesh || d.mesh->vertexCount() == 0) continue;
@@ -2805,17 +2553,18 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
         // Level models: opaque parts, alpha-tested foliage (two-sided, alpha to coverage with MSAA), impostor cards.
         if (!m_modelDraws.empty()) {
-            const std::pair<SDL_GPUGraphicsPipeline*, bool> passes[2] = {{m_modelPipe, false}, {m_modelFoliagePipe, true}};
+            const std::pair<const gpu::GraphicsPipeline*, bool> passes[2] = {{&m_modelPipe, false},
+                                                                               {&m_modelFoliagePipe, true}};
             for (const auto& [pipe, alpha] : passes) {
-                SDL_BindGPUGraphicsPipeline(pass, pipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+                pass.bindPipeline(*pipe);
+                cmd.pushUniforms(kVertex, 0, fu);
+                cmd.pushUniforms(kFragment, 0, fu);
                 m_stats.modelDraws += drawModels(pass, m_modelDraws, alpha, false);
             }
             if (m_stats.modelImpostors > 0) {
-                SDL_BindGPUGraphicsPipeline(pass, m_impostorPipe);
-                SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-                SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
+                pass.bindPipeline(m_impostorPipe);
+                cmd.pushUniforms(kVertex, 0, fu);
+                cmd.pushUniforms(kFragment, 0, fu);
                 m_stats.modelDraws += drawImpostors(pass);
             }
             m_stats.drawCalls += m_stats.modelDraws;
@@ -2823,10 +2572,10 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
         // Trees (one instanced draw per LOD).
         if (trees.count[0] + trees.count[1] + trees.count[2] + trees.count[3] > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_treePipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 4);
+            pass.bindPipeline(m_treePipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            pass.bindSamplers(kFragment, 0, std::span(litTex, 4));
             for (int l = 0; l < 4; ++l) {
                 if (trees.count[l] == 0) continue;
                 drawTrees(pass, m_treeMeshes[l], trees.first[l], trees.count[l]);
@@ -2837,19 +2586,19 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         // Tire marks: one instanced draw over the live part of the ring (6 vertices per segment), blended over the
         // ground with the same lighting, shadows and fog.
         if (markCount > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_markPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUVertexUniformData(cmd, 1, &mu, sizeof(mu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 1, &mu, sizeof(mu));
-            SDL_PushGPUFragmentUniformData(cmd, 2, &m_terrainTexUniforms, sizeof(m_terrainTexUniforms));
+            pass.bindPipeline(m_markPipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kVertex, 1, mu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            cmd.pushUniforms(kFragment, 1, mu);
+            cmd.pushUniforms(kFragment, 2, m_terrainTexUniforms);
             // Off the level the splat slot only needs a valid texture (mu.ground.x = 0 skips it).
-            const SDL_GPUTextureSamplerBinding markTex[6] = {
+            const gpu::TextureSamplerBinding markTex[6] = {
                 litTex[0], litTex[1], litTex[2], {m_terrainAlbedo.tex, m_terrainSampler},
                 {m_terrainNra.tex, m_terrainSampler}, {m_terrainSplat.tex ? m_terrainSplat.tex : m_mask.tex, m_clampSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, markTex, 6);
-            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_markBuffer, 1);
-            SDL_DrawGPUPrimitives(pass, 6, markCount, 0, 0);
+            pass.bindSamplers(kFragment, 0, std::span(markTex, 6));
+            bindVertexStorage(pass, m_markBuffer);
+            pass.draw(6, markCount, 0, 0);
             ++m_stats.drawCalls;
         }
 
@@ -2857,17 +2606,17 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         m_stats.grassChunks = int(grassTotal);
         m_stats.grassBlades = 0;
         if (grassTotal > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_grassPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding vtex[4] = {{m_height.tex, m_clampSampler},
+            pass.bindPipeline(m_grassPipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            gpu::TextureSamplerBinding vtex[4] = {{m_height.tex, m_clampSampler},
                                                     {m_mask.tex, m_clampSampler},
                                                     {m_trample.tex, m_clampSampler},
                                                     {m_noise.tex, m_repeatSampler}};
-            SDL_BindGPUVertexSamplers(pass, 0, vtex, 4);
-            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_grassBuffer, 1);
-            SDL_GPUTextureSamplerBinding ftex{m_shadow.tex, m_cmpSampler};
-            SDL_BindGPUFragmentSamplers(pass, 0, &ftex, 1);
+            pass.bindSamplers(kVertex, 0, std::span(vtex, 4));
+            bindVertexStorage(pass, m_grassBuffer);
+            gpu::TextureSamplerBinding ftex{m_shadow.tex, m_cmpSampler};
+            pass.bindSamplers(kFragment, 0, std::span(&ftex, 1));
             const float fine = kGrassCells[s.grassLevel - 1];
             const int perSide0 = int(std::lround(kGrassChunk / fine));
             const float D = s.grassDistance;
@@ -2886,9 +2635,9 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                     gu.wind = glm::vec4(0.85f, 0.53f, 3.2f, 1.0f);
                     for (int i = 0; i < 4; ++i) gu.wheels[i] = glm::vec4(glm::vec3(frame.wheelContacts[i]),
                                                                          frame.wheelContacts[i].w > 0 ? 0.32f : 0.0f);
-                    SDL_PushGPUVertexUniformData(cmd, 1, &gu, sizeof(gu));
+                    cmd.pushUniforms(kVertex, 1, gu);
                     const std::uint32_t instances = count * std::uint32_t(perSide * perSide);
-                    SDL_DrawGPUPrimitives(pass, std::uint32_t(grassTriangles(l) * 3), instances, 0, 0);
+                    pass.draw(std::uint32_t(grassTriangles(l) * 3), instances, 0, 0);
                     m_stats.grassBlades += instances;
                     ++m_stats.drawCalls;
                 }
@@ -2897,51 +2646,54 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         }
 
         // Sky behind everything (depth test against the cleared far plane).
-        SDL_BindGPUGraphicsPipeline(pass, m_skyPipe);
-        SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-        SDL_GPUTextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
-        SDL_BindGPUFragmentSamplers(pass, 0, &skyTex, 1);
-        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        pass.bindPipeline(m_skyPipe);
+        cmd.pushUniforms(kFragment, 0, fu);
+        gpu::TextureSamplerBinding skyTex{m_noise.tex, m_repeatSampler};
+        pass.bindSamplers(kFragment, 0, std::span(&skyTex, 1));
+        pass.draw(3, 1, 0, 0);
         ++m_stats.drawCalls;
 
         if (depthFx) {
             // The transparent part continues in a second pass over the AO-darkened opaque scene.
-            SDL_EndGPURenderPass(pass);
+            pass.end();
             depthPasses();
             if (sceneCopy) {
                 // The water samples the opaque scene (refraction, absorption, screen-space reflections).
-                SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-                SDL_GPUTextureLocation src{}, dst{};
+                gpu::CopyPass copy = cmd.beginCopyPass();
+                gpu::TextureRegion src, dst;
                 src.texture = m_hdr.tex;
+                src.width = rw;
+                src.height = rh;
+                src.depth = 1;
                 dst.texture = m_sceneCopy.tex;
-                SDL_CopyGPUTextureToTexture(copy, &src, &dst, rw, rh, 1, false);
-                SDL_EndGPUCopyPass(copy);
+                copy.copy(src, dst, false);
+                copy.end();
             }
-            SDL_GPUColorTargetInfo ct2{};
+            gpu::ColorTarget ct2;
             ct2.texture = m_hdr.tex;
-            ct2.load_op = SDL_GPU_LOADOP_LOAD;
-            ct2.store_op = SDL_GPU_STOREOP_STORE;
-            SDL_GPUDepthStencilTargetInfo dt2{};
+            ct2.load = gpu::LoadOp::Load;
+            ct2.store = gpu::StoreOp::Store;
+            gpu::DepthTarget dt2;
             dt2.texture = m_depth.tex;
-            dt2.load_op = SDL_GPU_LOADOP_LOAD;
-            dt2.store_op = SDL_GPU_STOREOP_STORE;
-            dt2.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-            dt2.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-            pass = SDL_BeginGPURenderPass(cmd, &ct2, 1, &dt2);
+            dt2.load = gpu::LoadOp::Load;
+            dt2.store = gpu::StoreOp::Store;
+            dt2.stencilLoad = gpu::LoadOp::DontCare;
+            dt2.stencilStore = gpu::StoreOp::DontCare;
+            pass = cmd.beginRenderPass(ct2, &dt2);
         }
 
         // Puddle surfaces.
         if (frame.water && frame.water->vertexCount() > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_waterPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding wtex[6] = {{m_shadow.tex, m_cmpSampler},
+            pass.bindPipeline(m_waterPipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            gpu::TextureSamplerBinding wtex[6] = {{m_shadow.tex, m_cmpSampler},
                                                     {m_noise.tex, m_repeatSampler},
                                                     {m_height.tex, m_clampSampler},
                                                     {reflVisible ? m_reflColor.tex : m_noise.tex, m_clampSampler},
                                                     {sceneCopy ? m_sceneCopy.tex : m_noise.tex, m_clampSampler},
                                                     {sceneCopy ? m_linDepth.tex : m_farDepth.tex, m_pointSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, wtex, 6);
+            pass.bindSamplers(kFragment, 0, std::span(wtex, 6));
             DrawItem wd;
             wd.mesh = frame.water;
             drawLit(pass, wd);
@@ -2950,14 +2702,14 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
 
         // Waterfalls (sheets, foam, mist) over the water.
         if (frame.waterfalls && frame.waterfalls->vertexCount() > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_waterfallPipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUTextureSamplerBinding ftex[4] = {{m_shadow.tex, m_cmpSampler},
+            pass.bindPipeline(m_waterfallPipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            gpu::TextureSamplerBinding ftex[4] = {{m_shadow.tex, m_cmpSampler},
                                                     {m_noise.tex, m_repeatSampler},
                                                     {m_height.tex, m_clampSampler},
                                                     {depthFx ? m_linDepth.tex : m_farDepth.tex, m_pointSampler}};
-            SDL_BindGPUFragmentSamplers(pass, 0, ftex, 4);
+            pass.bindSamplers(kFragment, 0, std::span(ftex, 4));
             DrawItem wd;
             wd.mesh = frame.waterfalls;
             drawLit(pass, wd);
@@ -2967,30 +2719,29 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         // Wheel spray: one instanced draw of camera-facing particles, lit like the scene (sun shadows, ambient,
         // headlights, fog), blended after the water.
         if (sprayCount > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, m_sprayPipe);
+            pass.bindPipeline(m_sprayPipe);
             // y: angular size of one render pixel (sub-pixel bits are drawn at >= ~0.7 px with less alpha instead).
             const float pixelAngle = 2.0f * std::tan(0.5f * frame.fovYRadians) / float(std::max(m_stats.renderH, 1u));
             const glm::vec4 sprayInfo(float(sprayCount), pixelAngle, 0, 0);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUVertexUniformData(cmd, 1, &sprayInfo, sizeof(sprayInfo));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_BindGPUFragmentSamplers(pass, 0, litTex, 3);
-            SDL_BindGPUVertexStorageBuffers(pass, 0, &m_sprayBuffer, 1);
-            SDL_DrawGPUPrimitives(pass, 6, sprayCount, 0, 0);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kVertex, 1, sprayInfo);
+            cmd.pushUniforms(kFragment, 0, fu);
+            pass.bindSamplers(kFragment, 0, std::span(litTex, 3));
+            bindVertexStorage(pass, m_sprayBuffer);
+            pass.draw(6, sprayCount, 0, 0);
             ++m_stats.drawCalls;
         }
 
         // Debug lines.
         if (lineBytes > 0) {
-            SDL_BindGPUGraphicsPipeline(pass, frame.linesOnTop ? m_lineOnTopPipe : m_linePipe);
-            SDL_PushGPUVertexUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_PushGPUFragmentUniformData(cmd, 0, &fu, sizeof(fu));
-            SDL_GPUBufferBinding binding{m_lineBuffer, 0};
-            SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-            SDL_DrawGPUPrimitives(pass, std::uint32_t(frame.lines.size()), 1, 0, 0);
+            pass.bindPipeline(frame.linesOnTop ? m_lineOnTopPipe : m_linePipe);
+            cmd.pushUniforms(kVertex, 0, fu);
+            cmd.pushUniforms(kFragment, 0, fu);
+            pass.bindVertexBuffer(0, {m_lineBuffer, 0});
+            pass.draw(std::uint32_t(frame.lines.size()), 1, 0, 0);
             ++m_stats.drawCalls;
         }
-        SDL_EndGPURenderPass(pass);
+        pass.end();
     }
 
     // ---- 3b. Velocity, TAA, motion blur, depth of field, sun shafts (single-sample scene only)
@@ -3005,21 +2756,21 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(rw), 1.0f / float(rh));
         const bool blurOn = s.motionBlur > 0.0f && m_fx[0].tex && !cut;
         if (taa || blurOn) {
-            fullscreen(m_velocity.tex, SDL_GPU_LOADOP_DONT_CARE, m_velocityPipe, u, &linDepthTex, 1, kBenchVelocity);
+            fullscreen(m_velocity.tex, gpu::LoadOp::DontCare, m_velocityPipe, u, &linDepthTex, 1, kBenchVelocity);
             // Moving meshes (vehicle body, wheels) with their previous model matrix, depth-tested against the scene.
             if (!cut && m_prevModels.size() == m_curModels.size()) {
-                SDL_GPUColorTargetInfo ct{};
+                gpu::ColorTarget ct;
                 ct.texture = m_velocity.tex;
-                ct.load_op = SDL_GPU_LOADOP_LOAD;
-                ct.store_op = SDL_GPU_STOREOP_STORE;
-                SDL_GPUDepthStencilTargetInfo dt{};
+                ct.load = gpu::LoadOp::Load;
+                ct.store = gpu::StoreOp::Store;
+                gpu::DepthTarget dt;
                 dt.texture = m_depth.tex;
-                dt.load_op = SDL_GPU_LOADOP_LOAD;
-                dt.store_op = SDL_GPU_STOREOP_DONT_CARE;
-                dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-                dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-                SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &dt);
-                SDL_BindGPUGraphicsPipeline(pass, m_velocityObjPipe);
+                dt.load = gpu::LoadOp::Load;
+                dt.store = gpu::StoreOp::DontCare;
+                dt.stencilLoad = gpu::LoadOp::DontCare;
+                dt.stencilStore = gpu::StoreOp::DontCare;
+                gpu::RenderPass pass = cmd.beginRenderPass(ct, &dt);
+                pass.bindPipeline(m_velocityObjPipe);
                 const Frustum fr(viewProj);
                 for (std::size_t i = 0; i < m_curModels.size(); ++i) {
                     const DrawItem& d = frame.draws[i];
@@ -3031,34 +2782,33 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                     drawSphere(d, center, radius);
                     if (!fr.sphere(center, radius)) continue;
                     const VelocityUniforms vu{viewProj, viewProjNJ, prevViewProj, d.model, prevModel};
-                    SDL_PushGPUVertexUniformData(cmd, 0, &vu, sizeof(vu));
-                    SDL_GPUBufferBinding binding{d.mesh->buffer(), 0};
-                    SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-                    SDL_DrawGPUPrimitives(pass, d.mesh->vertexCount(), 1, 0, 0);
+                    cmd.pushUniforms(kVertex, 0, vu);
+                    pass.bindVertexBuffer(0, {d.mesh->buffer(), 0});
+                    pass.draw(d.mesh->vertexCount(), 1, 0, 0);
                     ++m_stats.velocityObjects;
                 }
-                SDL_EndGPURenderPass(pass);
+                pass.end();
             }
         }
         if (taa) {
             const Texture& hist = m_taa[std::size_t(m_taaIndex)];
             const Texture& out = m_taa[std::size_t(1 - m_taaIndex)];
             u.params = glm::vec4(taaReset ? 1.0f : 0.0f, 0.1f, 0.0f, 0.0f);
-            const SDL_GPUTextureSamplerBinding b[4] = {{m_hdr.tex, m_clampSampler},
+            const gpu::TextureSamplerBinding b[4] = {{m_hdr.tex, m_clampSampler},
                                                        {hist.tex, m_clampSampler},
                                                        {m_velocity.tex, m_pointSampler},
                                                        linDepthTex};
-            fullscreen(out.tex, SDL_GPU_LOADOP_DONT_CARE, m_taaPipe, u, b, 4, kBenchTaa);
+            fullscreen(out.tex, gpu::LoadOp::DontCare, m_taaPipe, u, b, 4, kBenchTaa);
             m_taaIndex = 1 - m_taaIndex;
             scene = &out;
             m_stats.taa = true;
         }
         if (blurOn) {
             u.params = glm::vec4(s.motionBlur, 40.0f * float(rh) / 1080.0f, s.ao >= 2 ? 12.0f : 10.0f, 0.0f);
-            const SDL_GPUTextureSamplerBinding b[3] = {{scene->tex, m_clampSampler},
+            const gpu::TextureSamplerBinding b[3] = {{scene->tex, m_clampSampler},
                                                        {m_velocity.tex, m_pointSampler},
                                                        linDepthTex};
-            fullscreen(m_fx[0].tex, SDL_GPU_LOADOP_DONT_CARE, m_motionBlurPipe, u, b, 3, kBenchMotionBlur);
+            fullscreen(m_fx[0].tex, gpu::LoadOp::DontCare, m_motionBlurPipe, u, b, 3, kBenchMotionBlur);
             scene = &m_fx[0];
             m_stats.motionBlur = true;
         }
@@ -3066,12 +2816,12 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         if (dofAmount > 0.0f && m_fx[1].tex) {
             u.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(m_dofHalf.w), 1.0f / float(m_dofHalf.h));
             u.params = glm::vec4(frame.dofFocus, dofAmount, 9.0f * float(m_dofHalf.h) / 540.0f, 0.6f);
-            const SDL_GPUTextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
-            fullscreen(m_dofHalf.tex, SDL_GPU_LOADOP_DONT_CARE, m_dofBlurPipe, u, b, 2, kBenchDof);
-            const SDL_GPUTextureSamplerBinding c[3] = {{scene->tex, m_clampSampler},
+            const gpu::TextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
+            fullscreen(m_dofHalf.tex, gpu::LoadOp::DontCare, m_dofBlurPipe, u, b, 2, kBenchDof);
+            const gpu::TextureSamplerBinding c[3] = {{scene->tex, m_clampSampler},
                                                        {m_dofHalf.tex, m_clampSampler},
                                                        linDepthTex};
-            fullscreen(m_fx[1].tex, SDL_GPU_LOADOP_DONT_CARE, m_dofPipe, u, c, 3, kBenchDof);
+            fullscreen(m_fx[1].tex, gpu::LoadOp::DontCare, m_dofPipe, u, c, 3, kBenchDof);
             scene = &m_fx[1];
             m_stats.dof = true;
         }
@@ -3090,8 +2840,8 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
                 const glm::vec3 glow(fu.skySunGlow);
                 const float gl = std::max(0.2126f * glow.r + 0.7152f * glow.g + 0.0722f * glow.b, 1e-4f);
                 u.sunColor = glm::vec4(glm::mix(glm::vec3(1.0f), glow / gl, 0.5f), 0.0f);
-                const SDL_GPUTextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
-                fullscreen(m_shafts.tex, SDL_GPU_LOADOP_DONT_CARE, m_shaftsPipe, u, b, 2, kBenchShafts);
+                const gpu::TextureSamplerBinding b[2] = {{scene->tex, m_clampSampler}, linDepthTex};
+                fullscreen(m_shafts.tex, gpu::LoadOp::DontCare, m_shaftsPipe, u, b, 2, kBenchShafts);
                 m_stats.shafts = true;
             }
         }
@@ -3103,31 +2853,28 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         PostFxUniforms u = pf;
         u.texel = glm::vec4(1.0f / float(scene->w), 1.0f / float(scene->h), 1.0f / 64.0f, 1.0f / 64.0f);
         u.params = glm::vec4(exposure, 0, 0, 0);
-        const SDL_GPUTextureSamplerBinding b{scene->tex, m_clampSampler};
-        fullscreen(m_lum.tex, SDL_GPU_LOADOP_DONT_CARE, m_lumPipe, u, &b, 1, kBenchLum);
+        const gpu::TextureSamplerBinding b{scene->tex, m_clampSampler};
+        fullscreen(m_lum.tex, gpu::LoadOp::DontCare, m_lumPipe, u, &b, 1, kBenchLum);
         const float dt = std::clamp(frame.time - m_prevTime, 0.0f, 0.1f);
         u.params.x = (!m_adaptValid || cut) ? 1.0f : 1.0f - std::exp(-dt * 1.4f);
-        const SDL_GPUTextureSamplerBinding a[2] = {{m_lum.tex, m_clampSampler},
+        const gpu::TextureSamplerBinding a[2] = {{m_lum.tex, m_clampSampler},
                                                    {m_adapt[std::size_t(m_adaptIndex)].tex, m_pointSampler}};
-        fullscreen(m_adapt[std::size_t(1 - m_adaptIndex)].tex, SDL_GPU_LOADOP_DONT_CARE, m_adaptPipe, u, a, 2);
+        fullscreen(m_adapt[std::size_t(1 - m_adaptIndex)].tex, gpu::LoadOp::DontCare, m_adaptPipe, u, a, 2);
         m_adaptIndex = 1 - m_adaptIndex;
         m_adaptValid = true;
         // Read back the adapted value for the stats (mapped one frame later; a stale value is harmless).
         if (!m_adaptReadback) {
-            SDL_GPUTransferBufferCreateInfo ti{};
-            ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-            ti.size = 4;
-            m_adaptReadback = SDL_CreateGPUTransferBuffer(m_device, &ti);
+            if (quench::Result<gpu::TransferBuffer> tb =
+                    m_device.createTransferBuffer({gpu::TransferDirection::Download, 4}))
+                m_adaptReadback = std::move(*tb);
         }
         if (m_adaptReadback) {
-            SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-            SDL_GPUTextureRegion region{};
+            gpu::CopyPass copy = cmd.beginCopyPass();
+            gpu::TextureRegion region;
             region.texture = m_adapt[std::size_t(m_adaptIndex)].tex;
-            region.w = region.h = region.d = 1;
-            SDL_GPUTextureTransferInfo dst{};
-            dst.transfer_buffer = m_adaptReadback;
-            SDL_DownloadFromGPUTexture(copy, &region, &dst);
-            SDL_EndGPUCopyPass(copy);
+            region.width = region.height = region.depth = 1;
+            copy.download(region, m_adaptReadback, 0);
+            copy.end();
         }
     } else {
         m_adaptValid = false;
@@ -3142,21 +2889,21 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
             pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
             pu.params = glm::vec4(1.6f, 0, 0, i == 0 ? 1.0f : 0.0f);
             pu.extra = glm::vec4(0, 0, 1, 1);
-            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
-            fullscreen(m_bloom[i].tex, SDL_GPU_LOADOP_DONT_CARE, m_bloomDownPipe, pu, &b, 1, kBenchBloom);
+            gpu::TextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_bloom[i].tex, gpu::LoadOp::DontCare, m_bloomDownPipe, pu, &b, 1, kBenchBloom);
         }
         for (int i = kBloomLevels - 1; i > 0; --i) {
             PostUniforms pu{};
             pu.texel = glm::vec4(1.0f / float(m_bloom[i].w), 1.0f / float(m_bloom[i].h), 0, 0);
             pu.extra = glm::vec4(0, 0, 1, 1);
-            SDL_GPUTextureSamplerBinding b{m_bloom[i].tex, m_clampSampler};
-            fullscreen(m_bloom[i - 1].tex, SDL_GPU_LOADOP_LOAD, m_bloomUpPipe, pu, &b, 1, kBenchBloom);
+            gpu::TextureSamplerBinding b{m_bloom[i].tex, m_clampSampler};
+            fullscreen(m_bloom[i - 1].tex, gpu::LoadOp::Load, m_bloomUpPipe, pu, &b, 1, kBenchBloom);
         }
     }
 
     // ---- 5. Tonemap (+ upscale from the render resolution), 6. FXAA; into the blur source while a menu blurs
     const bool blur = frame.blur > 0.0f && !m_blur.empty();
-    SDL_GPUTexture* const post = blur ? m_blurSrc.tex : target;
+    const gpu::TextureRef post = blur ? gpu::TextureRef(m_blurSrc.tex) : target;
     {
         PostUniforms pu{};
         pu.texel = glm::vec4(1.0f / float(rw), 1.0f / float(rh), 1.0f / float(w), 1.0f / float(h));
@@ -3168,20 +2915,20 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         pu.look2 = glm::vec4(m_stats.flareSun > 1e-3f ? s.lensFlare * 0.035f : 0.0f,
                              m_stats.shafts ? s.sunShafts : 0.0f, kAutoExposureKey, kAutoExposureRange);
         pu.look3 = glm::vec4(float(m_frameIndex % 997) * 7.31f, sunScreen.uv, m_stats.flareSun);
-        const SDL_GPUTextureSamplerBinding tex[5] = {
+        const gpu::TextureSamplerBinding tex[5] = {
             {scene->tex, m_clampSampler},
             {bloom ? m_bloom[0].tex : scene->tex, m_clampSampler},
             {m_adapt[std::size_t(m_adaptIndex)].tex, m_pointSampler},
             {m_stats.shafts ? m_shafts.tex : scene->tex, m_clampSampler},
             {m_lut.tex, m_clampSampler}};
         if (s.fxaa && m_ldr.tex) {
-            fullscreen(m_ldr.tex, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
+            fullscreen(m_ldr.tex, gpu::LoadOp::DontCare, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
             PostUniforms fx{};
             fx.texel = glm::vec4(1.0f / float(w), 1.0f / float(h), 0, 0);
-            SDL_GPUTextureSamplerBinding b{m_ldr.tex, m_clampSampler};
-            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_fxaaPipe, fx, &b, 1);
+            gpu::TextureSamplerBinding b{m_ldr.tex, m_clampSampler};
+            fullscreen(post, gpu::LoadOp::DontCare, m_fxaaPipe, fx, &b, 1);
         } else {
-            fullscreen(post, SDL_GPU_LOADOP_DONT_CARE, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
+            fullscreen(post, gpu::LoadOp::DontCare, m_tonemapPipe, pu, tex, 5, kBenchTonemap);
         }
     }
     m_prevViewProj = viewProjNJ;
@@ -3200,100 +2947,92 @@ bool Renderer::drawFrame(const FrameDesc& frame) {
         for (int i = 0; i < kBlurLevels; ++i) {
             const Texture& src = i == 0 ? m_blurSrc : m_blur[std::size_t(i - 1)];
             pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
-            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
-            fullscreen(m_blur[std::size_t(i)].tex, SDL_GPU_LOADOP_DONT_CARE, m_blurDownPipe, pu, &b, 1);
+            gpu::TextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_blur[std::size_t(i)].tex, gpu::LoadOp::DontCare, m_blurDownPipe, pu, &b, 1);
         }
         for (int i = kBlurLevels - 1; i > 0; --i) {
             const Texture& src = m_blur[std::size_t(i)];
             pu.texel = glm::vec4(1.0f / float(src.w), 1.0f / float(src.h), 0, 0);
-            SDL_GPUTextureSamplerBinding b{src.tex, m_clampSampler};
-            fullscreen(m_blur[std::size_t(i - 1)].tex, SDL_GPU_LOADOP_DONT_CARE, m_blurUpPipe, pu, &b, 1);
+            gpu::TextureSamplerBinding b{src.tex, m_clampSampler};
+            fullscreen(m_blur[std::size_t(i - 1)].tex, gpu::LoadOp::DontCare, m_blurUpPipe, pu, &b, 1);
         }
         PostUniforms cu{};
         cu.params = glm::vec4(frame.blur, frame.blurDim, frame.blurDesaturate, 0.0f);
-        SDL_GPUTextureSamplerBinding tex[2] = {{m_blurSrc.tex, m_clampSampler}, {m_blur[0].tex, m_clampSampler}};
-        fullscreen(target, SDL_GPU_LOADOP_DONT_CARE, m_blurCompositePipe, cu, tex, 2);
+        gpu::TextureSamplerBinding tex[2] = {{m_blurSrc.tex, m_clampSampler}, {m_blur[0].tex, m_clampSampler}};
+        fullscreen(target, gpu::LoadOp::DontCare, m_blurCompositePipe, cu, tex, 2);
     }
 
     // ---- 7. UI on top (the ImGui pipeline is created without a depth target)
     if (frame.ui && frame.ui->DisplaySize.x > 0 && frame.ui->DisplaySize.y > 0) {
-        SDL_GPUColorTargetInfo uiColor{};
+        gpu::ColorTarget uiColor;
         uiColor.texture = target;
-        uiColor.load_op = SDL_GPU_LOADOP_LOAD;
-        uiColor.store_op = SDL_GPU_STOREOP_STORE;
-        SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(cmd, &uiColor, 1, nullptr);
-        ImGui_ImplSDLGPU3_RenderDrawData(frame.ui, cmd, uiPass);
-        SDL_EndGPURenderPass(uiPass);
+        uiColor.load = gpu::LoadOp::Load;
+        uiColor.store = gpu::StoreOp::Store;
+        gpu::RenderPass uiPass = cmd.beginRenderPass(uiColor);
+        if (m_imgui) m_imgui->draw(uiPass, frame.ui, m_colorFormat, w, h);
+        uiPass.end();
     }
 
     if (captureTex) {
-        SDL_GPUBlitInfo blit{};
+        gpu::BlitDesc blit;
         blit.source.texture = captureTex;
-        blit.source.w = w;
-        blit.source.h = h;
+        blit.source.width = w;
+        blit.source.height = h;
         blit.destination.texture = swapchain;
-        blit.destination.w = w;
-        blit.destination.h = h;
-        blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
-        blit.filter = SDL_GPU_FILTER_NEAREST;
-        SDL_BlitGPUTexture(cmd, &blit);
+        blit.destination.width = w;
+        blit.destination.height = h;
+        blit.load = gpu::LoadOp::DontCare;
+        blit.filter = gpu::Filter::Nearest;
+        cmd.blit(blit);
         saveCapture(cmd, captureTex, w, h, frame.capturePath); // submits cmd
-        SDL_ReleaseGPUTexture(m_device, captureTex);
         return true;
     }
 
-    if (SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd)) {
-        m_fences.push_back({fence});
-        while (m_fences.size() > 8) {
-            SDL_ReleaseGPUFence(m_device, m_fences.front().fence);
-            m_fences.pop_front();
-        }
+    if (quench::Result<gpu::Fence> fence = cmd.submitWithFence()) {
+        m_fences.push_back(std::move(*fence));
+        while (m_fences.size() > 8) m_fences.pop_front();
+    } else {
+        SDL_Log("TrailForge: %s", fence.error().c_str());
     }
     return true;
 }
 
-bool Renderer::saveCapture(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* src, std::uint32_t w, std::uint32_t h,
+bool Renderer::saveCapture(gpu::CommandBuffer& cmd, const gpu::TextureRef& src, std::uint32_t w, std::uint32_t h,
                            const char* path) {
     const std::uint32_t bytes = w * h * 4;
-    SDL_GPUTransferBufferCreateInfo ti{};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-    ti.size = bytes;
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(m_device, &ti);
-    if (!tb) {
-        SDL_SubmitGPUCommandBuffer(cmd);
+    quench::Result<gpu::TransferBuffer> created =
+        m_device.createTransferBuffer({gpu::TransferDirection::Download, bytes});
+    if (!created) {
+        submit(cmd);
         return false;
     }
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(cmd);
-    SDL_GPUTextureRegion region{};
+    gpu::TransferBuffer tb = std::move(*created);
+    gpu::CopyPass copy = cmd.beginCopyPass();
+    gpu::TextureRegion region;
     region.texture = src;
-    region.w = w;
-    region.h = h;
-    region.d = 1;
-    SDL_GPUTextureTransferInfo dst{};
-    dst.transfer_buffer = tb;
-    SDL_DownloadFromGPUTexture(copy, &region, &dst);
-    SDL_EndGPUCopyPass(copy);
-    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    region.width = w;
+    region.height = h;
+    region.depth = 1;
+    copy.download(region, tb, 0);
+    copy.end();
+    const quench::Result<gpu::Fence> fence = cmd.submitWithFence();
     bool ok = false;
     if (fence) {
-        SDL_WaitForGPUFences(m_device, true, &fence, 1);
-        const double ms = gpuFenceMs(fence);
-        if (ms >= 0.0) m_stats.gpuMs = ms;
-        SDL_ReleaseGPUFence(m_device, fence);
-        const SDL_GPUTextureFormat fmt = m_colorFormat;
-        const SDL_PixelFormat pf = (fmt == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM || fmt == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB)
+        m_device.wait(*fence);
+        if (const std::optional<double> ms = m_device.gpuMilliseconds(*fence)) m_stats.gpuMs = *ms;
+        const gpu::TextureFormat fmt = m_colorFormat;
+        const SDL_PixelFormat pf = (fmt == gpu::TextureFormat::Bgra8Unorm || fmt == gpu::TextureFormat::Bgra8UnormSrgb)
                                        ? SDL_PIXELFORMAT_ARGB8888
                                        : SDL_PIXELFORMAT_ABGR8888;
-        void* pixels = SDL_MapGPUTransferBuffer(m_device, tb, false);
+        void* pixels = tb.map(false).data();
         if (SDL_Surface* surf = SDL_CreateSurfaceFrom(int(w), int(h), pf, pixels, int(w * 4))) {
             const std::size_t len = std::strlen(path);
             const bool png = len > 4 && SDL_strcasecmp(path + len - 4, ".png") == 0;
             ok = png ? SDL_SavePNG(surf, path) : SDL_SaveBMP(surf, path);
             SDL_DestroySurface(surf);
         }
-        SDL_UnmapGPUTransferBuffer(m_device, tb);
+        tb.unmap();
     }
-    SDL_ReleaseGPUTransferBuffer(m_device, tb);
     SDL_Log("TrailForge: capture %s -> %s", path, ok ? "ok" : SDL_GetError());
     return ok;
 }

@@ -169,7 +169,8 @@ if(TRAILFORGE_BUILD_APP)
         src/ui/MapUI.cpp
         ${TRAILFORGE_ICON_SOURCES})
     # trailforge_audio brings trailforge_sim.
-    target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static imgui glm_headers)
+    target_link_libraries(trailforge PRIVATE trailforge_audio trailforge_flow miniaudio_lib SDL3::SDL3-static quench_app quench_gpu
+                          quench_imgui glm_headers)
     # shaders/scene.hlsl: every entry point is compiled at build time (SPIR-V; metallib, or MSL without the Metal
     # toolchain, on Apple platforms; DXIL on Windows hosts) and embedded as quench::shaders::scene ("scene_shaders.h").
     # Resource counts are given where the pipelines are created (src/render/Renderer.cpp).
@@ -184,10 +185,6 @@ if(TRAILFORGE_BUILD_APP)
         ao_blur_fs:fragment velocity_fs:fragment velocity_obj_vs:vertex velocity_obj_fs:fragment taa_fs:fragment
         motion_blur_fs:fragment dof_blur_fs:fragment dof_fs:fragment lum_fs:fragment adapt_fs:fragment
         shafts_fs:fragment)
-    if(APPLE)
-        target_sources(trailforge PRIVATE src/render/GpuTimingMetal.m)
-        target_link_libraries(trailforge PRIVATE "-framework Metal")
-    endif()
     if(TRAILFORGE_IOS)
         target_compile_definitions(trailforge PRIVATE TRAILFORGE_IOS=1)
     endif()

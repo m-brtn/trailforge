@@ -51,15 +51,6 @@ FetchContent_Declare(JoltPhysics
     SOURCE_SUBDIR Build
     EXCLUDE_FROM_ALL)
 
-# ---------------------------------------------------------------- Dear ImGui
-# v1.92.9b (no CMake of its own; the target is built below)
-FetchContent_Declare(imgui
-    URL https://github.com/ocornut/imgui/archive/f1cc2ae15e53a861a874c3034aae6798fde194ab.tar.gz
-    URL_HASH SHA256=f30be7f3e2136615b1848a9afb72f6dfd8a60820ddf1c1a85997bf3b722e7cfc
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    # iOS only (TARGET_OS_IPHONE): the SDL GPU backend uses its MSL shaders instead of the macOS metallibs.
-    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patches/ImguiIos.cmake)
-
 # ---------------------------------------------------------------- GLM
 # 1.0.3 (used header-only)
 FetchContent_Declare(glm
@@ -99,9 +90,8 @@ FetchContent_Declare(meshoptimizer
 FetchContent_MakeAvailable(JoltPhysics cgltf meshoptimizer)
 
 if(TRAILFORGE_BUILD_APP)
-    # imgui has no CMakeLists.txt, and glm's SOURCE_SUBDIR points to
-    # a nonexistent folder, so MakeAvailable only downloads the sources.
-    FetchContent_MakeAvailable(SDL3 imgui glm miniaudio)
+    # glm's and miniaudio's SOURCE_SUBDIR point to a nonexistent folder, so MakeAvailable only downloads them.
+    FetchContent_MakeAvailable(SDL3 glm miniaudio)
 
     # Only the low-level API is used (device, decoder, encoder); the engine, node graph, resource manager and
     # the FLAC decoder are compiled out. MP3 stays in for the music (assets/music/intro.mp3). The defines are PUBLIC so the header sees the same configuration.
@@ -122,18 +112,6 @@ if(TRAILFORGE_BUILD_APP)
                                                    "-framework CoreAudio" "-framework Foundation")
     endif()
 
-    add_library(imgui STATIC
-        ${imgui_SOURCE_DIR}/imgui.cpp
-        ${imgui_SOURCE_DIR}/imgui_draw.cpp
-        ${imgui_SOURCE_DIR}/imgui_tables.cpp
-        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-        ${imgui_SOURCE_DIR}/imgui_demo.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp)
-    target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-    target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
-    target_compile_features(imgui PUBLIC cxx_std_20)
-
     add_library(glm_headers INTERFACE)
     target_include_directories(glm_headers SYSTEM INTERFACE ${glm_SOURCE_DIR})
     target_compile_definitions(glm_headers INTERFACE
@@ -142,9 +120,11 @@ if(TRAILFORGE_BUILD_APP)
 endif()
 
 # ---------------------------------------------------------------- Quench (the engine)
-# Added after the dependencies above: the engine declares SDL, Jolt, ImGui and GLM with the same pins and options, and
-# the first declaration wins, so both use the same sources (with the patches above). Used so far: quench_core
-# (FixedStepClock, JSON), quench_physics (PhysicsWorld) and the shader build (quench_add_shaders, quench_shaderc).
+# Added after the dependencies above: the engine declares SDL, Jolt and GLM with the same pins and options, and the
+# first declaration wins, so both use the same sources (with the SDL patch above). Dear ImGui (v1.92.9b) comes from
+# the engine's declaration alone. Used so far: quench_core (FixedStepClock, JSON), quench_physics (PhysicsWorld), the
+# shader build (quench_add_shaders, quench_shaderc), quench_gpu (the renderer's GPU layer), quench_imgui (Dear ImGui
+# with its SDL3 platform backend) and quench_app (only its ImGui renderer, quench::app::ImGuiRenderer).
 # Without the app only the engine's headless modules are configured, and SDL is not fetched.
 include(${CMAKE_CURRENT_LIST_DIR}/Quench.cmake)
 if(TRAILFORGE_BUILD_APP)

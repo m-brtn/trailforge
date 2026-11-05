@@ -49,10 +49,10 @@ Trying Windows or Linux (please report what happens):
 
 | Dependency | Version | Commit |
 |---|---|---|
-| Quench (the engine: `quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, the shader build; `cmake/Quench.cmake`) | 0.1.0 + `tools/check_games.sh` | `dc22eeb9` |
+| Quench (the engine: `quench::PhysicsWorld`, `quench::FixedStepClock`, `quench::json`, the shader build, `quench::gpu`, its ImGui renderer; `cmake/Quench.cmake`) | 0.1.0 + the public ImGui renderer | `3dfb9f49` |
 | SDL | release-3.4.18 | `829a65d7` |
 | Jolt Physics | v5.6.0 | `e77f1755` |
-| Dear ImGui | v1.92.9b | `f1cc2ae1` |
+| Dear ImGui (pinned and built by the engine, `quench_imgui`) | v1.92.9b | `f1cc2ae1` |
 | GLM | 1.0.3 | `8d1fd52e` |
 | miniaudio | 0.11.25 | `9634bedb` |
 | SPIRV-Headers, SPIRV-Tools, glslang, SPIRV-Cross (the engine's shader compiler, host tool only; pinned by the engine) | Vulkan SDK tag vulkan-sdk-1.4.357.0 | `29981f65`, `9a49b088`, `168d452a`, `6c09849f` |
@@ -197,12 +197,11 @@ How the build works:
   extended gamepad, `GCSupportsControllerUserInteraction`), the app icon compiled by `actool` from
   `external_assets/images/Icon.png`, and `assets/` copied to the bundle root (`SDL_GetBasePath()` on iOS). It is
   signed with `TRAILFORGE_IOS_SIGN_IDENTITY` (default `-`, ad hoc).
-- Two patches of the pinned dependencies run as FetchContent `PATCH_COMMAND`s:
-  `cmake/patches/SdlIosSimulator.cmake` (inside `#if TARGET_OS_SIMULATOR` only: SDL GPU accepts the Simulator's Metal
-  device, which reports only GPU family Apple2, and skips `setDepthClipMode`, which that device rejects; Metal
-  validation asserts on it and without validation the GPU stalls) and `cmake/patches/ImguiIos.cmake` (ImGui's SDL GPU
-  backend tests `TARGET_OS_MAC` first, which is also true on iOS, and so picks its macOS metallibs; on iOS it now uses
-  its MSL source). macOS compiles the original code paths.
+- One patch of the pinned SDL runs as a FetchContent `PATCH_COMMAND`: `cmake/patches/SdlIosSimulator.cmake` (inside
+  `#if TARGET_OS_SIMULATOR` only: SDL GPU accepts the Simulator's Metal device, which reports only GPU family Apple2,
+  and skips `setDepthClipMode`, which that device rejects; Metal validation asserts on it and without validation the
+  GPU stalls). macOS compiles the original code paths. ImGui is drawn by the engine's renderer, so ImGui's own SDL GPU
+  backend (and the patch it needed on iOS) is gone.
 - Code: Low is the default quality preset on iOS (`kDefaultQuality`, until the port is measured on a device). The app
   lifecycle events pause the game when it loses focus (pause menu), and in the background nothing is rendered, the
   simulation does not tick and the audio device is stopped; it restarts on return.
@@ -236,7 +235,8 @@ Known limitations:
 
 Preset `ios-xcode` generates `build/ios-xcode/TrailForge.xcodeproj` (Xcode generator, iOS device only, arm64,
 iOS 26.0+) with Xcode's **Automatic** signing. The project has the app target `trailforge` (product `TrailForge.app`),
-its libraries (`trailforge_sim`, `trailforge_audio`, `trailforge_flow`, Jolt, SDL3, ImGui, miniaudio) and one shared
+its libraries (`trailforge_sim`, `trailforge_audio`, `trailforge_flow`, the engine's `quench_*` libraries with ImGui in
+`quench_imgui`, Jolt, SDL3, miniaudio) and one shared
 scheme, `trailforge`, whose Run action uses the Release configuration (Debug Jolt is too slow to drive). Not run on a
 real iPhone or iPad yet.
 

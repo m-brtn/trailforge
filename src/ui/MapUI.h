@@ -3,11 +3,12 @@
 #include "app/MapData.h"
 #include "app/MapView.h"
 
+#include <quench/gpu/Resources.h>
+
 #include <string>
 
 struct ImFont;
 struct ImDrawList;
-struct SDL_GPUTexture;
 
 namespace tf {
 
@@ -42,7 +43,7 @@ public:
     // Uploads the raster and keeps the vector data; replaces the previous map.
     void setMap(Renderer& renderer, MapData data);
     void release();
-    bool hasMap() const { return m_texture != nullptr; }
+    bool hasMap() const { return bool(m_texture); }
     const MapData& data() const { return m_data; }
 
     // Full-screen layout for a display size: the map panel (left) and the side panel (right), in points.
@@ -79,8 +80,7 @@ private:
     void drawPlayerArrow(ImDrawList* dl, float x, float y, float angleDeg, float s) const;
 
     MapData m_data;
-    Renderer* m_renderer = nullptr;
-    SDL_GPUTexture* m_texture = nullptr;
+    quench::gpu::Texture m_texture;
     ImFont* m_body = nullptr;
     ImFont* m_heading = nullptr;
     struct ListRow {

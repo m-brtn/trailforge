@@ -70,13 +70,16 @@ private:
     SDL_Window* m_window = nullptr;
 };
 
-// RAII Dear ImGui context with SDL3 + SDL GPU backends.
+// RAII Dear ImGui context with the SDL3 platform backend and the renderer's ImGui renderer (quench::app).
 class ImGuiContextGuard {
 public:
-    ImGuiContextGuard(SDL_Window* window, const Renderer& renderer);
+    ImGuiContextGuard(SDL_Window* window, Renderer& renderer);
     ~ImGuiContextGuard();
     ImGuiContextGuard(const ImGuiContextGuard&) = delete;
     ImGuiContextGuard& operator=(const ImGuiContextGuard&) = delete;
+
+private:
+    Renderer& m_renderer;
 };
 
 // Lifecycle and main loop: events -> fixed physics steps -> interpolation -> render.

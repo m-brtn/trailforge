@@ -21,10 +21,9 @@ src/sim/      Simulation (physics + track + vehicle, input on ticks), TireMarks 
               BodyImpacts (contact listener: chassis hits for the sound)
 src/audio/    AudioMixer (sound model + own mixer, no device), AudioMapping (pure rpm/load/tire/ambience mappings),
               VehicleAudioFeed (per-tick frame and events), AudioManifest, AudioSystem (miniaudio device / WAV capture)
-src/render/   Renderer (SDL GPU passes), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
+src/render/   Renderer (render passes over the engine's quench::gpu), RenderSettings (quality presets), StyleKit (shared vehicle parts), VehicleModel (named vehicle parts),
               Scenery (backdrop terrain, pine meshes and instances), LevelScene (level props, water, horizon ring,
-              tree instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw,
-              GpuTimingMetal.m (GPU time from MTLCommandBuffer, macOS only)
+              tree instances), TimeOfDay (sun/moon path, sky palette), GroundMaps (grass/mud/wet masks), Mesh, Camera, DebugDraw
 src/input/    Input (keyboard, mouse, gamepad → DriverIntent and discrete actions), ControlLayout (bindings, key cap
               labels, gamepad glyph names; no SDL), KeyboardPedals
 src/ui/       DebugUI (ImGui: HUD, telemetry, tuning, teleport, graphics and audio panels), MenuUI (intro, start,

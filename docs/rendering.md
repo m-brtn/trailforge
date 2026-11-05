@@ -531,6 +531,6 @@ Grass distance and the tree detail distance (Exploration Peaks; see there for th
 own in Settings → Graphics and in the F2 panel; they are generic per-system distances (not tied to the current pine
 mesh). Rocks and props have a single mesh each and no distance setting.
 
-The panel also shows CPU frame time (without the swapchain wait), GPU time (from `MTLCommandBuffer`
-`GPUStartTime/GPUEndTime`), render/output size, draw calls and grass blades. Every setting can be changed
+The panel also shows CPU frame time (without the swapchain wait), GPU time (`quench::gpu::Device::gpuMilliseconds`:
+`MTLCommandBuffer` `GPUStartTime/GPUEndTime`, Metal only), render/output size, draw calls and grass blades. Every setting can be changed
 individually (the preset becomes "Custom"). Physics debug lines are off by default (Tuning → Debug drawing).
